@@ -10,6 +10,9 @@ include timezone for timed hardware/rehearsal evidence.
   OpenGL; no service authoring or lyric presentation yet. An opt-in winit/wgpu
   audience-process diagnostic has measured independent animation.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
+- Active continuation: **M0-06** ordered delivery after the M0-05 CPU preparation
+  checkpoint. The user asked to continue; this extends the M0 feasibility work,
+  not a production backend choice or waiver of the Windows/reference/M0-10 gate.
 - M0-02 reference ledger, M0-03 native harness and M0-04 audience spike were
   developed in separate worktrees and merged into local `main`, with ticket
   commits and an M0-04 integration/failure-check checkpoint.
@@ -38,6 +41,8 @@ remain `planned`. Update the current state above when switching work.
 | M0-02 | blocked | Public-source ledger and executable observation runbook; lawful installed 8.0.49/Windows access missing, zero installed observations. |
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, bounded synthetic slow preparation and clean/forced operator exit; Windows physical qualification open. |
+| M0-05 | implemented-unqualified | CPU snapshots and bounded worker tested; shaping/upload, renderer integration and applied-state checks remain. |
+| M0-06 | active | Ordered command/acknowledgment contract is next; reference mask semantics remain blocked. |
 
 ## Session records
 
@@ -419,3 +424,33 @@ PY
   post-exit/kill 241/75; preparation max gap 54.505ms. Summary retained as
   `.amp/in/artifacts/output-preparation/repeat-summary.json`; transient duplicate
   captures removed. Native setup commands are now explicit in the runbook.
+
+### M0-05 — CPU preparation checkpoint — 2026-10-04 UTC
+
+- State: **implemented-unqualified** partial slice. Framework-independent owned
+  scene/version/resource types and one bounded worker, no new UI or production
+  renderer/backend selection. Detailed ownership/budgets/limitations are in
+  [preparation.md](preparation.md). Direct pinned image/hash/font dependencies
+  were already transitive; lock update adds only root dependency entries.
+- Worker reads and hashes capped source files, decodes static PNG/JPEG, parses
+  supplied font face 0, returns read-only snapshots. Acceptance supersedes older
+  work; saturation/invalid input does not. Exact deadlines reject even queued
+  results; cancellation and teardown do not wait on blocking OS calls.
+- U/I: `cargo test --locked --all-targets -j 8` passed **14 tests** (10 new
+  preparation tests, 3 GPUI tests, 1 spike test). Asymmetric RGBA/alpha and JPEG
+  normalization, immutable font/text/image snapshots, missing/changed/corrupt
+  resources, invalid dimensions, budgets/overflow, worker saturation/failure,
+  queued stale results, exact deadline, recovery and nonblocking cancellation/drop.
+- `cargo clippy --locked --all-targets -j 8 -- -D warnings`,
+  `cargo fmt --all -- --check`, `git diff --check` and existing inline documentation
+  checks passed. Initial clippy array-chunk warning corrected with clippy's fix;
+  reran tests and strict clippy. Formatter/fix output reread. Font SHA-256 matched
+  fixture README; full redistribution notices retained (trailing spaces removed).
+- Not run/claimed: rendering/shaping/glyph coverage, GPU upload/readiness,
+  APNG fixture regression, measured RSS, Windows/hardware or physical display
+  latency. These modules are not yet wired to the native spike. U/I resource
+  readiness is not presentation acknowledgment. Parent combined acceptance boxes
+  remain open where downstream renderer work is needed.
+- Delivery: local `feat(M0-05): checkpoint bounded CPU scene preparation` commit;
+  no push or installer. Next: M0-06 bounded ordered submission and acknowledgment
+  state; keep safety capacity tests separate from unobserved mask semantics.

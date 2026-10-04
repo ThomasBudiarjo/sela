@@ -5124,7 +5124,11 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "image",
  "pollster 0.4.0",
+ "sha2",
+ "tempfile",
+ "ttf-parser",
  "wgpu",
  "winit",
  "zlog",

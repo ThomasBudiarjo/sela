@@ -1,0 +1,309 @@
+//! Owned editable inputs and immutable, resolved scene snapshots. No GPUI types.
+use sha2::{Digest, Sha256};
+use std::{
+    fs::File,
+    io::{Cursor, Read},
+    path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+pub const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_SCENE_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_TEXT_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ContentVersion {
+    pub id: u128,
+    pub revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Extent {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy)]
+pub struct RendererCapabilities {
+    pub max_texture_dimension: u32,
+}
+
+#[derive(Clone)]
+pub struct ResourceRef {
+    pub version: ContentVersion,
+    pub path: PathBuf,
+    pub sha256: [u8; 32],
+}
+
+#[derive(Clone)]
+pub enum BackgroundSpec {
+    Color([u8; 4]),
+    Image(ResourceRef),
+}
+
+#[derive(Clone)]
+pub struct TextSpec {
+    pub content: String,
+    pub font: ResourceRef,
+    pub font_size: u16,
+}
+
+/// Editing/selection owns this value. Submit a clone to freeze that revision.
+#[derive(Clone)]
+pub struct SceneSpec {
+    pub version: ContentVersion,
+    pub extent: Extent,
+    pub background: BackgroundSpec,
+    pub text: Option<TextSpec>,
+}
+
+// Payloads deliberately lack Debug: ordinary diagnostics must not print lyrics,
+// font bytes, pixels or filesystem paths. Public access is read-only.
+pub enum PreparedBackground {
+    Color([u8; 4]),
+    Image {
+        version: ContentVersion,
+        extent: Extent,
+        rgba: Box<[u8]>,
+    },
+}
+
+pub struct PreparedText {
+    content: String,
+    font_version: ContentVersion,
+    font: Box<[u8]>,
+    font_size: u16,
+}
+
+impl PreparedText {
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+    pub fn font(&self) -> &[u8] {
+        &self.font
+    }
+    pub fn font_version(&self) -> ContentVersion {
+        self.font_version
+    }
+    pub fn font_size(&self) -> u16 {
+        self.font_size
+    }
+}
+
+pub struct PreparedCue {
+    version: ContentVersion,
+    extent: Extent,
+    background: PreparedBackground,
+    text: Option<PreparedText>,
+    bytes: usize,
+}
+
+impl PreparedCue {
+    pub fn version(&self) -> ContentVersion {
+        self.version
+    }
+    pub fn extent(&self) -> Extent {
+        self.extent
+    }
+    pub fn background(&self) -> &PreparedBackground {
+        &self.background
+    }
+    pub fn text(&self) -> Option<&PreparedText> {
+        self.text.as_ref()
+    }
+    pub fn resource_bytes(&self) -> usize {
+        self.bytes
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrepareError {
+    InvalidScene,
+    TooLarge,
+    MissingResource(ContentVersion),
+    ResourceIo(ContentVersion, std::io::ErrorKind),
+    ChangedResource(ContentVersion),
+    UnsupportedImage,
+    InvalidImage,
+    InvalidFont,
+    Cancelled,
+    TimedOut,
+    Busy,
+    Disconnected,
+}
+
+impl std::fmt::Display for PrepareError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::InvalidScene => "Invalid scene size, text or font size; correct it and retry",
+            Self::TooLarge => "Resource exceeds the preparation budget; reduce its size",
+            Self::MissingResource(_) => "Referenced resource is missing; locate it before retrying",
+            Self::ResourceIo(_, _) => "Resource cannot be read; check its type and permissions",
+            Self::ChangedResource(_) => "Resource bytes changed; explicitly refresh the snapshot",
+            Self::UnsupportedImage => {
+                "Only static PNG and JPEG images are supported by this preparer"
+            }
+            Self::InvalidImage => "Image cannot be decoded; replace the corrupt resource",
+            Self::InvalidFont => "Font face 0 cannot be parsed; choose a valid font file",
+            Self::Cancelled => "Preparation was cancelled",
+            Self::TimedOut => "Preparation deadline elapsed; current output is unchanged",
+            Self::Busy => "Preparation queue is full; retry after polling completion",
+            Self::Disconnected => "Preparation worker disconnected; recreate it before retrying",
+        };
+        f.write_str(message)
+    }
+}
+impl std::error::Error for PrepareError {}
+
+fn check_extent(extent: Extent, caps: RendererCapabilities) -> Result<(), PrepareError> {
+    if extent.width == 0 || extent.height == 0 {
+        return Err(PrepareError::InvalidScene);
+    }
+    if extent.width > caps.max_texture_dimension
+        || extent.height > caps.max_texture_dimension
+        || u64::from(extent.width) * u64::from(extent.height) > (MAX_SCENE_BYTES / 4) as u64
+    {
+        return Err(PrepareError::TooLarge);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate(spec: &SceneSpec, caps: RendererCapabilities) -> Result<(), PrepareError> {
+    check_extent(spec.extent, caps)?;
+    if let Some(text) = &spec.text {
+        if text.font_size == 0 || text.font_size > 512 || text.content.is_empty() {
+            return Err(PrepareError::InvalidScene);
+        }
+        if text.content.len() > MAX_TEXT_BYTES || text.font.path.as_os_str().len() > 4096 {
+            return Err(PrepareError::TooLarge);
+        }
+    }
+    if let BackgroundSpec::Image(resource) = &spec.background
+        && resource.path.as_os_str().len() > 4096
+    {
+        return Err(PrepareError::TooLarge);
+    }
+    Ok(())
+}
+
+fn cancelled(flag: &AtomicBool) -> Result<(), PrepareError> {
+    if flag.load(Ordering::Acquire) {
+        Err(PrepareError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+fn read_resource(resource: &ResourceRef, cancel: &AtomicBool) -> Result<Vec<u8>, PrepareError> {
+    cancelled(cancel)?;
+    let io_error = |error: std::io::Error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            PrepareError::MissingResource(resource.version)
+        } else {
+            PrepareError::ResourceIo(resource.version, error.kind())
+        }
+    };
+    // Reject known non-regular inputs before open (e.g. FIFO). OS path races or
+    // stalled filesystem calls still require process-level isolation to interrupt.
+    let metadata = std::fs::metadata(&resource.path).map_err(io_error)?;
+    if !metadata.is_file() {
+        return Err(PrepareError::ResourceIo(
+            resource.version,
+            std::io::ErrorKind::InvalidInput,
+        ));
+    }
+    if metadata.len() > MAX_SOURCE_BYTES as u64 {
+        return Err(PrepareError::TooLarge);
+    }
+    let file = File::open(&resource.path).map_err(io_error)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SOURCE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    cancelled(cancel)?;
+    if bytes.len() > MAX_SOURCE_BYTES {
+        return Err(PrepareError::TooLarge);
+    }
+    if <[u8; 32]>::from(Sha256::digest(&bytes)) != resource.sha256 {
+        return Err(PrepareError::ChangedResource(resource.version));
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn prepare(
+    spec: SceneSpec,
+    caps: RendererCapabilities,
+    cancel: &AtomicBool,
+) -> Result<PreparedCue, PrepareError> {
+    validate(&spec, caps)?;
+    cancelled(cancel)?;
+    let text = spec
+        .text
+        .map(|text| {
+            let font = read_resource(&text.font, cancel)?;
+            ttf_parser::Face::parse(&font, 0).map_err(|_| PrepareError::InvalidFont)?;
+            Ok(PreparedText {
+                content: text.content,
+                font_version: text.font.version,
+                font: font.into_boxed_slice(),
+                font_size: text.font_size,
+            })
+        })
+        .transpose()?;
+    let mut bytes = text.as_ref().map_or(0, |t| t.content.len() + t.font.len());
+    let background = match spec.background {
+        BackgroundSpec::Color(color) => PreparedBackground::Color(color),
+        BackgroundSpec::Image(resource) => {
+            let source = read_resource(&resource, cancel)?;
+            let format =
+                image::guess_format(&source).map_err(|_| PrepareError::UnsupportedImage)?;
+            if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
+                return Err(PrepareError::UnsupportedImage);
+            }
+            let (width, height) = image::ImageReader::with_format(Cursor::new(&source), format)
+                .into_dimensions()
+                .map_err(|_| PrepareError::InvalidImage)?;
+            let extent = Extent { width, height };
+            check_extent(extent, caps)?;
+            bytes += width as usize * height as usize * 4;
+            if bytes > MAX_SCENE_BYTES {
+                return Err(PrepareError::TooLarge);
+            }
+            cancelled(cancel)?;
+            let mut reader = image::ImageReader::with_format(Cursor::new(&source), format);
+            let mut limits = image::Limits::default();
+            limits.max_image_width = Some(caps.max_texture_dimension);
+            limits.max_image_height = Some(caps.max_texture_dimension);
+            limits.max_alloc = Some(MAX_SCENE_BYTES as u64);
+            if format == image::ImageFormat::Png {
+                let png = image::codecs::png::PngDecoder::with_limits(
+                    Cursor::new(&source),
+                    limits.clone(),
+                )
+                .map_err(|_| PrepareError::InvalidImage)?;
+                if png.is_apng().map_err(|_| PrepareError::InvalidImage)? {
+                    return Err(PrepareError::UnsupportedImage);
+                }
+            }
+            reader.limits(limits);
+            let rgba = reader
+                .decode()
+                .map_err(|_| PrepareError::InvalidImage)?
+                .into_rgba8()
+                .into_raw();
+            PreparedBackground::Image {
+                version: resource.version,
+                extent,
+                rgba: rgba.into_boxed_slice(),
+            }
+        }
+    };
+    cancelled(cancel)?;
+    Ok(PreparedCue {
+        version: spec.version,
+        extent: spec.extent,
+        background,
+        text,
+        bytes,
+    })
+}

@@ -273,14 +273,17 @@ not production decoding or prepared-scene ownership.
 
 Depends on: M0-04. Tests: U, I.
 
-- [ ] Define minimal immutable scene/cue types, stable identities, revisions,
+CPU preparation slice: [preparation.md](preparation.md). Renderer integration,
+shaping/upload and applied-state follow-through remain open; no gate is waived.
+
+- [x] Define minimal immutable scene/cue types, stable identities, revisions,
   asset/font references and renderer capabilities without GPUI types.
 - [ ] Separate selected/editing content, prepared cue and applied scene state.
 - [ ] Move filesystem/decode/font preparation off UI and live frame paths.
-- [ ] Define ownership/lifetimes, cancellation, preparation timeout and budgets.
+- [x] Define ownership/lifetimes, cancellation, preparation timeout and budgets.
 - [ ] Test missing asset, invalid scene and late completion after cancellation;
   preserve the prior valid scene in every failed preparation case.
-- [ ] Document versioning needs at the renderer boundary without inventing a
+- [x] Document versioning needs at the renderer boundary without inventing a
   public plugin API or unnecessary transport abstraction.
 
 Acceptance: a cue is either ready to apply or rejected without changing live.

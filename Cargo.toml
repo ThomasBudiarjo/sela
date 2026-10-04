@@ -8,6 +8,9 @@ description = "Offline worship presentation — native feasibility preview"
 repository = "https://github.com/thomasbudiarjo/sela"
 
 [dependencies]
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
+sha2 = "=0.10.9"
+ttf-parser = "=0.25.1"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false }
 zlog = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
@@ -16,6 +19,7 @@ zlog = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd3
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["wayland", "x11"] }
 
 [dev-dependencies]
+tempfile = "=3.27.0"
 winit = "=0.30.12"
 wgpu = "=29.0.4"
 pollster = "=0.4.0"
