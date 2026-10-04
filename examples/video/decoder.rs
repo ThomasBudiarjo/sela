@@ -209,6 +209,11 @@ impl Decoder {
                 }
                 read
             })();
+            if result.is_err() {
+                // Complete frames buffered before a terminal decoder error must
+                // not become fresh output after the caller observes failure.
+                stop.store(true, Ordering::Release);
+            }
             let _ = finish.send(result);
         });
         Self {
@@ -261,6 +266,30 @@ mod tests {
             assert_eq!(bytes(w, h, n), Err(Failure::Bounds));
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn completed_success_retains_final_frame_but_failure_hides_it() {
+        for (script, expected) in [
+            ("printf 'abcd'", Ok(())),
+            ("printf 'abcd'; exit 7", Err(Failure::Decoder)),
+        ] {
+            let mut c = Command::new("sh");
+            c.args(["-c", script]);
+            let d = Decoder::launch(c, None, 4, 1, Duration::from_secs(2));
+            assert_eq!(
+                d.done.recv_timeout(Duration::from_secs(3)).unwrap(),
+                expected
+            );
+            if expected.is_ok() {
+                let frame = d.poll().expect("completion must not discard final frame");
+                assert_eq!(frame.index, 0);
+                assert_eq!(frame.rgba, b"abcd");
+            } else {
+                assert!(d.poll().is_none(), "terminal failure hides buffered output");
+            }
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn watchdog_and_cancel() {

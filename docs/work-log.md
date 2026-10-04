@@ -696,3 +696,26 @@ PY
 - Next: parent merge and combined validation/backlog update; carry unresolved
   native surface/fence/PTS/audio/device/memory work forward. Local coherent
   `feat(M0-07c)` commit only; no push or waived release gates.
+
+### M0-07c — Parent integration review and failure fixes — 2026-10-04 UTC
+
+- Merged the shell and decoder worktrees locally, preserving both ticket commits
+  and both appended records. Reviewed actual implementations before integration.
+- Fixed terminal decoder failures exposing buffered frames, completion racing the
+  final poll, and the fixture encoder's unbounded exit wait. Added real-child
+  success/failure final-buffer and encoder timeout/error regressions.
+- `cargo test --locked --all-targets -j 8`: **40 passed** (11 video tests).
+  `cargo clippy --locked --all-targets -j 8 -- -D warnings`,
+  `cargo build --locked --all-targets -j 8`, `cargo fmt --all -- --check` passed.
+  Formatted implementation and diff reread. Runtime private mktemp directory:
+  `XDG_RUNTIME_DIR="$runtime" target/debug/examples/video_spike
+  .amp/in/artifacts/video` passed all 12 exact frame/readback and failure checks.
+- Parent inspected both first/last PNGs: readable actual text, left green stripe,
+  rectangle moves from left to right across the captured endpoints, no corruption.
+  Actual ordering/bytes verified by the executable, not inferred from screenshots.
+- Remains diagnostic-only: no native playback, audio, original PTS, physical
+  Windows/GPU qualification or hostile-process sandbox. Kernel metadata/spawn
+  latency and inherited stdout descendants are outside the watchdog contract.
+- Delivery: local ticket fix checkpoint; no push or release. Continue operator
+  work under the approved sequencing exception; native renderer integration and
+  observed transitions remain open.

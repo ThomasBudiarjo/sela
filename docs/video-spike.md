@@ -17,7 +17,7 @@ rmdir "$runtime"
 ```
 
 All passed on Debian 12 x64, FFmpeg 5.1.9-0+deb12u1, Vulkan llvmpipe
-LLVM15.0.6 / Mesa22.3.6. Nine ordinary tests do not invoke FFmpeg or GPU;
+LLVM15.0.6 / Mesa22.3.6. Eleven ordinary tests do not invoke FFmpeg or GPU;
 Unix child tests use only trusted static `sh -c` commands. Windows lifecycle
 tests and hardware qualification remain open. Initial strict Clippy rejected
 constant `chunks_exact`; replaced with `as_chunks`, reran all commands.
@@ -53,17 +53,26 @@ explicit first video map, input/output `-threads 1`, `-filter_threads 1`,
 `-nostdin`, `-xerror`, and frame limit. Commands use argument arrays, not shell
 interpolation; stderr is discarded rather than buffered. Encoder is private
 fixed-size setup only and its synchronous wait is outside UI/rendering; it has
-no independent watchdog. Decoder read failures/EOF are bounded by supervisor
+a 10-second watchdog with kill/reap on timeout. Decoder read failures/EOF are bounded by supervisor
 deadline if child hangs before exit. Cancel/deadline kill child to unblock read,
 discard queue visibility, join reader and reap. Failure never updates the
 demonstration's last accepted frame. Polling caller must reject stale generations
 when integrating with real application lifecycle; this example has no live scene.
+
+Terminal decoder failure hides already-buffered frames before reporting completion.
+Successful completion leaves the last buffered frame readable; the CLI drains it
+even when publication races its first poll. The watchdog starts after child spawn;
+filesystem metadata/spawn kernel latency and thread creation failure are outside
+its bound. Only the trusted child is killed, not arbitrary process descendants;
+this protocol is not intended for subprocesses that inherit stdout into children.
 
 Tests cover one-byte partial reads, clean/mid-frame EOF, zero/overflow bounds,
 sleeping-child deadline/cancel, asynchronous Drop/reaping, deterministic queue-full
 gate cancellation. CLI asserts installed FFmpeg success, missing `Input`, corrupt
 `Decoder`, saturated queue `Deadline`/`Cancelled`, no post-cancel frame, ordered
 frames and retained last composed result. No external dependency in ordinary tests.
+Regression tests cover encoder error/hang and completion-before-final-poll on both
+successful and failed decoders.
 
 ## Copies, synchronization and unresolved work
 

@@ -42,6 +42,26 @@ fn wait(d: &decoder::Decoder) -> Result<(), decoder::Failure> {
         std::thread::sleep(Duration::from_millis(1));
     }
 }
+
+fn encode(command: &mut Command, deadline: Duration) -> Result<(), Box<dyn Error>> {
+    let mut child = command.stdin(Stdio::null()).spawn()?;
+    let start = Instant::now();
+    let result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err("fixture encoder failed".into()),
+            Err(error) => break Err(error.into()),
+            Ok(None) if start.elapsed() >= deadline => {
+                break Err("fixture encoder deadline".into());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+        }
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 1 {
@@ -58,7 +78,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     // Fixture encoding is setup only; decoder spawn/read/wait are worker-owned.
-    let status = Command::new("ffmpeg")
+    let mut encoder = Command::new("ffmpeg");
+    encoder
         .args([
             "-nostdin",
             "-hide_banner",
@@ -96,12 +117,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "-f",
             "matroska",
         ])
-        .arg(&video)
-        .stdin(Stdio::null())
-        .status()?;
-    if !status.success() {
-        return Err("fixture encoder failed".into());
-    }
+        .arg(&video);
+    encode(&mut encoder, Duration::from_secs(10))?;
     let alpha = text::raster(
         include_bytes!("../tests/fixtures/DejaVuSans.ttf"),
         "Video · Café",
@@ -120,13 +137,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map_err(|e| format!("{e:?}"))?;
     let mut accepted = Vec::new();
     let start = Instant::now();
+    let mut completion = None;
     for index in 0..N {
         let frame = loop {
             if let Some(f) = d.poll() {
                 break f;
             }
             if let Some(r) = d.completion() {
-                return Err(format!("early completion {r:?}").into());
+                if r.is_ok() {
+                    // The last frame can arrive between poll and completion.
+                    // Completion is published after all successful sends.
+                    completion = Some(r);
+                    if let Some(f) = d.poll() {
+                        break f;
+                    }
+                }
+                return Err("decoder completed without the requested frame".into());
             }
             if start.elapsed() > Duration::from_secs(12) {
                 return Err("frame timeout".into());
@@ -172,7 +198,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?;
         }
     }
-    assert_eq!(wait(&d), Ok(()));
+    assert_eq!(completion.unwrap_or_else(|| wait(&d)), Ok(()));
     let last = accepted.clone();
     let corrupt = tmp.path().join("corrupt.mkv");
     std::fs::write(&corrupt, b"not matroska")?;
@@ -209,4 +235,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         "PASS: 12 exact ordered RGBA frames, actual text GPU pixels; missing/corrupt; saturated deadline/cancel and reaped completion; last accepted preserved"
     );
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoder_failure_and_hung_child_are_bounded() {
+        for (script, expected) in [
+            ("exit 7", "fixture encoder failed"),
+            ("exec sleep 10", "fixture encoder deadline"),
+        ] {
+            let start = Instant::now();
+            let error = encode(
+                Command::new("sh").args(["-c", script]),
+                Duration::from_millis(30),
+            )
+            .unwrap_err();
+            assert_eq!(error.to_string(), expected);
+            assert!(start.elapsed() < Duration::from_secs(2));
+        }
+    }
 }
