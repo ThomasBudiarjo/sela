@@ -113,7 +113,10 @@ fn shell_controls_and_resize(cx: &mut TestAppContext) {
         assert!(b.size.width > px(0.) && b.size.height > px(0.));
         assert!(b.right() <= px(720.) && b.bottom() <= px(440.));
     }
-    cx.update(|window, cx| assert!(operator.read(cx).focus.is_focused(window)));
+    cx.update(|window, cx| {
+        assert!(operator.read(cx).controls[2].is_focused(window));
+        assert!(operator.read(cx).focus.contains_focused(window, cx));
+    });
 }
 
 #[gpui::test]
@@ -156,6 +159,7 @@ fn splitters_bound_release_and_reset(cx: &mut TestAppContext) {
     assert_ne!(operator.read_with(&cx, |o, _| o.ratios), [0.24, 0.62, 0.62]);
     let b = cx.debug_bounds("reset-layout").unwrap();
     cx.simulate_click(b.center(), Default::default());
+    cx.update(|window, cx| assert!(operator.read(cx).controls[0].is_focused(window)));
     assert_eq!(operator.read_with(&cx, |o, _| o.ratios), [0.24, 0.62, 0.62]);
     for (selector, dimension, minimum) in [
         ("split-schedule", 0, 150.),
@@ -181,10 +185,124 @@ fn splitters_bound_release_and_reset(cx: &mut TestAppContext) {
         );
         let d = operator.read_with(&cx, |o, _| o.dimensions(1280., 800.));
         assert!((d[dimension] - minimum).abs() < 0.01);
+        cx.update(|window, cx| {
+            assert!(operator.read(cx).controls[0].is_focused(window));
+            assert!(operator.read(cx).focus.contains_focused(window, cx));
+        });
     }
     for (w, h) in [(0., 0.), (10., 10.), (720., 440.), (1280., 800.)] {
         let d = operator.read_with(&cx, |o, _| o.dimensions(w, h));
         assert!(d.iter().all(|v| v.is_finite() && *v >= 0.));
         assert!((d[0] + d[1] + d[2] - (w - 12.).max(0.)).abs() < 0.01);
     }
+}
+
+fn assert_control(cx: &mut VisualTestContext, operator: &Entity<Operator>, index: usize) {
+    cx.update(|window, cx| {
+        assert!(
+            operator.read(cx).controls[index].is_focused(window),
+            "control {index}"
+        );
+        assert!(operator.read(cx).focus.contains_focused(window, cx));
+    });
+}
+
+#[gpui::test]
+fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
+    let (mut cx, operator, seen) = fixture(cx);
+    for index in 0..8 {
+        cx.simulate_keystrokes("tab");
+        assert_control(&mut cx, &operator, index);
+        assert_eq!(operator.read_with(&cx, |o, _| o.tab), 0);
+    }
+    cx.simulate_keystrokes("tab");
+    assert_control(&mut cx, &operator, 0);
+    cx.simulate_keystrokes("shift-tab");
+    assert_control(&mut cx, &operator, 7);
+    for index in (0..7).rev() {
+        cx.simulate_keystrokes("shift-tab");
+        assert_control(&mut cx, &operator, index);
+    }
+    cx.simulate_keystrokes("tab tab tab tab");
+    assert_control(&mut cx, &operator, 4);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(operator.read_with(&cx, |o, _| o.tab), 1);
+    cx.simulate_keystrokes("tab space");
+    assert_eq!(operator.read_with(&cx, |o, _| o.tab), 2);
+    let schedule = cx.debug_bounds("Schedule").unwrap();
+    let ratios = operator.read_with(&cx, |o, _| o.ratios);
+    cx.simulate_keystrokes("ctrl-j down left shift-enter shift-space");
+    assert_control(&mut cx, &operator, 5);
+    assert_eq!(operator.read_with(&cx, |o, _| o.tab), 2);
+    assert_eq!(operator.read_with(&cx, |o, _| o.ratios), ratios);
+    assert_eq!(cx.debug_bounds("Schedule").unwrap(), schedule);
+    cx.simulate_keystrokes("ctrl-q");
+    assert_eq!(seen.get(), 1, "root Quit routes from a child context");
+    cx.simulate_keystrokes("shift-tab shift-tab shift-tab shift-tab enter space");
+    assert_control(&mut cx, &operator, 1);
+    assert_eq!(
+        seen.get(),
+        3,
+        "each focused Quit activation dispatches once"
+    );
+    cx.update(|_, cx| cx.clear_key_bindings());
+    cx.simulate_keystrokes("enter space tab ctrl-q");
+    assert_control(&mut cx, &operator, 1);
+    assert_eq!(
+        seen.get(),
+        3,
+        "unbound keys must not bypass semantic actions"
+    );
+}
+
+#[gpui::test]
+fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
+    let (mut cx, operator, seen) = fixture(cx);
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    let original = operator.read_with(&cx, |o, _| (o.tab, o.ratios, o.collapsed));
+    cx.simulate_keystrokes("enter space ctrl-j down left");
+    assert_eq!(
+        original,
+        operator.read_with(&cx, |o, _| (o.tab, o.ratios, o.collapsed))
+    );
+    cx.simulate_keystrokes("tab tab tab enter");
+    assert!(operator.read_with(&cx, |o, _| o.collapsed));
+    assert_control(&mut cx, &operator, 2);
+    assert!(cx.debug_bounds("Songs").is_none());
+    cx.simulate_keystrokes("tab");
+    assert_control(&mut cx, &operator, 0);
+    cx.simulate_keystrokes("shift-tab space");
+    assert_control(&mut cx, &operator, 2);
+    assert!(!operator.read_with(&cx, |o, _| o.collapsed));
+    cx.simulate_keystrokes("tab");
+    assert_control(&mut cx, &operator, 3);
+    let b = cx.debug_bounds("collapse-resources").unwrap();
+    cx.simulate_click(b.center(), Default::default());
+    assert_control(&mut cx, &operator, 2);
+    cx.simulate_keystrokes("tab enter");
+    assert_control(&mut cx, &operator, 0);
+    assert!(!operator.read_with(&cx, |o, _| o.collapsed));
+    cx.update(|window, cx| window.blur(cx));
+    cx.simulate_keystrokes("tab enter space ctrl-q");
+    cx.update(|window, cx| assert!(!operator.read(cx).focus.contains_focused(window, cx)));
+    assert_eq!(seen.get(), 0);
+    assert_eq!(
+        original,
+        operator.read_with(&cx, |o, _| (o.tab, o.ratios, o.collapsed))
+    );
+    // Unavailable Live labels have neither focus handles nor activation routes.
+    for label in ["Go Live", "Black", "Clear", "Logo"] {
+        let bounds = cx.debug_bounds(label).unwrap();
+        cx.simulate_click(bounds.center(), Default::default());
+        cx.update(|window, cx| {
+            assert!(operator.read(cx).focus.is_focused(window));
+            assert!(!window.is_action_available(&ActivateControl, cx));
+        });
+        cx.simulate_keystrokes("enter space");
+    }
+    assert_eq!(
+        original,
+        operator.read_with(&cx, |o, _| (o.tab, o.ratios, o.collapsed))
+    );
+    assert_eq!(seen.get(), 0);
 }

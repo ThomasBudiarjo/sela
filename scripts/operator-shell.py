@@ -15,10 +15,7 @@ def run(*args):
 def main():
     artifacts = Path(".amp/in/artifacts/operator-shell")
     artifacts.mkdir(parents=True, exist_ok=True)
-    binary = (
-        Path(os.environ.get("CARGO_TARGET_DIR", "target")).resolve()
-        / "debug/sela"
-    )
+    binary = Path(os.environ.get("CARGO_TARGET_DIR", "target")).resolve() / "debug/sela"
     with tempfile.TemporaryDirectory(prefix="sela-shell-") as scratch:
         env = dict(os.environ, XDG_RUNTIME_DIR=scratch)
         with open(Path(scratch) / "app.log", "w") as log:
@@ -86,7 +83,13 @@ def main():
                     run("xdotool", "click", "1")
                     time.sleep(0.2)
 
-                def capture(name):
+                def key(*keys):
+                    focus()
+                    run("xdotool", "key", "--clearmodifiers", *keys)
+                    time.sleep(0.2)
+                    assert app.poll() is None, "unexpected keyboard exit"
+
+                def capture(name, focused=None, selected=None):
                     g = geometry()
                     root = str(Path(scratch) / "root.png")
                     run("import", "-window", "root", root)
@@ -98,9 +101,40 @@ def main():
                         "+repage",
                         str(artifacts / f"{name}.png"),
                     )
+                    for point, color in [(focused, "DCE3FA"), (selected, "536ACA")]:
+                        if point is not None:
+                            pixel = run(
+                                "convert",
+                                str(artifacts / f"{name}.png"),
+                                "-format",
+                                f"%[hex:p{{{point[0]},{point[1]}}}]",
+                                "info:",
+                            )
+                            assert pixel == color, (
+                                f"{name}: {point}: {pixel} != {color}"
+                            )
 
                 resize(1280, 800)
                 capture("normal")
+                pointer(600, 20)  # Keep hover out of keyboard-focus captures.
+                key("Tab")
+                capture("focus-reset", focused=(220, 10))
+                key("Tab", "Tab", "Tab", "Tab")
+                capture(
+                    "focus-scriptures-unselected", focused=(80, 528), selected=(20, 554)
+                )
+                key("Return")
+                capture(
+                    "focus-scriptures-selected", focused=(80, 528), selected=(90, 554)
+                )
+                key("Tab", "space")
+                capture("focus-media-selected", focused=(170, 528), selected=(180, 554))
+                key("shift+Tab", "shift+Tab", "shift+Tab", "Return")
+                capture("keyboard-collapsed", focused=(100, 777))
+                key("Tab")
+                capture("collapsed-focus-reset", focused=(220, 10))
+                key("Return")
+                capture("keyboard-reset", focused=(220, 10), selected=(180, 554))
                 pointer(270, 20)
                 time.sleep(0.2)
                 capture("hover-reset")
@@ -123,7 +157,8 @@ def main():
                 run("xdotool", "key", "--clearmodifiers", "ctrl+q")
                 assert app.wait(timeout=10) == 0
                 print(
-                    "PASS: native size/focus/exit assertions; tab/collapse/reset/drag "
+                    "PASS: native size/focus/survival/exit assertions; keyboard "
+                    "focus/activation and tab/collapse/reset/drag "
                     "input captured for required visual state inspection"
                 )
             finally:

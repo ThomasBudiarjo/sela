@@ -18,7 +18,7 @@ owned marker; a retained activation subscription cancels it on deactivation.
 Drags do not focus another control. Geometry is recalculated from viewport bounds
 on render; resizing retains proportions, with 150px upper pane minima and 140px
 upper/resources area minima. Subminimum viewports use nonnegative equal-share
-fallback minima. Resources collapse/restore and Reset layout are clickable only;
+fallback minima. Resources collapse/restore and Reset layout support click and keyboard;
 reset restores provisional ratios and expands Resources. Layout persistence,
 alternative layout modes, installed-reference focus/traversal and mixed-DPI
 qualification remain parent M1-02 acceptance, not silently dropped functionality.
@@ -116,3 +116,56 @@ text is centered at y≈168 within its y72–264 canvas; Live centers higher bec
 its bottom controls consume 32px. No extra geometry correction is required.
 Before-style capture is retained for comparison; this is a first styling slice,
 not a finished product UI or owner approval of the design.
+
+## M1-03a: bounded shell keyboard access
+
+Implemented-unqualified on `ticket/m1-03-focus`, based on local main `c937670`.
+Tab / Shift+Tab traverse Reset layout, Quit, Collapse/Restore resources, then
+Songs / Scriptures / Media / Presentations / Themes, wrapping in either direction.
+Traversal does **not** select a tab. Enter / Space activate only the focused
+control. Click focuses and activates once. Focus has a pale blue background;
+selected resource tabs retain their separate underline. Root Ctrl+Q still routes
+from child contexts. No Go Live, safety, slide navigation or search bindings exist.
+Disabled Live labels have no focus handle or action handler.
+
+These keys/order/wrapping are reversible **Sela accessibility policy**, not
+observed EasyWorship 8.0.49 behavior. Layout 1:1 remains the target; no Painter,
+new control placement, domain behavior or output connection is introduced.
+Retained handles and GPUI's rendered tab-stop tree exclude hidden resource tabs.
+Collapse clicks focus the surviving collapse control; reset focuses its own
+surviving control and expands Resources without changing selected tab. Splitter
+mouse down suppresses GPUI's default ancestor refocus, retaining the current
+root or child focus while preserving geometry and drag/release handling.
+
+Reviewed current upstream HEAD via `git ls-remote` (same pinned
+`a84689073d296dfd39987bc7dd478e43ef76d83a`): Apache-2.0
+`crates/gpui/examples/tab_stop.rs`, `crates/gpui/src/window.rs`
+(`FocusHandle::tab_index/tab_stop`, containment, rendered-tree focus_next/prev),
+`crates/gpui/src/elements/div.rs` (track_focus, focus style, default mouse focus
+and synthesized keyboard clicks), and `crates/gpui/src/interactive.rs`
+(`ClickEvent`). Original implementation uses semantic actions in `Sela` and
+`SelaControl` contexts. Keyboard click synthesis is explicitly rejected by the
+click callback so an unbound key cannot bypass action policy or double-activate.
+No GPL application UI was copied.
+
+Executed reproduction commands above: **42 all-target tests pass**, including
+seven actual operator-tree tests. New tests assert forward/backward wrapping,
+focused Enter/Space including Quit, hidden-tab removal, safe collapse/reset,
+unfocused/unbound rejection, unchanged selection/ratios on irrelevant keys,
+root Quit from children, inert Live labels and exact focus retained after drags.
+Native driver additionally asserts pixel colors at focus/selection locations
+in fixed 1280×800 captures, PID focus, size, survival and exit; these are bounded
+rendered-state assertions, not an accessibility-tree or physical-device test.
+
+Inspected `focus-scriptures-unselected.png` (Songs underline/empty label while
+Scriptures has focus), `focus-media-selected.png` (Media focus and underline),
+`keyboard-collapsed.png` (focused Restore, no tabs), and `keyboard-reset.png`
+(focused Reset, Resources restored, Media selection retained), under
+`.amp/in/artifacts/operator-shell/`. Native Enter collapse stayed collapsed,
+demonstrating no synthesized second activation on key release. Native-smoke
+also passes Ctrl+Q and WM-close clean termination. Shared X11 services unchanged.
+
+Open qualifications: installed reference observation, Windows/UIA/Narrator,
+physical GPU/display, mixed DPI, screen readers and performance. Text inputs,
+modals, multi-selection and actual navigation/live commands are not implemented
+in this shell; qualify their ownership with their future controls, not here.
