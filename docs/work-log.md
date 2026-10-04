@@ -6,6 +6,11 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- Active continuation: **M1-06b** backed-up arrangement/section-ID persistence
+  and lossless editor round trips; **M0-06c/M0-07d** bounded owned resource
+  transport and native prepared composition. Independent worktrees, local commits
+  per slice. Owner permits postponing Windows/physical qualification to the end;
+  available automated checks continue before commits. No gate is marked passed.
 - Application: native GPUI technical preview builds and renders on Linux software
   OpenGL, with persistent offline song authoring; no service schedule UI or live
   lyric presentation yet. The Linux preview is reinstalled and native-tested.
@@ -1443,3 +1448,17 @@ PY
   Preview launcher remains `scripts/run-orb-preview.sh`. Resume the explicit-ID
   persistence/migration prerequisite and renderer resource transport separately;
   obtain Windows/reference access when the owner is available.
+
+### Continuation scope — 2026-10-04 UTC
+
+- Owner asks to continue feasible implementation and postpone final Windows/
+  hardware proof. Resume two independent prerequisites from local main: storage
+  explicit-ID/arrangement migration with verified backup, and owned font/text/
+  image transport with native readiness separated from frame submission.
+- Storage owns repository/domain/editor data round trips and their tests;
+  renderer owns scene/transport/native examples and their tests. No Painter or
+  live-control semantics change. Reference unknowns remain explicit.
+- Each worktree records/commits its own bounded slices. Parent merges locally,
+  reviews combined contracts and runs integration/native checks. Shared Cargo
+  target must be serialized and root-source compilation observed to avoid the
+  previously detected stale-worktree artifact reuse. No push authorized.
