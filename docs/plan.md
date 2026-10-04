@@ -2,7 +2,7 @@
 
 This is a condensed implementation baseline from the product discussion, not a
 verbatim copy of the original master plan. Future scope remains a product goal;
-no application features have been implemented.
+the work log records implemented slices and outstanding qualification.
 
 The [implementation backlog](backlog.md) expands this baseline into executable
 tickets, compatibility coverage, test boundaries, and release gates. The

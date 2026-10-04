@@ -6,9 +6,10 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 started=$SECONDS
 echo "[setup] Checking native build and graphics prerequisites"
 packages=(
-  build-essential pkg-config git ca-certificates curl shellcheck
+  build-essential cmake clang pkg-config git ca-certificates curl shellcheck
   libfontconfig-dev fonts-dejavu-core libwayland-dev libxkbcommon-x11-dev
   libvulkan1 mesa-vulkan-drivers vulkan-tools
+  xvfb xauth xdotool openbox xcompmgr imagemagick
 )
 missing=()
 for package in "${packages[@]}"; do
@@ -52,4 +53,8 @@ rustc --version
 cargo --version
 cargo fmt --version
 cargo clippy --version
-echo "[setup] Ready ($((SECONDS - started))s total); no application manifest yet"
+if [[ -f Cargo.lock ]]; then
+  echo "[setup] Fetching locked Rust dependencies"
+  cargo fetch --locked
+fi
+echo "[setup] Ready ($((SECONDS - started))s total); build with cargo build --locked"

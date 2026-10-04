@@ -1,8 +1,8 @@
 # Implementation backlog
 
 This is the executable backlog for [the engineering baseline](plan.md), from an
-empty repository to a qualified release. Updated 2026-10-04. No application code
-exists yet. Checkboxes describe work to do, not existing capabilities.
+empty repository to a qualified release. Updated 2026-10-04. A native bootstrap
+exists; the work log distinguishes implementation from qualification.
 
 The goal is comprehensive EasyWorship feature, layout, and operator-UX coverage
 with original code/assets, Rust, GPUI, offline operation, and a separately paced
@@ -191,13 +191,13 @@ stable IDs such as `EW8-OBS-001`, linked from tickets and tests. Each record nee
 
 Depends on: none. Tests: U, N; Windows build required.
 
-- [ ] Inspect current Zed `crates/gpui` and relevant minimal window/action examples;
+- [x] Inspect current Zed `crates/gpui` and relevant minimal window/action examples;
   record upstream commit/paths and license boundaries before adopting patterns.
-- [ ] Pin Rust toolchain and known-good GPUI revision; choose the smallest crate
+- [x] Pin Rust toolchain and known-good GPUI revision; choose the smallest crate
   structure with clear ownership, not an empty crate for each future feature.
-- [ ] Add application entry point and a minimal operator window with clean exit.
-- [ ] Document Linux development and Windows build prerequisites and commands.
-- [ ] Add formatting, lint, unit-test and Windows build CI; keep GPU tests separate.
+- [x] Add application entry point and a minimal operator window with clean exit.
+- [x] Document Linux development and Windows build prerequisites and commands.
+- [x] Add formatting, lint, unit-test and Windows build CI; keep GPU tests separate.
 - [ ] Document run/test commands from a clean checkout; smoke-open on Windows.
 
 Acceptance: reproducible build and native window; no renderer-independence claim.

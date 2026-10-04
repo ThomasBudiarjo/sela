@@ -6,13 +6,13 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
-- Application: not implemented; no runnable Rust/GPUI project yet.
-- Active partial ticket: **M0-01 — Reproducible Rust/GPUI bootstrap**.
-- Completed slice: orb prerequisites and Rust 1.98.1 pin; setup tested locally.
-  Setup is not active for future project orbs until pushed to the default branch.
-- All other M0–M5 implementation tickets remain `planned`.
-- Next action: inspect current upstream GPUI minimal application/action examples,
-  record commit/paths/licenses, then pin the GPUI dependency and create the app.
+- Application: native GPUI technical preview builds and renders on Linux software
+  OpenGL; no service authoring or audience output yet.
+- M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
+- Next slices: M0-03 native harness and M0-04 independent audience spike in separate
+  worktrees; M0-02 reference research runs alongside, installed observation blocked.
+- M1–M5 remain `planned`; M0-10 requires physical Windows evidence before full UI.
+- Setup and application changes are local only; no push/publication authorized.
 - Parallel opportunity: M0-02 reference observation when a lawful EasyWorship
   8.0.49 installation on Windows is available.
 - Known qualification needs: real Windows GPU/displays; EasyWorship reference;
@@ -28,9 +28,41 @@ remain `planned`. Update the current state above when switching work.
 | Ticket | State | Completed slice / remaining work |
 | --- | --- | --- |
 | PLAN-001 | done | 63 implementation tickets, 326 ticket checklist items, test/compatibility matrices and commit/resume rules. Documentation verified; delivered in this local planning commit. No application implementation. |
-| M0-01 | active | Orb setup slice and Rust pin committed locally. GPUI revision, crate/application, CI, Windows prerequisites/build/native launch remain open. |
+| M0-01 | implemented-unqualified | Pinned native GPUI window, lockfile, CI and instructions; Linux build/render/quit verified. Windows build and native launch open. |
 
 ## Session records
+
+### M0-01 — Native bootstrap — 2026-10-04 (Asia/Jakarta)
+
+- Scope: one Rust package, pinned GPUI/platform and stderr diagnostics, minimal
+  original light window, contextual Quit action, close lifecycle, lockfile,
+  Linux checks/Windows build CI, setup dependencies and build instructions.
+- Upstream pin, inspected API paths and Apache/GPL boundary are recorded in
+  `docs/gpui-bootstrap.md`; no Zed application components/assets copied.
+- Verification: `cargo build --locked -j 8` passed; `target/debug/sela --version`
+  printed `Sela 0.1.0 (technical preview)`; `cargo fmt --all -- --check`,
+  `cargo clippy --locked --all-targets -j 8 -- -D warnings`, `git diff --check`
+  passed. `cargo test --locked -j 8` passed with **zero tests**, not feature coverage;
+  M0-03 adds meaningful action/native checks.
+- Initial compile exposed the two-argument close callback and a focus-handle
+  borrow; both corrected against pinned GPUI before final checks.
+- Native N: Xvfb 1600x1000, Openbox, xcompmgr, Debian 12 x64, Mesa llvmpipe
+  software GL. `DISPLAY=:99 xdotool ... key --clearmodifiers ctrl+q` and
+  `... key --clearmodifiers alt+F4` closed the window; service recorded clean exit.
+  Root `import` captures cropped with ImageMagick were inspected at 960x600 and
+  720x440: readable title, limitation text and Quit control, no clipping.
+  Evidence: `.amp/in/artifacts/m0-01-bootstrap.png`, `m0-01-small.png`.
+- Failure evidence: software Vulkan configured but produced black captures;
+  native GL test used `VK_DRIVER_FILES=/dev/null`. Direct-window captures also
+  failed/hung; root captures succeeded. No claim that Vulkan/native GPUs pass.
+- Setup: `bash -n .agents/setup`, `shellcheck .agents/setup` passed; installation
+  11.903s; locked fetch warm run 3s, subsequent run 0.932s. No secrets required.
+- Unrun: Windows CI (not pushed/dispatched), Windows build/native launch,
+  hardware, accessibility and EasyWorship installed observation. `list_runners`
+  returned no connected runners. No milestone gate waived.
+- Delivery: local M0-01 implementation checkpoint, not an installer/release.
+- Next: integrate M0-02 research and run M0-03/M0-04 isolated worktrees; obtain
+  Windows dual-display/reference access for required qualification.
 
 ### M0-01 — Partial: orb prerequisites — 2026-10-04 (Asia/Jakarta)
 
@@ -108,7 +140,7 @@ assert len(tickets) == len(parts[1::2]), 'duplicate IDs'
 graph = {}
 for key, body in tickets.items():
     assert 'Acceptance:' in body, key
-    assert len(re.findall(r'^- \[ \]', body, re.M)) >= 5, key
+    assert len(re.findall(r'^- \[[ x]\]', body, re.M)) >= 5, key
     header = re.search(r'Depends on: (.*?)Tests:', body, re.S)
     assert header, key
     graph[key] = re.findall(r'M\d-\d{2}', header[1])
@@ -139,7 +171,7 @@ for path in [Path('README.md'), Path('AGENTS.md'), *Path('docs').glob('*.md')]:
             headings = re.findall(r'^#+ (.+)$', target.read_text(), re.M)
             anchors = [re.sub(r'[^\w\- ]', '', h.lower()).replace(' ', '-') for h in headings]
             assert fragment in anchors, (path, link)
-count = sum(len(re.findall(r'^- \[ \]', body, re.M)) for body in tickets.values())
+count = sum(len(re.findall(r'^- \[[ x]\]', body, re.M)) for body in tickets.values())
 print(f'PASS: {len(tickets)} unique tickets; {count} ticket checklist items')
 print('PASS: dependencies acyclic; references, local links/anchors and whitespace valid')
 PY

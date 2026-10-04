@@ -3,7 +3,20 @@
 An open-source, offline-first worship presentation platform built with Rust and
 GPUI. Windows is the first-class deployment target; macOS and Linux are planned.
 
-**Status: planning and technical validation. There is no runnable application yet.**
+**Status: native technical preview. Service authoring and live presentation are
+not yet implemented or qualified for use in a service.**
+
+## Build the technical preview
+
+On Debian Linux, run `.agents/setup`, `cargo build --locked`, then
+`cargo run --locked` in a graphical session. `target/debug/sela --version` also
+works without a display. The preview opens a native GPUI window; Ctrl+Q or closing
+the window exits. It does not modify user data or open network listeners.
+
+See [bootstrap and Windows instructions](docs/gpui-bootstrap.md) for dependency
+provenance, prerequisites, verification commands and qualification limits.
+Windows build/native verification and the independent-audience feasibility gate
+remain open; this is not an installable Sunday-ready release.
 
 ## Product direction
 
@@ -45,9 +58,9 @@ application UI code is copied.
 
 X11/Wayland libraries and Mesa software Vulkan prepare the Linux environment;
 they do not select Sela's audience renderer or qualify physical GPU performance.
-The application/GPUI dependency revision, Windows build, and native launch remain
-M0-01 work. There is no `Cargo.toml` yet, so setup does not fetch/build an app.
-Revalidate packages and add locked dependency fetching when the manifest lands.
+Setup fetches the locked dependencies without compiling the application. Xvfb,
+Openbox and xdotool support native Linux smoke checks, not Windows/physical display
+qualification. GPUI is pinned in `Cargo.toml`; transitive versions are locked.
 
 Check setup with `bash -n .agents/setup`, `shellcheck .agents/setup`, and two
 consecutive `.agents/setup` runs. Changes only reach future project orbs after
