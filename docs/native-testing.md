@@ -32,12 +32,22 @@ storage and renderer failures are not implemented and therefore not tested here.
 
 ## Reproduce
 
+On a fresh orb after `.agents/setup`, provision the virtual display once (only if
+`:99` is unused). These are supervised native services, not web UI substitutes:
+
 ```sh
-export CARGO_TARGET_DIR=/home/user/workspace/repo/target
-cargo test --locked -j 4
-cargo build --locked -j 4
+amp orb service start sela-x11 --command 'Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp'
+amp orb service start sela-wm --command 'env DISPLAY=:99 openbox'
+amp orb service start sela-compositor --command 'env DISPLAY=:99 xcompmgr'
+```
+
+From the repository root, run checks serially:
+
+```sh
+cargo test --locked --all-targets -j 4
+cargo build --locked --all-targets -j 4
 DISPLAY=:99 VK_DRIVER_FILES=/dev/null scripts/native-smoke.sh \
-  "$CARGO_TARGET_DIR/debug/sela" .amp/in/artifacts
+  "${CARGO_TARGET_DIR:-$PWD/target}/debug/sela" .amp/in/artifacts
 bash -n scripts/native-smoke.sh
 shellcheck scripts/native-smoke.sh
 ```
@@ -95,7 +105,8 @@ roles/names/actions separately; report missing semantics rather than guessing.
 Use a lawful pinned EasyWorship installation for compatibility tests; Quit is
 Sela's development control, not an observed reference shortcut.
 
-Headless CI runs GPUI tests only. Native runs are opt-in and fail without DISPLAY;
+Headless CI runs GPUI and pure example tests only, not native windows. Native
+runs are opt-in and fail without DISPLAY;
 absence of a graphical/Windows/hardware runner must be recorded as **not run**,
 never hardware-qualified or silently skipped green. Do not replace GPUI with a
 web UI to manufacture coverage.

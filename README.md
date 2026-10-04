@@ -18,6 +18,12 @@ provenance, prerequisites, verification commands and qualification limits.
 Windows build/native verification and the independent-audience feasibility gate
 remain open; this is not an installable Sunday-ready release.
 
+The opt-in [audience spike](docs/output-spike.md) uses a separate winit/wgpu process
+and tests UI stalls, delayed worker preparation and operator termination. It is
+diagnostic geometry, not lyric presentation. [Native tests](docs/native-testing.md)
+exercise the real GPUI window; the [reference ledger](docs/reference-observations.md)
+records documentation evidence and the still-required Windows observations.
+
 ## Product direction
 
 - GPUI is the operator frontend, not the live presentation renderer.

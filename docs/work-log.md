@@ -7,10 +7,15 @@ include timezone for timed hardware/rehearsal evidence.
 ## Current state
 
 - Application: native GPUI technical preview builds and renders on Linux software
-  OpenGL; no service authoring or audience output yet.
+  OpenGL; no service authoring or lyric presentation yet. An opt-in winit/wgpu
+  audience-process diagnostic has measured independent animation.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
-- Next slices: M0-03 native harness and M0-04 independent audience spike in separate
-  worktrees; M0-02 reference research runs alongside, installed observation blocked.
+- M0-02 reference ledger, M0-03 native harness and M0-04 audience spike were
+  developed in separate worktrees and merged into local `main`, with ticket
+  commits and an M0-04 integration/failure-check checkpoint.
+- Resume M0-04 on Windows DX12 with two physical displays, DPI/topology changes,
+  hotplug and physical capture; run the M0-02 installed-reference runbook alongside.
+  No Windows runner is connected. These required checks block gate closure.
 - M1–M5 remain `planned`; M0-10 requires physical Windows evidence before full UI.
 - Setup and application changes are local only; no push/publication authorized.
 - Parallel opportunity: M0-02 reference observation when a lawful EasyWorship
@@ -18,7 +23,8 @@ include timezone for timed hardware/rehearsal evidence.
 - Known qualification needs: real Windows GPU/displays; EasyWorship reference;
   later physical audio/capture/controllers/mobile devices and permitted provider
   accounts. None is assumed available merely because this repo is in an orb.
-- Native E2E: not evaluated; M0-03 decides feasibility and records fallback.
+- Native E2E: bounded X11 PID-scoped focus/resize/key/exit checks passed. Windows
+  accessibility/physical display qualification remains open; see native runbook.
 
 ## Ticket status index
 
@@ -29,6 +35,9 @@ remain `planned`. Update the current state above when switching work.
 | --- | --- | --- |
 | PLAN-001 | done | 63 implementation tickets, 326 ticket checklist items, test/compatibility matrices and commit/resume rules. Documentation verified; delivered in this local planning commit. No application implementation. |
 | M0-01 | implemented-unqualified | Pinned native GPUI window, lockfile, CI and instructions; Linux build/render/quit verified. Windows build and native launch open. |
+| M0-02 | blocked | Public-source ledger and executable observation runbook; lawful installed 8.0.49/Windows access missing, zero installed observations. |
+| M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
+| M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, bounded synthetic slow preparation and clean/forced operator exit; Windows physical qualification open. |
 
 ## Session records
 
@@ -356,3 +365,57 @@ PY
   .amp/in/artifacts/output-spike-final` passed, 619 calls, stall calls 6/30/117/6,
   post-exit/kill 214/70; p50/p95/max 16.854/18.152/49.197ms. Prior measurement
   artifacts retained; final exact 2s/exit/kill timestamps appended in spike note.
+
+### M0-04 — Integration and delayed preparation — 2026-10-04 (Asia/Jakarta)
+
+- Scope: integrated M0-02/M0-03/M0-04 worktrees in local main, retained both
+  work-log records when resolving the append conflict; no implementation conflict.
+  Added single in-flight delayed background task and busy/completed feedback.
+  Uses pinned GPUI background executor/entity task/update patterns from
+  `crates/gpui/examples/testing.rs`; no actual decoder or production scene protocol.
+- Corrected driver title-only targeting and hard-coded orb checkout/environment:
+  now PID-scoped, verifies focus on every key, uses private temporary runtime,
+  inherits explicit DISPLAY/backend choice, closes/reaps only owned processes.
+  Captures root to temporary storage and retains cropped owned windows only.
+  Strengthened interval assertions (complete ordered stalls, boundaries included,
+  ≥500ms stall-gap rejection as diagnostic only), actual clean-exit status and
+  one worker/busy rejection/control action entirely within preparation interval.
+- `cargo fmt --all -- --check`, `cargo build --locked --all-targets -j 8`,
+  `cargo test --locked --all-targets -j 8` (**4 passed**),
+  `cargo clippy --locked --all-targets -j 8 -- -D warnings`,
+  `uvx ruff check scripts/output-spike.py`, Bash syntax/ShellCheck, and
+  `git diff --check`: passed. CI commands now include example tests; remote
+  workflows have not been pushed or run. Formatter changes were reread.
+- Native integrated baseline: `DISPLAY=:99 VK_DRIVER_FILES=/dev/null
+  scripts/native-smoke.sh /home/user/workspace/repo/target/debug/sela .amp/in/artifacts`
+  passed after merge and again after preparation changes. Rendered resized
+  bootstrap inspected: no clipped labels. No fake web UI or browser evidence.
+- `DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/output-spike.py
+  .amp/in/artifacts/output-preparation` passed on Debian12 Xvfb/Openbox/xcompmgr,
+  Mesa22.3.6 llvmpipe GL, debug build. 898 present calls; p50/p95/max intervals
+  16.828/17.757/46.039ms; 118 inside 2s UI stall; 237/76 after clean exit/SIGKILL.
+  During 2s background delay the 100ms UI handler completed before worker finish,
+  repeated preparation was rejected, and audience maximum gap was 41.877ms.
+  Exact correlation times are in `docs/output-spike.md` and artifact summary.json.
+- Inspected preparation pending/completed screenshots and two-frame comparisons
+  during UI stall/after exit: readable controls/help and changed triangle position.
+  Artifact directory `.amp/in/artifacts/output-preparation/`; captures/logs are
+  local evidence, not physical scanout or hardware performance qualification.
+- Failure checks: subprocess runs with missing DISPLAY, nonexistent target binary
+  and invalid X server all returned nonzero within 15s, produced no success
+  summary, and left no `sela-output-*` runtime directories. Initial Ruff findings
+  (imports/mode/file scope/style) corrected with formatter and scoped file lifetime.
+- Remaining blockers: Windows build/native launch/DX12 physical dual-monitor
+  mixed-DPI/fullscreen/hotplug/recovery; lawful installed EasyWorship 8.0.49
+  observations; software Vulkan black-capture finding. Production command,
+  scene, text/video and data/UI tickets have not been implemented or qualified.
+  M0-10 entry-to-M1 gate is not waived; usable/installed Sunday app is not delivered.
+- Next concrete action: connect an authorized Windows runner with physical output
+  and reference access; execute `docs/reference-observations.md` W01–W05 and the
+  Windows spike sequence in `docs/output-spike.md`, recording actual evidence.
+- Delivery: local ticket commits plus worktree merges and this M0-04 checkpoint;
+  no push, installer, signed package, publication or deployment.
+- Final identical-source repeat passed: 883 calls; 117 during 2s stall;
+  post-exit/kill 241/75; preparation max gap 54.505ms. Summary retained as
+  `.amp/in/artifacts/output-preparation/repeat-summary.json`; transient duplicate
+  captures removed. Native setup commands are now explicit in the runbook.

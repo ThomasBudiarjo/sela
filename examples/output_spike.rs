@@ -35,7 +35,7 @@ fn stamp(event: &str) {
         let _ = tx.try_send(line);
     }
 }
-actions!(spike, [Stall100, Stall500, Stall2000, Exit]);
+actions!(spike, [Stall100, Stall500, Stall2000, PrepareDelayed, Exit]);
 fn stall(ms: u64) {
     stamp(&format!("stall_begin {ms}"));
     std::thread::sleep(Duration::from_millis(ms));
@@ -43,6 +43,31 @@ fn stall(ms: u64) {
 }
 struct Operator {
     focus: FocusHandle,
+    preparation: Option<Task<()>>,
+}
+impl Operator {
+    fn prepare_delayed(&mut self, cx: &mut Context<Self>) {
+        if self.preparation.is_some() {
+            stamp("preparation_busy");
+            return;
+        }
+        // Controlled latency injection only, not a decoder or prepared scene.
+        // One in-flight worker; repeated input is rejected, never queued.
+        let worker = cx.background_executor().spawn(async {
+            stamp("preparation_begin");
+            std::thread::sleep(Duration::from_secs(2));
+            stamp("preparation_end");
+        });
+        self.preparation = Some(cx.spawn(async move |this, cx| {
+            worker.await;
+            let _ = this.update(cx, |this, cx| {
+                this.preparation = None;
+                stamp("preparation_observed");
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
 }
 impl Render for Operator {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -50,6 +75,7 @@ impl Render for Operator {
             .on_action(cx.listener(|_, _: &Stall100, _, _| stall(100)))
             .on_action(cx.listener(|_, _: &Stall500, _, _| stall(500)))
             .on_action(cx.listener(|_, _: &Stall2000, _, _| stall(2000)))
+            .on_action(cx.listener(|this, _: &PrepareDelayed, _, cx| this.prepare_delayed(cx)))
             .on_action(cx.listener(|_, _: &Exit, _, cx| { stamp("operator_exit"); cx.quit(); }))
             .size_full().p_8().bg(rgb(0xf4f6f9)).text_color(rgb(0x182536))
             .flex().flex_col().gap_4()
@@ -58,6 +84,10 @@ impl Render for Operator {
             .child(div().id("stall100").on_click(cx.listener(|_, _, _, _| stall(100))).child("Stall 100 ms"))
             .child(div().id("stall500").on_click(cx.listener(|_, _, _, _| stall(500))).child("Stall 500 ms"))
             .child(div().id("stall2000").on_click(cx.listener(|_, _, _, _| stall(2000))).child("Stall 2000 ms"))
+            .child(div().id("prepare").on_click(cx.listener(|this, _, _, cx| this.prepare_delayed(cx))).child(
+                if self.preparation.is_some() { "Preparing on worker · repeated requests rejected" }
+                else { "Prepare with 2s delay · Ctrl+P" }
+            ))
             .child(div().id("exit").on_click(cx.listener(|_, _, _, cx| { stamp("operator_exit"); cx.quit(); })).child("Exit operator · Ctrl+Q"))
             .child("Audience: close its titlebar to stop; automatic 25s deadline. Driver owns both processes.")
     }
@@ -290,13 +320,14 @@ fn main() {
                 KeyBinding::new("ctrl-1", Stall100, Some("Spike")),
                 KeyBinding::new("ctrl-2", Stall500, Some("Spike")),
                 KeyBinding::new("ctrl-3", Stall2000, Some("Spike")),
+                KeyBinding::new("ctrl-p", PrepareDelayed, Some("Spike")),
                 KeyBinding::new("ctrl-q", Exit, Some("Spike")),
             ]);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                         point(px(30.), px(80.)),
-                        size(px(700.), px(430.)),
+                        size(px(700.), px(480.)),
                     ))),
                     titlebar: Some(TitlebarOptions {
                         title: Some("Sela output operator spike".into()),
@@ -307,6 +338,7 @@ fn main() {
                 |window, cx| {
                     let view = cx.new(|cx| Operator {
                         focus: cx.focus_handle(),
+                        preparation: None,
                     });
                     view.read(cx).focus.clone().focus(window, cx);
                     view

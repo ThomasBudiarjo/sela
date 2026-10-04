@@ -49,33 +49,43 @@ are not qualified by the successful resize check.
 
 ## Reproduce on the existing Linux graphical orb
 
-Do not start/stop the shared display services. Requires :99 Xvfb, Openbox,
-xcompmgr, xdotool and ImageMagick; driver supplies process-local environment.
+For fresh-orb display provisioning, see [native setup](native-testing.md#reproduce).
+Do not start/stop shared display services. Requires an existing X11 display,
+Openbox or another EWMH window manager, xdotool and ImageMagick. The driver uses
+private temporary runtime data, PID-scoped targeting and verifies focus before
+every key. Run input tests serially. It respects DISPLAY/backend environment;
+no fixed checkout path or implicit Vulkan override is embedded in the driver.
 
 ```sh
-export CARGO_TARGET_DIR=/home/user/workspace/repo/target
 cargo build --locked --example output_spike -j 4
 cargo test --locked --example output_spike -j 4
 cargo clippy --locked --example output_spike -j 4 -- -D warnings
 rustfmt --edition 2024 --check examples/output_spike.rs
-python3 scripts/output-spike.py
+DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/output-spike.py
 git diff --check
 ```
 
 Driver's default artifacts are `.amp/in/artifacts/output-spike/`: raw audience
-and operator logs, summary.json, root screenshots during stall, after clean exit
-and after SIGKILL. Test process handles are tracked/reaped in finally; subprocess
+and operator logs, summary.json, cropped window screenshots during stall, after
+clean exit and after SIGKILL. Root captures are temporary; only owned window
+interiors are retained. Keep other windows off these regions during capture.
+Test process handles are tracked/reaped in finally; subprocess
 commands have timeouts, startup retries bounded. Audience stops via native
 Alt+F4, or its deadline; cleanup escalates terminate/kill only owned children.
 Standalone controls Ctrl+1/2/3 and clickable labels deliberately stall actual
 GPUI callback for 100/500/2000ms, Ctrl+Q/click exits operator; audience titlebar
 close independently stops audience. These are diagnostic controls, not reference
 compatibility semantics. No command protocol, acknowledgments or safe scene
-ownership is implemented. Preparation overload remains a future test.
+ownership is implemented. Ctrl+P injects 2s of latency on a GPUI background worker,
+with one retained task; repeated requests reject instead of queuing. The native
+driver asserts a second request rejects, a Ctrl+1 handler completes before the
+worker finishes, the UI observes completion and audience presentation continues.
+This is controlled latency injection, not actual file/font/media preparation;
+cancellation, decoding and stale-scene contracts remain M0-05/M0-06 work.
 
 Backend explicitly selected by SELA_SPIKE_BACKEND=gl (default), vulkan or dx12;
-no silent fallback. Driver disables Vulkan only in launched process environment
-for this GL run; this Linux driver is not the Windows harness. Initial GL attempt
+no silent fallback. The command above disables Vulkan only for this GL run;
+this Linux driver is not the Windows harness. Initial GL attempt
 without owned display handle failed adapter/surface compatibility before opening;
 corrected using wgpu InstanceDescriptor's documented display ownership.
 
@@ -104,8 +114,8 @@ budget claim. Resize 640x360→600x320 and explicit audience close passed.
 Root capture pairs were visually inspected: actual yellow geometry changes
 position while GPUI callback is stalled and after operator exits. Crop root,
 never capture application window directly. Initial inspected stall pair also
-shows operator controls readable; bottom help needs more vertical room in the
-small diagnostic window. Raw root captures retain full content. PNG motion plus
+shows operator controls readable. Integration captures of the final 700x480
+operator show complete controls/help without clipping. PNG motion plus
 present timestamps supports virtual compositor continuity, **not physical
 scanout**, GPU completion, end-to-end cue latency or every frame being visible.
 
@@ -122,12 +132,32 @@ exit/kill had 214/70 subsequent calls. Final 2s interval
 began at 1791102165033012µs. Exit observed 1791102167158497µs, kill observed
 1791102169589036µs. Both runs are virtual-display evidence only.
 
+The integrated driver additionally rejects incomplete/out-of-order stall logs,
+requires a clean operator exit, includes interval boundaries in the maximum-gap
+calculation and rejects any gap ≥500ms inside the 2s stall. This discriminates a
+long freeze from sustained progress; 500ms is a diagnostic threshold, **not** a
+presentation SLO. Its snapshot/measurement overhead is part of the workload.
+
+Integrated preparation run: `DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3
+scripts/output-spike.py .amp/in/artifacts/output-preparation` passed. Preparation
+began at 1791102759203072µs, rejected a duplicate at 1791102759234862µs, finished
+at 1791102761203289µs and was observed by UI at 1791102761203706µs. The 100ms
+operator callback ran at 1791102759900850–1791102760001012µs, entirely inside
+preparation. Audience maximum gap during preparation was 41.877ms; 118 calls
+occurred inside the 2s UI stall (40.161ms maximum boundary-inclusive gap).
+898 total calls; p50/p95/max 16.828/17.757/46.039ms. Post-exit/kill counts 237/76.
+Both preparing/completed controls and motion capture pairs were inspected.
+Missing DISPLAY, missing binary and invalid X server returned nonzero without
+success summary or temporary-runtime leaks. Whole-project build/test/clippy/fmt
+and native bootstrap smoke passed after both worktree merges. CI now includes
+example tests via `--all-targets`; remote CI itself has not been run.
+
 ## Gate / next action
 
 GO for continuing independent-process feasibility work; **NO-GO for production
 backend/full workspace qualification**. Windows physical dual-monitor mixed-DPI,
 fullscreen, display hotplug, device/surface recovery, actual scanout timing,
-text-over-video, slow preparation and production command/lifecycle protocol are
+text-over-video, real resource preparation and production command/lifecycle protocol are
 unrun. Run this example on authorized Windows DX12 hardware (set backend dx12,
 launch two modes under an owning supervisor), instrument stalls and exit with
 physical capture, then extend M0-04 evidence. Do not mark parent done or M0-10

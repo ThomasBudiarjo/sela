@@ -253,7 +253,7 @@ Depends on: M0-01. Tests: I, N, H, P.
   while GPUI remains the operator frontend; no full operator layout yet.
 - [x] Compare feasible backend/window ownership and render-thread/process choices;
   inspect upstream patterns and record the chosen boundary and alternatives.
-- [ ] Inject deliberate UI stalls and slow preparation; measure output continuity
+- [x] Inject deliberate UI stalls and slow preparation; measure output continuity
   separately from control responsiveness during the stall.
 - [x] Test operator process termination according to the chosen architecture;
   state exactly which failures output can and cannot survive.
@@ -265,7 +265,9 @@ Acceptance: real Windows evidence for independence, or a documented failing spik
 and follow-up architecture work. A render thread alone is not crash isolation.
 
 Linux partial evidence: [output-spike.md](output-spike.md), implemented-unqualified.
-Stalls/clean exit/SIGKILL measured; slow preparation and Windows physical gate open.
+UI stalls, bounded delayed preparation, clean exit and SIGKILL measured;
+Windows physical gate remains open. Preparation is synthetic latency injection,
+not production decoding or prepared-scene ownership.
 
 ### M0-05 — Framework-independent scene and preparation contracts
 
