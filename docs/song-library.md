@@ -172,3 +172,84 @@ reopened captures. Also manually navigate Previous/Next between lyric edits,
 undo each in chronological order, redo, branch with new typing, remove the final
 section at Remove-button focus and undo to restore it. No new appearance change;
 native action/focus/content qualification remains pending, not visual redesign.
+
+## M1-05d — Reference-directed native authoring correction
+
+Implemented-unqualified on `ticket/m1-ui-reference`, LOCAL base `231fffb`.
+Original GPUI editor, not Painter or a web substitute. Historical official
+Support 7 articles and the working editor screenshot were personally read and
+inspected; evidence/version limits are D-UI-02 in the reference ledger. Current
+8.0.49 interactions, typography, dimensions and pagination remain unobserved.
+Upstream Apache GPUI focus/control/Div/Window/tab-stop APIs and license inspected
+at current/pinned `a84689073d296dfd39987bc7dd478e43ef76d83a`; exact paths in
+the M1-02c shell note. No Zed GPL application UI, reference song/assets or new
+dependencies copied.
+
+The blank editor has Title upper-left, selectable draft sections and Words/Slides
+on the left, a local draft preview on the right, Inspector top-right, bottom-left
+Add/Remove and bottom-right OK/Cancel. Words edits the selected label/lyrics;
+Slides shows original text-only section thumbnails (first four lines), not
+rendered audience slides. Native fields retain document history across view
+changes. The preview displays logical draft lines, with scrolling; **not WYSIWYG,
+font fitting, arrangement/pagination, theme or rendered-output matching**.
+Inspector replaces the right preview with the three existing metadata fields.
+Unsupported formatting/theme/media/arrangement controls are not faked.
+
+Explicit **Library** opens the existing bounded worker-backed ID-order saved-song
+selector, separate from Words; it temporarily replaces the preview, not the
+document. Load/refresh/paging, New, Save-without-close, Duplicate, confirmed
+tombstone Delete, Discard edits and Previous/Next remain reachable. Dirty song
+replacement still requires save/discard; every hidden field remains retained and
+validated. At 720×440, the redundant header status is omitted to keep Inspector
+visible; status remains below the toolbar. Left/right panes scroll, and bottom
+Add/Remove/OK/Cancel stay fixed. Title/section rows scroll within the left pane.
+
+OK submits the existing immutable expected-head save, then waits for the actual
+`Reply::Saved` receipt before closing. It never closes on validation, submission,
+storage or stale-head conflict failure. Cancel uses the existing dirty/pending
+guard. Pending operations hide mutable controls and intentional close waits.
+Save retains undo/redo/selection and advances only the committed baseline and
+Version; OK uses that same path. No close-on-submit, new synchronous UI I/O,
+history reset or database/schema change introduced. Validation status is refreshed
+after a new edit without claiming that the new draft has already validated.
+
+- [x] Clean blank editor from both main launch routes, explicit Library selector.
+- [x] Title/Words/Slides/selected section/local preview/Inspector/bottom controls.
+- [x] Preserve M1-05c chronological history, save/load/duplicate/delete/close guards.
+- [x] New test covers modes/no history churn, section selection, invalid OK,
+  conflicting OK retaining draft, and pending Cancel; existing failure tests pass.
+- [x] Both native drivers replayed; independent SQLite bytes, metadata, two
+  asymmetric sections, save-undo dirty close, structural undo across Save,
+  reopen, compact states and successful OK close checked. This executes the
+  previously pending M1-05c serial native replay; no history assertions removed.
+- [x] Inspect actual Words, Slides, Inspector, validation/dirty-close and compact
+  Words/Inspector/Library/scrolled captures, plus restored/reopened content.
+- [ ] Installed8.0.49/Windows/real IME/accessibility/DPI/physical output/performance.
+
+Executed on Debian12 x64 orb, Xvfb/Openbox software GL, shared services unchanged:
+
+```sh
+export CARGO_TARGET_DIR=/home/user/workspace/repo/target
+# Root src/main.rs and src/lib.rs touched before initial compilation for cache drift.
+cargo test --locked --all-targets -j4             # 96 passed, 1 child fixture ignored
+cargo clippy --locked --all-targets -j4 -- -D warnings
+cargo fmt --all -- --check
+uvx ruff check scripts/operator-shell.py scripts/song-library.py
+git diff --check
+cargo build --locked --bin sela -j4
+DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/operator-shell.py
+DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/song-library.py
+DISPLAY=:99 VK_DRIVER_FILES=/dev/null scripts/native-smoke.sh "$CARGO_TARGET_DIR/debug/sela"
+```
+
+All pass; new test names and all five arrangement-domain tests observed, avoiding
+stale shared-worktree cache evidence. Native captures are actual client crops
+under `.amp/in/artifacts/song-library/`: `initial`, `draft` (Words), `slides`,
+`inspector-filled`, `validation`, `unsaved-close`, `saved-document-undo`,
+`removed-section`, `restored-section`, `reopened-chorus`, `compact`,
+`compact-inspector`, `compact-library-selector`, `compact-scrolled` PNGs.
+Initial native driver still used old form coordinates; retained independent
+payload/undo/close assertions and corrected replay for actual Inspector/Words.
+Initial hidden-metadata focus tests now reveal Inspector before native field
+edits; no failure expectations weakened. Native OK independently verifies
+committed bytes after process exit. Real platform qualification remains open.

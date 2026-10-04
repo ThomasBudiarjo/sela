@@ -1276,3 +1276,82 @@ PY
   Preparation-intent coordinator, durable epochs, production supervision and
   device-loss handling remain open. Static-color slice is implemented-unqualified;
   M0-06/M0-07/M0-10 are not done and no Black/Clear/Logo semantics were invented.
+
+### M1-02c — Reference-directed toolbar correction — 2026-10-04 UTC
+
+- Implemented-unqualified on `ticket/m1-ui-reference`, LOCAL main `231fffb`
+  (all four non-UI merges), not origin/main. Read instructions/plan/backlog/log.
+  Owner explicitly requested actual UI correction; no Painter, dependency,
+  storage, arrangement or renderer changes. Scoped checklist/provenance in
+  `docs/operator-shell.md`, documented-only evidence D-UI-01 in reference ledger.
+- Personally fetched/inspected official toolbar image: exact left/right action
+  order, right group above Live, no bottom live controls or invented output
+  handlers. Its build is unknown, not verified 8.0.49. Original clean GPUI chrome,
+  preserved pane/splitter geometry; Reset/Quit moved to Resources chrome.
+- Real New menu and bottom Songs + open blank authoring; companion M1-05d follows.
+  New/menu join semantic traversal, menu overlays without reflow. Fixed removed
+  menu-item focus after native replay caught failed operator close. No assertion
+  dropped. Disabled output controls remain inert, no color-diagnostic wiring.
+- Combined slice checks: `CARGO_TARGET_DIR=/home/user/workspace/repo/target cargo
+  test --locked --all-targets -j4`: **96 passed, 1 ignored child fixture** (three
+  process tests invoke it); new test names actually observed. Root sources touched
+  before initial build to defeat shared-worktree stale cache. Strict all-target
+  Clippy (`-D warnings`), fmt, Ruff both drivers, diff check and bin build passed.
+- Serial `DISPLAY=:99 VK_DRIVER_FILES=/dev/null CARGO_TARGET_DIR=/home/user/workspace/repo/target
+  python3 scripts/operator-shell.py`, song-library driver and native-smoke against
+  shared target binary passed. X11 services untouched. Actual normal/New menu/
+  compact/focus/collapse/reset/drag/editor-guard PNGs inspected under
+  `.amp/in/artifacts/operator-shell/`; screenshots are ignored local evidence.
+- Windows/installed8.0.49/accessibility/DPI/physical GPU/display/performance unrun:
+  no suitable reference/hardware environment; no parity or release qualification.
+  Local subticket commit only, no push. Next: retain companion editor correction,
+  parent reviews/reruns integration and consolidates backlog; exact reference
+  interaction and audience qualification gates remain open.
+
+### M1-05d — Reference-directed song editor correction — 2026-10-04 UTC
+
+- Implemented-unqualified companion on `ticket/m1-ui-reference`, LOCAL main
+  `231fffb`, retaining M1-05c chronological document history and all four non-UI
+  merges. Owns song_library/source tests, native song driver, owner note, ledger
+  and appended record only. No storage/arrangement/transport/scene/Cargo/native
+  diagnostic/backlog changes; root-source touches only forced correct cache build.
+- Personally read official Support7 articles (2024-09-03 and 2023-01-05) and
+  inspected working historical editor screenshot. D-UI-02 explicitly documents
+  those sources, not an installed8.0.49 finding. Apache GPUI upstream commit,
+  inspected paths and license recorded; original UI/fixture text, no Painter.
+- Title/Words/Slides/section selector left, draft preview or Inspector metadata
+  right, Add/Remove bottom-left and OK/Cancel bottom-right. Explicit Library
+  selector retains bounded worker catalog/loading/paging outside Words; existing
+  New/Save/Duplicate/Delete/Discard/Previous/Next reachable. Compact Inspector
+  clipping caught by visual review: omit redundant header status below900px,
+  keep truthful status below toolbar; fixed footer and scrolling preserve access.
+- Slides are four-line original text thumbnails; preview is logical draft text,
+  not audience WYSIWYG/pagination/themes/arrangement or matching output. No fake
+  unsupported formatting/media/output features. Native field entities retained.
+- OK waits for committed Saved receipt, not submission; validation/conflict/error
+  keep draft open; Cancel/WM/Ctrl+Q retain existing pending/dirty guards. Ordinary
+  Save advances only durable baseline/Version and retains selection/history.
+  New test exercises mode/navigation history invariants, invalid/conflicting OK
+  and pending Cancel. Old history/failure tests remain, revealing Inspector
+  before metadata-field focus instead of typing into a removed focus subtree.
+- Final `CARGO_TARGET_DIR=/home/user/workspace/repo/target cargo test --locked
+  --all-targets -j4`: **96 passed, 1 ignored child fixture**, new actual test names
+  and all five arrangement tests observed. Strict all-target Clippy `-D warnings`,
+  fmt, Ruff both drivers, diff check, locked bin build passed. Serial native
+  song-library/operator-shell drivers and native-smoke passed with DISPLAY=:99,
+  VK_DRIVER_FILES=/dev/null and the same shared target. Shared services untouched.
+- Native independent SQLite decoding verifies metadata/two asymmetric sections,
+  save-undo dirty close, retained committed bytes on discard, structural undo
+  across saves, reopen and actual OK-save/close; invalid OK also asserts survival
+  and zero commits. This executes the previously pending M1-05c native replay.
+  Coordinates were updated, not payload/undo/failure assertions removed.
+- Inspected actual ignored `.amp/in/artifacts/song-library/` initial/draft/Slides,
+  Inspector-filled, validation/validation-ok, unsaved-close, restored-section,
+  reopened-chorus, compact/compact-inspector/compact-library-selector/scrolled
+  PNGs, plus operator's independent editor-close guard. Original native crops,
+  not reference/composited images. Commands and scoped checklist in owner note.
+- Remaining: lawful installed8.0.49 behavior, Windows/real IME/accessibility/DPI,
+  hardware/audience output and performance unavailable/unrun, no parity/release
+  claim. Next: parent reviews these two local commits, reruns merged integration,
+  consolidates backlog and schedules required native/reference qualifications;
+  unsupported authoring/arrangement/pagination remains open. No push/publication.

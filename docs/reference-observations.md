@@ -200,3 +200,46 @@ append identified results/artifacts and map only those proven workflows to tests
 Follow with W04/W05 and exhaustive W06; qualify Sela independently with G01 when
 M0-03/M0-08/M0-09 are ready. No installed access, masks, focus, display timing,
 provider rights or parity is inferred from this documentation checkpoint.
+
+## D-UI-01 — Official toolbar image (documented-only, 2026-10-04)
+
+- Source: <https://www.easyworship.com/software/features>; directly fetched and
+  visually inspected <https://cdn.easyworship.com/files/software/features/ew-interface.webp>.
+- Visible single toolbar left New, Open, Save, Web, Remote; right Go Live,
+  Alerts, Logo, Black, Clear, Live, in that order, above the Live pane.
+  No separate menu row is visible. Schedule/Preview/Live span the upper area,
+  tabbed Resources the lower area. Image dimensions 1736×954; not a native
+  measurement or DPI/layout specification. Existing bounded pane ratios remain
+  provisional rather than pretending these pixels prove exact 8.0.49 geometry.
+- **Build unidentified, not proven EasyWorship 8.0.49.** Marketing imagery is
+  documented evidence only, not an installed observation. Shortcuts, focus,
+  menus, masks, selection, output behavior and responsive layout remain unknown.
+- Used to correct M1-02c action placement with original GPUI styling; reference
+  screenshot/song/background assets were not copied into application or fixtures.
+
+## D-UI-02 — Official song authoring guidance (documented-only, 2026-10-04)
+
+- Personally read <https://support.easyworship.com/support/solutions/articles/24000020402-adding-and-editing-songs>,
+  modified **2024-09-03**, under **Support 7**: Songs bottom + opens Song Editor;
+  Title, Words label/lyrics, bottom-left Add, top-right Inspector for song
+  copyright information, OK saves changes. Documents Ctrl+Enter split/new slide,
+  theme/text/scripture/media/arrange, import, search and live actions too; those
+  are not implemented or silently treated as completed by this UI correction.
+- Personally read <https://support.easyworship.com/support/solutions/articles/24000020385-quick-start-guide>,
+  modified **2023-01-05**, **Support 7**: New toolbar → New Song; Words/Slides
+  left and editable WYSIWYG preview right; Masters, Theme/Text/Scripture/Media,
+  Arrange and Inspector. Sela's preview is local draft text, explicitly **not**
+  that WYSIWYG functionality. Provisional shortcuts remain unchanged rather than
+  pretending documented Ctrl+Enter is observed 8.0.49 or adding splitting here.
+- Working official attachment personally fetched and visually inspected:
+  <https://s3.amazonaws.com/cdn.freshdesk.com/data/helpdesk/attachments/production/24018643889/original/U0uDOPvM27V3pQwL_KlrGEv99LcimpEbvw?1516306231>.
+  Visible title upper-left, editor/format toolbar, Words/Slides/Masters and
+  section list left, large preview right, + bottom-left, OK/Cancel footer right.
+  Attachment is historical (query timestamp), **not verified 8.0.49**. Broken
+  older help image links are not substitute evidence. No reference lyrics,
+  background, screenshot or proprietary icons used as Sela assets/fixtures.
+- Supports M1-05d editor region correction only. Exact selected-section focus,
+  cancel/dirty/conflict semantics, undo, small-window behavior, audience layout,
+  metadata field details and full build-specific interactions still need lawful
+  installed observations. The missing capabilities stay in the compatibility
+  inventory/future tickets; no full editor/workflow-parity finding made.
