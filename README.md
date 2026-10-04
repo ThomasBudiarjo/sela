@@ -21,6 +21,9 @@ tests; compatibility is a goal, not an implemented capability. Pin reference
 builds deliberately rather than silently following upstream releases.
 
 See [the engineering baseline](docs/plan.md) for milestones and unresolved gates.
+Use [the implementation backlog](docs/backlog.md) for detailed tickets,
+dependencies, checklists, test boundaries, and release gates. Start or resume work
+from [the work log](docs/work-log.md); the first implementation ticket is M0-01.
 Sela is an independent project, not affiliated with or endorsed by EasyWorship.
 
 ## License

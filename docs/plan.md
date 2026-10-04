@@ -4,6 +4,12 @@ This is a condensed implementation baseline from the product discussion, not a
 verbatim copy of the original master plan. Future scope remains a product goal;
 no application features have been implemented.
 
+The [implementation backlog](backlog.md) expands this baseline into executable
+tickets, compatibility coverage, test boundaries, and release gates. The
+[work log](work-log.md) records partial progress and where to resume. Keep this
+baseline's architectural constraints when refining tickets; newly discovered
+EasyWorship workflows must be tracked rather than silently omitted.
+
 ## Fixed product decisions
 
 - Rust application, GPUI frontend, dedicated GPU live compositor.
