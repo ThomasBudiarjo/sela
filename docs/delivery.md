@@ -98,7 +98,7 @@ This is deliberately the useful static-color fallback, **not text/image IPC**.
   polling/receipt enqueue, bounded startup and child lifetime, explicit retirement.
 - [x] Real child exchange, saturation, rejection, disconnect and injected-clock
   timeout tests; native receipt-correlated capture/restart driver on own display.
-- [ ] Transfer font/text/image resources with per-field/total size validation,
+- [x] Transfer font/text/image resources with per-field/total size validation,
   renderer-worker shaping/upload, GPU-ready ownership and failure tests. The
   existing offscreen composition/readback helper is **not** a live-frame API.
 - [ ] Preparation-intent coordinator, production controller/supervisor, durable
@@ -228,3 +228,69 @@ renderer preparation worker and nonblocking GPU-ready commit. Reuse composition
 policies/tests but separate its blocking readback path, then extend this driver
 to asymmetric text/image captures and failed-resource retention. Do not wire main
 UI or mark complete feature parity from static-color success.
+
+## M0-06c — Owned resource transport continuation
+
+Version 1 remains byte-compatible for colors/receipts/Ready. Version 2 command
+header is `SCUE`, u8 version=2, u8 kind=1, reserved u16=0, then u32 body length
+(little endian). The first 61 body bytes match v1 command metadata. Background
+tag 0 carries opaque RGBA4; tag 1 carries resource ID u128/revision u64, extent
+u32/u32 and a u32-length normalized straight-alpha RGBA blob. Text tag 0 means
+absent; tag 1 carries font ID/revision, font size u16, length-prefixed UTF-8,
+then length-prefixed face-0 font bytes. No paths, mutable handles or hashes of
+external files cross this boundary. Trailing bytes and unknown tags fail.
+
+Body declarations outside 67..64MiB+160 fail before payload allocation. Per-field
+limits remain 64KiB text, 8MiB font and 64MiB decoded image; aggregate owned
+resources must fit 64MiB. `PreparedCue::from_owned` validates image length,
+capabilities, font parsing and aggregate bounds, **not glyph/layout/GPU readiness**.
+Frame construction and reconstruction are worker-only APIs for resource cues.
+V2 receiver-local budget starts before reading length/body, so body transfer,
+inbound queue and subsequent preparation delay cannot restart it. No shared-clock
+or pipe-before-header deadline guarantee is claimed.
+
+Pipe capacities remain 2 inbound/4 outbound plus executing frames, now each up
+to 64MiB+172 wire bytes rather than inline 73 bytes. Thus a single endpoint can retain eight
+maximal frames (~512MiB), excluding caller copies, kernel buffers and allocator
+overhead. This explicit diagnostic ceiling is **not** a production RSS target.
+Use Delivery's one-Cue/one-Safety admission; never use the pipe as a work backlog.
+Native readiness and software captures are recorded separately below.
+
+## M0-07d — Native prepared text/image submission
+
+State: **implemented-unqualified**, standalone diagnostic only. The audience now
+uses a single preparation worker with one queued frame and one buffered result.
+Worker-only reconstruction/font parsing, explicit-font shaping/raster, allocation,
+GPU upload and a two-second upload-completion wait precede native admission.
+No resource file is opened by the audience. The pipe reader/writer remain separate
+bounded workers. Saturated preparation rejects `Busy` and consumes ordering
+identity; no eviction or retry backlog. Proper Delivery admission supplies at most
+one Cue and one Safety; these are replacement lanes, not implemented mask policy.
+Preparation is FIFO, not a preemptible real-time safety path.
+
+Accepted now means GPU-ready resources entered RendererSession, not presentation.
+The renderer deadline still uses the original reader timestamp: queue, shaping,
+upload and completion-buffer delay are included. Expiry at admission or redraw
+rejects TimedOut; malformed/glyph/layout failures reject RenderFailed. GPU upload
+failure/timeout or worker disconnect retires the session (output Unknown), never
+loops to accumulate more staging uploads. No automatic replay on restart.
+
+At most two ready pending bindings, one applied binding, one buffered completion
+and one executing upload are retained. Each background/mask pair is at most
+64MiB+16MiB (~400MiB for five), excluding upload staging, driver allocations,
+surface buffers and alignment. Native CPU ownership adds one queued resource
+frame, one executing reconstruction (temporarily both frame and copied payload),
+one completion and two pending/one applied cues to the pipe ceiling above.
+Raster output plus inset mask can add 32MiB, font shaping copies/cache are bounded
+by the diagnostic input limits but not measured RSS. No persistent cache exists.
+These deliberately conservative ceilings require measured production tuning.
+
+Redraw only encodes a pass using existing bindings, Queue::submit, native notify
+and present. Applied follows those calls, not GPU completion/physical scanout.
+No raster/decode/file/pipe/readback/upload wait occurs in redraw/about_to_wait.
+Exact cue/surface extent must match. On resize the old bindings/scene remain
+owned but are not sampled into an incompatible extent: new-extent preparation
+is required; visible retention during resize is **not qualified**. Surface loss
+and driver stalls still require supervision and physical qualification.
+
+See composition-spike.md for policy, provenance and actual native evidence.

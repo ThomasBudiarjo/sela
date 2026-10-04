@@ -93,3 +93,65 @@ Black/Clear/Logo require installed-reference observations; do not infer them fro
 these static frames. Golden-transition frames, device loss/recovery, actual
 allocation budgets, Windows/DX12/mixed-DPI/physical display tests and M0-10 remain
 open. A software PNG does not waive the plan's gate before the full M1 workspace.
+
+## M0-07d — Native resource continuation (2026-10-04)
+
+- [x] Share composition shader/pixel policy without invoking blocking readback
+  from the audience loop: `from_device`, worker `prepare_native`, submit-only
+  `submit_native`, renderer-owned immutable `ReadyComposition` bindings.
+- [x] Receive actual owned UTF-8/font/asymmetric image, raster/upload outside the
+  native callback, validate missing glyph/overflow/budgets before replacement.
+- [x] Correlate native receipts with client-only captures and exact retained RGB
+  digests after failed/stale/expired preparation; restart unknown without replay.
+- [ ] Production intent coordinator, pre-resolved safety resources, resized-output
+  preparation/retention, video/transition/device-loss qualification and measured
+  workload/RSS/GPU/frame-pacing budgets. Windows and physical scanout remain open.
+
+Policy is the existing original 32px inset, explicit supplied font, advanced
+shaping, no-wrap, white coverage, 1.3× line-height, nearest image contain/black
+sidebars/straight-alpha-over-black and linear sRGB composition. A color uses cover
+on a 1×1 opaque image to fill the output. Native requires a supported sRGB surface.
+The text diagnostic retains its stricter bounds: 2MiB font, 4096 UTF-8 bytes,
+32 lines, 1–96px size, raster edge <=4096 and <=16MiB alpha. CPU transport's
+broader valid input can therefore be rejected at native layout; no silent shrink,
+wrap, fallback or cropping. Images are already normalized RGBA, not decoded here.
+No EasyWorship layout/mask/transition behavior is invented by this diagnostic.
+
+Provenance: reused original repository `examples/composition/{text,gpu}.rs` policy
+and shader. Inspected pinned wgpu **29.0.4** `src/api/queue.rs::{write_texture,
+write_buffer,submit}`: writes stage until submit; worker flushes with `submit([])`
+and `Device::poll(PollType::Wait)` capped at 2s before readiness. No mapped readback
+or frame-side waits. wgpu MIT/Apache-2.0, winit 0.30.12 Apache-2.0, existing
+cosmic-text/DejaVu notices retained; no upstream application code or GPUI patterns
+copied. Dependency pins/manifest/lock are unchanged. Async upload failure retires
+the worker/session instead of accumulating staging/retrying on an uncertain GPU.
+
+Executed software-native diagnostic on owned supervised Xvfb **:102**, 1024×768,
+no WM/compositor, GL Mesa22.3.6 llvmpipe LLVM15 CPU adapter; shared :99 untouched:
+
+```sh
+export CARGO_TARGET_DIR=/home/user/workspace/repo/target
+# Cargo batches serialized with flock /tmp/sela-cargo-continuation.lock;
+# touch src/*.rs and changed examples/tests inside lock before each batch.
+cargo test --locked --all-targets -j4
+cargo clippy --locked --all-targets -j4 -- -D warnings
+cargo fmt --all -- --check
+cargo build --locked --example native_cues -j4
+uvx ruff check scripts/native-cues.py
+DISPLAY=:102 VK_DRIVER_FILES=/dev/null python3 scripts/native-cues.py \
+  --backend gl --out .amp/in/artifacts/native-resources-final
+git diff --check
+```
+
+Native evidence includes readable “Signal café” / “Beacon” over six distinct
+tiles. All six asymmetric sample points and >100 white coverage pixels are
+independently checked. Missing glyph, overflow, corrupt font, oversized text,
+old sequence and 1ms resource deadline each reject without changing the full
+captured RGB digest. Retired resource epoch cannot replace new-session startup;
+fresh explicit cue applies. The driver uses bounded nonblocking multi-write
+resource packets (>PIPE_BUF), not an unbounded blocking supervisor write.
+Captures/logs/receipt timestamps and RGB hashes: ignored
+`.amp/in/artifacts/native-resources-final/` (15 PNGs plus summary/logs).
+Inspected actual text/image and overflow-retention captures; no glyph boxes,
+clipping or row corruption. They are virtual native screenshots, **not offscreen
+readbacks, physical GPU/display evidence, scanout timestamps or parity proof**.

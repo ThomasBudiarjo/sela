@@ -99,6 +99,61 @@ pub struct PreparedCue {
 }
 
 impl PreparedCue {
+    /// Revalidate an owned transport snapshot on a worker. No paths, decoding,
+    /// system font lookup or renderer readiness is implied by this constructor.
+    pub fn from_owned(
+        version: ContentVersion,
+        extent: Extent,
+        background: PreparedBackground,
+        text: Option<(String, ContentVersion, Box<[u8]>, u16)>,
+        caps: RendererCapabilities,
+    ) -> Result<Self, PrepareError> {
+        check_extent(extent, caps)?;
+        let mut bytes = 0usize;
+        match &background {
+            PreparedBackground::Color(color) if color[3] != 255 => {
+                return Err(PrepareError::InvalidScene);
+            }
+            PreparedBackground::Image { extent, rgba, .. } => {
+                check_extent(*extent, caps)?;
+                let expected = extent.width as usize * extent.height as usize * 4;
+                if rgba.len() != expected {
+                    return Err(PrepareError::InvalidImage);
+                }
+                bytes = expected;
+            }
+            PreparedBackground::Color(_) => {}
+        }
+        let text = text
+            .map(|(content, font_version, font, font_size)| {
+                if content.is_empty() || font_size == 0 || font_size > 512 {
+                    return Err(PrepareError::InvalidScene);
+                }
+                if content.len() > MAX_TEXT_BYTES || font.len() > MAX_SOURCE_BYTES {
+                    return Err(PrepareError::TooLarge);
+                }
+                ttf_parser::Face::parse(&font, 0).map_err(|_| PrepareError::InvalidFont)?;
+                bytes += content.len() + font.len();
+                Ok(PreparedText {
+                    content,
+                    font_version,
+                    font,
+                    font_size,
+                })
+            })
+            .transpose()?;
+        if bytes > MAX_SCENE_BYTES {
+            return Err(PrepareError::TooLarge);
+        }
+        Ok(Self {
+            version,
+            extent,
+            background,
+            text,
+            bytes,
+        })
+    }
+
     /// Resource-free diagnostic snapshot. No file work or renderer readiness is
     /// implied; opaque color is the only native transport capability in M0-06b.
     pub fn diagnostic_color(

@@ -5,6 +5,7 @@ No input/focus events. X11 captures are cropped from root to this child's client
 Every capture is associated with an observed receipt and independently checked.
 """
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -91,6 +92,34 @@ def run():
             assert struct.unpack("<Q", body[16:24])[0] == seq
             assert body[24] == outcome, (body[24], outcome)
 
+        def resource(child, session, seq, text="Signal café\nBeacon", font=None, budget=2000):
+            font = (root / "tests/fixtures/DejaVuSans.ttf").read_bytes() if font is None else font
+            version = (71).to_bytes(16, "little") + struct.pack("<Q", 13)
+            pixels = bytes([173, 31, 57, 255, 23, 149, 79, 255, 31, 53, 179, 255,
+                            151, 117, 23, 255, 19, 137, 151, 255, 137, 29, 149, 255])
+            content = text.encode("utf-8")
+            body = (session.to_bytes(16, "little") + struct.pack("<QBI", seq, 0, budget)
+                    + (19).to_bytes(16, "little") + struct.pack("<QII", seq + 22, 641, 360)
+                    + b"\x01" + version + struct.pack("<III", 3, 2, len(pixels)) + pixels
+                    + b"\x01" + version + struct.pack("<HI", 32, len(content)) + content
+                    + struct.pack("<I", len(font)) + font)
+            packet = struct.pack("<4sBBHI", b"SCUE", 2, 1, 0, len(body)) + body
+            # Resource packets exceed PIPE_BUF. Bounded nonblocking writes prevent
+            # the supervisor from hanging if a renderer stops consuming them.
+            fd = child.stdin.fileno()
+            os.set_blocking(fd, False)
+            end = time.monotonic() + 3
+            offset = 0
+            while offset < len(packet):
+                remain = end - time.monotonic()
+                if remain <= 0 or not select.select([], [fd], [], remain)[1]:
+                    raise TimeoutError("resource writer blocked; retire child, output unknown")
+                try:
+                    offset += os.write(fd, packet[offset:offset + 65536])
+                except BlockingIOError:
+                    continue
+            os.set_blocking(fd, True)
+
         def window(child):
             end = time.monotonic() + 5
             while time.monotonic() < end:
@@ -102,7 +131,7 @@ def run():
                     time.sleep(0.05)
             raise TimeoutError("owned window not found")
 
-        def capture(child, label, expected, receipt_seq):
+        def capture(child, label, expected, receipt_seq, text=False):
             # Allow virtual compositor to sample submitted frame; this is not
             # scanout timing, a GPU wait, or evidence of every frame's visibility.
             time.sleep(0.15)
@@ -118,14 +147,24 @@ def run():
             assert (int(geom["WIDTH"]), int(geom["HEIGHT"])) == (641, 360)
             # Check multiple interior points; center-only could miss a stale scene.
             pixels = []
-            for x, y in [(32, 32), (320, 180), (608, 327)]:
+            points = [(32, 32), (320, 180), (608, 327)]
+            if text:
+                points = [(100, 160), (320, 160), (540, 160), (100, 280), (320, 280), (540, 280)]
+            for index, (x, y) in enumerate(points):
                 pixel = subprocess.check_output(["convert", str(output), "-crop", f"1x1+{x}+{y}",
                                                  "+repage", "-depth", "8", "rgb:-"], env=env, timeout=5)
                 assert len(pixel) == 3
-                assert all(abs(a - b) <= 2 for a, b in zip(pixel, expected)), (label, list(pixel), expected)
+                wanted = expected[index] if text else expected
+                assert all(abs(a - b) <= 2 for a, b in zip(pixel, wanted)), (label, list(pixel), wanted)
                 pixels.append(list(pixel))
+            raw = subprocess.check_output(["convert", str(output), "-depth", "8", "rgb:-"], env=env, timeout=5)
+            if text:
+                white = sum(min(raw[i:i + 3]) >= 245 for i in range(0, len(raw), 3))
+                assert white > 100, ("no actual text coverage", white)
             history.append({"pid": child.pid, "capture": output.name, "confirmed_receipt_sequence": receipt_seq,
-                            "expected_rgb": expected, "observed_rgb": pixels, "captured_unix_ns": time.time_ns()})
+                            "expected_rgb": expected, "observed_rgb": pixels, "captured_unix_ns": time.time_ns(),
+                            "rgb_sha256": hashlib.sha256(raw).hexdigest()})
+            return hashlib.sha256(raw).digest()
 
         def retire(child):
             child.stdin.close()  # Disconnect, not implicit replay or service reset.
@@ -164,14 +203,35 @@ def run():
             send(child, epoch, 3, red)
             ack(child, epoch, 3, 6)  # Old sequence rejected.
             capture(child, "stale-retains-green", green[:3], 4)
+            resource(child, epoch, 5)
+            ack(child, epoch, 5, 0)
+            ack(child, epoch, 5, 1)
+            asymmetric = [(173, 31, 57), (23, 149, 79), (31, 53, 179),
+                          (151, 117, 23), (19, 137, 151), (137, 29, 149)]
+            retained = capture(child, "text-asymmetric-image", asymmetric, 5, text=True)
+            for seq, label, content, font in [
+                (6, "missing-glyph", "\U0010ffff", None),
+                (7, "overflow", "Overflow " * 100, None),
+                (8, "invalid-font", "Do not replace", b"OTTOgarbage"),
+                (9, "oversize-text", "A" * 65537, None),
+            ]:
+                resource(child, epoch, seq, text=content, font=font)
+                ack(child, epoch, seq, 7)
+                assert capture(child, f"{label}-retains-text-image", asymmetric, 5, text=True) == retained
+            resource(child, epoch, 4)
+            ack(child, epoch, 4, 6)
+            assert capture(child, "stale-retains-text-image", asymmetric, 5, text=True) == retained
+            resource(child, epoch, 10, budget=1)
+            ack(child, epoch, 10, 4)  # Transfer/queued preparation consumed budget.
+            assert capture(child, "expired-retains-text-image", asymmetric, 5, text=True) == retained
             retire(child)
             new_epoch = epoch ^ 1  # Distinct within run; old child fully retired.
             if new_epoch == 0:
                 new_epoch = epoch ^ 2
             child = launch(new_epoch, "restarted")
             capture(child, "fresh-session-unconfirmed", (0, 0, 0), None)
-            send(child, epoch, 5, red)
-            ack(child, epoch, 5, 5)  # Retired epoch cannot replace anything.
+            resource(child, epoch, 11)
+            ack(child, epoch, 11, 5)  # Retired resource epoch cannot replace anything.
             capture(child, "old-epoch-rejected", (0, 0, 0), None)
             send(child, new_epoch, 1, green)
             ack(child, new_epoch, 1, 0)

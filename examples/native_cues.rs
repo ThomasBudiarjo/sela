@@ -1,13 +1,22 @@
-//! Opt-in M0-06b audience child; stdin/stdout are binary protocol, never logs.
-//! Deliberately only opaque static colors. No main/operator changes or masks.
+//! Opt-in audience child; stdin/stdout are binary protocol, never logs.
+//! Bounded worker preparation and native submission. No operator/mask policy.
+#[allow(dead_code)] // Shared offscreen helper also exposes diagnostic-only readback.
+#[path = "composition/gpu.rs"]
+mod composition;
+#[path = "composition/text.rs"]
+mod text;
 use sela::{
-    delivery::{DeliveryError, Epoch, RendererSession},
+    delivery::{Command, DeliveryError, Epoch, Outcome, RendererSession, Stamp},
     scene::{PreparedBackground, PreparedCue, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
 use std::{
+    collections::VecDeque,
     io,
-    sync::Arc,
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, SyncSender},
+    },
     time::{Duration, Instant},
 };
 use winit::{
@@ -96,6 +105,81 @@ struct Audience {
     backend: wgpu::Backends,
     start: Instant,
     next: Instant,
+    compositor: Option<Arc<composition::Compositor>>,
+    preparation: Option<SyncSender<Frame>>,
+    completions: Option<Receiver<Completion>>,
+    ready: VecDeque<(Stamp, composition::ReadyComposition)>,
+    applied_ready: Option<composition::ReadyComposition>,
+}
+struct Completion {
+    stamp: Stamp,
+    result: Result<(Command, composition::ReadyComposition), PreparationFailure>,
+}
+enum PreparationFailure {
+    Resource,
+    Upload,
+}
+fn prepare_frame(
+    frame: Frame,
+    caps: RendererCapabilities,
+    compositor: &composition::Compositor,
+) -> Result<(Command, composition::ReadyComposition), PreparationFailure> {
+    let command = frame
+        .into_command(Instant::now(), caps)
+        .map_err(|_| PreparationFailure::Resource)?;
+    let cue = command.cue();
+    let size = cue.extent();
+    // Same 32px inset, explicit font, no-wrap policy as composition_spike.
+    let mut alpha = vec![0; size.width as usize * size.height as usize];
+    if let Some(t) = cue.text() {
+        let width = size
+            .width
+            .checked_sub(64)
+            .filter(|w| *w > 0)
+            .ok_or(PreparationFailure::Resource)?;
+        let height = size
+            .height
+            .checked_sub(64)
+            .filter(|h| *h > 0)
+            .ok_or(PreparationFailure::Resource)?;
+        let raster = text::raster(
+            t.font(),
+            t.content(),
+            width,
+            height,
+            f32::from(t.font_size()),
+        )
+        .map_err(|_| PreparationFailure::Resource)?;
+        for row in 0..height as usize {
+            let start = (row + 32) * size.width as usize + 32;
+            alpha[start..start + width as usize]
+                .copy_from_slice(&raster[row * width as usize..(row + 1) * width as usize]);
+        }
+    }
+    let background = match cue.background() {
+        PreparedBackground::Color(rgba) => composition::Image {
+            width: 1,
+            height: 1,
+            rgba,
+        },
+        PreparedBackground::Image { extent, rgba, .. } => composition::Image {
+            width: extent.width,
+            height: extent.height,
+            rgba,
+        },
+    };
+    let ready = compositor
+        .prepare_native(
+            size,
+            background,
+            &alpha,
+            match cue.background() {
+                PreparedBackground::Color(_) => composition::Fit::Cover,
+                PreparedBackground::Image { .. } => composition::Fit::Contain,
+            },
+        )
+        .map_err(|_| PreparationFailure::Upload)?;
+    Ok((command, ready))
 }
 impl ApplicationHandler for Audience {
     fn resumed(&mut self, el: &ActiveEventLoop) {
@@ -123,15 +207,57 @@ impl ApplicationHandler for Audience {
         }))
         .unwrap();
         // Startup-only provenance, before Ready/live frames; stdout stays binary.
-        eprintln!("M0-06b adapter {:?}", adapter.get_info());
+        eprintln!("M0-07d adapter {:?}", adapter.get_info());
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
         let size = window.inner_size();
-        let config = surface
+        let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .unwrap();
+        config.format = surface
+            .get_capabilities(&adapter)
+            .formats
+            .into_iter()
+            .find(wgpu::TextureFormat::is_srgb)
+            .expect("native composition requires sRGB surface");
         surface.configure(&device, &config);
-        let max = device.limits().max_texture_dimension_2d;
+        let max = device.limits().max_texture_dimension_2d.min(8192);
+        let compositor = Arc::new(composition::Compositor::from_device(
+            device.clone(),
+            queue.clone(),
+            adapter.get_info(),
+            config.format,
+        ));
+        let (jobs, work) = mpsc::sync_channel::<Frame>(1);
+        let (results, completions) = mpsc::sync_channel(1);
+        let worker = compositor.clone();
+        std::thread::Builder::new()
+            .name("native-cue-prepare".into())
+            .spawn(move || {
+                while let Ok(frame) = work.recv() {
+                    let Ok(stamp) = frame.command_stamp() else {
+                        break;
+                    };
+                    let result = prepare_frame(
+                        frame,
+                        RendererCapabilities {
+                            max_texture_dimension: max,
+                        },
+                        &worker,
+                    );
+                    let fatal = matches!(result, Err(PreparationFailure::Upload));
+                    if results.send(Completion { stamp, result }).is_err() {
+                        break;
+                    }
+                    if fatal {
+                        break;
+                    } // Never accumulate uploads after a failed GPU wait.
+                }
+            })
+            .unwrap();
+        self.compositor = Some(compositor);
+        self.preparation = Some(jobs);
+        self.completions = Some(completions);
         self.gpu = Some(Gpu {
             window,
             surface,
@@ -174,35 +300,48 @@ impl ApplicationHandler for Audience {
                     }
                 };
                 if self.session.pending().is_some() {
-                    if let Some(ack) = self
-                        .session
-                        .present(Instant::now(), |cue| g.submit(frame, Some(cue)))
-                        && self.pipes.try_send(Frame::acknowledgment(ack)).is_err()
-                    {
+                    let stamp = self.session.pending().unwrap().stamp();
+                    let Some((prepared_stamp, ready)) = self.ready.pop_front() else {
                         el.exit();
+                        return;
+                    };
+                    if stamp != prepared_stamp {
+                        el.exit();
+                        return;
+                    }
+                    let compositor = self.compositor.as_ref().unwrap();
+                    if let Some(ack) = self.session.present(Instant::now(), |cue| {
+                        if cue.extent().width != g.config.width
+                            || cue.extent().height != g.config.height
+                        {
+                            return Err(DeliveryError::RenderFailed);
+                        }
+                        compositor
+                            .submit_native(&frame.texture.create_view(&Default::default()), &ready);
+                        g.window.pre_present_notify();
+                        frame.present();
+                        Ok(())
+                    }) {
+                        if ack.outcome == Outcome::Applied {
+                            self.applied_ready = Some(ready);
+                        }
+                        if self.pipes.try_send(Frame::acknowledgment(ack)).is_err() {
+                            el.exit();
+                        }
                     }
                 } else {
-                    // After resize, retain prior color without silently confirming
-                    // a new extent/version. No receipt is produced for redraws.
-                    let previous = self.session.applied().map(|c| c.as_ref());
-                    if let Some(cue) = previous {
-                        if let PreparedBackground::Color(color) = cue.background() {
-                            let resized = PreparedCue::diagnostic_color(
-                                cue.version(),
-                                sela::scene::Extent {
-                                    width: g.config.width,
-                                    height: g.config.height,
-                                },
-                                *color,
-                                RendererCapabilities {
-                                    max_texture_dimension: g
-                                        .device
-                                        .limits()
-                                        .max_texture_dimension_2d,
-                                },
-                            )
-                            .unwrap();
-                            let _ = g.submit(frame, Some(&resized));
+                    if let Some(ready) = &self.applied_ready {
+                        // Do not sample an old fixed-extent mask after resize.
+                        let cue = self.session.applied().unwrap();
+                        if cue.extent().width == g.config.width
+                            && cue.extent().height == g.config.height
+                        {
+                            self.compositor.as_ref().unwrap().submit_native(
+                                &frame.texture.create_view(&Default::default()),
+                                ready,
+                            );
+                            g.window.pre_present_notify();
+                            frame.present();
                         }
                     } else {
                         let _ = g.submit(frame, None);
@@ -223,6 +362,41 @@ impl ApplicationHandler for Audience {
         let Some(g) = &self.gpu else {
             return;
         };
+        // Only completed uploads cross into the native session; failures never
+        // supply a replacement. Worker FIFO plus session ordering filters stale.
+        for _ in 0..2 {
+            match self.completions.as_ref().unwrap().try_recv() {
+                Ok(completion) => {
+                    let ack = match completion.result {
+                        Ok((command, ready)) => {
+                            let ack = self.session.accept(command, Instant::now());
+                            if ack.outcome == Outcome::Accepted
+                                && !self.ready.iter().any(|(s, _)| *s == ack.stamp)
+                            {
+                                self.ready.push_back((ack.stamp, ready));
+                            }
+                            ack
+                        }
+                        Err(PreparationFailure::Resource) => {
+                            self.session.reject_preparation(completion.stamp)
+                        }
+                        Err(PreparationFailure::Upload) => {
+                            el.exit();
+                            return; // GPU uncertainty retires session, no inferred Applied.
+                        }
+                    };
+                    if self.pipes.try_send(Frame::acknowledgment(ack)).is_err() {
+                        el.exit();
+                        return;
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    el.exit();
+                    return;
+                }
+            }
+        }
         // Hard per-tick work limit; pipe flood cannot monopolize frame scheduling.
         for _ in 0..2 {
             let frame = match self.pipes.poll() {
@@ -240,19 +414,19 @@ impl ApplicationHandler for Audience {
                     return;
                 }
             };
-            let now = Instant::now();
-            let ack = match frame.into_command(
-                now,
-                RendererCapabilities {
-                    max_texture_dimension: g.device.limits().max_texture_dimension_2d,
-                },
-            ) {
-                Ok(command) => self.session.accept(command, now),
-                Err(_) => self.session.reject_preparation(stamp),
-            };
-            if self.pipes.try_send(Frame::acknowledgment(ack)).is_err() {
-                el.exit();
-                return;
+            match self.preparation.as_ref().unwrap().try_send(frame) {
+                Ok(()) => {}
+                Err(mpsc::TrySendError::Full(_)) => {
+                    let ack = self.session.reject_overload(stamp);
+                    if self.pipes.try_send(Frame::acknowledgment(ack)).is_err() {
+                        el.exit();
+                        return;
+                    }
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    el.exit();
+                    return;
+                }
             }
         }
         let now = Instant::now();
@@ -298,6 +472,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         backend,
         start,
         next: start,
+        compositor: None,
+        preparation: None,
+        completions: None,
+        ready: VecDeque::with_capacity(2),
+        applied_ready: None,
     };
     EventLoop::new()?.run_app(&mut app)?;
     Ok(())
