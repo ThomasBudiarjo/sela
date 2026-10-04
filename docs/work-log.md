@@ -167,3 +167,67 @@ Include the log/checklist update in the same commit as its implementation slice.
 Use `git log --grep='<ticket ID>'` to find commits; no need to amend a commit merely
 to put its own hash in this file. A blocked partial slice may be committed with
 failing checks disclosed, but cannot be marked done or qualified.
+
+### M0-02 — Partial: public-source ledger and Windows runbook — 2026-10-04
+
+- State: **blocked** for installed observation; documentation checkpoint complete,
+  not parent-ticket completion. Independently assigned alongside active M0-01;
+  the current-state/index above describes the bootstrap checkpoint, not a claim
+  that this parallel research has not started.
+- Scope: `docs/reference-observations.md` and this appended record only. No
+  README/backlog/plan gate changes, UI implementation, or completed M0-02 boxes.
+- Evidence: ledger EW8-OBS-001–009, source register SRC-01–04, observation runs
+  W01–W06 and separate Sela acceptance handoff G01 in
+  [reference-observations.md](reference-observations.md).
+- Sources: full official update, Quick Start, EasyWorship 7 shortcuts and Screen
+  Setup pages fetched via `read_web_page(forceRefetch=true)` on 2026-10-04.
+  Official listing explicitly says “Build 8.0.49 · Released Jun 30, 2026”.
+  Historical guide says Preview navigation does not advance live output and
+  Live double-click can exit Logo/Black/Clear; v7 shortcut guide assigns Ctrl+C
+  both editor-copy and show text-toggle. These are documented-only, not observed
+  8.0.49 behavior. Screen Setup describes extended desktop routing, not pacing.
+- Decisions: preserve unknown mask precedence/restore/Go Live/transport/output
+  scope and focus dispatch. Runbook separates reference compatibility from
+  Sela's acknowledged-state, private-selection and output-independence contracts.
+  No upstream GPUI pattern review needed: no code or GPUI implementation added.
+- Verification: `git diff --check` passed; Python standard-library link/whitespace
+  check below passed for both owned files (local links/anchors, unique ledger IDs,
+  nine records). All four external source URLs returned full page content in the
+  live fetches above. No proprietary installer/assets downloaded or copied.
+- Not run: installed reference N/H/L entitlement confirmation, Windows/native
+  app tests, physical display/GPU/audio, timing, E2E or failure injection. No
+  lawful installed reference or Windows runner is available; public source access
+  does not substitute for them. Zero installed observations/artifacts/passes.
+- Remaining/next action: obtain authorized Windows operator with lawful 8.0.49,
+  physical operator/audience displays and capture; execute W01 then W02/W03 static
+  cases and append results/artifacts. Continue focus/routing/full inventory;
+  G01 requires the Sela spike and M0-03/M0-08/M0-09 prerequisites. No gates waived.
+- Delivery: local `docs(M0-02): checkpoint reference ledger and Windows runbook`
+  commit on `ticket/m0-02-reference`; no push, publication or additional agents.
+
+Reproduce this slice's documentation check from repository root:
+
+```sh
+git diff --check
+python3 - <<'PY'
+from pathlib import Path
+import re
+for path in map(Path, ['docs/reference-observations.md', 'docs/work-log.md']):
+    source = path.read_text()
+    assert all(line == line.rstrip() for line in source.splitlines()), path
+    for link in re.findall(r'\]\(([^)]+)\)', source):
+        if '://' in link:
+            continue
+        filename, _, fragment = link.partition('#')
+        target = path.parent / filename if filename else path
+        assert target.is_file(), (path, link)
+        if fragment:
+            headings = re.findall(r'^#+ (.+)$', target.read_text(), re.M)
+            anchors = [re.sub(r'[^\w\- ]', '', h.lower()).replace(' ', '-') for h in headings]
+            assert fragment in anchors, (path, link)
+ledger = Path('docs/reference-observations.md').read_text()
+ids = re.findall(r'^\| (EW8-OBS-\d{3}) \|', ledger, re.M)
+assert len(ids) == len(set(ids)) == 9
+print('PASS: two owned files; local links/anchors and whitespace; nine unique ledger IDs')
+PY
+```
