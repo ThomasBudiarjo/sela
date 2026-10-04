@@ -1377,3 +1377,13 @@ PY
   WM-close scenarios. Full merged native/visual evidence is recorded below.
 - Local subticket fix, not a push or Windows qualification. Next: complete
   parent integration checkpoint and retain the remaining parent-ticket gates.
+
+### M0-06b — Native driver executable metadata — 2026-10-04 UTC
+
+- Parent's combined Ruff check found EXE001: the shebang-bearing native cue
+  driver lacked executable permission. Set its tracked mode to 0755; no Python
+  content changed. `scripts/native-cues.py --help` and `uvx ruff check
+  scripts/operator-shell.py scripts/song-library.py scripts/native-cues.py` now
+  pass; `git diff --check` passes. The full native cue replay had already passed
+  via `python3`; the mode change only makes direct invocation consistent.
+- Local M0-06b follow-up; parent integration evidence follows. No push.
