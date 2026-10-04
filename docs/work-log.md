@@ -517,3 +517,50 @@ PY
   do not qualify parent M0-07 or waive M0-10. Local subticket commit only, no push.
 - Next: integrator includes this module in composition example and reruns example
   tests/clippy plus GPU readback; then execute Windows/reference/hardware gates.
+
+### M0-07b — Offscreen static GPU composition/readback — 2026-10-04 UTC
+
+- State: **implemented-unqualified** subticket on `ticket/m0-07-compose`, based
+  on local main `71dc754` M0-05/M0-06 contracts. Assigned GPU module/docs only;
+  parent owns permanent common example/checklist and parallel explicit-font mask.
+- Files: `examples/composition/gpu.rs`, `docs/composition-gpu.md`, this one
+  appended record. No manifest/src/text/backlog/main-example changes. Original
+  embedded WGSL full-screen triangle loads nearest sRGB image and linear R8
+  coverage, composites straight-alpha image over opaque black and white glyphs
+  in linear light, writes sRGB RGBA8, strips padded GPU readback rows.
+- Decisions/upstream: exact pinned wgpu29.0.4 MIT/Apache-2.0 API paths,
+  coordinate/color policy, per-resource 64MiB/8192/device caps, 10s poll + 1s
+  callback wait and remaining default-error/driver-memory boundaries documented
+  in [composition-gpu.md](composition-gpu.md). No GPUI patterns or new deps.
+- Verification with `CARGO_TARGET_DIR=/home/user/workspace/repo/target`:
+  `cargo test --locked --example compose_gpu_check -j 4` (2 GPU-free tests),
+  `cargo test --locked --all-targets -j 4` (**24 passed**),
+  `cargo clippy --locked --example compose_gpu_check -j 4 -- -D warnings`,
+  `rustfmt --edition 2024 --check examples/composition/gpu.rs examples/compose_gpu_check.rs`,
+  `git diff --check`: passed. Initial v29 API compile errors and Clippy findings
+  corrected, final checks rerun; automatic chunk fix rolled back before explicit
+  reference-comparison correction. Formatted code reread.
+- R/GPU: `runtime=$(mktemp -d /tmp/sela-compose-runtime.XXXXXX)`;
+  `XDG_RUNTIME_DIR="$runtime" cargo run --locked --example compose_gpu_check -j 4`;
+  `rmdir "$runtime"`: passed repeatedly using actual Vulkan llvmpipe LLVM15.0.6
+  CPU adapter, Mesa22.3.6, Debian12 x64 debug orb, no surface/native service
+  changes. Initial successful run without XDG directory had runtime warnings;
+  private-runtime runs did not. No GL fallback or global environment mutation.
+- Real readback checked asymmetric 3x2 RGBA orientation/nonaligned rows, both
+  contain/cover aspect axes and crop boundaries, transparent background, zero/
+  half/full coverage (~188 half-white, not 128), midtone linear-light color,
+  input rejection and recovery. Retained `Compositor::check_readback()` allows
+  parent to repeat all pixel checks; normal unit tests never request GPU.
+- Evidence: ignored `.amp/in/artifacts/m0-07b-gpu.png` (321x180) inspected via
+  media tool: centered four-color image, black sidebars, white synthetic H and
+  half-coverage bar visible. Synthetic mask only, not font/shaping evidence.
+  Temporary harness removed before commit; full reproduction is in module note.
+- Not run: explicit-font integration, Windows/DX12, physical GPU/display or
+  scanout, native E2E, forced loss/OOM/timeout, cut/fade/video, performance/RSS or
+  installed-reference checks. Software offscreen pixels do not qualify them;
+  parent M0-07 remains open. Budget is per resource, not total resident memory.
+- Next: integrator includes GPU module in common example, calls diagnostic
+  `check_readback()` only opt-in and feeds CPU worker's exact output-size alpha
+  mask into `render`; rerun all-target checks and inspect actual font frames.
+- Delivery: local `feat(M0-07b): add offscreen GPU composition and readback`
+  commit; no push/publication/backend selection or waived qualification.
