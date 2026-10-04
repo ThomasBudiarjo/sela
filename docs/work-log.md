@@ -1307,3 +1307,51 @@ PY
   Local subticket commit only, no push. Next: retain companion editor correction,
   parent reviews/reruns integration and consolidates backlog; exact reference
   interaction and audience qualification gates remain open.
+
+### M1-05d — Reference-directed song editor correction — 2026-10-04 UTC
+
+- Implemented-unqualified companion on `ticket/m1-ui-reference`, LOCAL main
+  `231fffb`, retaining M1-05c chronological document history and all four non-UI
+  merges. Owns song_library/source tests, native song driver, owner note, ledger
+  and appended record only. No storage/arrangement/transport/scene/Cargo/native
+  diagnostic/backlog changes; root-source touches only forced correct cache build.
+- Personally read official Support7 articles (2024-09-03 and 2023-01-05) and
+  inspected working historical editor screenshot. D-UI-02 explicitly documents
+  those sources, not an installed8.0.49 finding. Apache GPUI upstream commit,
+  inspected paths and license recorded; original UI/fixture text, no Painter.
+- Title/Words/Slides/section selector left, draft preview or Inspector metadata
+  right, Add/Remove bottom-left and OK/Cancel bottom-right. Explicit Library
+  selector retains bounded worker catalog/loading/paging outside Words; existing
+  New/Save/Duplicate/Delete/Discard/Previous/Next reachable. Compact Inspector
+  clipping caught by visual review: omit redundant header status below900px,
+  keep truthful status below toolbar; fixed footer and scrolling preserve access.
+- Slides are four-line original text thumbnails; preview is logical draft text,
+  not audience WYSIWYG/pagination/themes/arrangement or matching output. No fake
+  unsupported formatting/media/output features. Native field entities retained.
+- OK waits for committed Saved receipt, not submission; validation/conflict/error
+  keep draft open; Cancel/WM/Ctrl+Q retain existing pending/dirty guards. Ordinary
+  Save advances only durable baseline/Version and retains selection/history.
+  New test exercises mode/navigation history invariants, invalid/conflicting OK
+  and pending Cancel. Old history/failure tests remain, revealing Inspector
+  before metadata-field focus instead of typing into a removed focus subtree.
+- Final `CARGO_TARGET_DIR=/home/user/workspace/repo/target cargo test --locked
+  --all-targets -j4`: **96 passed, 1 ignored child fixture**, new actual test names
+  and all five arrangement tests observed. Strict all-target Clippy `-D warnings`,
+  fmt, Ruff both drivers, diff check, locked bin build passed. Serial native
+  song-library/operator-shell drivers and native-smoke passed with DISPLAY=:99,
+  VK_DRIVER_FILES=/dev/null and the same shared target. Shared services untouched.
+- Native independent SQLite decoding verifies metadata/two asymmetric sections,
+  save-undo dirty close, retained committed bytes on discard, structural undo
+  across saves, reopen and actual OK-save/close; invalid OK also asserts survival
+  and zero commits. This executes the previously pending M1-05c native replay.
+  Coordinates were updated, not payload/undo/failure assertions removed.
+- Inspected actual ignored `.amp/in/artifacts/song-library/` initial/draft/Slides,
+  Inspector-filled, validation/validation-ok, unsaved-close, restored-section,
+  reopened-chorus, compact/compact-inspector/compact-library-selector/scrolled
+  PNGs, plus operator's independent editor-close guard. Original native crops,
+  not reference/composited images. Commands and scoped checklist in owner note.
+- Remaining: lawful installed8.0.49 behavior, Windows/real IME/accessibility/DPI,
+  hardware/audience output and performance unavailable/unrun, no parity/release
+  claim. Next: parent reviews these two local commits, reruns merged integration,
+  consolidates backlog and schedules required native/reference qualifications;
+  unsupported authoring/arrangement/pagination remains open. No push/publication.

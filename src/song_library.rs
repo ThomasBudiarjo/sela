@@ -27,7 +27,7 @@ pub fn open(path: PathBuf, cx: &mut App) -> Result<(), String> {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(720.), px(440.))),
             titlebar: Some(TitlebarOptions {
-                title: Some("Sela — Song library".into()),
+                title: Some("Sela — Song editor".into()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -144,7 +144,7 @@ struct Library {
     focus: FocusHandle,
     fields: [Entity<TextInput>; 6],
     field_edits: [u64; 6],
-    buttons: [FocusHandle; 12],
+    buttons: [FocusHandle; 18],
     subscriptions: Vec<Subscription>,
     task: Option<Task<()>>,
     worker: Option<Worker>,
@@ -160,6 +160,12 @@ struct Library {
     status: String,
     confirm_close: bool,
     confirm_delete: bool,
+    inspector: bool,
+    show_catalog: bool,
+    slides: bool,
+    close_after_save: bool,
+    committed_close: bool,
+    section_focus: [FocusHandle; 128],
 }
 
 impl Library {
@@ -217,6 +223,14 @@ impl Library {
             status,
             confirm_close: false,
             confirm_delete: false,
+            inspector: false,
+            show_catalog: false,
+            slides: false,
+            close_after_save: false,
+            committed_close: false,
+            section_focus: std::array::from_fn(|i| {
+                cx.focus_handle().tab_stop(true).tab_index(300 + i as isize)
+            }),
         };
         this.load_fields(cx);
         for (index, field) in this.fields.iter().enumerate() {
@@ -274,6 +288,13 @@ impl Library {
             },
         };
         *value = text.into();
+        if song != self.draft
+            && (self.status.starts_with("A title is required")
+                || self.status.starts_with("An input was rejected")
+                || self.status.starts_with("Song is invalid"))
+        {
+            self.status = "Draft changed · validate with Save or OK".into();
+        }
         self.record(song);
     }
     fn record(&mut self, song: Song) {
@@ -424,7 +445,12 @@ impl Library {
                 self.confirm_delete = false;
                 self.confirm_close = false;
                 self.cursor = None;
-                self.refresh(cx);
+                if self.close_after_save {
+                    self.committed_close = true;
+                    self.close_after_save = false;
+                } else {
+                    self.refresh(cx);
+                }
             }
             (Some(Pending::Delete), Ok(Reply::Deleted)) => {
                 self.begin(blank(), None, cx);
@@ -432,6 +458,7 @@ impl Library {
                 self.refresh(cx);
             }
             (_, Err(e)) => {
+                self.close_after_save = false;
                 self.status = error_message(e).into();
             }
             _ => self.status = "Unexpected storage reply. Close and reopen the library.".into(),
@@ -444,6 +471,22 @@ impl Library {
         }
         self.record(self.current(cx));
         match index {
+            12 => {
+                self.inspector = !self.inspector;
+                self.show_catalog = false;
+            }
+            13 => self.show_catalog = !self.show_catalog,
+            14 => self.slides = false,
+            17 => self.slides = true,
+            15 => {
+                self.action(1, window, cx);
+                self.close_after_save = matches!(self.pending, Some(Pending::Save(_)));
+            }
+            16 => {
+                if self.may_close(cx) {
+                    window.remove_window();
+                }
+            }
             0 if self.may_replace(cx) => {
                 self.begin(blank(), None, cx);
                 self.status = "New song · not saved".into();
@@ -564,11 +607,32 @@ impl Library {
         }
         cx.notify();
     }
+
+    fn select_section(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.pending.is_some() || index >= self.draft.sections.len() {
+            return;
+        }
+        let song = self.current(cx);
+        let mut bounded = song.clone();
+        if bounded.title.is_empty() {
+            bounded.title = "Untitled".into();
+        }
+        if bounded.validate().is_err() {
+            self.status = "Song too large. Shorten this section before switching.".into();
+        } else {
+            self.record(song.clone());
+            self.draft = song;
+            self.section = index;
+            self.load_fields(cx);
+        }
+        cx.notify();
+    }
     fn button(&self, index: usize, label: &str, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id(("library-button", index))
             .track_focus(&self.buttons[index])
             .key_context("SelaControl")
+            .flex_shrink_0()
             .px_2()
             .py_1()
             .rounded(px(4.))
@@ -628,7 +692,10 @@ fn error_message(e: Error) -> &'static str {
 }
 
 impl Render for Library {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.committed_close {
+            window.remove_window();
+        }
         let busy = self.pending.is_some();
         let dirty = self.dirty(cx);
         div()
@@ -653,6 +720,8 @@ impl Render for Library {
             .text_size(px(13.))
             .child(
                 div()
+                    .id("editor-toolbar")
+                    .overflow_x_scroll()
                     .h(px(44.))
                     .flex_shrink_0()
                     .px_3()
@@ -661,18 +730,10 @@ impl Render for Library {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(0xdcdedc))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Song library"),
-                    )
-                    .child(if dirty {
-                        "Unsaved changes"
-                    } else {
-                        "No unsaved changes"
-                    })
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Song editor"))
                     .when(!busy, |d| {
-                        d.child(self.button(0, "New", cx))
+                        d.child(self.button(13, "Library", cx))
+                            .child(self.button(0, "New", cx))
                             .child(self.button(1, "Save", cx))
                             .child(self.button(2, "Duplicate", cx))
                             .child(self.button(
@@ -685,15 +746,22 @@ impl Render for Library {
                                 cx,
                             ))
                             .child(self.button(4, "Discard edits", cx))
-                    }),
+                    })
+                    .when(f32::from(window.viewport_size().width) >= 900., |d| {
+                        d.child(if dirty {
+                            "Unsaved"
+                        } else {
+                            "Saved / unchanged"
+                        })
+                    })
+                    .child(div().flex_1())
+                    .when(!busy, |d| d.child(self.button(12, "Inspector", cx))),
             )
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .text_size(px(12.))
-                    .child(self.status.clone()),
-            )
+            .child(div().px_3().py_2().text_size(px(12.)).child(format!(
+                "{} · {}",
+                if dirty { "Unsaved" } else { "Unchanged" },
+                self.status
+            )))
             .when(self.confirm_close && !busy, |d| {
                 d.child(
                     div()
@@ -712,72 +780,79 @@ impl Render for Library {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(
-                        div()
-                            .w(px(220.))
-                            .flex_shrink_0()
-                            .border_r_1()
-                            .border_color(rgb(0xdcdedc))
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .p_3()
-                                    .text_color(rgb(0x646971))
-                                    .child("Saved songs · ID order"),
-                            )
-                            .child(
-                                div()
-                                    .id("library-list")
-                                    .flex_1()
-                                    .min_h_0()
-                                    .overflow_y_scroll()
-                                    .children(self.catalog.iter().enumerate().map(
-                                        |(i, (version, title))| {
-                                            let version = *version;
-                                            div()
-                                                .id(("song-row", i))
-                                                .track_focus(&self.row_focus[i])
-                                                .key_context("SelaControl")
-                                                .px_3()
-                                                .py_2()
-                                                .cursor_pointer()
-                                                .bg(rgb(if self.version == Some(version) {
-                                                    0xe3e7f3
-                                                } else {
-                                                    0xf4f4f3
-                                                }))
-                                                .hover(|d| d.bg(rgb(0xe8e9e7)))
-                                                .focus(|d| d.bg(rgb(0xdce3fa)))
-                                                .on_action(cx.listener(
-                                                    move |s, _: &ActivateControl, w, cx| {
-                                                        w.prevent_default();
-                                                        s.select(version, cx);
-                                                    },
-                                                ))
-                                                .on_click(cx.listener(move |s, event, w, cx| {
-                                                    if matches!(event, ClickEvent::Keyboard(_)) {
-                                                        return;
-                                                    }
-                                                    s.row_focus[i].focus(w, cx);
-                                                    s.select(version, cx);
-                                                }))
-                                                .child(title.clone())
+                    .when(self.show_catalog, |d| {
+                        d.child(
+                            div()
+                                .w(px(220.))
+                                .flex_shrink_0()
+                                .border_r_1()
+                                .border_color(rgb(0xdcdedc))
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .p_3()
+                                        .text_color(rgb(0x646971))
+                                        .child("Saved songs · ID order"),
+                                )
+                                .child(
+                                    div()
+                                        .id("library-list")
+                                        .flex_1()
+                                        .min_h_0()
+                                        .overflow_y_scroll()
+                                        .children(self.catalog.iter().enumerate().map(
+                                            |(i, (version, title))| {
+                                                let version = *version;
+                                                div()
+                                                    .id(("song-row", i))
+                                                    .track_focus(&self.row_focus[i])
+                                                    .key_context("SelaControl")
+                                                    .px_3()
+                                                    .py_2()
+                                                    .cursor_pointer()
+                                                    .bg(rgb(if self.version == Some(version) {
+                                                        0xe3e7f3
+                                                    } else {
+                                                        0xf4f4f3
+                                                    }))
+                                                    .hover(|d| d.bg(rgb(0xe8e9e7)))
+                                                    .focus(|d| d.bg(rgb(0xdce3fa)))
+                                                    .on_action(cx.listener(
+                                                        move |s, _: &ActivateControl, w, cx| {
+                                                            w.prevent_default();
+                                                            s.select(version, cx);
+                                                        },
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |s, event, w, cx| {
+                                                            if matches!(
+                                                                event,
+                                                                ClickEvent::Keyboard(_)
+                                                            ) {
+                                                                return;
+                                                            }
+                                                            s.row_focus[i].focus(w, cx);
+                                                            s.select(version, cx);
+                                                        },
+                                                    ))
+                                                    .child(title.clone())
+                                            },
+                                        )),
+                                )
+                                .when(!busy, |d| {
+                                    d.child(self.button(
+                                        9,
+                                        if self.catalog.len() == 128 {
+                                            "Next page"
+                                        } else {
+                                            "Refresh / first page"
                                         },
-                                    )),
-                            )
-                            .when(!busy, |d| {
-                                d.child(self.button(
-                                    9,
-                                    if self.catalog.len() == 128 {
-                                        "Next page"
-                                    } else {
-                                        "Refresh / first page"
-                                    },
-                                    cx,
-                                ))
-                            }),
-                    )
+                                        cx,
+                                    ))
+                                }),
+                        )
+                    })
                     .child(if busy {
                         div()
                             .flex_1()
@@ -787,24 +862,99 @@ impl Render for Library {
                     } else {
                         div()
                             .id("song-form")
-                            .flex_1()
+                            .w(px(
+                                (f32::from(window.viewport_size().width) * 0.46).max(310.)
+                            ))
+                            .flex_shrink_0()
                             .min_w_0()
                             .p_4()
                             .overflow_y_scroll()
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .children(
-                                ["Title", "Authors", "Copyright", "License identifier"]
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(|(i, label)| {
-                                        div()
-                                            .flex_shrink_0()
-                                            .child(div().mb_1().text_size(px(12.)).child(label))
-                                            .child(self.fields[i].clone())
-                                    }),
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .child("Title")
+                                    .child(self.fields[0].clone()),
                             )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_shrink_0()
+                                    .child(
+                                        div()
+                                            .border_b_2()
+                                            .border_color(rgb(if !self.slides {
+                                                0x536aca
+                                            } else {
+                                                0xf4f4f3
+                                            }))
+                                            .child(self.button(14, "Words", cx)),
+                                    )
+                                    .child(
+                                        div()
+                                            .border_b_2()
+                                            .border_color(rgb(if self.slides {
+                                                0x536aca
+                                            } else {
+                                                0xf4f4f3
+                                            }))
+                                            .child(self.button(17, "Slides", cx)),
+                                    ),
+                            )
+                            .when(self.slides, |d| {
+                                d.child(
+                                    div().text_size(px(11.)).text_color(rgb(0x646971)).child(
+                                        "Draft sections · first 4 lines · not rendered slides",
+                                    ),
+                                )
+                            })
+                            .children(self.draft.sections.iter().enumerate().map(|(i, section)| {
+                                div()
+                                    .id(("draft-section", i))
+                                    .track_focus(&self.section_focus[i])
+                                    .key_context("SelaControl")
+                                    .flex_shrink_0()
+                                    .p_2()
+                                    .border_b_1()
+                                    .border_color(rgb(0xdcdedc))
+                                    .bg(rgb(if i == self.section {
+                                        0xe3e7f3
+                                    } else {
+                                        0xfafaf9
+                                    }))
+                                    .focus(|d| d.bg(rgb(0xdce3fa)))
+                                    .cursor_pointer()
+                                    .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
+                                        w.prevent_default();
+                                        s.select_section(i, cx);
+                                    }))
+                                    .on_click(cx.listener(move |s, event, w, cx| {
+                                        if matches!(event, ClickEvent::Keyboard(_)) {
+                                            return;
+                                        }
+                                        s.section_focus[i].focus(w, cx);
+                                        s.select_section(i, cx);
+                                    }))
+                                    .child(format!("{} · {}", i + 1, section.label))
+                                    .when(self.slides, |d| {
+                                        d.child(
+                                            div()
+                                                .mt_2()
+                                                .p_2()
+                                                .bg(rgb(0x202226))
+                                                .text_color(rgb(0xfafaf9))
+                                                .children(section.lyrics.split('\n').take(4).map(
+                                                    |line| {
+                                                        div().child(
+                                                            line.trim_end_matches('\r').to_owned(),
+                                                        )
+                                                    },
+                                                )),
+                                        )
+                                    })
+                            }))
                             .child(
                                 div()
                                     .flex_shrink_0()
@@ -821,9 +971,7 @@ impl Render for Library {
                                         self.draft.sections.len()
                                     ))
                                     .child(self.button(5, "Previous", cx))
-                                    .child(self.button(6, "Next", cx))
-                                    .child(self.button(7, "Add section", cx))
-                                    .child(self.button(8, "Remove", cx)),
+                                    .child(self.button(6, "Next", cx)),
                             )
                             .when(!self.draft.sections.is_empty(), |d| {
                                 d.child(
@@ -832,16 +980,87 @@ impl Render for Library {
                                         .child("Section label")
                                         .child(self.fields[4].clone()),
                                 )
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .child("Lyrics · line breaks are preserved")
-                                        .child(self.fields[5].clone()),
-                                )
+                                .when(!self.slides, |d| {
+                                    d.child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .child("Lyrics · line breaks are preserved")
+                                            .child(self.fields[5].clone()),
+                                    )
+                                })
                             })
                             .into_any_element()
+                    })
+                    .when(!busy && !self.show_catalog, |d| {
+                        d.child(
+                            div()
+                                .id("draft-preview")
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_y_scroll()
+                                .p_4()
+                                .border_l_1()
+                                .border_color(rgb(0xdcdedc))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(0x646971))
+                                        .child("Local draft preview · not audience pagination"),
+                                )
+                                .when(!self.inspector, |d| {
+                                    d.child(
+                                        div()
+                                            .mt_4()
+                                            .p_4()
+                                            .bg(rgb(0x202226))
+                                            .text_color(rgb(0xfafaf9))
+                                            .child(self.fields[4].read(cx).text().to_string())
+                                            .child(div().mt_3().children(
+                                                self.fields[5].read(cx).text().split('\n').map(
+                                                    |line| {
+                                                        div().min_h(px(20.)).child(
+                                                            line.trim_end_matches('\r').to_owned(),
+                                                        )
+                                                    },
+                                                ),
+                                            )),
+                                    )
+                                })
+                                .when(self.inspector, |d| {
+                                    d.child(
+                                        div().child("Inspector · song information").children(
+                                            ["Authors", "Copyright", "License identifier"]
+                                                .iter()
+                                                .enumerate()
+                                                .map(|(i, label)| {
+                                                    div()
+                                                        .mt_3()
+                                                        .child(*label)
+                                                        .child(self.fields[i + 1].clone())
+                                                }),
+                                        ),
+                                    )
+                                }),
+                        )
                     }),
             )
+            .when(!busy, |d| {
+                d.child(
+                    div()
+                        .h(px(40.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .px_3()
+                        .child(self.button(7, "+ Add section", cx))
+                        .child(self.button(8, "Remove", cx))
+                        .child(div().flex_1())
+                        .child(self.button(15, "OK", cx))
+                        .child(self.button(16, "Cancel", cx)),
+                )
+            })
     }
 }
 
@@ -877,6 +1096,11 @@ mod tests {
     fn field(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize, text: &str) {
         cx.update(|w, cx| {
             view.update(cx, |v, cx| {
+                if (1..=3).contains(&index) {
+                    v.inspector = true;
+                    v.show_catalog = false;
+                    cx.notify();
+                }
                 v.fields[index]
                     .update(cx, |f, cx| f.set_text(text, cx))
                     .unwrap();
@@ -889,6 +1113,16 @@ mod tests {
     }
 
     fn edit(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize, text: &str) {
+        if (1..=3).contains(&index) {
+            cx.update(|_, cx| {
+                view.update(cx, |v, cx| {
+                    v.inspector = true;
+                    v.show_catalog = false;
+                    cx.notify();
+                })
+            });
+            cx.run_until_parked();
+        }
         let input = view.read_with(cx, |v, _| v.fields[index].clone());
         cx.update(|w, cx| {
             input.update(cx, |f, cx| {
@@ -897,6 +1131,51 @@ mod tests {
                 f.focus_handle(cx).focus(w, cx);
             })
         });
+    }
+
+    #[gpui::test]
+    fn editor_modes_section_selection_and_ok_failure_retain_document(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let (mut cx, view) = fixture(cx, path.clone());
+        assert!(view.read_with(&cx, |v, _| !v.inspector && !v.show_catalog && !v.slides));
+        action(&mut cx, &view, 15);
+        assert!(view.read_with(&cx, |v, _| v.pending.is_none()
+            && !v.committed_close
+            && !v.close_after_save
+            && v.status.contains("title")));
+        edit(&mut cx, &view, 0, "Original mode fixture");
+        edit(&mut cx, &view, 5, "Asymmetric first line");
+        action(&mut cx, &view, 7);
+        edit(&mut cx, &view, 5, "Distinct second section");
+        let count = view.read_with(&cx, |v, _| v.history.undo.len());
+        action(&mut cx, &view, 17);
+        action(&mut cx, &view, 12);
+        action(&mut cx, &view, 13);
+        cx.update(|_, cx| view.update(cx, |v, cx| v.select_section(0, cx)));
+        assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), count);
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.current(cx).sections[0].lyrics.clone()),
+            "Asymmetric first line"
+        );
+        action(&mut cx, &view, 1);
+        wait(&mut cx, &view);
+        let version = view.read_with(&cx, |v, _| v.version.unwrap());
+        let mut other = Repository::open(&path).unwrap();
+        let mut song = other.song(version).unwrap();
+        song.title = "Other writer".into();
+        other.save_song(Some(version), song).unwrap();
+        edit(&mut cx, &view, 0, "Retained conflict draft");
+        action(&mut cx, &view, 15);
+        assert!(view.read_with(&cx, |v, _| v.close_after_save && !v.committed_close));
+        action(&mut cx, &view, 16);
+        assert!(view.read_with(&cx, |v, _| v.pending.is_some()));
+        wait(&mut cx, &view);
+        assert!(view.read_with(&cx, |v, cx| !v.committed_close
+            && !v.close_after_save
+            && v.dirty(cx)
+            && v.status.starts_with("Changed elsewhere")
+            && v.current(cx).title == "Retained conflict draft"));
     }
 
     #[gpui::test]
