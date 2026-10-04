@@ -136,8 +136,15 @@ def run():
             # scanout timing, a GPU wait, or evidence of every frame's visibility.
             time.sleep(0.15)
             target = window(child)
-            geom = dict(line.split("=", 1) for line in cmd(
-                "xdotool", "getwindowgeometry", "--shell", target).splitlines())
+            # xdotool's absolute origin can include a decoration offset under a
+            # reparenting WM. Use actual client coordinates, as the GPUI drivers do.
+            geom = {}
+            for line in cmd("xwininfo", "-id", target).splitlines():
+                for key, field in [("X", "Absolute upper-left X:"),
+                                   ("Y", "Absolute upper-left Y:"),
+                                   ("WIDTH", "Width:"), ("HEIGHT", "Height:")]:
+                    if field in line:
+                        geom[key] = int(line.split(":")[-1].strip())
             image = pathlib.Path(scratch) / "root.png"
             subprocess.run(["import", "-window", "root", str(image)], env=env, check=True, timeout=5)
             bounds = "{WIDTH}x{HEIGHT}+{X}+{Y}".format(**geom)

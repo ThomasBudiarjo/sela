@@ -1606,3 +1606,22 @@ PY
   flock and rerun integration plus serial native/operator regressions. Continue
   production intent/pre-resolved safety coordinator and resize preparation before
   live-control wiring; do not close parent M0 gates from software-native captures.
+
+### M0-07d — Parent native capture correction — 2026-10-04 UTC
+
+- Merged native replay on shared :99 with Openbox exposed a driver geometry bug:
+  xdotool's reported origin shifted the crop downward by about 20px. The top-left
+  expected red sample at (100,160) read the lower ochre tile; screenshot inspection
+  also showed a bottom decoration strip. Worker :102 had no window manager, so
+  its passing captures did not expose this. No renderer assertion was weakened.
+- Use xwininfo absolute client origin/width/height, matching existing GPUI drivers.
+  Ruff caught an initial capture-label shadow before execution; renamed the local
+  field. `uvx ruff check scripts/native-cues.py` and `DISPLAY=:99
+  VK_DRIVER_FILES=/dev/null python3 scripts/native-cues.py --backend gl --out
+  .amp/in/artifacts/native-resources-integrated` now pass all 15 captures, pixel
+  samples and retained full-image RGB hashes. `git diff --check` passes.
+- Inspected corrected text-asymmetric-image and expired-retains-text-image PNGs:
+  complete six tiles, equal-height rows, readable Signal café/Beacon, no decoration
+  strip or shifted crop. Receipt sequence/pixel checks are executed evidence;
+  images alone do not prove timing or physical scanout. No application behavior
+  change. Local M0-07d follow-up, no push.
