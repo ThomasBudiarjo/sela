@@ -12,7 +12,9 @@ On Debian Linux, run `.agents/setup`, `cargo build --locked`, then
 `cargo run --locked` in a graphical session. `target/debug/sela --version` also
 works without a display. The preview opens a native GPUI window; Ctrl+Q or closing
 the window closes it, with an unsaved-song guard. It opens no network listeners.
-Choose **Songs → Open song library** to create, edit and save original songs, or
+Choose **New → New Song** or **Songs → + New Song** to create original songs;
+use **Library** in the editor to reopen saved songs and **Inspector** for metadata.
+**OK** saves and closes only after the database acknowledges the commit. Or
 use `target/debug/sela --library /absolute/path/to/library.sqlite` for an explicit
 profile. Opening the library creates a local SQLite database. See the
 [song editor guide](docs/song-library.md) for data locations, controls and limits.
@@ -54,6 +56,12 @@ records documentation evidence and the still-required Windows observations.
 The opt-in [static composition diagnostic](docs/composition-spike.md) prepares
 owned font/image resources and verifies actual GPU text-over-color/image readback.
 It is not yet connected to the native live-output loop or service UI.
+
+The [native cue diagnostic](docs/delivery.md) now tests bounded cross-process
+static-color commands and native presentation receipts, including stale/failed
+cue retention and restart without replay. It does not deliver lyrics or implement
+Black/Clear/Logo. [Verified backup/restore](docs/storage.md) is available through
+the storage worker API, not yet through an operator recovery interface.
 
 The [operator shell](docs/operator-shell.md) provides separate panes, resizable
 dividers, collapsible Resources and five resource tabs. Songs opens the working

@@ -8,16 +8,23 @@ include timezone for timed hardware/rehearsal evidence.
 
 - Application: native GPUI technical preview builds and renders on Linux software
   OpenGL, with persistent offline song authoring; no service schedule UI or live
-  lyric presentation yet. An opt-in winit/wgpu
-  audience-process diagnostic has measured independent animation; a separate
-  static composition example now verifies explicit-font GPU readback.
+  lyric presentation yet. The Linux preview is reinstalled and native-tested.
+  Opt-in winit/wgpu diagnostics cover independent animation, static-color native
+  cue delivery/receipts and separate explicit-font/image GPU readback.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
-- Latest slices: **M1-05b / M1-16a** persistent native song editor and installed
-  Linux developer preview checked. Next: M1-05c whole-document undo/section
-  edit semantics, then M1-06 arrangements/pagination prerequisites.
-  M1-05a native fields, M1-01a durable storage and M1-03a keyboard shell are merged,
-  as are the M0-07c video and M1-02a/b shell/style slices. The owner
-  explicitly permits UI implementation before physical renderer qualification;
+- Latest parallel wave is merged into local `main`, retaining each subticket:
+  **M1-05c** document undo, **M1-01b** verified backup/restore and process-abort
+  tests, **M1-06a** immutable arrangement domain, **M0-06b** bounded static-color
+  native pipes. **M1-02c/M1-05d** correct toolbar/editor placement from documented
+  official references; no Painter. Parent regression fixes and combined checks
+  are committed. These slices are implemented-unqualified, not completed parents.
+- Next concrete backend slice: M1-06 persistence prerequisite, explicit section
+  IDs and arrangement revisions with a real schema-1 migration gated by verified
+  backup, lossless old-song/schedule recovery and undo adapter tests. Domain IDs
+  must not derive from display labels or vector positions. Renderer work can run
+  separately: bounded owned font/image/text transport and preparation/upload
+  before native Ready/Applied. No current live UI wiring or mask-policy guesses.
+- The owner permits UI implementation before physical renderer qualification;
   this changes sequencing, not reference, hardware or service-ready claims.
 - M0-07a text and M0-07b GPU worktrees are merged into local `main`, retaining
   their individual subticket commits. Static composition is checked; resume
@@ -29,8 +36,8 @@ include timezone for timed hardware/rehearsal evidence.
 - Resume M0-04 on Windows DX12 with two physical displays, DPI/topology changes,
   hotplug and physical capture; run the M0-02 installed-reference runbook alongside.
   No Windows runner is connected. These required checks block gate closure.
-- M1-02a may proceed under the approved early-UI exception; other milestones
-  remain planned and M0-10 still requires physical Windows evidence for closure.
+- Remaining M1 UI slices may proceed under the approved exception; no M0-10
+  physical Windows qualification or service-ready release gate has closed.
 - Setup and application changes are local only; no push/publication authorized.
 - Parallel opportunity: M0-02 reference observation when a lawful EasyWorship
   8.0.49 installation on Windows is available.
@@ -53,12 +60,13 @@ remain `planned`. Update the current state above when switching work.
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, bounded synthetic slow preparation and clean/forced operator exit; Windows physical qualification open. |
 | M0-05 | implemented-unqualified | CPU snapshots and bounded worker tested; shaping/upload, renderer integration and applied-state checks remain. |
-| M0-06 | implemented-unqualified | Bounded ordered model with reserved capacity and receipt tests; IPC, native integration and reference mask semantics open. |
+| M0-06 | implemented-unqualified | Ordered model and bounded native static-color IPC/receipts; owned text/images, production coordination and reference mask semantics open. |
 | M0-07 | implemented-unqualified | Explicit-font color/image and decoded FFV1 GPU readback; native integration, transitions and physical qualification open. |
-| M1-01 | implemented-unqualified | Durable song/schedule snapshot repository and bounded worker; UI integration, remaining domain schemas/backups/recovery open. |
-| M1-02 | implemented-unqualified | Separate-pane shell and initial contemporary chrome; persistence/modes/reference/DPI checks open. |
+| M1-01 | implemented-unqualified | Durable song/schedule snapshots, bounded worker, verified backup/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
+| M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Native metadata/section authoring, save/load/duplicate/delete and dirty-close guard; full undo/reference/Windows qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, documented-reference editor and receipt-gated OK; installed-reference/Windows/IME/accessibility qualification open. |
+| M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs and immutable bounded domain with repeated-section tests; persistence/migration, editor integration and pagination open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
 
 ## Session records
@@ -1387,3 +1395,51 @@ PY
   pass; `git diff --check` passes. The full native cue replay had already passed
   via `python3`; the mode change only makes direct invocation consistent.
 - Local M0-06b follow-up; parent integration evidence follows. No push.
+
+### Parallel wave — Parent integration and installed preview — 2026-10-04 UTC
+
+- Four independently owned non-UI worktrees plus the reference-directed UI
+  worktree are locally merged with per-subticket commits intact. Parent inspected
+  storage publication/validation, arrangement identity/bounds, transport/native
+  submit/receipt ordering, document callbacks/history and toolbar/editor changes.
+  Resolved append-only work-log conflicts without dropping worker records;
+  retained both library module exports. Main checkout owns combined verification.
+- Shared target reuse had been detected in worker runs. Touched merged root
+  sources before rebuild and confirmed real compilation plus new test names;
+  did not treat stale zero-test/filter output as verification. Final
+  `cargo test --locked --all-targets -j4`: **97 passed, 1 ignored child fixture**
+  (three process tests explicitly invoke it). Strict all-target Clippy, fmt,
+  all-target build and `git diff --check` passed. Final Ruff across all three
+  native Python drivers passed after the recorded executable-mode correction.
+- Serial Linux X11/software GL commands with `DISPLAY=:99 VK_DRIVER_FILES=/dev/null`:
+  `python3 scripts/operator-shell.py`, `python3 scripts/song-library.py`,
+  `scripts/native-smoke.sh "$PWD/target/debug/sela"`, and
+  `python3 scripts/native-cues.py --backend gl --out .amp/in/artifacts/native-cues`
+  all passed. Existing shared Xvfb/Openbox/xcompmgr services were not restarted.
+  Native cue summary binds receipt sequences to sampled cropped pixel colors;
+  failed/stale/retired commands retain state and fresh startup does not replay.
+- Reinstalled via the exact offline debug Cargo install command above. Installed
+  smoke passed; `DISPLAY=:99 VK_DRIVER_FILES=/dev/null
+  SELA_BINARY="$PWD/.amp/install/bin/sela" python3 scripts/song-library.py` passed:
+  actual validation, independent SQLite payload checks, two-section editing,
+  save/document/structural undo, dirty-close, reopen, resize and OK commit-close.
+- Parent inspected actual `.amp/in/artifacts/operator-shell/{normal,compact}.png`,
+  `song-library/{draft,slides,compact-inspector,compact-scrolled}.png` and native
+  cue `render-failure-retains-red.png`. Toolbar grouping/placement, Words/Slides,
+  draft preview, Inspector and fixed footer are legible without overlap. Compact
+  form crops at its scroll boundary; scrolling reveals lyrics while footer stays
+  reachable. These are native software-rendered captures, not physical evidence.
+- Updated backlog evidence and README entry paths. The arrangement domain is
+  not persisted; backup is a worker API, not a recovery UI; native transport is
+  opaque-color-only, not text/image output or Black/Clear/Logo implementation.
+  Official marketing/Support screenshots are documented evidence, not installed
+  8.0.49 verification. No indexed search, service scheduler or live lyric UI yet.
+- Unrun: Windows/package installer, installed reference, physical GPU/projector,
+  mixed DPI, IME/accessibility qualification, destructive migration, power-loss
+  recovery, measured large-workload performance and long hardware soak. No access
+  or implementation prerequisite for these checks was invented. No parent ticket
+  or milestone gate was closed by this wave.
+- Delivery: all work is committed locally; nothing pushed, published or deployed.
+  Preview launcher remains `scripts/run-orb-preview.sh`. Resume the explicit-ID
+  persistence/migration prerequisite and renderer resource transport separately;
+  obtain Windows/reference access when the owner is available.

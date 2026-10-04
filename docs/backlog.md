@@ -297,8 +297,10 @@ Acceptance: a cue is either ready to apply or rejected without changing live.
 
 Depends on: M0-05. Tests: U, I.
 
-CPU model slice: [delivery.md](delivery.md). Native IPC, preparation-intent
-coordination and reference mask semantics remain open.
+CPU model and M0-06b native static-color IPC slices: [delivery.md](delivery.md).
+Bounded pipes, native submit/present receipts, stale/failure scene retention and
+fresh-epoch/no-replay checks pass. Owned text/image transport, preparation-intent
+coordination, production supervision and reference mask semantics remain open.
 
 - [x] Define sequence/epoch rules, accepted/applied/rejected acknowledgment meanings,
   stale rejection and restart behavior; distinguish submission from visibility.
@@ -392,10 +394,12 @@ success cannot close this gate.
 
 Depends on: M0-05, M0-10. Tests: U, I.
 
-M1-01a is locally merged as a prerequisite to the UI-first exception:
+M1-01a/b are locally merged as prerequisites to the UI-first exception:
 [storage contract](storage.md). Songs/revisions/schedule snapshots and a bounded
-worker exist; themes/assets/arrangements, destructive upgrades/backups and crash
-recovery remain open. No physical-output gate is waived.
+worker exist. Verified online backup and fresh-profile restore include live WAL
+and actual process-abort tests. Themes/assets/arrangements, real destructive
+upgrades, recovery UI and power-loss qualification remain open. No physical-output
+gate is waived.
 
 - [ ] Define songs, revisions, arrangements, themes, schedules and asset references;
   document stable IDs and transaction boundaries; media bytes stay outside SQLite.
@@ -415,7 +419,8 @@ Depends on: M0-02, M0-03, M0-10. Tests: N, E if viable, H.
 
 Early slice M1-02a is authorized by the sequencing exception above: separate-pane
 empty shell, provisional geometry, splitters and resource tabs, now locally merged
-and native-tested. Persisted layout,
+and native-tested. M1-02b/c add contemporary chrome and official-image-directed
+toolbar placement (D-UI-01), including New Song entry. Persisted layout,
 other modes and installed-reference behavior remain parent follow-through.
 
 - [x] Inspect relevant current GPUI split-pane/list/focus code and record references.
@@ -469,14 +474,17 @@ Acceptance: resource browsing remains responsive and cannot act on stale results
 
 Depends on: M1-01, M1-03. Tests: U, I, N.
 
-M1-05a/b are **implemented-unqualified**: native fields and a working persistent
-song editor, with [use/check instructions](song-library.md). Whole-document undo,
-installed-reference workflow/field confirmation and Windows/native qualification
-remain open; field undo alone does not close the full editing checklist.
+M1-05a–d are **implemented-unqualified**: native fields, persistent song editing,
+bounded chronological whole-document undo across section/metadata edits, and
+documented-reference editor layout with receipt-gated OK. See
+[use/check instructions](song-library.md). Native replay verifies save/undo,
+structural undo, reopen and dirty-close retention against independent SQLite
+bytes. Installed-reference workflow/field confirmation, Windows/IME/accessibility
+and production qualification remain open.
 
 - [ ] Implement title, authors, copyright/license identifiers, lyrics and labeled
   sections based on observed fields; keep identity separate from display title.
-- [ ] Support create/edit/duplicate/delete, validation, undo/redo and unsaved-close
+- [x] Support create/edit/duplicate/delete, validation, undo/redo and unsaved-close
   behavior without changing current live content.
 - [x] Preserve intentional line breaks and Unicode; define empty-section behavior.
 - [ ] Test duplicate titles, long lines, repeated sections, composed/decomposed
@@ -490,7 +498,12 @@ library changes. No licensed lyrics required for tests.
 
 Depends on: M1-05, M0-07. Tests: U, R, N.
 
-- [ ] Model ordered section occurrences and arrangement variants without duplicating
+M1-06a pure immutable [arrangement model](arrangement.md) is locally merged and
+unit-tested, including asymmetric repeated sections and stable occurrence IDs.
+It is not persisted or wired to the editor. Explicit-ID migration, repository
+adapter, UI/undo integration and pagination remain follow-through work.
+
+- [x] Model ordered section occurrences and arrangement variants without duplicating
   the underlying song or losing occurrence identity.
 - [ ] Implement reference-observed slide splitting, manual breaks, text fitting,
   section labels, slide ordering and overflow feedback.
