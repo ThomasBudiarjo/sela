@@ -1,7 +1,18 @@
 use super::*;
-use gpui::{CursorStyle, Empty, MouseButton, Point, Subscription};
+use gpui::{CursorStyle, Empty, FontWeight, MouseButton, Point, Subscription};
 
 const TABS: [&str; 5] = ["Songs", "Scriptures", "Media", "Presentations", "Themes"];
+
+// Sela-owned neutral chrome. Content/output state must not share selection colors.
+const CHROME: u32 = 0xf4f4f3;
+const SURFACE: u32 = 0xfafaf9;
+const BORDER: u32 = 0xdcdedc;
+const TEXT: u32 = 0x292c30;
+const MUTED: u32 = 0x646971;
+const HOVER: u32 = 0xe8e9e7;
+const PRESSED: u32 = 0xdedfdc;
+const ACCENT: u32 = 0x536aca;
+const CANVAS: u32 = 0x202226;
 
 #[derive(Clone, Copy)]
 struct Split(usize);
@@ -69,7 +80,17 @@ impl Operator {
             .when(!horizontal, |d| {
                 d.w(px(6.)).h_full().cursor(CursorStyle::ResizeLeftRight)
             })
-            .bg(rgb(0xc8d0da))
+            .bg(rgb(CHROME))
+            .flex()
+            .items_center()
+            .justify_center()
+            .hover(|d| d.bg(rgb(0xdde2f2)))
+            .child(
+                div()
+                    .bg(rgb(BORDER))
+                    .when(horizontal, |d| d.h(px(1.)).w_full())
+                    .when(!horizontal, |d| d.w(px(1.)).h_full()),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, _| {
@@ -118,9 +139,14 @@ fn control(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
         .id(id)
         .debug_selector(|| id.into())
         .px_3()
-        .py_1()
+        .h(px(26.))
+        .flex()
+        .items_center()
+        .rounded(px(4.))
         .cursor_pointer()
-        .bg(rgb(0xe2e7ee))
+        .text_color(rgb(MUTED))
+        .hover(|d| d.bg(rgb(HOVER)).text_color(rgb(TEXT)))
+        .active(|d| d.bg(rgb(PRESSED)))
         .child(label)
 }
 
@@ -137,9 +163,13 @@ fn pane(title: &'static str, text: &'static str, width: f32, dark: bool) -> impl
             div()
                 .h(px(32.))
                 .flex_shrink_0()
+                .flex()
+                .items_center()
                 .px_3()
-                .py_1()
-                .bg(rgb(0xe8ecf1))
+                .font_weight(FontWeight::MEDIUM)
+                .border_b_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(CHROME))
                 .child(title),
         )
         .child(
@@ -147,8 +177,12 @@ fn pane(title: &'static str, text: &'static str, width: f32, dark: bool) -> impl
                 .flex_1()
                 .min_h_0()
                 .p_3()
-                .bg(rgb(if dark { 0x17202e } else { 0xffffff }))
-                .text_color(rgb(if dark { 0xc5cfdd } else { 0x596576 }))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(13.))
+                .bg(rgb(if dark { CANVAS } else { SURFACE }))
+                .text_color(rgb(if dark { 0xb2b6be } else { MUTED }))
                 .child(text),
         )
 }
@@ -174,10 +208,10 @@ impl Render for Operator {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(rgb(0xf4f6f9))
-            .text_color(rgb(0x182536))
+            .bg(rgb(CHROME))
+            .text_color(rgb(TEXT))
             .font_family("DejaVu Sans")
-            .text_sm()
+            .text_size(px(13.))
             .child(
                 div()
                     .h(px(40.))
@@ -186,8 +220,10 @@ impl Render for Operator {
                     .items_center()
                     .px_3()
                     .gap_3()
-                    .child(div().text_color(rgb(0x233f65)).child("Sela"))
-                    .child("Development preview")
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Sela"))
+                    .child(div().text_color(rgb(MUTED)).child("Development preview"))
                     .child(
                         control("reset-layout", "Reset layout").on_click(cx.listener(
                             |this, _, _, cx| {
@@ -233,13 +269,13 @@ impl Render for Operator {
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .text_xs()
+                                    .text_size(px(11.))
                                     .px_2()
-                                    .children(
-                                        ["Go Live", "Black", "Clear", "Logo"].map(|label| {
-                                            div().text_color(rgb(0x78818d)).child(label)
-                                        }),
-                                    ),
+                                    .border_t_1()
+                                    .border_color(rgb(BORDER))
+                                    .children(["Go Live", "Black", "Clear", "Logo"].map(|label| {
+                                        div().px_1().py_1().text_color(rgb(0x81858b)).child(label)
+                                    })),
                             ),
                     ),
             )
@@ -252,7 +288,7 @@ impl Render for Operator {
                     .items_center()
                     .px_3()
                     .gap_3()
-                    .child("Resources")
+                    .child(div().font_weight(FontWeight::MEDIUM).child("Resources"))
                     .child(
                         control(
                             "collapse-resources",
@@ -283,15 +319,23 @@ impl Render for Operator {
                                 .flex_shrink_0()
                                 .flex()
                                 .items_center()
-                                .gap_2()
                                 .px_3()
+                                .border_b_1()
+                                .border_color(rgb(BORDER))
                                 .children(TABS.iter().enumerate().map(|(index, label)| {
                                     control(label, label)
-                                        .bg(rgb(if self.tab == index {
-                                            0xcbd9eb
+                                        .h_full()
+                                        .rounded_none()
+                                        .border_b_2()
+                                        .border_color(rgb(if self.tab == index {
+                                            ACCENT
                                         } else {
-                                            0xe2e7ee
+                                            CHROME
                                         }))
+                                        .bg(rgb(if self.tab == index { SURFACE } else { CHROME }))
+                                        .when(self.tab == index, |d| {
+                                            d.text_color(rgb(TEXT)).font_weight(FontWeight::MEDIUM)
+                                        })
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.tab = index;
                                             cx.notify();
@@ -303,26 +347,47 @@ impl Render for Operator {
                                 .flex_1()
                                 .min_h_0()
                                 .flex()
-                                .bg(rgb(0xffffff))
+                                .bg(rgb(SURFACE))
                                 .child(
                                     div()
                                         .w(px(left))
                                         .flex_shrink_0()
                                         .p_3()
-                                        .bg(rgb(0xeef1f5))
-                                        .child("Collections")
-                                        .child(div().mt_2().child("No collections")),
+                                        .border_r_1()
+                                        .border_color(rgb(BORDER))
+                                        .bg(rgb(CHROME))
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child("Collections"),
+                                        )
+                                        .child(
+                                            div()
+                                                .mt_2()
+                                                .text_color(rgb(MUTED))
+                                                .child("No collections"),
+                                        ),
                                 )
                                 .child(
                                     div()
                                         .debug_selector(|| "library-detail".into())
                                         .flex_1()
                                         .p_3()
-                                        .child(format!("{} library is empty", TABS[self.tab]))
+                                        .flex()
+                                        .flex_col()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            div().font_weight(FontWeight::MEDIUM).child(format!(
+                                                "{} library is empty",
+                                                TABS[self.tab]
+                                            )),
+                                        )
                                         .child(
                                             div()
                                                 .mt_2()
-                                                .text_color(rgb(0x596576))
+                                                .text_size(px(12.))
+                                                .text_color(rgb(MUTED))
                                                 .child("Library storage is not implemented."),
                                         ),
                                 ),

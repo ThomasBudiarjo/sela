@@ -29,8 +29,9 @@ Historical official v7 Quick Start (2023):
 <https://support.easyworship.com/support/solutions/articles/24000020385-quick-start-guide>
 supports the pane families, bottom Resources, five tabs and alternative views.
 Exact 8.0.49 geometry, control positioning and focus behavior are unknown.
-The parent's Painter image is density inspiration only, not parity evidence;
-no proprietary assets or invented import/help/menu controls were copied.
+The owner rejected further Painter use. Its early images are not the UI
+specification or parity evidence. No proprietary assets or invented import/help/
+menu controls were copied.
 
 Reviewed pinned Zed `a84689073d296dfd39987bc7dd478e43ef76d83a`:
 `crates/gpui/src/elements/div.rs` (on_drag, on_drag_move, mouse capture),
@@ -86,3 +87,32 @@ mixed DPI, installed EasyWorship, persistence, other modes or measured performan
 Software Vulkan black captures remain a known environment limitation; explicit
 GL is diagnostic only. Next: integrator merges this local ticket, reruns combined
 checks and retains parent qualification/persistence/mode items open.
+
+## M1-02b: contemporary light chrome
+
+The owner's target is EasyWorship layout with a clean Codex/T3code/Notion/Zed
+visual finish, not the original dated desktop skin. This styling slice preserves
+all pane extents, control regions, minimum sizes and interaction handlers. Sela's
+own neutral palette, 13px UI text, restrained weight hierarchy, 1px visible
+splitters (unchanged 6px hit region), subtle hover/pressed buttons, underlined
+active resource tab and centered empty states are implemented directly in GPUI.
+Preview/Live retain charcoal canvases; unavailable live controls remain inert.
+Existing DejaVu font dependency is retained, not a copied Zed font asset.
+
+Inspected current Zed HEAD (same pinned `a84689073d296dfd39987bc7dd478e43ef76d83a`):
+`assets/themes/one/one.json`, `assets/settings/default.json`,
+`crates/ui/src/styles/typography.rs`, `crates/ui/src/components/tab.rs`,
+`crates/ui/src/components/button/button_like.rs` for design observations.
+Zed defaults to One Light, compact sans typography, flat adjacent surfaces and
+subtle neutral button feedback. GPL application components/theme files are not
+copied/imported; original styles use Apache GPUI `Styled`/`InteractiveElement`
+from `crates/gpui/src/styled.rs` and `crates/gpui/src/elements/div.rs`.
+Codex/T3code/Notion are user-provided aesthetic references, not code dependencies.
+
+Merged-tree checks: 40 all-target tests, strict Clippy, fmt, native driver and
+native-smoke pass. Parent inspected normal, compact, selected Scriptures,
+collapsed, minimum drag and new `hover-reset.png` captures. At 720×440 Preview
+text is centered at y≈168 within its y72–264 canvas; Live centers higher because
+its bottom controls consume 32px. No extra geometry correction is required.
+Before-style capture is retained for comparison; this is a first styling slice,
+not a finished product UI or owner approval of the design.

@@ -747,3 +747,27 @@ PY
 - Windows/reference/mixed-DPI and persistent geometry/modes remain open. No
   service-ready/installable release claim, no push. Next: implement styling,
   capture all affected states again, then continue remaining operator tickets.
+
+### M1-02b — Direct GPUI styling checkpoint — 2026-10-04 UTC
+
+- Implemented original neutral chrome, typography hierarchy, thin visual dividers
+  with unchanged drag hit areas, subtle hover/pressed buttons and selected tabs.
+  No pane/control-region reorder, invented menu or live behavior. Provenance and
+  license boundary are in `docs/operator-shell.md`; no Zed components/assets copied.
+- Owner clarified design references as Codex/T3code/Notion/Zed and prohibited
+  further Painter use. Recorded in AGENTS/plan. Early generated studies are not
+  specifications or accepted designs; future iteration is actual GPUI only.
+- `cargo test --locked --all-targets -j 8`: **40 passed**; strict all-target
+  Clippy, fmt, bin build, Ruff and diff checks passed. Native shell driver and
+  native-smoke passed with `DISPLAY=:99 VK_DRIVER_FILES=/dev/null`.
+- Inspected actual normal/compact/Scriptures/collapsed/minimum-drag/hover captures
+  under `.amp/in/artifacts/operator-shell/`. Layout and labels fit both sizes;
+  hover gives subtle feedback, all empty/disconnected claims remain explicit.
+  Direct compact-image review rejected an automated visual-analysis false alarm:
+  Preview label really is centered in its taller canvas; Live has bottom controls.
+- This is not owner design approval, full feature parity or a usable worship
+  release. Persistent layout, modes, accessible controls and content authoring
+  remain. Local styling commit only; no push/publication.
+- Next independent slices: M1-01a durable song/schedule repository as prerequisite
+  to real operator content, and M1-03a keyboard access to existing shell controls.
+  Both proceed under the UI-first sequencing exception; no output gate waived.

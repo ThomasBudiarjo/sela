@@ -16,6 +16,9 @@ EasyWorship workflows must be tracked rather than silently omitted.
 - EasyWorship 8 layout and behavior parity is the target, not just inspiration.
 - Modern light-mode styling with original assets; preserve familiar control
   placement and interaction rather than redesigning the workflow.
+- Visual direction: clean contemporary Codex/T3code/Notion/Zed restraint, not
+  EasyWorship's dated skin. Keep the 1:1 layout/behavior target. Implement and
+  review actual GPUI screens; the owner explicitly rejected further Painter use.
 - Windows first, followed by macOS (Apple Silicon first) and Linux (Wayland/X11).
 - Offline-first, no mandatory cloud account, AGPL-3.0-or-later.
 - Audience, stage/confidence, and stream outputs are long-term requirements.

@@ -101,6 +101,9 @@ def main():
 
                 resize(1280, 800)
                 capture("normal")
+                pointer(270, 20)
+                time.sleep(0.2)
+                capture("hover-reset")
                 resize(720, 440)
                 capture("compact")
                 click(160, 318)
@@ -108,7 +111,7 @@ def main():
                 resize(1280, 800)
                 click(160, 510)
                 capture("collapsed")
-                click(330, 20)  # Reset layout, original top-bar control.
+                click(270, 20)  # Reset layout, original top-bar control.
                 pointer(307, 180)
                 run("xdotool", "mousedown", "1")
                 pointer(50, 180)

@@ -4,6 +4,11 @@
 - Preserve the EasyWorship layout and behavior compatibility goal. Observe the
   pinned reference before choosing shortcuts, focus rules, drag/drop behavior,
   selection rules, or Black/Clear/Logo semantics. Record unknowns instead of guessing.
+- Keep EasyWorship's 1:1 layout/behavior as the compatibility target, but use a
+  clean contemporary visual finish inspired by Codex, T3code, Notion and Zed:
+  restrained chrome, clear typography, subtle borders and interaction states.
+  Do not substitute a card dashboard or copy a dated desktop skin. Do not use
+  Painter; implement original GPUI UI and inspect actual rendered states.
 - Before implementing non-trivial GPUI patterns, inspect current
   `zed-industries/zed`, especially `crates/gpui` and relevant feature code.
   Record upstream paths and commits or issues in the implementation PR or design
