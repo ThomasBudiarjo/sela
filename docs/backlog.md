@@ -646,6 +646,12 @@ surprises or UI-workload stalls in the measured audience output.
 
 Depends on: M1-02, M1-03, M1-12. Tests: I, N, H.
 
+M1-16a is a **partial developer-local Linux install/check slice**, not completion
+of this Windows ticket or its dependency gates. Cargo local installation and the
+installed native song editor are checked in the orb; Windows packaging, upgrade,
+settings, accessibility and service rehearsal remain open. See README install
+instructions and the work log for precise evidence and limits.
+
 - [ ] Produce repeatable local Windows installer/package with required runtime
   dependencies and profile/data locations; no publishing/signing secret required.
 - [ ] Add observed core settings and output selection, persistence, validation and

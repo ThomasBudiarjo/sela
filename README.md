@@ -22,6 +22,29 @@ provenance, prerequisites, verification commands and qualification limits.
 Windows build/native verification and the independent-audience feasibility gate
 remain open; this is not an installable Sunday-ready release.
 
+### Install the Linux developer preview locally
+
+After the prerequisites above, install without administrator permissions:
+
+```sh
+cargo install --path . --locked --debug --bin sela --root "$PWD/.amp/install"
+.amp/install/bin/sela --version
+.amp/install/bin/sela
+```
+
+This installs an unoptimized technical preview, not a portable OS package.
+It still needs the native libraries and fonts from setup. Add `--offline` to the
+install command when dependencies are already cached; that path was tested in
+the Debian orb. An initial dependency download still requires network access.
+Repeat the install command after updating source. Song profiles live outside the
+installation root; `cargo uninstall --root "$PWD/.amp/install" sela` removes the
+executable, not those profiles. Production upgrade/recovery is not qualified.
+
+In an Amp orb, `scripts/run-orb-preview.sh` runs the installed app in the foreground
+using the verified software-GL backend. Amp Desktop supplies its graphical
+environment; the script does not replace DISPLAY, Wayland or audio settings.
+This override is orb-specific, not a recommended physical Windows/GPU setting.
+
 The opt-in [audience spike](docs/output-spike.md) uses a separate winit/wgpu process
 and tests UI stalls, delayed worker preparation and operator termination. It is
 diagnostic geometry, not lyric presentation. [Native tests](docs/native-testing.md)

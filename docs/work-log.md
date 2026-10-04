@@ -12,8 +12,9 @@ include timezone for timed hardware/rehearsal evidence.
   audience-process diagnostic has measured independent animation; a separate
   static composition example now verifies explicit-font GPU readback.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
-- Active continuation: **M1-05b** persistent native song editor implemented and
-  checked; next verify a developer-local installed binary (M1-16a partial slice).
+- Latest slices: **M1-05b / M1-16a** persistent native song editor and installed
+  Linux developer preview checked. Next: M1-05c whole-document undo/section
+  edit semantics, then M1-06 arrangements/pagination prerequisites.
   M1-05a native fields, M1-01a durable storage and M1-03a keyboard shell are merged,
   as are the M0-07c video and M1-02a/b shell/style slices. The owner
   explicitly permits UI implementation before physical renderer qualification;
@@ -58,6 +59,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-02 | implemented-unqualified | Separate-pane shell and initial contemporary chrome; persistence/modes/reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
 | M1-05 | implemented-unqualified | Native metadata/section authoring, save/load/duplicate/delete and dirty-close guard; full undo/reference/Windows qualification open. |
+| M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
 
 ## Session records
 
@@ -1016,3 +1018,42 @@ PY
   Next: developer-local install and launch/save/reopen of the installed binary,
   then arrangement/pagination or resource-search prerequisites. Commit is local;
   no push/publication authorized.
+
+### M1-16a — Locally installed Linux developer preview — 2026-10-04 UTC
+
+- Partial prerequisite under the owner's request for installable/useful progress;
+  does not close M1-16's Windows scope, M1-12 dependency, M0-10 or Sunday gate.
+  Source app remains the M1-05b technical preview. Added reproducible README
+  instructions, ignored generated Cargo install root, and a foreground orb
+  Desktop launcher which preserves supplied display/Wayland/audio variables.
+- `cargo install --path . --locked --offline --debug --bin sela --root "$PWD/.amp/install" -j 8`:
+  passed without sudo using cached dependencies. Installed executable reports
+  `Sela 0.1.0 (technical preview)`; `ldd` output asserted to contain no `not found`.
+  SHA256: `6638e4f6dbde5ef9de37beeddbe855d32e5030e3ba28a554fd6038b79069c2dd`.
+  This is a local unoptimized ELF needing setup libraries/fonts, not a portable,
+  signed, published or Windows package. Initial uncached setup requires network.
+- `SELA_BINARY="$PWD/.amp/install/bin/sela" DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/song-library.py`:
+  passed complete native input/independent SQLite/save/reopen/dirty-close/resize
+  flow on the installed executable. Inspected its actual reopened-chorus capture:
+  all original metadata, Chorus section identity and both distinct lines present,
+  readable with no overlap. Same retained native artifact path as M1-05b.
+- `DISPLAY=:99 VK_DRIVER_FILES=/dev/null scripts/native-smoke.sh "$PWD/.amp/install/bin/sela"`
+  and `DISPLAY=:99 scripts/native-smoke.sh "$PWD/scripts/run-orb-preview.sh"`:
+  both passed input/focus/resize, Ctrl+Q and WM close, clean exit/window removal.
+  `bash -n scripts/run-orb-preview.sh`, `shellcheck scripts/run-orb-preview.sh`,
+  and launcher `--version`: passed. Launcher deliberately uses orb software GL;
+  it is not a recommendation for untested physical hardware.
+- Bounded inline Python executed two additional disposable-root cycles of the
+  same offline Cargo install command, installed `--version`, then
+  `cargo uninstall --root <temporary-root>/installed sela`. Binary removed each
+  time and a sibling original SQLite retention fixture's SHA256 stayed identical.
+  Temporary roots removed; main `.amp/install/bin/sela` remains installed. This
+  verifies filesystem retention only, not an actual Sela schema upgrade or S08.
+- Unrun: Windows/macOS installer, clean-machine dependency packaging, production
+  upgrade/rollback/signing, real platform IME/accessibility and physical output.
+  No performance or complete parity claim. Song authoring is usable; schedule,
+  arrangement/theme authoring, connected live output and recovery remain open.
+- Next concrete implementation: M1-05c bounded whole-document undo for section
+  changes, preserving field editing and saved revision/dirty invariants; inspect
+  reference semantics when access is available. Then M1-06 arrangement/pagination.
+  Local per-subticket commits only; no push, publication or deployment authorized.
