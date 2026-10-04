@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Debian orb prerequisites; provenance and qualification limits: README.md.
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+started=$SECONDS
+echo "[setup] Checking native build and graphics prerequisites"
+packages=(
+  build-essential pkg-config git ca-certificates curl shellcheck
+  libfontconfig-dev fonts-dejavu-core libwayland-dev libxkbcommon-x11-dev
+  libvulkan1 mesa-vulkan-drivers vulkan-tools
+)
+missing=()
+for package in "${packages[@]}"; do
+  if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != "install ok installed" ]]; then
+    missing+=("$package")
+  fi
+done
+if ((${#missing[@]})); then
+  sudo -n apt-get update -qq
+  sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+fi
+echo "[setup] System packages ready ($((SECONDS - started))s elapsed)"
+
+export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+export PATH="$CARGO_HOME/bin:$PATH"
+if ! command -v rustup >/dev/null 2>&1; then
+  installer=$(mktemp)
+  trap 'rm -f -- "$installer"' EXIT
+  curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+    --connect-timeout 15 --max-time 120 https://sh.rustup.rs -o "$installer"
+  sh "$installer" -y --profile minimal --default-toolchain none --no-modify-path
+fi
+
+# Separate login shells used by Amp/services must also discover rustup proxies.
+profile_marker='# Sela orb Rust environment'
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<'PROFILE'
+
+# Sela orb Rust environment
+if [ -f "${CARGO_HOME:-$HOME/.cargo}/env" ]; then
+  . "${CARGO_HOME:-$HOME/.cargo}/env"
+fi
+PROFILE
+fi
+
+echo "[setup] Ensuring repository-pinned Rust toolchain and components"
+# Read rust-toolchain.toml explicitly; do not rely on deprecated auto-installation.
+rustup toolchain install --no-self-update --no-update
+rustup show active-toolchain
+rustc --version
+cargo --version
+cargo fmt --version
+cargo clippy --version
+echo "[setup] Ready ($((SECONDS - started))s total); no application manifest yet"

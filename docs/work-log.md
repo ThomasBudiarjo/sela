@@ -7,10 +7,12 @@ include timezone for timed hardware/rehearsal evidence.
 ## Current state
 
 - Application: not implemented; no runnable Rust/GPUI project yet.
-- All M0–M5 implementation tickets: `planned`.
-- Next ticket: **M0-01 — Reproducible Rust/GPUI bootstrap**.
-- First action: inspect current upstream GPUI minimal application/action examples,
-  record commit/paths/licenses, then establish pinned toolchain/dependencies.
+- Active partial ticket: **M0-01 — Reproducible Rust/GPUI bootstrap**.
+- Completed slice: orb prerequisites and Rust 1.98.1 pin; setup tested locally.
+  Setup is not active for future project orbs until pushed to the default branch.
+- All other M0–M5 implementation tickets remain `planned`.
+- Next action: inspect current upstream GPUI minimal application/action examples,
+  record commit/paths/licenses, then pin the GPUI dependency and create the app.
 - Parallel opportunity: M0-02 reference observation when a lawful EasyWorship
   8.0.49 installation on Windows is available.
 - Known qualification needs: real Windows GPU/displays; EasyWorship reference;
@@ -26,8 +28,48 @@ remain `planned`. Update the current state above when switching work.
 | Ticket | State | Completed slice / remaining work |
 | --- | --- | --- |
 | PLAN-001 | done | 63 implementation tickets, 326 ticket checklist items, test/compatibility matrices and commit/resume rules. Documentation verified; delivered in this local planning commit. No application implementation. |
+| M0-01 | active | Orb setup slice and Rust pin committed locally. GPUI revision, crate/application, CI, Windows prerequisites/build/native launch remain open. |
 
 ## Session records
+
+### M0-01 — Partial: orb prerequisites — 2026-10-04 (Asia/Jakarta)
+
+- Scope: `.agents/setup`, `rust-toolchain.toml`, `.gitignore`, README setup notes;
+  no application manifest, service, credentials or renderer selection.
+- Upstream: Zed commit
+  [`a846890`](https://github.com/zed-industries/zed/commit/a84689073d296dfd39987bc7dd478e43ef76d83a),
+  `rust-toolchain.toml`, `script/linux`, and GPUI/Linux/WGPU manifests. This
+  inspected revision is provenance, not yet Sela's GPUI dependency pin.
+- Decisions: pin Rust 1.98.1 with rustfmt/clippy; install only missing Debian
+  prerequisites; persist cargo discovery for login shells; no resume script
+  because nothing needs authentication or service repair. Native package list
+  must be revalidated against the eventual application feature set.
+- Verification on Debian 12 x86_64 orb:
+  - `bash -n .agents/setup` and `shellcheck .agents/setup`: passed.
+  - `time .agents/setup`: first install 15.885s. Replaced deprecated rustup
+    auto-install with explicit `rustup toolchain install --no-self-update --no-update`.
+    Final script warm runs: 0.409s and 0.531s, no package downloads.
+  - `RUSTUP_HOME="$fresh" time .agents/setup` with a disposable empty rustup
+    directory: final-script fresh toolchain installation passed in 12.55s;
+    temporary toolchain removed afterward.
+  - `env -i HOME="$HOME" USER="$(id -un)" PATH=/usr/local/bin:/usr/bin:/bin
+    /bin/bash -lc 'command -v cargo rustc; rustc --version'`: proxies found in
+    `/home/user/.cargo/bin`, Rust 1.98.1. Rust 2024 stdin compile/run in the same
+    clean login-shell environment printed `Rust compile/run smoke passed`.
+    Initial smoke-command shell quoting failed; corrected command passed.
+  - `pkg-config --modversion fontconfig wayland-client xkbcommon-x11`: 2.14.1,
+    1.21.0, 1.5.0. `vulkaninfo --summary`: Mesa llvmpipe CPU device; not physical
+    GPU/display qualification.
+  - `grep -Fc '# Sela orb Rust environment' "$HOME/.bash_profile"`: one hook
+    after repeated runs. `git check-ignore .amp/portals/test.json target/test`:
+    both ignored. Documentation verifier and `git diff --check`: passed.
+- Not run: GPUI build/render, app tests, Windows build/native launch, hardware
+  checks; no application exists. Software Vulkan detection is not app execution.
+- Delivery: local partial commit `chore(M0-01): prepare Rust and GPUI orb prerequisites`;
+  no push or project-setting change. Future-orb activation awaits authorization.
+- Resume: finish M0-01 upstream application-pattern review, dependency pin,
+  manifest/window, CI and Windows verification. No full parent checkbox is
+  checked because this setup slice does not satisfy an entire combined item.
 
 ### PLAN-001 — Executable roadmap and checkpoint discipline — 2026-10-04
 

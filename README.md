@@ -26,6 +26,34 @@ dependencies, checklists, test boundaries, and release gates. Start or resume wo
 from [the work log](docs/work-log.md); the first implementation ticket is M0-01.
 Sela is an independent project, not affiliated with or endorsed by EasyWorship.
 
+## Orb development environment
+
+Run `.agents/setup` in a Debian 12 Amp orb. It installs missing native packages
+and the Rust version/components in `rust-toolchain.toml`; repeated runs reuse
+installed packages and toolchains. Rust is made available to subsequent login
+shells. Setup needs network access and passwordless sudo for missing packages,
+but no project secrets. It does not start services or authenticate accounts.
+No resume script is needed while there are no services or credentials to repair.
+
+The initial Rust 1.98.1 pin and Linux package selection follow Zed commit
+[`a846890`](https://github.com/zed-industries/zed/commit/a84689073d296dfd39987bc7dd478e43ef76d83a),
+specifically `rust-toolchain.toml`, `script/linux`, and the manifests under
+`crates/gpui`, `crates/gpui_linux`, and `crates/gpui_wgpu`. Only standalone GPUI
+prerequisites are included, not Zed's full application dependencies. ShellCheck,
+DejaVu fonts, and Vulkan diagnostics support setup verification. No upstream
+application UI code is copied.
+
+X11/Wayland libraries and Mesa software Vulkan prepare the Linux environment;
+they do not select Sela's audience renderer or qualify physical GPU performance.
+The application/GPUI dependency revision, Windows build, and native launch remain
+M0-01 work. There is no `Cargo.toml` yet, so setup does not fetch/build an app.
+Revalidate packages and add locked dependency fetching when the manifest lands.
+
+Check setup with `bash -n .agents/setup`, `shellcheck .agents/setup`, and two
+consecutive `.agents/setup` runs. Changes only reach future project orbs after
+merging/pushing them to the project's default branch (or explicitly configuring
+a project pre-setup script).
+
 ## License
 
 Copyright (C) 2026 Sela contributors.
