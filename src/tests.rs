@@ -100,6 +100,10 @@ fn shell_controls_and_resize(cx: &mut TestAppContext) {
     cx.simulate_click(bounds.center(), Default::default());
     assert!(operator.read_with(&cx, |o, _| o.collapsed));
     assert!(cx.debug_bounds("library-detail").is_none());
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.dimensions(1280., 800.))[3],
+        730.
+    );
     let bounds = cx.debug_bounds("collapse-resources").unwrap();
     cx.simulate_click(bounds.center(), Default::default());
     assert!(!operator.read_with(&cx, |o, _| o.collapsed));
@@ -153,6 +157,31 @@ fn splitters_bound_release_and_reset(cx: &mut TestAppContext) {
     let b = cx.debug_bounds("reset-layout").unwrap();
     cx.simulate_click(b.center(), Default::default());
     assert_eq!(operator.read_with(&cx, |o, _| o.ratios), [0.24, 0.62, 0.62]);
+    for (selector, dimension, minimum) in [
+        ("split-schedule", 0, 150.),
+        ("split-live", 1, 150.),
+        ("split-resources", 3, 140.),
+    ] {
+        let start = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(
+            start - point(px(15.), px(15.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(-3000.), px(-3000.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(-3000.), px(-3000.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        let d = operator.read_with(&cx, |o, _| o.dimensions(1280., 800.));
+        assert!((d[dimension] - minimum).abs() < 0.01);
+    }
     for (w, h) in [(0., 0.), (10., 10.), (720., 440.), (1280., 800.)] {
         let d = operator.read_with(&cx, |o, _| o.dimensions(w, h));
         assert!(d.iter().all(|v| v.is_finite() && *v >= 0.));

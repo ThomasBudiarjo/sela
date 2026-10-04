@@ -28,6 +28,12 @@ The opt-in [static composition diagnostic](docs/composition-spike.md) prepares
 owned font/image resources and verifies actual GPU text-over-color/image readback.
 It is not yet connected to the native live-output loop or service UI.
 
+The [operator shell](docs/operator-shell.md) provides separate panes, resizable
+dividers, collapsible Resources and five empty resource tabs. Live controls remain
+unavailable until an audience renderer is connected. The opt-in
+[video diagnostic](docs/video-spike.md) checks original FFV1 frames through FFmpeg
+and GPU composition; it is not a production video player.
+
 ## Product direction
 
 - GPUI is the operator frontend, not the live presentation renderer.
@@ -69,8 +75,10 @@ application UI code is copied.
 X11/Wayland libraries and Mesa software Vulkan prepare the Linux environment;
 they do not select Sela's audience renderer or qualify physical GPU performance.
 Setup fetches the locked dependencies without compiling the application. Xvfb,
-Openbox and xdotool support native Linux smoke checks, not Windows/physical display
-qualification. GPUI is pinned in `Cargo.toml`; transitive versions are locked.
+Openbox, xdotool and xwininfo support native Linux smoke checks, not Windows/physical
+display qualification. External FFmpeg supports the opt-in decoder diagnostic;
+it is not bundled with Sela. GPUI is pinned in `Cargo.toml`; transitive versions
+are locked.
 
 Check setup with `bash -n .agents/setup`, `shellcheck .agents/setup`, and two
 consecutive `.agents/setup` runs. Changes only reach future project orbs after

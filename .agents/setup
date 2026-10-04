@@ -9,7 +9,7 @@ packages=(
   build-essential cmake clang pkg-config git ca-certificates curl shellcheck
   libfontconfig-dev fonts-dejavu-core libwayland-dev libxkbcommon-x11-dev
   libvulkan1 mesa-vulkan-drivers vulkan-tools
-  xvfb xauth xdotool openbox xcompmgr imagemagick
+  xvfb xauth xdotool x11-utils openbox xcompmgr imagemagick ffmpeg
 )
 missing=()
 for package in "${packages[@]}"; do

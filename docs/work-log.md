@@ -11,13 +11,14 @@ include timezone for timed hardware/rehearsal evidence.
   audience-process diagnostic has measured independent animation; a separate
   static composition example now verifies explicit-font GPU readback.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
-- Active continuation: **M0-07c** bounded software video-decoder/GPU interop spike
-  and **M1-02a** provisional operator shell in separate worktrees. The owner
+- Active continuation: **M1-02b** Zed-inspired light styling of the native shell,
+  preserving EasyWorship pane layout. M0-07c video and M1-02a shell are locally
+  merged and checked. The owner
   explicitly permits UI implementation before physical renderer qualification;
   this changes sequencing, not reference, hardware or service-ready claims.
 - M0-07a text and M0-07b GPU worktrees are merged into local `main`, retaining
   their individual subticket commits. Static composition is checked; resume
-  native GPU-readiness/receipt integration and decoder interop next, with observed
+  native GPU-readiness/receipt integration next, with observed
   transition behavior pending reference access.
 - M0-02 reference ledger, M0-03 native harness and M0-04 audience spike were
   developed in separate worktrees and merged into local `main`, with ticket
@@ -50,8 +51,8 @@ remain `planned`. Update the current state above when switching work.
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, bounded synthetic slow preparation and clean/forced operator exit; Windows physical qualification open. |
 | M0-05 | implemented-unqualified | CPU snapshots and bounded worker tested; shaping/upload, renderer integration and applied-state checks remain. |
 | M0-06 | implemented-unqualified | Bounded ordered model with reserved capacity and receipt tests; IPC, native integration and reference mask semantics open. |
-| M0-07 | implemented-unqualified | Explicit-font color/image contain/cover GPU readback; native integration, transitions/video and physical qualification open. |
-| M1-02 | active | Early-UI exception approved; M1-02a empty separate-pane shell and bounded splitters, no speculative live semantics. |
+| M0-07 | implemented-unqualified | Explicit-font color/image and decoded FFV1 GPU readback; native integration, transitions and physical qualification open. |
+| M1-02 | active | M1-02a separate-pane shell merged/tested; M1-02b modern Zed-inspired light styling requested, no speculative live semantics. |
 
 ## Session records
 
@@ -719,3 +720,30 @@ PY
 - Delivery: local ticket fix checkpoint; no push or release. Continue operator
   work under the approved sequencing exception; native renderer integration and
   observed transitions remain open.
+
+### M1-02a — Shell integration and native evidence — 2026-10-04 UTC
+
+- Parent reviewed and merged original worktree commit. Fixed collapsed layout's
+  unused six-pixel gutter; added all three lower drag-boundary assertions, alongside
+  existing upper-bound tests. Native driver uses repo-relative target by default
+  and distinguishes asserted input/exit checks from visually inspected state.
+- `cargo test --locked --all-targets -j 8`: **40 passed**, including five operator
+  tests. All-target strict Clippy/build, fmt, Ruff and diff checks passed.
+  `DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/operator-shell.py` and
+  `DISPLAY=:99 VK_DRIVER_FILES=/dev/null scripts/native-smoke.sh
+  "$PWD/target/debug/sela"` passed on Debian12 Xvfb/Openbox software GL.
+- Parent inspected normal, compact, Scriptures, collapsed and drag-minimum PNGs
+  under `.amp/in/artifacts/operator-shell/`: correct selected label, full collapsed
+  height, minimum 150px Schedule, no clipped controls or pane overlap. Automated
+  GPUI tests assert state/bounds; captured images alone do not prove transitions.
+- Persisted installed xwininfo and FFmpeg diagnostic prerequisites in `.agents/setup`.
+  `bash -n .agents/setup`, `shellcheck .agents/setup`, two setup runs passed (2s/1s);
+  no service restart. These setup changes are only local, not active for future
+  project orbs until shipped. README/backlog now reflect the merged diagnostics.
+- New owner direction: retain EasyWorship layout 1:1 as the compatibility target,
+  modern Zed visual styling, not the dated Painter concept. Begin M1-02b styling
+  only; preserve placement/behavior and original assets. Zed HEAD matches our pin;
+  inspect One Light/settings and button/tab source as design observations only.
+- Windows/reference/mixed-DPI and persistent geometry/modes remain open. No
+  service-ready/installable release claim, no push. Next: implement styling,
+  capture all affected states again, then continue remaining operator tickets.

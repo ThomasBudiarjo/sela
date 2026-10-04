@@ -36,7 +36,7 @@ impl Operator {
             .clamp(left + minimum, (available - minimum).max(left + minimum));
         let body = (height - 76.).max(0.);
         let upper = if self.collapsed {
-            body
+            (height - 70.).max(0.)
         } else {
             (body * self.ratios[2]).clamp(
                 140_f32.min(body / 2.),

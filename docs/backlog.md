@@ -320,7 +320,8 @@ live; safety delivery has an explicit bound and no unbounded queue.
 Depends on: M0-05, M0-06. Tests: U, R, H, P.
 
 Static diagnostic: [composition-spike.md](composition-spike.md), including actual
-font/GPU readback. Native integration, transitions/video and hardware remain open.
+font/GPU readback. [Video diagnostic](video-spike.md) establishes a software
+FFV1/RGBA copy path; native surfaces, transitions and hardware remain open.
 
 - [x] Render text over solid color and still images with explicit logical/physical
   coordinates, aspect fit/crop, alpha and color-space assumptions.
@@ -328,7 +329,7 @@ font/GPU readback. Native integration, transitions/video and hardware remain ope
   reference fonts; include non-ASCII and overflow fixtures.
 - [ ] Implement cut/fade and interrupted-transition behavior from observations;
   retain immutable source/destination scenes for the required lifetime.
-- [ ] Prototype text over a decoded video surface to settle decoder/GPU interop
+- [x] Prototype text over a decoded video surface to settle decoder/GPU interop
   before M2; document copies, sync and licensing tradeoffs, not full video UX.
 - [ ] Inspect rendered normal/overflow/transition frames; compare golden output
   within a documented backend tolerance rather than universal pixel identity.
@@ -408,10 +409,11 @@ original database on migration failure.
 Depends on: M0-02, M0-03, M0-10. Tests: N, E if viable, H.
 
 Early slice M1-02a is authorized by the sequencing exception above: separate-pane
-empty shell, provisional geometry, splitters and resource tabs. Persisted layout,
+empty shell, provisional geometry, splitters and resource tabs, now locally merged
+and native-tested. Persisted layout,
 other modes and installed-reference behavior remain parent follow-through.
 
-- [ ] Inspect relevant current GPUI split-pane/list/focus code and record references.
+- [x] Inspect relevant current GPUI split-pane/list/focus code and record references.
 - [ ] Implement Schedule/Preview/Live/Resources positions and observed pane sizing,
   minimum sizes, splitters and persisted geometry with original light-mode assets.
 - [ ] Implement observed separate/combined/contiguous modes; add child tickets if

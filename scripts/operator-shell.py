@@ -16,7 +16,7 @@ def main():
     artifacts = Path(".amp/in/artifacts/operator-shell")
     artifacts.mkdir(parents=True, exist_ok=True)
     binary = (
-        Path(os.environ.get("CARGO_TARGET_DIR", "/home/user/workspace/repo/target"))
+        Path(os.environ.get("CARGO_TARGET_DIR", "target")).resolve()
         / "debug/sela"
     )
     with tempfile.TemporaryDirectory(prefix="sela-shell-") as scratch:
@@ -120,7 +120,8 @@ def main():
                 run("xdotool", "key", "--clearmodifiers", "ctrl+q")
                 assert app.wait(timeout=10) == 0
                 print(
-                    "PASS: native resize, tab/collapse/reset/drag input, captures, Ctrl+Q exit"
+                    "PASS: native size/focus/exit assertions; tab/collapse/reset/drag "
+                    "input captured for required visual state inspection"
                 )
             finally:
                 if app.poll() is None:
