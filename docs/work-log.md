@@ -819,3 +819,52 @@ PY
   then wires Worker open/poll/SaveSong/Heads to the actual GPUI editor with explicit
   busy/conflict/error/dirty-close states. Poll writes before intentional close;
   reconcile heads after unexpected Drop. Local per-ticket commit only; no push.
+
+### M1-03a — Existing shell keyboard access — 2026-10-04 UTC
+
+- State: **implemented-unqualified** bounded subticket on `ticket/m1-03-focus`,
+  based on LOCAL main `c937670`, not origin/main. Assigned UI-first exception;
+  no parent completion or qualification gate changed. Owns only `src/main.rs`,
+  `src/operator.rs`, `src/tests.rs`, `scripts/operator-shell.py`,
+  `docs/operator-shell.md` and this appended session record. No storage changes.
+- Retained eight control focus handles, semantic contextual Tab/Shift+Tab and
+  Enter/Space actions, click focus, wrapping traversal, distinct focus background
+  versus selected-tab underline. Hidden tabs leave the rendered traversal tree;
+  collapse/reset focus surviving controls. Root Ctrl+Q preserved from children.
+  No disconnected live handlers or invented safety/navigation bindings.
+- Reversible Sela accessibility policy, not installed EasyWorship observation.
+  EasyWorship 1:1 target/neutral styling/geometry retained; no Painter. Reviewed
+  current Zed HEAD (`git ls-remote https://github.com/zed-industries/zed HEAD`)
+  matching pin `a84689073d296dfd39987bc7dd478e43ef76d83a`; Apache GPUI example
+  `crates/gpui/examples/tab_stop.rs` and window/div/interactive focus APIs listed
+  in shell note. No GPL application UI copied. Explicitly rejects synthesized
+  keyboard clicks so semantic keys cannot double-activate or bypass bindings.
+- Verification with `CARGO_TARGET_DIR=/home/user/workspace/repo/target`:
+  `cargo test --locked --all-targets -j 4`: **42 passed**, seven actual operator
+  tree/input tests. `cargo clippy --locked --all-targets -j 4 -- -D warnings`,
+  `cargo fmt --all -- --check`, `uvx ruff check scripts/operator-shell.py`,
+  `git diff --check`: passed. `cargo fmt --all` / `uvx ruff format
+  scripts/operator-shell.py` output reread. Initial new exact-child drag-focus
+  assertion failed: GPUI defaults refocused the tracked ancestor on mouse down.
+  Suppressed only splitter default focus, retaining both prior root and child;
+  reran all tests with exact focus plus containment assertions, no weakening.
+- Native: own `cargo build --locked --bin sela -j 4` immediately before
+  `DISPLAY=:99 VK_DRIVER_FILES=/dev/null CARGO_TARGET_DIR=/home/user/workspace/repo/target
+  python3 scripts/operator-shell.py`; passed, including native focus/selection
+  pixel assertions, size, focus, survival and Ctrl+Q clean exit. Then
+  `DISPLAY=:99 VK_DRIVER_FILES=/dev/null scripts/native-smoke.sh
+  /home/user/workspace/repo/target/debug/sela`: passed input/resize/Ctrl+Q/WM-close.
+  Debian12 x64 debug/Xvfb/Openbox/xcompmgr software GL; services left running.
+- Inspected actual `.amp/in/artifacts/operator-shell/` captures:
+  `focus-scriptures-unselected.png` separates focus from Songs selection;
+  `focus-media-selected.png` proves Space-selected Media; `keyboard-collapsed.png`
+  has focused Restore and no tabs (Enter did not toggle twice);
+  `keyboard-reset.png` restores Resources while retaining Media selection.
+  Artifacts are ignored local evidence, not physical/accessibility qualification.
+- Not run: installed 8.0.49, Windows/UIA/Narrator/screen-reader, mixed DPI,
+  physical GPU/displays or performance; orb software display cannot qualify
+  them. Text-input/modal/multi-selection/live-navigation ownership remains future
+  work, not invented here. Backlog/plan intentionally untouched by ownership.
+- Delivery: local `feat(M1-03a)` subticket commit only, no push/publication.
+  Next: integrator merge and rerun combined checks; obtain authorized Windows
+  reference/accessibility environment before claiming focus compatibility.

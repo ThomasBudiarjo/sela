@@ -3,10 +3,16 @@ use gpui::{
     WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
-actions!(sela, [Quit]);
+actions!(sela, [Quit, FocusNext, FocusPrevious, ActivateControl]);
 
 fn bind_operator_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("ctrl-q", Quit, Some("Sela"))]);
+    cx.bind_keys([
+        KeyBinding::new("ctrl-q", Quit, Some("Sela")),
+        KeyBinding::new("tab", FocusNext, Some("Sela")),
+        KeyBinding::new("shift-tab", FocusPrevious, Some("Sela")),
+        KeyBinding::new("enter", ActivateControl, Some("SelaControl")),
+        KeyBinding::new("space", ActivateControl, Some("SelaControl")),
+    ]);
 }
 
 mod operator;

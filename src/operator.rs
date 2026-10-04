@@ -19,6 +19,7 @@ struct Split(usize);
 
 pub(super) struct Operator {
     pub(super) focus: FocusHandle,
+    pub(super) controls: [FocusHandle; 8],
     pub(super) ratios: [f32; 3],
     pub(super) collapsed: bool,
     pub(super) tab: usize,
@@ -30,12 +31,67 @@ impl Operator {
     pub(super) fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus: cx.focus_handle(),
+            controls: std::array::from_fn(|index| {
+                cx.focus_handle()
+                    .tab_index(index as isize + 1)
+                    .tab_stop(true)
+            }),
             ratios: [0.24, 0.62, 0.62],
             collapsed: false,
             tab: 0,
             drag: None,
             activation: None,
         }
+    }
+
+    fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        match index {
+            0 => {
+                self.ratios = [0.24, 0.62, 0.62];
+                self.collapsed = false;
+                self.drag = None;
+            }
+            1 => window.dispatch_action(Box::new(Quit), cx),
+            2 => {
+                self.collapsed = !self.collapsed;
+                self.drag = None;
+                if self.collapsed && self.controls[3..].iter().any(|f| f.is_focused(window)) {
+                    self.controls[2].focus(window, cx);
+                }
+            }
+            3..=7 if !self.collapsed => self.tab = index - 3,
+            _ => return,
+        }
+        cx.notify();
+    }
+
+    fn button(
+        &self,
+        index: usize,
+        id: &'static str,
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        control(id, label)
+            .track_focus(&self.controls[index])
+            .key_context("SelaControl")
+            // Background distinguishes keyboard focus from the selected-tab underline.
+            .focus(|d| d.bg(rgb(0xdce3fa)).text_color(rgb(0x253c91)))
+            .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
+                if this.controls[index].is_focused(window) {
+                    // GPUI also synthesizes keyboard clicks for on_click; use only
+                    // this semantic route for keyboard activation.
+                    window.prevent_default();
+                    this.activate(index, window, cx);
+                }
+            }))
+            .on_click(cx.listener(move |this, event, window, cx| {
+                if matches!(event, gpui::ClickEvent::Keyboard(_)) {
+                    return;
+                }
+                this.controls[index].focus(window, cx);
+                this.activate(index, window, cx);
+            }))
     }
 
     pub(super) fn dimensions(&self, width: f32, height: f32) -> [f32; 4] {
@@ -93,7 +149,8 @@ impl Operator {
             )
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, _| {
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, _| {
+                    window.prevent_default();
                     this.drag = Some((axis, event.position, this.ratios[axis]));
                 }),
             )
@@ -203,6 +260,8 @@ impl Render for Operator {
             .key_context("Sela")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
+            .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
+            .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
             .capture_any_mouse_up(cx.listener(|this, _, _, _| this.drag = None))
             .size_full()
             .flex()
@@ -224,20 +283,8 @@ impl Render for Operator {
                     .border_color(rgb(BORDER))
                     .child(div().font_weight(FontWeight::SEMIBOLD).child("Sela"))
                     .child(div().text_color(rgb(MUTED)).child("Development preview"))
-                    .child(
-                        control("reset-layout", "Reset layout").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.ratios = [0.24, 0.62, 0.62];
-                                this.collapsed = false;
-                                this.drag = None;
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .child(
-                        control("quit", "Quit · Ctrl+Q")
-                            .on_click(cx.listener(|_, _, _, cx| cx.quit())),
-                    ),
+                    .child(self.button(0, "reset-layout", "Reset layout", cx))
+                    .child(self.button(1, "quit", "Quit · Ctrl+Q", cx)),
             )
             .child(
                 div()
@@ -274,7 +321,12 @@ impl Render for Operator {
                                     .border_t_1()
                                     .border_color(rgb(BORDER))
                                     .children(["Go Live", "Black", "Clear", "Logo"].map(|label| {
-                                        div().px_1().py_1().text_color(rgb(0x81858b)).child(label)
+                                        div()
+                                            .debug_selector(move || label.into())
+                                            .px_1()
+                                            .py_1()
+                                            .text_color(rgb(0x81858b))
+                                            .child(label)
                                     })),
                             ),
                     ),
@@ -289,21 +341,16 @@ impl Render for Operator {
                     .px_3()
                     .gap_3()
                     .child(div().font_weight(FontWeight::MEDIUM).child("Resources"))
-                    .child(
-                        control(
-                            "collapse-resources",
-                            if self.collapsed {
-                                "Restore resources"
-                            } else {
-                                "Collapse resources"
-                            },
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.collapsed = !this.collapsed;
-                            this.drag = None;
-                            cx.notify();
-                        })),
-                    ),
+                    .child(self.button(
+                        2,
+                        "collapse-resources",
+                        if self.collapsed {
+                            "Restore resources"
+                        } else {
+                            "Collapse resources"
+                        },
+                        cx,
+                    )),
             )
             .when(!self.collapsed, |d| {
                 d.child(
@@ -323,7 +370,7 @@ impl Render for Operator {
                                 .border_b_1()
                                 .border_color(rgb(BORDER))
                                 .children(TABS.iter().enumerate().map(|(index, label)| {
-                                    control(label, label)
+                                    self.button(index + 3, label, label, cx)
                                         .h_full()
                                         .rounded_none()
                                         .border_b_2()
@@ -336,10 +383,6 @@ impl Render for Operator {
                                         .when(self.tab == index, |d| {
                                             d.text_color(rgb(TEXT)).font_weight(FontWeight::MEDIUM)
                                         })
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.tab = index;
-                                            cx.notify();
-                                        }))
                                 })),
                         )
                         .child(
