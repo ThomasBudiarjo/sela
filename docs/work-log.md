@@ -486,3 +486,34 @@ PY
 - Delivery: local `feat(M0-06): checkpoint ordered delivery and acknowledgment model`
   commit, no push/installer. Next: M0-07 explicit-font composition/readback;
   integrate resource readiness before applying this model to the native spike.
+
+### M0-07a — Explicit-font CPU text raster — 2026-10-04 UTC
+
+- State: **implemented-unqualified** parallel CPU diagnostic slice on
+  `ticket/m0-07-text`, based on local main 71dc754, not origin/main. Owns only
+  `examples/composition/text.rs`, Cargo dev dependency/root lock entry,
+  `docs/composition-text.md` and this appended record. Parent boxes are left to
+  integration; no main example, src, other modules or backlog edits.
+- API: supplied single-face font bytes and original UTF-8 text to bounded
+  row-major white alpha; Advanced shaping, explicit lines, no wrap/margin,
+  all-line logical and raster ink overflow rejection, source-over mark coverage.
+  Collection headers rejected before fontdb allocation; empty supplied-only DB.
+  Per-job caches dropped; not a hard memory/time bound or adversarial sandbox.
+- Upstream commits/paths, dependency/fixture notices, bounds and exact harness
+  commands are in [composition-text.md](composition-text.md). No GPUI code added.
+- Verification with `CARGO_TARGET_DIR=/home/user/workspace/repo/target`:
+  `cargo test --locked --example text_check -j 4` **3 passed**;
+  `cargo clippy --locked --example text_check -j 4 -- -D warnings`,
+  `cargo run --locked --example text_check -j 4`,
+  `rustfmt --edition 2024 --check examples/composition/text.rs examples/text_check.rs`
+  passed. Initial iterator move/borrow error fixed and checks rerun. Temporary
+  harness and `/tmp` PGM removed before commit; module reread after formatting.
+- Inspected ignored `.amp/in/artifacts/m0-07a-text.png`: readable Café, acute a,
+  Arabic سلام and explicit Signal beacon second line; no clipped ink. Tests also
+  reject missing glyph, both logical overflow axes, left ink bearing, malformed/
+  collection fonts and oversized inputs. `git diff --check` passed.
+- Not run: GPU/native upload/readback or golden/transition/video, Windows,
+  physical GPU/displays, reference compatibility, performance/RSS. CPU checks
+  do not qualify parent M0-07 or waive M0-10. Local subticket commit only, no push.
+- Next: integrator includes this module in composition example and reruns example
+  tests/clippy plus GPU readback; then execute Windows/reference/hardware gates.
