@@ -263,3 +263,45 @@ assert len(ids) == len(set(ids)) == 9
 print('PASS: two owned files; local links/anchors and whitespace; nine unique ledger IDs')
 PY
 ```
+
+### M0-04 — Linux audience process spike — 2026-10-04 UTC
+
+- State: **implemented-unqualified** parallel slice; Windows parent gate open.
+- Scope: opt-in `examples/output_spike.rs`, example dev dependencies/lockfile,
+  `scripts/output-spike.py`, `docs/output-spike.md`, M0-04 checklist only. No
+  `src/main.rs` or native harness changes; no production renderer/scene protocol.
+- Upstream: bootstrap GPUI pin and exact winit 0.30.12 example/wgpu 29.0.4
+  API rustdoc source paths and license boundaries recorded in output-spike note.
+- Chosen boundary: independently supervised audience process owns winit/wgpu GL
+  surface/event loop; monotonic triangle motion, ~16.667ms pacing, bounded 2048
+  telemetry queue off frame path, explicit native close, 25s self deadline.
+- Verification (CARGO_TARGET_DIR=/home/user/workspace/repo/target):
+  `cargo build --locked --example output_spike -j 4`,
+  `cargo test --locked --example output_spike -j 4` (one test passed),
+  `cargo clippy --locked --example output_spike -j 4 -- -D warnings`,
+  `rustfmt --edition 2024 --check examples/output_spike.rs`, `git diff --check`;
+  `python3 scripts/output-spike.py` passed on shared :99 Xvfb/Openbox/xcompmgr,
+  Debian12 llvmpipe Mesa22.3.6 GL. Initial missing display handle adapter error
+  fixed against wgpu documented owned-display API; no shared service changed.
+- N/I/P: actual 100/500/2000ms GPUI callbacks stalled; 6/30/118 audience calls
+  inside exact intervals, queued 100ms action only started after stall. Clean
+  operator exit and second operator SIGKILL had 218/72 subsequent calls.
+  621 calls, interval p50/p95/max 16.870/19.793/47.308ms. Native resize and close
+  passed; all owned processes reaped. Not physical scanout or 60Hz qualification.
+- Durable timestamp table, failure boundaries, commands and decision in
+  `docs/output-spike.md`; review artifacts `.amp/in/artifacts/output-spike/`
+  raw logs/summary/root capture pairs. Inspected cropped root stall geometry
+  visibly moved; no direct application capture. Minimal diagnostic controls,
+  not EasyWorship parity. Bottom help at small window is a known layout limit.
+- Not run: slow preparation, forced surface/device loss, Windows DX12/native
+  mixed-DPI dual physical displays/fullscreen/hotplug, physical scanout/cue
+  latency, text-over-video, production lifecycle or memory/CPU/GPU soak. Orb
+  software display cannot replace these gates; parent not done.
+- Next: integrate this local slice; obtain Windows hardware and owning two-process
+  supervisor, run backend dx12 with physical capture; extend failure/preparation
+  tests before M0-10 decision. Local coherent M0-04 commit only; no push.
+- Final rerun after telemetry 1KiB cap/suboptimal surface-release ordering:
+  same build/test/clippy/fmt/diff commands passed; `python3 scripts/output-spike.py
+  .amp/in/artifacts/output-spike-final` passed, 619 calls, stall calls 6/30/117/6,
+  post-exit/kill 214/70; p50/p95/max 16.854/18.152/49.197ms. Prior measurement
+  artifacts retained; final exact 2s/exit/kill timestamps appended in spike note.

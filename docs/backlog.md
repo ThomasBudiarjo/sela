@@ -246,13 +246,13 @@ reason to switch GPUI to a web implementation or postpone all other testing.
 
 Depends on: M0-01. Tests: I, N, H, P.
 
-- [ ] Prototype a separately paced audience surface showing animated diagnostics
+- [x] Prototype a separately paced audience surface showing animated diagnostics
   while GPUI remains the operator frontend; no full operator layout yet.
-- [ ] Compare feasible backend/window ownership and render-thread/process choices;
+- [x] Compare feasible backend/window ownership and render-thread/process choices;
   inspect upstream patterns and record the chosen boundary and alternatives.
 - [ ] Inject deliberate UI stalls and slow preparation; measure output continuity
   separately from control responsiveness during the stall.
-- [ ] Test operator process termination according to the chosen architecture;
+- [x] Test operator process termination according to the chosen architecture;
   state exactly which failures output can and cannot survive.
 - [ ] Exercise mixed-DPI dual monitors, resize, fullscreen and hotplug on Windows.
 - [ ] Record frame timing, hardware/driver, failure behavior and a go/no-go decision
@@ -260,6 +260,9 @@ Depends on: M0-01. Tests: I, N, H, P.
 
 Acceptance: real Windows evidence for independence, or a documented failing spike
 and follow-up architecture work. A render thread alone is not crash isolation.
+
+Linux partial evidence: [output-spike.md](output-spike.md), implemented-unqualified.
+Stalls/clean exit/SIGKILL measured; slow preparation and Windows physical gate open.
 
 ### M0-05 — Framework-independent scene and preparation contracts
 
