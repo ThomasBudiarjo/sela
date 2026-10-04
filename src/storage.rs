@@ -550,7 +550,9 @@ mod tests {
         let (_d, p, mut r) = fixture();
         let original = song();
         let a = r.save_song(None, original.clone()).unwrap();
-        let b = r.save_song(None, original.clone()).unwrap();
+        let mut distinct = original.clone();
+        distinct.sections[0].lyrics = "Different lyrics with the same title\n".into();
+        let b = r.save_song(None, distinct.clone()).unwrap();
         assert_ne!(a.id, b.id);
         let s = Schedule {
             title: "Sunday".into(),
@@ -564,7 +566,10 @@ mod tests {
         assert_eq!(r.save_song(Some(a), song()), Err(Error::Conflict));
         drop(r);
         let r = Repository::open(&p).unwrap();
-        assert_eq!(r.schedule(v).unwrap(), (s, vec![original.clone(); 3]));
+        assert_eq!(
+            r.schedule(v).unwrap(),
+            (s, vec![distinct, original.clone(), original.clone()])
+        );
         assert_eq!(r.song(a).unwrap(), original);
         assert_eq!(r.heads(false, None).unwrap(), vec![b]);
     }

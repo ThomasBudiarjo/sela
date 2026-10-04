@@ -392,14 +392,19 @@ success cannot close this gate.
 
 Depends on: M0-05, M0-10. Tests: U, I.
 
+M1-01a is locally merged as a prerequisite to the UI-first exception:
+[storage contract](storage.md). Songs/revisions/schedule snapshots and a bounded
+worker exist; themes/assets/arrangements, destructive upgrades/backups and crash
+recovery remain open. No physical-output gate is waived.
+
 - [ ] Define songs, revisions, arrangements, themes, schedules and asset references;
   document stable IDs and transaction boundaries; media bytes stay outside SQLite.
 - [ ] Add versioned migrations, backups before destructive upgrade and recovery
   behavior for newer/unsupported schema versions.
-- [ ] Run database work on bounded background workers with cancellation rules.
+- [x] Run database work on bounded background workers with cancellation rules.
 - [ ] Test fresh/old/corrupt database, locked database, disk full, failed migration
   and rollback using disposable fixtures.
-- [ ] Prove failed writes cannot leave half a committed schedule revision.
+- [x] Prove failed writes cannot leave half a committed schedule revision.
 
 Acceptance: durable domain storage without blocking frame paths or losing the
 original database on migration failure.
@@ -428,6 +433,11 @@ No speculative redesign of control placement or default focus.
 ### M1-03 — Semantic actions, keyboard focus and selection rules
 
 Depends on: M0-02, M1-02. Tests: U, N, E if viable.
+
+M1-03a adds keyboard access to current shell controls only. Tab/Shift+Tab and
+Enter/Space are explicitly provisional Sela accessibility policy, not installed
+reference observations. Native input/focus/selection checks passed; text-entry,
+modal scopes, multi-selection and live commands remain open.
 
 - [ ] Map observed commands to GPUI actions/key contexts, not global key matching.
 - [ ] Define focus traversal, text-input ownership, modal scope and selection

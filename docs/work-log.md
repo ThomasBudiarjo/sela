@@ -11,9 +11,9 @@ include timezone for timed hardware/rehearsal evidence.
   audience-process diagnostic has measured independent animation; a separate
   static composition example now verifies explicit-font GPU readback.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
-- Active continuation: **M1-02b** Zed-inspired light styling of the native shell,
-  preserving EasyWorship pane layout. M0-07c video and M1-02a shell are locally
-  merged and checked. The owner
+- Active continuation: **M1-05a** native text-entry foundation for song editing.
+  M1-01a durable storage and M1-03a keyboard shell are locally merged and checked,
+  as are the M0-07c video and M1-02a/b shell/style slices. The owner
   explicitly permits UI implementation before physical renderer qualification;
   this changes sequencing, not reference, hardware or service-ready claims.
 - M0-07a text and M0-07b GPU worktrees are merged into local `main`, retaining
@@ -52,7 +52,10 @@ remain `planned`. Update the current state above when switching work.
 | M0-05 | implemented-unqualified | CPU snapshots and bounded worker tested; shaping/upload, renderer integration and applied-state checks remain. |
 | M0-06 | implemented-unqualified | Bounded ordered model with reserved capacity and receipt tests; IPC, native integration and reference mask semantics open. |
 | M0-07 | implemented-unqualified | Explicit-font color/image and decoded FFV1 GPU readback; native integration, transitions and physical qualification open. |
-| M1-02 | active | M1-02a separate-pane shell merged/tested; M1-02b modern Zed-inspired light styling requested, no speculative live semantics. |
+| M1-01 | implemented-unqualified | Durable song/schedule snapshot repository and bounded worker; UI integration, remaining domain schemas/backups/recovery open. |
+| M1-02 | implemented-unqualified | Separate-pane shell and initial contemporary chrome; persistence/modes/reference/DPI checks open. |
+| M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
+| M1-05 | active | Native text-entry foundation before song editor integration; no saved-song operator workflow yet. |
 
 ## Session records
 
@@ -868,3 +871,32 @@ PY
 - Delivery: local `feat(M1-03a)` subticket commit only, no push/publication.
   Next: integrator merge and rerun combined checks; obtain authorized Windows
   reference/accessibility environment before claiming focus compatibility.
+
+### M1-01a / M1-03a — Parent review and merged verification — 2026-10-04 UTC
+
+- Merged both worktrees with separate local merge commits, retaining subticket
+  commits. Only appended work-log conflict; both records preserved. Reviewed
+  storage API/schema/migration/worker/test implementation and actual focus diff.
+- Strengthened snapshot regression with distinct lyrics under duplicate titles;
+  ordered B/A/A content and revisions must survive edit/delete/reopen. Identical
+  payload fixtures could not detect accidental reordered song resolution.
+- Combined `cargo test --locked --all-targets -j 8`: **50 passed**; strict
+  all-target Clippy, fmt and bin build passed. Native shell driver and native-smoke
+  rerun from main with `DISPLAY=:99 VK_DRIVER_FILES=/dev/null`: passed focus/
+  selection pixel assertions, input, resize, keyboard and WM exits.
+- Parent inspected four actual keyboard captures: unselected Scriptures focus,
+  Media activation, collapsed Restore focus, reset with retained Media selection.
+  Existing artifact directory under main contains reproducible native evidence.
+- No direct DB/file work added to UI; storage is not yet connected. Domain
+  payload bounds and transaction outcomes reviewed; initial schema only, no
+  destructive upgrade or host-disk/power-loss qualification claimed.
+- Next M1-05a scope: persistent native field entities using Apache GPUI input
+  callbacks, Unicode/grapheme selection, bounded edits, clipboard/IME, multiline
+  lyric layout/scroll/caret. Then wire editor save/load through the existing
+  bounded storage Worker. No synthetic key-to-string web substitute or Painter.
+- Upstream input example inspected through Librarian: single-line only; native
+  UTF16 ranges and marked replacement require careful conversion. Existing
+  example preedit selection math must not be copied unchanged. GPUI API paths,
+  ownership and licensing must be documented with the implementation.
+- Local checkpoint only; no push/install/release claim. Windows/reference gates
+  remain open; they do not stop approved provisional operator implementation.
