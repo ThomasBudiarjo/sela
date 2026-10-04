@@ -186,6 +186,13 @@ impl Repository {
             })
             .collect()
     }
+    /// Bounded browser page. Decode one bounded payload at a time off the UI thread.
+    pub fn catalog(&self, after: Option<Id>) -> Result<Vec<(Version, String)>> {
+        self.heads(false, after)?
+            .into_iter()
+            .map(|version| Ok((version, self.song(version)?.title)))
+            .collect()
+    }
     pub fn open(path: &std::path::Path) -> Result<Self> {
         use rusqlite::{OpenFlags, limits::Limit};
         let mut db = Connection::open_with_flags(
@@ -380,6 +387,7 @@ pub enum Command {
     Schedule(Version),
     DeleteSong(Version),
     Heads { schedules: bool, after: Option<Id> },
+    Catalog(Option<Id>),
 }
 #[derive(Debug)]
 pub enum Reply {
@@ -389,6 +397,7 @@ pub enum Reply {
     Schedule(Schedule, Vec<Song>),
     Deleted,
     Heads(Vec<Version>),
+    Catalog(Vec<(Version, String)>),
 }
 struct Request {
     command: Command,
@@ -405,6 +414,7 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::Schedule(v) => repo.schedule(v).map(|(s, songs)| Reply::Schedule(s, songs)),
         Command::DeleteSong(v) => repo.delete_song(v).map(|()| Reply::Deleted),
         Command::Heads { schedules, after } => repo.heads(schedules, after).map(Reply::Heads),
+        Command::Catalog(after) => repo.catalog(after).map(Reply::Catalog),
     }
 }
 /// Cancellation only wins before the worker starts a command. Always poll its result.
@@ -439,6 +449,12 @@ impl Worker {
         std::thread::Builder::new()
             .name("sela-storage".into())
             .spawn(move || {
+                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty())
+                    && std::fs::create_dir_all(parent).is_err()
+                {
+                    let _ = tx.send(Err(Error::Io));
+                    return;
+                }
                 let mut repo = match Repository::open(&path) {
                     Ok(r) => r,
                     Err(e) => {
@@ -683,6 +699,45 @@ mod tests {
             assert!(std::time::Instant::now() < end);
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn catalog_pages_current_revisions_and_excludes_tombstones() {
+        let (_d, _p, mut repo) = fixture();
+        let mut expected = Vec::new();
+        for i in 0..130 {
+            let mut song = song();
+            song.title = format!("Original {i}");
+            let version = repo.save_song(None, song.clone()).unwrap();
+            expected.push((version, song.title));
+        }
+        repo.delete_song(expected.remove(0).0).unwrap();
+        let mut edited = song();
+        edited.title = "Revised title".into();
+        expected[0] = (
+            repo.save_song(Some(expected[0].0), edited.clone()).unwrap(),
+            edited.title,
+        );
+        expected.sort_by_key(|(v, _)| v.id.0);
+        let first = repo.catalog(None).unwrap();
+        assert_eq!(first, expected[..128]);
+        let last = repo.catalog(Some(first[127].0.id)).unwrap();
+        assert_eq!(last, expected[128..]);
+        assert!(repo.catalog(Some(last[0].0.id)).unwrap().is_empty());
+    }
+    #[test]
+    fn worker_creates_parent_and_reports_unusable_parent_without_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new/profile/library.sqlite");
+        let mut worker = Worker::open(path.clone()).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        assert!(path.is_file());
+        worker.submit(Command::Catalog(None)).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Catalog(rows)) if rows.is_empty()));
+        let blocker = dir.path().join("existing-file");
+        std::fs::write(&blocker, b"preserve these bytes").unwrap();
+        let mut worker = Worker::open(blocker.join("library.sqlite")).unwrap();
+        assert!(matches!(wait(&mut worker), Err(Error::Io)));
+        assert_eq!(std::fs::read(blocker).unwrap(), b"preserve these bytes");
     }
     #[test]
     fn worker_backpressure_results_and_nonblocking_drop() {

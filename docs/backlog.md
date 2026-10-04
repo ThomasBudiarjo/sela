@@ -469,14 +469,19 @@ Acceptance: resource browsing remains responsive and cannot act on stale results
 
 Depends on: M1-01, M1-03. Tests: U, I, N.
 
+M1-05a/b are **implemented-unqualified**: native fields and a working persistent
+song editor, with [use/check instructions](song-library.md). Whole-document undo,
+installed-reference workflow/field confirmation and Windows/native qualification
+remain open; field undo alone does not close the full editing checklist.
+
 - [ ] Implement title, authors, copyright/license identifiers, lyrics and labeled
   sections based on observed fields; keep identity separate from display title.
 - [ ] Support create/edit/duplicate/delete, validation, undo/redo and unsaved-close
   behavior without changing current live content.
-- [ ] Preserve intentional line breaks and Unicode; define empty-section behavior.
+- [x] Preserve intentional line breaks and Unicode; define empty-section behavior.
 - [ ] Test duplicate titles, long lines, repeated sections, composed/decomposed
   Unicode, cancel versus save and deletion of a song used in a schedule.
-- [ ] Inspect actual editor, metadata, error and unsaved-change states.
+- [x] Inspect actual editor, metadata, error and unsaved-change states.
 
 Acceptance: editable songs persist losslessly and schedule snapshots survive
 library changes. No licensed lyrics required for tests.

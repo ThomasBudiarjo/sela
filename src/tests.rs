@@ -2,8 +2,8 @@ use super::*;
 use gpui::{Entity, TestAppContext, VisualTestContext};
 use std::{cell::Cell, rc::Rc};
 
-// Observe dispatch in capture phase without replacing Operator's real handler.
-// TestPlatform::quit is a no-op; native process termination is checked separately.
+// Count routed Quit actions without closing the test window, so subsequent
+// input can still be tested. Actual close/termination is checked natively.
 struct DispatchProbe {
     operator: Entity<Operator>,
     seen: Rc<Cell<usize>>,
@@ -14,7 +14,10 @@ impl Render for DispatchProbe {
         let seen = self.seen.clone();
         div()
             .size_full()
-            .capture_action(move |_: &Quit, _, _| seen.set(seen.get() + 1))
+            .capture_action(move |_: &Quit, _, cx| {
+                seen.set(seen.get() + 1);
+                cx.stop_propagation();
+            })
             .child(self.operator.clone())
     }
 }
@@ -210,7 +213,7 @@ fn assert_control(cx: &mut VisualTestContext, operator: &Entity<Operator>, index
 #[gpui::test]
 fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
     let (mut cx, operator, seen) = fixture(cx);
-    for index in 0..8 {
+    for index in 0..9 {
         cx.simulate_keystrokes("tab");
         assert_control(&mut cx, &operator, index);
         assert_eq!(operator.read_with(&cx, |o, _| o.tab), 0);
@@ -218,8 +221,8 @@ fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab");
     assert_control(&mut cx, &operator, 0);
     cx.simulate_keystrokes("shift-tab");
-    assert_control(&mut cx, &operator, 7);
-    for index in (0..7).rev() {
+    assert_control(&mut cx, &operator, 8);
+    for index in (0..8).rev() {
         cx.simulate_keystrokes("shift-tab");
         assert_control(&mut cx, &operator, index);
     }

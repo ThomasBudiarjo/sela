@@ -19,12 +19,13 @@ struct Split(usize);
 
 pub(super) struct Operator {
     pub(super) focus: FocusHandle,
-    pub(super) controls: [FocusHandle; 8],
+    pub(super) controls: [FocusHandle; 9],
     pub(super) ratios: [f32; 3],
     pub(super) collapsed: bool,
     pub(super) tab: usize,
     drag: Option<(usize, Point<gpui::Pixels>, f32)>,
     activation: Option<Subscription>,
+    library_error: Option<String>,
 }
 
 impl Operator {
@@ -41,6 +42,7 @@ impl Operator {
             tab: 0,
             drag: None,
             activation: None,
+            library_error: None,
         }
     }
 
@@ -60,6 +62,14 @@ impl Operator {
                 }
             }
             3..=7 if !self.collapsed => self.tab = index - 3,
+            8 if self.tab == 0 && !self.collapsed => {
+                self.library_error = crate::song_library::default_path()
+                    .ok_or_else(|| {
+                        "No user data directory. Launch with --library DATABASE_PATH.".to_string()
+                    })
+                    .and_then(|path| crate::song_library::open(path, cx))
+                    .err();
+            }
             _ => return,
         }
         cx.notify();
@@ -259,7 +269,7 @@ impl Render for Operator {
         div()
             .key_context("Sela")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
+            .on_action(cx.listener(|_, _: &Quit, window, _| window.remove_window()))
             .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
             .capture_any_mouse_up(cx.listener(|this, _, _, _| this.drag = None))
@@ -421,18 +431,19 @@ impl Render for Operator {
                                         .items_center()
                                         .justify_center()
                                         .child(
-                                            div().font_weight(FontWeight::MEDIUM).child(format!(
-                                                "{} library is empty",
-                                                TABS[self.tab]
-                                            )),
+                                            div().font_weight(FontWeight::MEDIUM).child(if self.tab == 0 {
+                                                "Songs · offline library".to_string()
+                                            } else { format!("{} library is empty", TABS[self.tab]) }),
                                         )
                                         .child(
                                             div()
                                                 .mt_2()
                                                 .text_size(px(12.))
                                                 .text_color(rgb(MUTED))
-                                                .child("Library storage is not implemented."),
-                                        ),
+                                                .child(if self.tab == 0 { "Create, edit and save songs in the song library." } else { "This resource library is not implemented." }),
+                                        )
+                                        .when(self.tab == 0, |d| d.child(self.button(8,"open-library","Open song library",cx)))
+                                        .children(self.library_error.clone().map(|error| div().text_color(rgb(0xb33232)).child(error))),
                                 ),
                         ),
                 )

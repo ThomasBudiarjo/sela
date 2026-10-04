@@ -7,12 +7,14 @@ include timezone for timed hardware/rehearsal evidence.
 ## Current state
 
 - Application: native GPUI technical preview builds and renders on Linux software
-  OpenGL; no service authoring or lyric presentation yet. An opt-in winit/wgpu
+  OpenGL, with persistent offline song authoring; no service schedule UI or live
+  lyric presentation yet. An opt-in winit/wgpu
   audience-process diagnostic has measured independent animation; a separate
   static composition example now verifies explicit-font GPU readback.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
-- Active continuation: **M1-05a** native text-entry foundation for song editing.
-  M1-01a durable storage and M1-03a keyboard shell are locally merged and checked,
+- Active continuation: **M1-05b** persistent native song editor implemented and
+  checked; next verify a developer-local installed binary (M1-16a partial slice).
+  M1-05a native fields, M1-01a durable storage and M1-03a keyboard shell are merged,
   as are the M0-07c video and M1-02a/b shell/style slices. The owner
   explicitly permits UI implementation before physical renderer qualification;
   this changes sequencing, not reference, hardware or service-ready claims.
@@ -55,7 +57,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Durable song/schedule snapshot repository and bounded worker; UI integration, remaining domain schemas/backups/recovery open. |
 | M1-02 | implemented-unqualified | Separate-pane shell and initial contemporary chrome; persistence/modes/reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | active | Native text-entry foundation before song editor integration; no saved-song operator workflow yet. |
+| M1-05 | implemented-unqualified | Native metadata/section authoring, save/load/duplicate/delete and dirty-close guard; full undo/reference/Windows qualification open. |
 
 ## Session records
 
@@ -965,3 +967,52 @@ PY
   close Worker flow. Rerun combined checks/native fixture; execute actual platform
   IME/accessibility and installed reference checks on authorized native runners.
 - Delivery: coherent local `feat(M1-05a)` subticket commit only; no push/publication.
+
+### M1-05b — Persistent native song authoring — 2026-10-04 UTC
+
+- Implemented-unqualified. Original separate authoring window launched from
+  Songs or explicit `--library` profile, retained native fields, labeled sections,
+  create/edit/duplicate/tombstone delete, validation and bounded ID-paged catalog.
+  SQLite and parent-directory creation stay on the bounded storage worker.
+  Inline dirty/pending-close guards cover Ctrl+Q and WM close; operator Quit now
+  closes only itself, never bypassing another editor's unsaved guard.
+- Immutable expected-head saves preserve concurrent-writer conflicts; late
+  replies cannot replace newer edits because busy controls are temporarily hidden.
+  Incompatible stored metadata/line counts reject before changing any field.
+  Documented original provisional UX and missing full-document undo; no live
+  connection, installed-reference parity, release, or performance claim.
+- Upstream GPUI close/focus/spawn contracts and licensing references are in
+  `docs/song-library.md`; no Painter or Zed application components used.
+- `cargo test --locked --all-targets -j 8`: **70 passed**, zero failed/ignored
+  (includes shared input tests in both app/example). Strict all-target Clippy,
+  fmt and app/all-target build passed. Added tests check different sections,
+  Unicode, pending/dirty close, duplicate/delete history, stale write retention,
+  atomic incompatible load, 128-entry catalog boundary/current revision/tombstone,
+  and worker parent creation/failure without replacing existing bytes.
+- Native commands, serial on existing Xvfb/Openbox/software GL:
+  `DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/song-library.py`,
+  `DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/operator-shell.py`,
+  `DISPLAY=:99 VK_DRIVER_FILES=/dev/null scripts/native-smoke.sh "$PWD/target/debug/sela"`:
+  all passed. Song driver independently decodes SQLite bytes after real native
+  title/metadata/two-section multiline entry; verifies blank-title rejection,
+  dirty WM close, keep-editing, discard-close, same-profile restart and clean exit.
+  Extended shell check opens the editor by keyboard, types a draft, closes only
+  the operator, asserts the editor survives, and exercises its dirty-close guard
+  before final exit. Its profile is disposable; no real default data is touched.
+- Inspected actual `.amp/in/artifacts/song-library/` saved/reopened-chorus,
+  validation, unsaved-close, keep-editing, compact and compact-scrolled captures.
+  Metadata and asymmetric lyrics match; controls fit at 720×440; scrolling exposes
+  section/lyrics without overlap. Content crossing scroll viewport edges is
+  intentionally clipped. Status validation is inline, not a native popup.
+- Initial integration-test macro import/borrow and strict lint errors corrected.
+  First extended native driver assumed focus stayed on a removed Keep-editing
+  button; screenshot showed Title focus restored. Corrected test to focus Title
+  and traverse both close choices; full repeat passed. No failure suppressed.
+  The multi-window driver's first fixed launcher coordinate missed after a
+  splitter drag; using the real tab order exercised the launcher reliably.
+- Still unrun: Windows install/IME/accessibility/high-DPI, physical GPU/output,
+  installed EasyWorship editor comparison and measured performance. Catalog is
+  not search, editor is not a service scheduler; backups/autosave remain open.
+  Next: developer-local install and launch/save/reopen of the installed binary,
+  then arrangement/pagination or resource-search prerequisites. Commit is local;
+  no push/publication authorized.

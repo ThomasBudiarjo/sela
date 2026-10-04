@@ -19,13 +19,17 @@ do not spin. Because there is only one outstanding request, its result identifie
 the submitted command without a separate generation. UI owners must still track
 their editing intent and must not apply a late reply to a different editor.
 
-Commands: `SaveSong`, `SaveSchedule`, `Song`, `Schedule`, `DeleteSong`, `Heads`.
+Commands: `SaveSong`, `SaveSchedule`, `Song`, `Schedule`, `DeleteSong`, `Heads`,
+`Catalog`. The worker creates missing profile parent directories before opening;
+an unusable parent reports `Io` without replacing existing files.
 Saves with `None` create independent stable 128-bit SQLite random IDs (collision
 fails, never overwrites). `Some(Version)` is an exact expected-head update;
 stale/deleted identities yield `Conflict`, not last-write-wins. Success returns
 the committed ID/revision. Display titles need not be unique. `Heads` returns
 up to 128 versions, sorted by ID, with exclusive last-ID cursor. Fetch individual
-titles/content through `Song`/`Schedule`; no search/sort-by-title feature promised.
+content through `Song`/`Schedule`; `Catalog` returns current nondeleted versions
+and titles with the same page bound/cursor. It decodes one bounded payload at a
+time on the worker; no search/sort-by-title feature promised.
 New songs can be duplicated by saving a fetched Song with `None`.
 
 Cancellation is sampled once immediately before command execution. If it wins,

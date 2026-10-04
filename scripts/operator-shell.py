@@ -17,7 +17,8 @@ def main():
     artifacts.mkdir(parents=True, exist_ok=True)
     binary = Path(os.environ.get("CARGO_TARGET_DIR", "target")).resolve() / "debug/sela"
     with tempfile.TemporaryDirectory(prefix="sela-shell-") as scratch:
-        env = dict(os.environ, XDG_RUNTIME_DIR=scratch)
+        env = dict(os.environ, XDG_RUNTIME_DIR=scratch,
+                   XDG_DATA_HOME=str(Path(scratch) / "data"))
         with open(Path(scratch) / "app.log", "w") as log:
             app = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
             try:
@@ -153,11 +154,26 @@ def main():
                 run("xdotool", "mouseup", "1")
                 time.sleep(0.3)
                 capture("drag-minimum")
+                click(25, 539)  # Songs tab, then the real editor launcher.
+                key("Tab", "Tab", "Tab", "Tab", "Tab", "Return")
+                time.sleep(1)
+                windows = run("xdotool", "search", "--onlyvisible", "--pid", str(app.pid)).splitlines()
+                assert len(windows) == 2, windows
+                library = next(w for w in windows if w != window)
+                run("xdotool", "windowactivate", "--sync", library)
+                run("xdotool", "type", "--clearmodifiers", "Unsaved separate window")
                 focus()
                 run("xdotool", "key", "--clearmodifiers", "ctrl+q")
+                time.sleep(0.3)
+                assert app.poll() is None, "closing operator must not abandon the editor"
+                assert run("xdotool", "search", "--onlyvisible", "--pid", str(app.pid)) == library
+                window = library
+                key("ctrl+q")
+                capture("editor-close-guard")
+                run("xdotool", "key", "--clearmodifiers", "shift+Tab", "shift+Tab", "Return")
                 assert app.wait(timeout=10) == 0
                 print(
-                    "PASS: native size/focus/survival/exit assertions; keyboard "
+                    "PASS: native size/focus/survival/exit and independent editor-close guard; keyboard "
                     "focus/activation and tab/collapse/reset/drag "
                     "input captured for required visual state inspection"
                 )

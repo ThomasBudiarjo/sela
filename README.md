@@ -3,15 +3,19 @@
 An open-source, offline-first worship presentation platform built with Rust and
 GPUI. Windows is the first-class deployment target; macOS and Linux are planned.
 
-**Status: native technical preview. Service authoring and live presentation are
-not yet implemented or qualified for use in a service.**
+**Status: native technical preview with offline song authoring. Service schedules
+and live presentation are not yet implemented or qualified for use in a service.**
 
 ## Build the technical preview
 
 On Debian Linux, run `.agents/setup`, `cargo build --locked`, then
 `cargo run --locked` in a graphical session. `target/debug/sela --version` also
 works without a display. The preview opens a native GPUI window; Ctrl+Q or closing
-the window exits. It does not modify user data or open network listeners.
+the window closes it, with an unsaved-song guard. It opens no network listeners.
+Choose **Songs → Open song library** to create, edit and save original songs, or
+use `target/debug/sela --library /absolute/path/to/library.sqlite` for an explicit
+profile. Opening the library creates a local SQLite database. See the
+[song editor guide](docs/song-library.md) for data locations, controls and limits.
 
 See [bootstrap and Windows instructions](docs/gpui-bootstrap.md) for dependency
 provenance, prerequisites, verification commands and qualification limits.
@@ -29,7 +33,8 @@ owned font/image resources and verifies actual GPU text-over-color/image readbac
 It is not yet connected to the native live-output loop or service UI.
 
 The [operator shell](docs/operator-shell.md) provides separate panes, resizable
-dividers, collapsible Resources and five empty resource tabs. Live controls remain
+dividers, collapsible Resources and five resource tabs. Songs opens the working
+editor; other resource libraries are not implemented. Live controls remain
 unavailable until an audience renderer is connected. The opt-in
 [video diagnostic](docs/video-spike.md) checks original FFV1 frames through FFmpeg
 and GPU composition; it is not a production video player.

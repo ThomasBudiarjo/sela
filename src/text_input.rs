@@ -753,6 +753,9 @@ impl Render for TextInput {
                 }),
             )
             .on_mouse_move(cx.listener(|s, e: &MouseMoveEvent, _, cx| {
+                if e.pressed_button != Some(MouseButton::Left) {
+                    s.dragging = false;
+                }
                 if s.dragging {
                     s.move_to(s.hit(e.position), true, cx)
                 }
@@ -936,7 +939,7 @@ mod tests {
         );
         assert_eq!(b.text, old);
         assert_eq!(
-            b.replace(Some(2..1), "", None, true, 4),
+            b.replace(Some(Range { start: 2, end: 1 }), "", None, true, 4),
             Err(InputError::InvalidRange)
         );
         assert_eq!(range16("a😀b", 2..99).unwrap(), 1..6);
@@ -951,7 +954,13 @@ mod tests {
         let before = b.snapshot();
         let edits = b.edits;
         assert_eq!(
-            b.replace(Some(1..3), "ab", Some(Some(2..1)), true, 7),
+            b.replace(
+                Some(1..3),
+                "ab",
+                Some(Some(Range { start: 2, end: 1 })),
+                true,
+                7
+            ),
             Err(InputError::InvalidRange)
         );
         assert_eq!(b.text, before.text);
