@@ -771,3 +771,51 @@ PY
 - Next independent slices: M1-01a durable song/schedule repository as prerequisite
   to real operator content, and M1-03a keyboard access to existing shell controls.
   Both proceed under the UI-first sequencing exception; no output gate waived.
+
+### M1-01a — Durable song and schedule repository — 2026-10-04 UTC
+
+- State: **implemented-unqualified** prerequisite on `ticket/m1-01-store`, based
+  on this thread's local main `c937670`, not origin/main. Scope limited to new
+  `src/storage.rs`, `src/lib.rs` export, Cargo dependency/lock, `docs/storage.md`
+  and this appended record. No operator/main/tests/backlog/plan/setup edits.
+- Read project guidance, plan/backlog/work-log before implementation; proceed
+  under owner's explicit UI/prerequisite sequencing exception. No parent done
+  claim, physical/reference gate waiver or fabricated theme/asset schema.
+- API and schema evidence: [storage.md](storage.md). Stable random 128-bit IDs,
+  duplicate titles, bounded lossless Unicode song payload, immutable revision
+  history, tombstone deletes and ordered FK-backed schedule snapshots. Expected
+  head conflicts and whole schedule transaction rollback are explicit.
+- Initial empty schema 0→1 transaction only; unsupported/newer/foreign/corrupt
+  files rejected without reset/replacement. Dependency pin rusqlite 0.40.2,
+  bundled SQLite 3.53.2, limits. Authoritative rustdoc and downloaded dependency
+  license/source notices inspected; no GPUI patterns or live contracts changed.
+- One background connection/thread per Worker; async open, one outstanding
+  bounded command/result including unconsumed completion, nonblocking submit/
+  poll/drop. Pre-start cancel does no command I/O; started transactions return
+  actual commit/failure, never a fabricated canceled success. Errors omit paths,
+  SQLite messages and content. Synchronous Repository is documented worker-only.
+- Verification with `CARGO_TARGET_DIR=/home/user/workspace/repo/target` on Debian
+  12 x64 orb: `cargo test --locked --all-targets -j4` **48 passed**, zero failed/
+  ignored; `cargo clippy --locked --all-targets -j4 -- -D warnings`,
+  `cargo fmt --all -- --check`, `git diff --check` passed. Final code/format and
+  lock diff reviewed. No existing dependency version upgraded; eight new
+  dependency packages plus unified hashbrown feature added by Cargo.
+- Eight new U/I tests use disposable databases for reopen/Unicode/CRLF/LF/empty
+  sections/duplicate titles; snapshot survival after edit/delete; stale revision
+  and FK failure byte-unchanged rollback; injected second-item trigger failure;
+  initial migration rollback; byte-preserved newer/foreign/corrupt files; real
+  competing lock (~100ms timeout), actual max_page_count disk-full rollback/
+  reopen; pre-start cancel, race-legal actual result, queue busy and nonjoining
+  Drop. No skipped DB checks; test fixtures removed by TempDir.
+- Not run: GPUI editor/native E2E, Windows, installed reference, physical GPU/
+  displays, crash/power-loss recovery, host-volume exhaustion or performance/
+  RSS qualification. No UI integration exists yet; no suitable physical/reference
+  environment. SQLite page-limit FULL is simulated capacity, not physical disk.
+- Remaining parent: arrangements/themes/assets/font references, destructive
+  upgrade backups, history retention/search, autosave/close outcome recovery,
+  stable cross-revision occurrence selection. Kernel/SQLite non-lock I/O has no
+  hard deadline and memory limits are payload/cache policies, not hard RSS.
+- Next: integrator cherry-picks this local ticket commit, reruns combined tests,
+  then wires Worker open/poll/SaveSong/Heads to the actual GPUI editor with explicit
+  busy/conflict/error/dirty-close states. Poll writes before intentional close;
+  reconcile heads after unexpected Drop. Local per-ticket commit only; no push.
