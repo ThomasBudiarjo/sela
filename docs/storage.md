@@ -32,7 +32,8 @@ and titles with the same page bound/cursor. It decodes one bounded payload at a
 time on the worker; no search/sort-by-title feature promised.
 New songs can be duplicated by saving a fetched Song with `None`.
 
-Cancellation is sampled once immediately before command execution. If it wins,
+For the original read/write commands, cancellation is sampled once immediately
+before command execution (copy-command exceptions are documented below). If it wins,
 `Canceled` means no command I/O began. Once execution starts, cancellation does
 not interrupt transactions and the actual commit/failure is reported. Handle
 cancellation is advisory, not acknowledgment. Worker Drop marks the pending
@@ -121,3 +122,112 @@ newer/foreign/corrupt files, real competing connection lock timeout, actual SQLi
 `max_page_count` disk-full rollback/reopen, pre-start cancel, race-legal cancel
 outcome, queue saturation and nonjoining Drop. SQLite disk-full simulation is
 not host-volume exhaustion or hardware power-loss evidence.
+
+## M1-01b — backup / restore-to-new-profile prerequisite
+
+State: **implemented-unqualified**, LOCAL main `2b62c77` prerequisite, not full
+M1-01 or M1-13 portable bundles. No destructive schema migration was invented.
+
+### API and safety contract
+
+Submit `Command::BackupNew(destination)` or
+`Command::RestoreNew { source, destination }` on the existing Worker and poll
+`Reply::Copied`. Restore does not switch the worker's current profile: open a
+new Worker at the restored path after acknowledgment. Synchronous
+`Repository::backup_new` / `restore_new` are background-only. All filesystem and
+SQLite work stays off the submit/poll caller. Both paths are capped at 4096 bytes;
+one outstanding command/completion remains the bound, including backup/restore.
+
+Parent must already exist and be a trusted, local profile directory, not a
+hostile writable directory or network share. Source is never replaced. Existing
+destination (including symlinks, source aliases/hardlinks) or destination SQLite
+`-wal`, `-shm`, `-journal` yields `Exists`. Final no-replace hard-link publication
+also protects against a racing destination file creation. Sidecar/directory
+races by hostile actors are outside this contract. Filesystems lacking hard
+links fail with `Io`, no copy/rename fallback that could overwrite a file.
+Unix staging is 0700 and published database 0600; Windows inherits directory ACLs
+and remains unqualified. No paths/SQLite messages/content added to Error or logs.
+
+Online Backup copies SQLite's committed view, including WAL content, into a
+random exclusively-created sibling staging directory. It copies 64 pages/step,
+fails `Locked` on BUSY/LOCKED instead of retrying indefinitely, and checks a
+256MiB logical database budget before copying and after each step. Concurrent
+external commits may restart the copy; completion is a consistent snapshot,
+**not** necessarily the head at submission time. Worker commands cannot mutate
+its source connection during copying. Restore opens the input read-only without
+CREATE/URI/migration. Missing/corrupt/foreign/newer inputs fail without reset;
+read-only SQLite may use/create WAL shared-memory auxiliary files, so this is
+not a promise of zero filesystem auxiliary activity. Unrecoverable hot-journal
+inputs fail; restore is not a repair engine.
+
+Private output is converted to rollback-journal mode, explicitly closed, reopened
+through existing supported-schema/quick-check/FK validation, then every historical
+song payload and schedule snapshot is bounded-decoded. Head resolution,
+tombstones and contiguous occurrence positions are checked. Verification is not
+an adversarial SQLite sandbox or exhaustive schema attestation. The output is
+closed and file `sync_all` succeeds **before** publication. Success requires all
+these checks; malformed history never becomes a published backup.
+
+The five-second cooperative budget is sampled between copy steps and historical
+rows; `Budget` also means oversize. Busy timeout is 100ms; queries, integrity
+scans, OS I/O/sync, allocation, close and scheduling are not hard deadlines.
+Two connections use 2MiB cache targets; semantic validation holds one <=256KiB
+song or <=32-item/8MiB schedule at a time. These are not hard RSS or physical disk
+quotas; staging/journal/transient overhead and a final size-check step can exceed
+logical budget, and abandoned staging can accumulate. No measured large-library
+performance, rotation or retention policy is claimed.
+
+Unlike writes, copy cancellation is sampled during steps/validation and once
+immediately before publication. `Canceled` means no destination published by
+this operation (private I/O may have occurred). Cancellation after the final
+sample loses: report actual `Copied`/failure, never false canceled success.
+Worker Drop detaches; publication can win a concurrent Drop. Always consume the
+completion when outcome matters. Ordinary failures best-effort remove staging;
+process abort can leave `.sela-backup-*` private directories. They are not backups
+and are never auto-restored; remove only known abandoned staging with no active
+worker. A process dying after publication but before acknowledgment leaves an
+unknown-to-caller outcome: inspect/reopen the chosen destination, do not overwrite.
+
+Hard-link creation is the publication boundary; no subsequent fallible cleanup
+changes its outcome. Parent-directory metadata is not synced: **no power-loss,
+reboot durability or hardware/fsync guarantee**. This deliberately avoids
+returning an ambiguous generic failure after publishing. SQLite FULL/file sync
+is not qualification for faulty hardware, volume exhaustion or Windows behavior.
+
+### Scoped checklist and executed evidence
+
+- [x] Worker-owned online backup, bounded commands, verified fresh publication.
+- [x] Validated read-only-input restore to a fresh profile; no in-place recovery.
+- [x] Disposable Unicode/revision/tombstone and asymmetric `B,A,B` snapshot
+  backup/reopen/restore including a live WAL source.
+- [x] Real exclusive lock rejection and uncommitted competing-writer exclusion;
+  corrupt/newer input byte retention, destination/source collision and pre-copy
+  cancellation; corrupt historical payload fails after private copy, no publish.
+- [x] Child process abort after first partial backup step leaves no destination
+  and unchanged source. Child process abort with spilled uncommitted transaction
+  restores committed head/content and removes uncommitted revision on reopen.
+  These are actual process termination tests, not transaction-Drop simulations.
+- [ ] Real destructive migration backup/upgrade/rollback gate: schema 1 has only
+  fresh initialization. Future migrations must gate mutation on acknowledged
+  verified backup and test the actual migration, not hypothetical destructive SQL.
+- [ ] Windows/local-filesystem qualification, power-loss/volume failure injection,
+  measured large-library budgets, continuous writer restart/starvation stress,
+  UI recovery chooser/rotation and portable asset bundle integration.
+
+Authoritative provenance inspected 2026-10-04: SQLite
+[Online Backup](https://www.sqlite.org/backup.html),
+[C backup API](https://www.sqlite.org/c3ref/backup_finish.html) (step locks,
+automatic restart, DONE, finish rollback), and
+[WAL](https://www.sqlite.org/wal.html) sections 2–4 (WAL is persistent state,
+FULL sync and checkpoint semantics). Pinned rusqlite **0.40.2** local registry
+`src/backup.rs` inspected (`Backup::new`, `step`, `progress`, `Drop` finish;
+Drop ignores finish return, so explicit DONE + close/reopen validation required),
+corresponding [versioned module](https://docs.rs/rusqlite/0.40.2/rusqlite/backup/index.html).
+Only its existing `backup` feature enabled; Cargo.lock unchanged, no new crate or
+upgrade, original implementation, existing MIT/public-domain notices retained.
+
+Executed on Linux x64 orb with shared target and `-j2`:
+`cargo test --locked --lib storage::tests -j2` (14 pass, zero ignored),
+`cargo test --locked --all-targets -j2` (74 pass, zero failed/ignored),
+`cargo clippy --locked --all-targets -j2 -- -D warnings`,
+`cargo fmt --all -- --check`, `git diff --check`.
