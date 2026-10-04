@@ -635,3 +635,34 @@ PY
 - Independent worktrees will own video example/modules versus operator source/
   tests/native driver. Merge with local ticket commits and combined checks;
   serialize native focus-changing tests. No push/publication authorization.
+
+### M1-02a — Empty operator shell — 2026-10-04 UTC
+
+- State: **implemented-unqualified**, early-UI exception; local main `115f545`
+  base on `ticket/m1-02-shell`, not origin/main. No physical/reference gate waived.
+- Scope: `src/main.rs`, original `src/operator.rs`, `src/tests.rs`,
+  `scripts/operator-shell.py`, `docs/operator-shell.md`, this appended record.
+  No library/contracts, manifests, examples, plan/backlog/README changes.
+- Separate Schedule/Preview/Live over full-width Resources; provisional 24/38/38,
+  five truthful empty tabs, collections, collapse/restore/reset, three bounded
+  proportional splitters. Live disconnected; safety/Go Live have no handlers.
+  Retained root focus and semantic clickable/Ctrl+Q Quit; no storage/import claims.
+- Pinned upstream Apache framework paths/licenses and historical-reference limits
+  are recorded in the shell note. Persistence/other modes remain parent work.
+- Verification: shared CARGO_TARGET_DIR; `cargo test --locked --all-targets -j 4`
+  **29 passed**; bin build, strict all-target clippy, fmt check, Ruff and diff check
+  passed. Two new actual-tree tests cover tabs, collapse/restore/reset, compact
+  bounds, every drag/release, focus, cross-axis isolation and subminimum fallback.
+- Native: `DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/operator-shell.py`
+  and existing native-smoke passed on shared Xvfb/Openbox/xcompmgr software GL;
+  owned app reaped, shared services unchanged. Installed x11-utils for xwininfo.
+  Corrected decoration-offset crops/input and drag cross-axis bug after visual
+  inspection; regression assertion added. Initial restore test reused the old
+  button position after collapse; corrected to query its new bounds.
+- Inspected `.amp/in/artifacts/operator-shell/{normal,compact,scriptures,collapsed,
+  drag-minimum}.png`: readable 1280x800/720x440, true tab/restore states, bounded
+  minimum drag. Details/exact repeat commands in `docs/operator-shell.md`.
+- Unrun: Windows, hardware, mixed DPI, installed 8.0.49, accessibility and
+  performance; no parity or audience qualification claim. Next: parent merges,
+  reruns combined tests/native checks, maintains persistence/modes/qualification.
+- Delivery: local `feat(M1-02a)` commit only; no push/publication.
