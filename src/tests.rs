@@ -83,3 +83,79 @@ fn wrong_context_rejects_key_but_direct_action_bypasses_binding(cx: &mut TestApp
     });
     assert_eq!(seen.get(), 1, "direct dispatch is not key-context E2E");
 }
+
+#[gpui::test]
+fn shell_controls_and_resize(cx: &mut TestAppContext) {
+    let (mut cx, operator, _) = fixture(cx);
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    for (index, tab) in ["Songs", "Scriptures", "Media", "Presentations", "Themes"]
+        .into_iter()
+        .enumerate()
+    {
+        let bounds = cx.debug_bounds(tab).unwrap();
+        cx.simulate_click(bounds.center(), Default::default());
+        assert_eq!(operator.read_with(&cx, |o, _| o.tab), index);
+    }
+    let bounds = cx.debug_bounds("collapse-resources").unwrap();
+    cx.simulate_click(bounds.center(), Default::default());
+    assert!(operator.read_with(&cx, |o, _| o.collapsed));
+    assert!(cx.debug_bounds("library-detail").is_none());
+    let bounds = cx.debug_bounds("collapse-resources").unwrap();
+    cx.simulate_click(bounds.center(), Default::default());
+    assert!(!operator.read_with(&cx, |o, _| o.collapsed));
+    cx.simulate_resize(size(px(720.), px(440.)));
+    for selector in ["Schedule", "Preview", "Live", "library-detail"] {
+        let b = cx.debug_bounds(selector).unwrap();
+        assert!(b.size.width > px(0.) && b.size.height > px(0.));
+        assert!(b.right() <= px(720.) && b.bottom() <= px(440.));
+    }
+    cx.update(|window, cx| assert!(operator.read(cx).focus.is_focused(window)));
+}
+
+#[gpui::test]
+fn splitters_bound_release_and_reset(cx: &mut TestAppContext) {
+    use gpui::{MouseButton, point};
+    let (mut cx, operator, _) = fixture(cx);
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    for selector in ["split-schedule", "split-live", "split-resources"] {
+        let old = operator.read_with(&cx, |o, _| o.ratios);
+        let start = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(
+            start + point(px(15.), px(15.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(3000.), px(3000.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(3000.), px(3000.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        let before = operator.read_with(&cx, |o, _| o.ratios);
+        if selector == "split-resources" {
+            assert_eq!(&old[..2], &before[..2]);
+        } else {
+            assert_eq!(old[2], before[2], "vertical drag must not resize resources");
+        }
+        cx.simulate_mouse_move(point(px(0.), px(0.)), None, Default::default());
+        assert_eq!(before, operator.read_with(&cx, |o, _| o.ratios));
+        let d = operator.read_with(&cx, |o, _| o.dimensions(1280., 800.));
+        assert!(d[..3].iter().all(|v| *v >= 149.99));
+        assert!(d[3] >= 140. && d[3] <= 584.);
+        cx.update(|window, cx| assert!(operator.read(cx).focus.is_focused(window)));
+    }
+    assert_ne!(operator.read_with(&cx, |o, _| o.ratios), [0.24, 0.62, 0.62]);
+    let b = cx.debug_bounds("reset-layout").unwrap();
+    cx.simulate_click(b.center(), Default::default());
+    assert_eq!(operator.read_with(&cx, |o, _| o.ratios), [0.24, 0.62, 0.62]);
+    for (w, h) in [(0., 0.), (10., 10.), (720., 440.), (1280., 800.)] {
+        let d = operator.read_with(&cx, |o, _| o.dimensions(w, h));
+        assert!(d.iter().all(|v| v.is_finite() && *v >= 0.));
+        assert!((d[0] + d[1] + d[2] - (w - 12.).max(0.)).abs() < 0.01);
+    }
+}
