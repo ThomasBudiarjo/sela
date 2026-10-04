@@ -1462,3 +1462,80 @@ PY
   reviews combined contracts and runs integration/native checks. Shared Cargo
   target must be serialized and root-source compilation observed to avoid the
   previously detected stale-worktree artifact reuse. No push authorized.
+
+### M1-06b — Backed-up stable-ID/arrangement persistence — 2026-10-04 UTC
+
+- **Implemented-unqualified** in `/home/user/workspace/sela-persistence`, branch
+  `ticket/m1-06-persistence`, based on LOCAL main **f161dc3**, not origin/main.
+  Read AGENTS/plan/backlog/work-log/arrangement/storage before implementation.
+  Owned storage/song-library, their three notes, native song driver and this
+  append only; central backlog/current-state consolidation remains parent-owned.
+  No Painter, visual geometry, renderer/scene/transport/delivery/main/library
+  export/example/Cargo/dependency or real-profile writes. No push/publication.
+- Schema 2 adds revision-keyed section-ID mappings and ordered named variants/
+  occurrences with FK/uniqueness checks. Original schema-1 payload codec remains
+  exact; migration does not rewrite payloads, old schedules, heads or tombstones.
+  Legacy IDs assigned once with SQLite randomblob per immutable revision, never
+  inferred from labels/indices/text or claimed continuous across old revisions.
+  New source edits preserve section IDs and variants. Historical arrangements
+  and schedule snapshots remain exact after edits/tombstones. Late missing
+  references reject all, never silently drop a chorus or return a partial variant.
+- Opening legacy profile holds IMMEDIATE writer reservation across a separate
+  read-only online backup and migration. `<profile>.schema1-backup` must be
+  verified/synced/published fresh before any upgrade DDL/mapping. Verification
+  uses non-upgrading open; backup/RestoreNew retain input schema 1 or 2. Migration
+  DDL/mappings/user_version are one transaction. Backup conflict/corruption/lock
+  blocks mutation. Failed/aborted migration retains verified backup; deterministic
+  backup name intentionally blocks blind retry with Exists. Preserve both files
+  and restore to a fresh profile for recovery; no overwrite/rotation/recovery UI.
+- Existing Song is the editor/repository source of truth, now Section.id plus
+  Song.variants. SaveSong/Song/Schedule worker round-trip all data; added
+  Repository/worker Arrangement(v) returns truthful immutable source pairing.
+  Pure Song adapter still requires caller provenance. New/Add CPU-only SHA-256
+  clock/PID/counter allocator does not read files/random devices; no cryptographic
+  uniqueness claim. Undo/load/save never regenerate IDs. Duplicate retains
+  song-local document IDs under a fresh song ID. Initial baseline shares one
+  blank allocation; history bytes include variants. Referenced Remove fails
+  atomically with status, no new controls/focus/action mappings.
+- Preserve maximum 256KiB unarranged legacy codec payload; arrangement creation
+  still obeys existing stricter text-plus-ID domain budget and may reject such a
+  document without losing text. Existing capacity-one worker and bounded reads
+  remain; added schedule arrangement completion overhead documented. No hard
+  RSS/migration deadline, measured performance, or physical/fsync qualification.
+- Executed final checks with actual root compilation/new test names observed:
+  `flock /tmp/sela-cargo-continuation.lock bash -c 'set -e; touch src/*.rs; export CARGO_TARGET_DIR=/home/user/workspace/repo/target; cargo test --locked --all-targets -j4; cargo clippy --locked --all-targets -j4 -- -D warnings; cargo fmt --all -- --check'`:
+  **104 passed, zero failed, one ignored subprocess fixture explicitly
+  invoked by three process tests**. Six new storage and one GPUI test: legacy WAL/
+  per-revision ID reload/old 2,1,2 schedules; backup gate conflict/corrupt/real
+  competing writer/DDL rollback; actual child SIGABRT after inserted mapping
+  rolls back schema/rows and retains backup; exact legacy payload max; schema2
+  V1/C/V2/C/C/reorder/source provenance/late reference and insert failures/
+  tombstone/backup/restore/worker round trips; deliberate late corrupt reference
+  and mapping position never truncate/publish; duplicate-label editor load/save/
+  duplicate/undo/redo/new Add identity/referenced and unreferenced Remove.
+  Existing storage crash/disk-full/worker/history and arrangement bounds pass.
+  `uvx ruff check scripts/song-library.py`, Python AST parse and `git diff --check`
+  passed. Formatter output and edited notes reread. Shared lock released outside
+  Cargo; no other worktree's root artifact accepted as evidence.
+- Initial compile used unsupported rusqlite usize FromSql (changed to checked
+  contiguous i64 positions). Initial test assumed byte-identical whole SQLite
+  backup header (corrected to schema/payload equivalence and immutable backup
+  bytes after verification), DDL error classification corrected to Corrupt.
+  Random New IDs exposed independent blank baseline allocation/old blank equality:
+  share initial allocation and assert fresh blank content/ID instead. Maximum
+  legacy test needed two sections/minimal metadata to exercise stricter domain
+  bound. Deliberately corrupt external fixture now explicitly disables FK before
+  injecting a broken late reference. No failed expectation suppressed.
+- Native song driver retains original independent payload decoder and now checks
+  schema2 distinct section IDs and exact retention across removal/undo/save.
+  Lint/parse checked only: parent owns :99 focus replay, not run or disturbed here.
+  After merge, parent must rebuild merged root under shared lock/touch and execute
+  `DISPLAY=:99 VK_DRIVER_FILES=/dev/null SELA_BINARY=/home/user/workspace/repo/target/debug/sela CARGO_TARGET_DIR=/home/user/workspace/repo/target python3 scripts/song-library.py`
+  plus combined native operator checks. Status error text is the only visible
+  wording change; no visual controls/arrangement UX introduced.
+- Windows/hardlink/ACL/installed8.0.49/IME/accessibility/physical display/GPU,
+  real volume/power-loss faults, large-library measurements and recovery chooser
+  remain unrun/open. Next concrete action: parent local merge/review/native replay
+  and central checklist consolidation, then arrangement controls/explicit repair
+  and pagination. Local M1-06b commit carries requested Amp-Thread-ID trailer;
+  no parent ticket marked done or qualification waived.

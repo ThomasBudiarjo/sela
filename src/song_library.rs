@@ -4,6 +4,7 @@ use crate::{
     text_input::{Redo, TextInput, Undo},
 };
 use gpui::{prelude::*, *};
+use sela::arrangement::SectionId;
 use sela::storage::{Command, Error, Id, Reply, Section, Song, Version, Worker};
 use std::{path::PathBuf, time::Duration};
 
@@ -64,7 +65,9 @@ fn blank() -> Song {
         authors: String::new(),
         copyright: String::new(),
         license: String::new(),
+        variants: Vec::new(),
         sections: vec![Section {
+            id: SectionId::allocate(),
             label: "Verse 1".into(),
             lyrics: String::new(),
         }],
@@ -86,6 +89,16 @@ impl Document {
             + self.song.authors.len()
             + self.song.copyright.len()
             + self.song.license.len()
+            + self
+                .song
+                .variants
+                .iter()
+                .map(|v| {
+                    std::mem::size_of_val(v)
+                        + v.name.len()
+                        + v.occurrences.len() * std::mem::size_of::<sela::arrangement::Occurrence>()
+                })
+                .sum::<usize>()
             + self
                 .song
                 .sections
@@ -201,6 +214,7 @@ impl Library {
             Ok(worker) => (Some(worker), Some(Pending::Open), "Opening library…".into()),
             Err(e) => (None, None, error_message(e).into()),
         };
+        let initial = blank();
         let mut this = Self {
             focus: cx.focus_handle(),
             fields,
@@ -216,8 +230,8 @@ impl Library {
             row_focus: Vec::new(),
             cursor: None,
             version: None,
-            draft: blank(),
-            baseline: blank(),
+            draft: initial.clone(),
+            baseline: initial,
             history: History::default(),
             section: 0,
             status,
@@ -359,6 +373,7 @@ impl Library {
     }
     fn load_fields(&mut self, cx: &mut Context<Self>) {
         let empty = Section {
+            id: SectionId(Id([0; 16])),
             label: String::new(),
             lyrics: String::new(),
         };
@@ -552,6 +567,7 @@ impl Library {
                         }
                         7 if candidate.sections.len() < 128 => {
                             candidate.sections.push(Section {
+                                id: SectionId::allocate(),
                                 label: format!("Section {}", candidate.sections.len() + 1),
                                 lyrics: String::new(),
                             });
@@ -576,7 +592,7 @@ impl Library {
                     }
                     if bounded.validate().is_err() {
                         self.status =
-                            "Section change exceeds the song limit. Original unchanged.".into();
+                            "Section is referenced or exceeds limits. Original unchanged.".into();
                         cx.notify();
                         return;
                     }
@@ -685,6 +701,9 @@ fn error_message(e: Error) -> &'static str {
         }
         Error::Invalid => "Song is invalid or exceeds storage limits. Correct the draft and retry.",
         Error::Missing => "Saved revision is missing. Refresh the library.",
+        Error::Exists => {
+            "Backup destination already exists. Preserve it and the library; recovery requires a fresh destination."
+        }
         _ => {
             "Library is unavailable. Close and reopen; do not discard an unsaved draft without copying it."
         }
@@ -1112,6 +1131,78 @@ mod tests {
         cx.update(|w, cx| view.update(cx, |v, cx| v.action(index, w, cx)));
     }
 
+    #[gpui::test]
+    fn persisted_ids_and_arrangements_survive_editor_save_duplicate_and_undo(
+        cx: &mut TestAppContext,
+    ) {
+        use sela::arrangement::{Occurrence, OccurrenceId, Variant, VariantId};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let mut original = blank();
+        original.title = "Duplicate labels".into();
+        original.sections[0].lyrics = "First original".into();
+        original.sections.push(Section {
+            id: SectionId::allocate(),
+            label: original.sections[0].label.clone(),
+            lyrics: "Chorus asymmetric\r\n".into(),
+        });
+        original.variants = vec![Variant {
+            id: VariantId(Id([5; 16])),
+            name: "Retained".into(),
+            occurrences: [0, 1, 1]
+                .into_iter()
+                .enumerate()
+                .map(|(i, n)| Occurrence {
+                    id: OccurrenceId(Id([i as u8; 16])),
+                    section: original.sections[n].id,
+                })
+                .collect(),
+        }];
+        let first = Repository::open(&path)
+            .unwrap()
+            .save_song(None, original.clone())
+            .unwrap();
+        let (mut cx, view) = fixture(cx, path.clone());
+        cx.update(|_, cx| view.update(cx, |v, cx| v.select(first, cx)));
+        wait(&mut cx, &view);
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
+        edit(&mut cx, &view, 5, "First edited");
+        let edited = view.read_with(&cx, |v, cx| v.current(cx));
+        action(&mut cx, &view, 1);
+        wait(&mut cx, &view);
+        let second = view.read_with(&cx, |v, _| v.version.unwrap());
+        assert_eq!(
+            Repository::open(&path).unwrap().song(second).unwrap(),
+            edited
+        );
+        cx.update(|w, cx| view.read(cx).buttons[8].clone().focus(w, cx));
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), edited);
+        let count = view.read_with(&cx, |v, _| v.history.undo.len());
+        action(&mut cx, &view, 8); // referenced section cannot be removed
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), edited);
+        assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), count);
+        action(&mut cx, &view, 7);
+        let added = view.read_with(&cx, |v, cx| v.current(cx));
+        assert!(!edited.sections.iter().any(|s| s.id == added.sections[2].id));
+        cx.update(|w, cx| view.read(cx).buttons[8].clone().focus(w, cx));
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), edited);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), added);
+        action(&mut cx, &view, 8); // unreferenced new section can be removed
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), edited);
+        action(&mut cx, &view, 2);
+        wait(&mut cx, &view);
+        let duplicate = view.read_with(&cx, |v, _| v.version.unwrap());
+        assert_ne!(duplicate.id, first.id);
+        let repo = Repository::open(&path).unwrap();
+        assert_eq!(repo.song(duplicate).unwrap(), edited);
+        assert_eq!(repo.song(first).unwrap(), original);
+    }
+
     fn edit(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize, text: &str) {
         if (1..=3).contains(&index) {
             cx.update(|_, cx| {
@@ -1328,7 +1419,11 @@ mod tests {
         edit(&mut cx, &view, 1, "New boundary");
         cx.simulate_keystrokes("ctrl-z");
         action(&mut cx, &view, 0);
-        assert!(view.read_with(&cx, |v, cx| v.current(cx) == blank()
+        assert!(view.read_with(&cx, |v, cx| v.current(cx) == v.baseline
+            && v.current(cx).title.is_empty()
+            && v.current(cx).sections.len() == 1
+            && v.current(cx).sections[0].lyrics.is_empty()
+            && v.current(cx).sections[0].id != baseline.sections[0].id
             && v.history.undo.is_empty()
             && v.history.redo.is_empty()
             && v.version.is_none()));
@@ -1419,6 +1514,7 @@ mod tests {
         many.title = "128 sections".into();
         many.sections = (0..128)
             .map(|n| Section {
+                id: SectionId::allocate(),
                 label: n.to_string(),
                 lyrics: format!("unique {n}"),
             })
@@ -1460,10 +1556,12 @@ mod tests {
             saved.sections,
             vec![
                 Section {
+                    id: saved.sections[0].id,
                     label: "Verse 1".into(),
                     lyrics: "First\r\nline e\u{301}\n".into()
                 },
                 Section {
+                    id: saved.sections[1].id,
                     label: "Chorus".into(),
                     lyrics: "Different second section".into()
                 },

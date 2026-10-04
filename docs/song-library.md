@@ -19,7 +19,8 @@ The default is `%LOCALAPPDATA%\sela\library.sqlite` on Windows or
 For manual file backups, close the editor first and preserve any SQLite sidecars;
 do not copy a live database file alone. The [storage worker](storage.md) now has
 verified online backup and restore-to-new-profile APIs, but no UI backup chooser,
-automatic rotation or destructive migration workflow. Never use valuable
+automatic rotation or recovery workflow. Schema-1 open now has a worker-owned
+verified-backup migration gate (see storage.md). Never use valuable
 original files as test fixtures.
 
 - Enter title, authors, copyright, license identifier and labeled lyric sections.
@@ -259,3 +260,41 @@ payload/undo/close assertions and corrected replay for actual Inspector/Words.
 Initial hidden-metadata focus tests now reveal Inspector before native field
 edits; no failure expectations weakened. Native OK independently verifies
 committed bytes after process exit. Real platform qualification remains open.
+
+## M1-06b — lossless identity/arrangement data prerequisite
+
+Implemented-unqualified on `ticket/m1-06-persistence`, LOCAL main `f161dc3`.
+The existing whole-Song source of truth now includes explicit section IDs and
+stored variants/occurrences. Field editing, Save, Duplicate, Load, baseline and
+whole-document Undo/Redo retain them. New/Add allocate a new ID using CPU-only
+allocation; undo restores the exact previous ID, not a new one. Initial blank
+draft and baseline share one allocation so opening remains clean. A fresh New
+document has fresh section identity. History byte accounting includes variant
+names and occurrence storage, retaining the 64 snapshots / combined 8MiB policy.
+
+Removing a referenced section is rejected before draft/history mutation; it does
+not delete the variant, truncate repeated occurrences or retarget to another
+duplicate label. Existing status reports the reference/limit rejection. No
+arrangement controls or repair UI are added: backend clients must explicitly
+repair/remove references in a complete valid document before that section can
+be removed. Unreferenced structural edits and all existing guards still work.
+No geometry/chrome/focus/action mapping or Painter change.
+
+New GPUI test executes durable load with duplicate labels/repeated occurrences,
+field edit/save/duplicate, whole-document undo/redo, fresh Add/undo identity,
+rejected referenced Remove with unchanged history, and valid unreferenced Remove.
+Existing test now checks fresh blank content/baseline/ID rather than comparing to
+an independently allocated `blank()`; failure/dirty/undo assertions retained.
+All-target tests: 104 passed, 1 ignored subprocess fixture invoked separately;
+strict Clippy, fmt, Ruff and Python AST/diff checks passed with serialized shared
+target and observed new tests. No new GPUI pattern, upstream dependency or UI
+component copied; existing documented history/input provenance remains applicable.
+
+Native driver still decodes the original text codec and now independently queries
+schema-2 section IDs, checking distinct IDs on first save and exact retention
+across Remove/structural Undo/save. It was lint/parse checked, **not replayed** here:
+parent owns shared :99 and will run after merge, using a freshly compiled merged
+binary (shared target must be locked and root sources touched). Exact replay:
+`DISPLAY=:99 VK_DRIVER_FILES=/dev/null SELA_BINARY=/home/user/workspace/repo/target/debug/sela CARGO_TARGET_DIR=/home/user/workspace/repo/target python3 scripts/song-library.py`.
+No new display/server launched. Native error-state rendering, Windows/reference/
+IME/accessibility/hardware and measured memory/latency qualification remain open.
