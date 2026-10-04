@@ -1,0 +1,304 @@
+//! Opt-in M0-06b audience child; stdin/stdout are binary protocol, never logs.
+//! Deliberately only opaque static colors. No main/operator changes or masks.
+use sela::{
+    delivery::{DeliveryError, Epoch, RendererSession},
+    scene::{PreparedBackground, PreparedCue, RendererCapabilities},
+    transport::{Frame, PipeWorkers},
+};
+use std::{
+    io,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use winit::{
+    application::ApplicationHandler,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    window::{Window, WindowId},
+};
+
+struct Gpu {
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+}
+impl Gpu {
+    // No readback, device wait, file work, decoding, rasterization or logging.
+    fn submit(
+        &self,
+        frame: wgpu::SurfaceTexture,
+        cue: Option<&PreparedCue>,
+    ) -> Result<(), DeliveryError> {
+        let color = match cue {
+            Some(cue) => {
+                if cue.text().is_some()
+                    || cue.extent().width != self.config.width
+                    || cue.extent().height != self.config.height
+                {
+                    return Err(DeliveryError::RenderFailed);
+                }
+                let PreparedBackground::Color(c) = cue.background() else {
+                    return Err(DeliveryError::RenderFailed);
+                };
+                if c[3] != 255 {
+                    return Err(DeliveryError::RenderFailed);
+                }
+                *c
+            }
+            None => [0, 0, 0, 255], // Unconfirmed startup diagnostic, not Black semantics.
+        };
+        let channel = |c: u8| {
+            let c = f64::from(c) / 255.;
+            if self.config.format.is_srgb() {
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            } else {
+                c
+            }
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: channel(color[0]),
+                            g: channel(color[1]),
+                            b: channel(color[2]),
+                            a: 1.,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+        self.queue.submit([encoder.finish()]);
+        self.window.pre_present_notify();
+        frame.present();
+        Ok(()) // Submission/present call only; not completion or physical scanout.
+    }
+}
+struct Audience {
+    gpu: Option<Gpu>,
+    pipes: PipeWorkers,
+    session: RendererSession,
+    epoch: Epoch,
+    backend: wgpu::Backends,
+    start: Instant,
+    next: Instant,
+}
+impl ApplicationHandler for Audience {
+    fn resumed(&mut self, el: &ActiveEventLoop) {
+        if self.gpu.is_some() {
+            return;
+        }
+        let window = Arc::new(
+            el.create_window(
+                Window::default_attributes()
+                    .with_title("Sela M0-06b native cue diagnostic")
+                    .with_inner_size(winit::dpi::PhysicalSize::new(641, 360)),
+            )
+            .unwrap(),
+        );
+        // Blocking adapter/device initialization is confined to startup, before
+        // Ready or any cue can enter the live session. Supervisor bounds startup.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: self.backend,
+            ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(el.owned_display_handle()))
+        });
+        let surface = instance.create_surface(window.clone()).unwrap();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        }))
+        .unwrap();
+        // Startup-only provenance, before Ready/live frames; stdout stays binary.
+        eprintln!("M0-06b adapter {:?}", adapter.get_info());
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let size = window.inner_size();
+        let config = surface
+            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+            .unwrap();
+        surface.configure(&device, &config);
+        let max = device.limits().max_texture_dimension_2d;
+        self.gpu = Some(Gpu {
+            window,
+            surface,
+            device,
+            queue,
+            config,
+        });
+        if self.pipes.try_send(Frame::ready(self.epoch, max)).is_err() {
+            el.exit();
+        }
+    }
+    fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        let Some(g) = self.gpu.as_mut() else {
+            return;
+        };
+        match event {
+            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
+                g.config.width = s.width;
+                g.config.height = s.height;
+                g.surface.configure(&g.device, &g.config);
+            }
+            WindowEvent::RedrawRequested => {
+                let size = g.window.inner_size();
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
+                let (frame, reconfigure) = match g.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(t) => (t, false),
+                    wgpu::CurrentSurfaceTexture::Suboptimal(t) => (t, true),
+                    wgpu::CurrentSurfaceTexture::Outdated => {
+                        g.surface.configure(&g.device, &g.config);
+                        return;
+                    }
+                    wgpu::CurrentSurfaceTexture::Timeout
+                    | wgpu::CurrentSurfaceTexture::Occluded => return,
+                    _ => {
+                        el.exit();
+                        return;
+                    }
+                };
+                if self.session.pending().is_some() {
+                    if let Some(ack) = self
+                        .session
+                        .present(Instant::now(), |cue| g.submit(frame, Some(cue)))
+                        && self.pipes.try_send(Frame::acknowledgment(ack)).is_err()
+                    {
+                        el.exit();
+                    }
+                } else {
+                    // After resize, retain prior color without silently confirming
+                    // a new extent/version. No receipt is produced for redraws.
+                    let previous = self.session.applied().map(|c| c.as_ref());
+                    if let Some(cue) = previous {
+                        if let PreparedBackground::Color(color) = cue.background() {
+                            let resized = PreparedCue::diagnostic_color(
+                                cue.version(),
+                                sela::scene::Extent {
+                                    width: g.config.width,
+                                    height: g.config.height,
+                                },
+                                *color,
+                                RendererCapabilities {
+                                    max_texture_dimension: g
+                                        .device
+                                        .limits()
+                                        .max_texture_dimension_2d,
+                                },
+                            )
+                            .unwrap();
+                            let _ = g.submit(frame, Some(&resized));
+                        }
+                    } else {
+                        let _ = g.submit(frame, None);
+                    }
+                }
+                if reconfigure {
+                    g.surface.configure(&g.device, &g.config);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        if self.start.elapsed() >= Duration::from_secs(24) {
+            el.exit();
+            return;
+        }
+        let Some(g) = &self.gpu else {
+            return;
+        };
+        // Hard per-tick work limit; pipe flood cannot monopolize frame scheduling.
+        for _ in 0..2 {
+            let frame = match self.pipes.poll() {
+                Ok(Some(frame)) => frame,
+                Ok(None) => break,
+                Err(_) => {
+                    el.exit();
+                    return;
+                }
+            };
+            let stamp = match frame.command_stamp() {
+                Ok(s) => s,
+                Err(_) => {
+                    el.exit();
+                    return;
+                }
+            };
+            let now = Instant::now();
+            let ack = match frame.into_command(
+                now,
+                RendererCapabilities {
+                    max_texture_dimension: g.device.limits().max_texture_dimension_2d,
+                },
+            ) {
+                Ok(command) => self.session.accept(command, now),
+                Err(_) => self.session.reject_preparation(stamp),
+            };
+            if self.pipes.try_send(Frame::acknowledgment(ack)).is_err() {
+                el.exit();
+                return;
+            }
+        }
+        let now = Instant::now();
+        if now >= self.next {
+            g.window.request_redraw();
+            self.next = now + Duration::from_micros(16_667);
+        }
+        el.set_control_flow(ControlFlow::WaitUntil(self.next));
+    }
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<_> = std::env::args().collect();
+    if args.len() != 3 {
+        return Err("usage: native_cues <fresh-nonzero-epoch-hex> <gl|vulkan|dx12|metal>".into());
+    }
+    let epoch = Epoch(u128::from_str_radix(&args[1], 16)?);
+    if epoch.0 == 0 {
+        return Err("epoch must be nonzero and never reused".into());
+    }
+    let backend = match args[2].as_str() {
+        "gl" => wgpu::Backends::GL,
+        "vulkan" => wgpu::Backends::VULKAN,
+        "dx12" => wgpu::Backends::DX12,
+        "metal" => wgpu::Backends::METAL,
+        _ => return Err("unsupported backend; no fallback".into()),
+    };
+    let start = Instant::now();
+    // Hard independent diagnostic lifetime, including stuck startup/device calls.
+    // No logging or graceful GPU teardown on this watchdog path. Supervisor must
+    // mark any pending delivery unknown and reap; never automatically replay.
+    std::thread::Builder::new()
+        .name("cue-lifetime".into())
+        .spawn(|| {
+            std::thread::sleep(Duration::from_secs(25));
+            std::process::exit(124);
+        })?;
+    let pipes = PipeWorkers::new(io::stdin(), io::stdout())?;
+    let mut app = Audience {
+        gpu: None,
+        pipes,
+        session: RendererSession::new(epoch),
+        epoch,
+        backend,
+        start,
+        next: start,
+    };
+    EventLoop::new()?.run_app(&mut app)?;
+    Ok(())
+}

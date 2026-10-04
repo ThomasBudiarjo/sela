@@ -76,3 +76,155 @@ in the existing two-process spike, fresh-epoch supervision, preparation-intent
 coordination and native receipt-to-frame checks. `Arc` and `Instant` are not wire
 types; IPC must explicitly translate resource handles and deadline clocks. Run
 real Windows/reference checks before closing the parent or M0-10 gate.
+
+## M0-06b — Native static-color pipe integration
+
+State: **implemented-unqualified**, bounded diagnostic subticket, based on local
+main `2b62c77`. The CPU model above remains framework-independent. New
+`transport` workers and `examples/native_cues.rs` connect it to a real separate
+winit/wgpu audience process. No operator controls, GPUI layout, Painter,
+Black/Clear/Logo policy, production transport or automatic replay is introduced.
+This is deliberately the useful static-color fallback, **not text/image IPC**.
+
+### Scoped checklist
+
+- [x] Versioned, owned, allocation-bounded local pipe color protocol; capability
+  readiness originates in the renderer after native surface/device setup.
+- [x] Reconstruct validated immutable CPU snapshots; enforce renderer epochs,
+  sequence ordering, independent lane capacity and FIFO across lanes.
+- [x] Submit a real native GPU clear pass before Applied; keep prior scene on
+  invalid resources, mismatched extent, stale commands or failed submission.
+- [x] Worker-only pipe I/O, bounded inbound/outbound queues, nonblocking native
+  polling/receipt enqueue, bounded startup and child lifetime, explicit retirement.
+- [x] Real child exchange, saturation, rejection, disconnect and injected-clock
+  timeout tests; native receipt-correlated capture/restart driver on own display.
+- [ ] Transfer font/text/image resources with per-field/total size validation,
+  renderer-worker shaping/upload, GPU-ready ownership and failure tests. The
+  existing offscreen composition/readback helper is **not** a live-frame API.
+- [ ] Preparation-intent coordinator, production controller/supervisor, durable
+  never-reused epoch registry, hard end-to-end expiration protocol, measured
+  latency/memory budgets, asynchronous device-loss/recovery qualification.
+- [ ] Windows/DX12, macOS/Metal, physical GPU/display/scanout and reference mask
+  semantics. Parent M0-06/M0-07/M0-10 gates remain open.
+
+### Wire schema and bounds
+
+All fields are explicitly little-endian, with no Rust `Arc`, `Instant`, enum
+layout, pointer, path or mutable file handle serialized. Eight-byte header:
+`SCUE` (4 bytes), version `1` (u8), kind (u8), exact body length (u16).
+Unknown version/kind/length, short header/body and oversized declarations fail
+before allocating payload memory. Reader uses a fixed 73-byte array; it never
+allocates according to an untrusted length. Version 1 supports only these kinds:
+
+| Kind | Body bytes | Fields, in order |
+| --- | --- | --- |
+| 1 command | 65 | epoch u128, sequence u64, lane u8, remaining budget milliseconds u32, content ID u128, revision u64, width u32, height u32, opaque sRGB RGBA8 (4 bytes) |
+| 2 receipt | 25 | epoch u128, sequence u64, outcome u8 |
+| 3 Ready | 20 | renderer epoch u128, max texture dimension u32 |
+
+Lane 0 is Cue; 1 is reserved Safety (replacement only, no mask semantics).
+Receipt codes: 0 Accepted, 1 Applied, 2 Busy, 3 Disconnected, 4 TimedOut,
+5 WrongEpoch, 6 Stale, 7 RenderFailed, 8 SequenceExhausted. Other codes fail.
+Sequence zero, invalid lane/budget, zero/over-capability/over-pixel-budget extent
+and non-opaque alpha cannot become a native cue. Structurally valid commands
+whose resources fail validation consume their ordering identity and return a
+rejection without changing prior live resources; invalid framing/direction
+retires the pipe. A sender attempting text/images gets `Unsupported`, never a
+silently simplified scene. If it already took a Delivery command, it must either
+record a local RenderFailed receipt before sending anything or disconnect; it
+must not leave that slot outstanding or retry automatically.
+
+Budgets are 1–5000ms. A receiver-local timestamp captured by the pipe reader
+includes inbound channel delay; it is metadata, not serialized. Sender retains
+its original acknowledgment deadline. **OS pipe transit/writer queue time is not
+a shared-clock expiration guarantee**: controller expiry means Unknown and the
+owner must retire/reap the child, not infer that it cannot subsequently submit.
+This conservative uncertainty is intentional; no wall-clock synchronization or
+unsafe cross-process `Instant` conversion is claimed.
+
+Two workers per endpoint: inbound capacity 2, outbound 4, plus one executing
+frame each. All frame values are inline. Kernel pipe capacity, worker stacks,
+Rust/channel overhead and GPU surface buffers are additional, not measured RSS.
+Delivery still admits one normal and one safety command; workers are not an
+alternative unbounded command-admission API. Native polls at most two incoming
+frames/tick, performs at most one commit attempt/redraw and uses ~16.667ms pacing
+without catch-up bursts. Full receipt queue or writer/reader failure exits the
+native session rather than blocking, dropping Applied and claiming health.
+No decode, raster, readback, GPU wait, pipe/file/log work occurs in the frame
+callback. GPU initialization and adapter provenance logging happen only before
+Ready. Surface configure/driver calls can still stall; no hard frame-time or
+GPU completion claim is made.
+
+Ready means device/surface configured, **not an applied startup scene**. Exact
+output extent is checked again at submission. Applied follows command encoding,
+`Queue::submit`, `pre_present_notify` and native `SurfaceTexture::present` calls;
+it does not certify asynchronous GPU completion, compositor visibility or physical
+scanout. The driver independently checks visible color afterward. Invalid cue
+releases an acquired texture without presenting it; previous output remains.
+Ordinary redraws and resize retention produce no new receipts. Surface fatal
+errors/panics terminate the child; missing receipts mean Unknown. Device-loss
+recovery is not implemented or qualified.
+
+Child normally expires at 24s, with a 25s independent process-exit watchdog that
+also bounds stuck startup calls. Driver startup is capped at 10s, each receipt
+at 3s, each external capture command at 5s, retirement at 3s then owned-child
+terminate/kill escalation. It reaps the old child and closes pipes before a new
+epoch, starts unknown with no retained command, and sends a new explicit cue.
+Random 128-bit initial epochs plus a distinct second epoch are diagnostic run
+IDs, not a persistent production guarantee. Dropping PipeWorkers never joins
+possibly stuck I/O; ownership requires retiring those pipes/processes, not
+repeatedly constructing workers to bypass backpressure.
+
+### Provenance, replay and executed checks
+
+Consulted authoritative pinned source/rustdoc: winit **0.30.12**
+`src/window.rs::pre_present_notify` and existing `examples/window.rs` lifecycle
+provenance in [output-spike.md](output-spike.md); wgpu **29.0.4**
+`src/api/{queue,surface_texture,render_pass}.rs` (`Queue::submit`, discard on
+unpresented texture drop and surface status handling). Lockfile is unchanged.
+winit Apache-2.0; wgpu MIT/Apache-2.0. No upstream application code/assets copied,
+no new GPUI patterns, and existing supplied-font license notices remain intact.
+
+```sh
+export CARGO_TARGET_DIR=/home/user/workspace/repo/target
+cargo test --locked --all-targets -j2
+cargo clippy --locked --all-targets -j2 -- -D warnings
+cargo fmt --all -- --check
+cargo build --locked --example native_cues -j2
+# Parent's reserved :99 can be used only once merges/native runs are serialized:
+DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/native-cues.py \
+  --backend gl --out .amp/in/artifacts/native-cues
+git diff --check
+```
+
+Driver uses existing authorized X11 only, never starts a display or sends focus
+events. Requires xdotool and ImageMagick `import`/`convert`; keep other windows
+away from the child's capture region. Backend is explicit, with no fallback;
+do not disable Vulkan when requesting Vulkan. `--binary` overrides target path.
+The same audience can run natively on another platform, but this capture driver
+is X11-specific, not Windows qualification.
+
+Executed in this worktree on 2026-10-04: all-target tests **79 passed, one ignored
+subprocess fixture** (that fixture is executed by three real-child tests), strict
+all-target clippy, example build, rustfmt/Cargo fmt and diff checks. Six transport
+unit tests exercise truncation/oversize/schema/resource rejection, round trips,
+inbound queue expiry and 1000 nonblocking overload attempts. The child fixtures
+never emit fake Applied: their compositor callback rejects; model success tests
+remain explicitly model tests. Native driver passed twice on dedicated supervised
+Xvfb **:101**, 1024×768, no WM/compositor, Mesa22.3.6 GL llvmpipe LLVM15.0.6 CPU
+adapter. Shared :99 was not used. Final ignored artifacts:
+`.amp/in/artifacts/native-cues-final/` (8 client-only PNGs, receipt/capture
+timestamps and checked RGB values in summary.json, startup adapter logs).
+Asymmetric red/green, invalid-alpha and extent-failure retention, old sequence,
+current duplicate, retired epoch, unconfirmed restart and explicit fresh cue all
+passed. These are virtual native capture checks, **not physical scanout or a
+performance qualification**. Missing DISPLAY/binary, invalid backend and missing
+audience arguments returned nonzero; idle standalone child cleanly expired near
+24s. Hard watchdog's stuck-driver path was not fault-injected. No operator/native
+focus regression rerun here; parent owns that serialized post-merge check.
+
+Next bounded slice: explicit owned text/font/image wire schema with total budgets,
+renderer preparation worker and nonblocking GPU-ready commit. Reuse composition
+policies/tests but separate its blocking readback path, then extend this driver
+to asymmetric text/image captures and failed-resource retention. Do not wire main
+UI or mark complete feature parity from static-color success.
