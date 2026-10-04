@@ -1355,3 +1355,25 @@ PY
   claim. Next: parent reviews these two local commits, reruns merged integration,
   consolidates backlog and schedules required native/reference qualifications;
   unsupported authoring/arrangement/pagination remains open. No push/publication.
+
+### M1-05d — Integration regression: whitespace-title navigation — 2026-10-04 UTC
+
+- Parent review found section-row selection rejected a whitespace-only unsaved
+  title, unlike Add/Previous/Next. Treat whitespace as blank only in the temporary
+  size-validation copy; retain exact draft bytes and require a real title on save.
+- Added an asymmetric two-section GPUI regression proving selection actually
+  changes, correct field content loads, document/history remain unchanged, and
+  OK still refuses persistence/close. After correcting a test-only borrow lifetime,
+  `cargo test --locked --bin sela blank_title_section_navigation -j4` failed at
+  section 1 versus expected 0 before the fix. The same test passes after the fix.
+- `cargo test --locked --all-targets -j4`: **97 passed, 1 ignored subprocess
+  fixture**, invoked by three process tests. Strict all-target Clippy `-D warnings`
+  and `cargo fmt --all -- --check` passed. Updated song guide entry paths and OK,
+  Cancel and backend-only backup limits. No visual geometry change in this fix.
+- `cargo install --path . --locked --offline --debug --bin sela --root
+  "$PWD/.amp/install" -j4` succeeded. Installed `--version` printed
+  `Sela 0.1.0 (technical preview)`; `DISPLAY=:99 VK_DRIVER_FILES=/dev/null
+  scripts/native-smoke.sh "$PWD/.amp/install/bin/sela"` passed both Ctrl+Q and
+  WM-close scenarios. Full merged native/visual evidence is recorded below.
+- Local subticket fix, not a push or Windows qualification. Next: complete
+  parent integration checkpoint and retain the remaining parent-ticket gates.

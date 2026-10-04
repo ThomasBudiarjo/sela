@@ -614,7 +614,7 @@ impl Library {
         }
         let song = self.current(cx);
         let mut bounded = song.clone();
-        if bounded.title.is_empty() {
+        if bounded.title.trim().is_empty() {
             bounded.title = "Untitled".into();
         }
         if bounded.validate().is_err() {
@@ -1176,6 +1176,31 @@ mod tests {
             && v.dirty(cx)
             && v.status.starts_with("Changed elsewhere")
             && v.current(cx).title == "Retained conflict draft"));
+    }
+
+    #[gpui::test]
+    fn blank_title_section_navigation_preserves_draft_but_cannot_save(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
+        edit(&mut cx, &view, 0, "   ");
+        edit(&mut cx, &view, 5, "First section");
+        action(&mut cx, &view, 7);
+        edit(&mut cx, &view, 5, "Second section");
+        let draft = view.read_with(&cx, |v, cx| v.current(cx));
+        let count = view.read_with(&cx, |v, _| v.history.undo.len());
+        cx.update(|_, cx| view.update(cx, |v, cx| v.select_section(0, cx)));
+        assert_eq!(view.read_with(&cx, |v, _| v.section), 0);
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.fields[5].read(cx).text().to_owned()),
+            "First section"
+        );
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), draft);
+        assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), count);
+        action(&mut cx, &view, 15);
+        assert!(view.read_with(&cx, |v, _| v.pending.is_none()
+            && !v.committed_close
+            && v.version.is_none()
+            && v.status.contains("title")));
     }
 
     #[gpui::test]

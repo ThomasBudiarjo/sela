@@ -1,4 +1,4 @@
-# M1-05b/c native song authoring
+# M1-05b/c/d native song authoring
 
 Implemented-unqualified under the owner's UI-first sequencing exception. This
 is a usable offline song editor, not a service scheduler or audience controller.
@@ -8,21 +8,27 @@ No Painter assets or Zed application UI components are used.
 ## Use
 
 Build with `cargo build --locked --bin sela`. Launch `target/debug/sela`, then
-choose **Songs → Open song library**, or use
+choose **New → New Song** or **Songs → + New Song**. In the editor, **Library**
+opens the saved-song catalog; **Inspector** reveals metadata. Use
 `target/debug/sela --library /absolute/path/to/library.sqlite` for a separate
 profile. The storage worker creates missing parent directories.
 
 The default is `%LOCALAPPDATA%\sela\library.sqlite` on Windows or
 `$XDG_DATA_HOME/sela/library.sqlite` on Linux (fallback
 `$HOME/.local/share/sela/library.sqlite`). Windows execution is not qualified.
-Back up the database while the editor is closed; automated backup/recovery and
-destructive migrations are not implemented. Never use valuable original files
-as test fixtures.
+For manual file backups, close the editor first and preserve any SQLite sidecars;
+do not copy a live database file alone. The [storage worker](storage.md) now has
+verified online backup and restore-to-new-profile APIs, but no UI backup chooser,
+automatic rotation or destructive migration workflow. Never use valuable
+original files as test fixtures.
 
 - Enter title, authors, copyright, license identifier and labeled lyric sections.
   New songs start with one empty Verse 1; empty or zero sections are retained.
 - **Save / Ctrl+S** commits a new immutable revision. **Duplicate** saves the
   current draft under a new identity, even if the title is unchanged.
+- **OK** saves and closes only after a successful commit receipt. Validation,
+  conflicts and storage failures keep the draft open. **Cancel** uses the same
+  pending-operation and unsaved-change guards as window close.
 - **Previous / Next / Add section / Remove** change the authored sections.
   **Ctrl+Z / Ctrl+Shift+Z** (Cmd on macOS) undo/redo the complete document in
   chronological order, including metadata, lyrics and Add/Remove, even after
