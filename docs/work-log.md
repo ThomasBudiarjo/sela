@@ -1057,3 +1057,42 @@ PY
   changes, preserving field editing and saved revision/dirty invariants; inspect
   reference semantics when access is available. Then M1-06 arrangement/pagination.
   Local per-subticket commits only; no push, publication or deployment authorized.
+
+### M1-06a — Bounded arrangement domain — 2026-10-04 UTC
+
+- State: **implemented-unqualified** assigned parallel non-UI prerequisite on
+  `ticket/m1-06-arrangement`, `/home/user/workspace/sela-arrangement`, from LOCAL
+  main `2b62c77`, not origin/main. Read guidance/plan/backlog/work-log. Only
+  `src/arrangement.rs`, library export, `docs/arrangement.md` and this append;
+  no persisted Song/Section/schema, editor, Cargo, UI or renderer changes.
+- Contract: explicit typed section/variant/occurrence IDs reuse opaque 128-bit
+  storage Id vocabulary. Occurrence scope is variant-local; selection uses the
+  full version/variant/occurrence tuple. Owned immutable revision snapshot shared
+  by Arc; repeated occurrences borrow identical section content, never head data.
+  Pure named-variant/edit/reorder/remove/retarget operations are all-or-error;
+  final-position move and empty draft policy explicit. Limits/reference/name/ID
+  validation and future non-destructive ID migration obligations in arrangement
+  note. No legacy label/index ID conversion or provenance verification claim.
+- Verification with `CARGO_TARGET_DIR=/home/user/workspace/repo/target`:
+  `cargo test --locked --lib -j2`: **33 passed**, including five new arrangement
+  tests; `cargo clippy --locked --lib --tests -j2 -- -D warnings`,
+  `cargo fmt --all -- --check`, `git diff --check`: passed. Formatter output
+  reread. Initial shared-target reuse returned the baseline's 28 tests (zero
+  arrangement tests); detected via filtered listing, touched this worktree's
+  source timestamps and reran, observing actual compilation and all five tests.
+  Only the recompiled 33-test result is arrangement evidence.
+- U cases: scrambled source order, duplicate labels/distinct IDs, asymmetric
+  V1/C/V2/C/C, pointer-shared choruses/distinct occurrences, both move directions,
+  retarget/remove/insert and independent variants; missing/deleted references and
+  internal final-reference corruption give no partial result; rejected edits
+  retain original; empty policy, lossless Unicode/CRLF, exact source/arrangement
+  byte boundaries, name bytes, section/variant/occurrence count boundaries.
+- Not run/claimed: native arrangement E2E, Windows/reference/physical rendering,
+  layout/pagination/font fitting, performance/RSS or persistence migration.
+  There is no UI or persisted adapter to exercise; no GPUI pattern added.
+  Parent M1-06 remains open. Source revision/content provenance is the future
+  repository adapter's obligation; domain payload budgets are not hard RSS caps.
+- Next: parent merge export/appended record, rerun combined checks with observed
+  test names (shared target can reuse another worktree artifact); settle storage
+  ID/arrangement migration and editor selection/undo before wiring controls.
+  Local coherent M1-06a subticket commit only; no push/publication/deployment.
