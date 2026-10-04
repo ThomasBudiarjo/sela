@@ -99,6 +99,27 @@ pub struct PreparedCue {
 }
 
 impl PreparedCue {
+    /// Resource-free diagnostic snapshot. No file work or renderer readiness is
+    /// implied; opaque color is the only native transport capability in M0-06b.
+    pub fn diagnostic_color(
+        version: ContentVersion,
+        extent: Extent,
+        color: [u8; 4],
+        caps: RendererCapabilities,
+    ) -> Result<Self, PrepareError> {
+        check_extent(extent, caps)?;
+        if color[3] != 255 {
+            return Err(PrepareError::InvalidScene);
+        }
+        Ok(Self {
+            version,
+            extent,
+            background: PreparedBackground::Color(color),
+            text: None,
+            bytes: 0,
+        })
+    }
+
     pub fn version(&self) -> ContentVersion {
         self.version
     }

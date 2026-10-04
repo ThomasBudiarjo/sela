@@ -27,6 +27,26 @@ pub struct Command {
 }
 
 impl Command {
+    pub(crate) fn from_wire(
+        stamp: Stamp,
+        lane: Lane,
+        cue: Arc<PreparedCue>,
+        deadline: Instant,
+    ) -> Self {
+        Self {
+            stamp,
+            lane,
+            cue,
+            deadline,
+        }
+    }
+    pub(crate) fn lane(&self) -> Lane {
+        self.lane
+    }
+    pub(crate) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
     pub fn stamp(&self) -> Stamp {
         self.stamp
     }
@@ -275,6 +295,23 @@ impl RendererSession {
             pending: VecDeque::with_capacity(2),
             applied: None,
             applied_stamp: None,
+        }
+    }
+
+    /// A structurally framed command failed renderer-owned resource validation.
+    /// Consume its ordering identity without touching pending/applied resources.
+    pub fn reject_preparation(&mut self, stamp: Stamp) -> Acknowledgment {
+        let error = if stamp.epoch != self.epoch {
+            DeliveryError::WrongEpoch
+        } else if stamp.sequence <= self.consumed {
+            DeliveryError::Stale
+        } else {
+            self.consumed = stamp.sequence;
+            DeliveryError::RenderFailed
+        };
+        Acknowledgment {
+            stamp,
+            outcome: Outcome::Rejected(error),
         }
     }
 

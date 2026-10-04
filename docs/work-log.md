@@ -1057,3 +1057,72 @@ PY
   changes, preserving field editing and saved revision/dirty invariants; inspect
   reference semantics when access is available. Then M1-06 arrangement/pagination.
   Local per-subticket commits only; no push, publication or deployment authorized.
+
+### M0-06b — Bounded native static-color cue pipe diagnostic — 2026-10-04 UTC
+
+- Owner-authorized parallel worktree `/home/user/workspace/sela-native-cues`,
+  branch `ticket/m0-06-native-cues`, based on **local main `2b62c77`**, not remote
+  main. Read plan/backlog/work log and preparation/delivery/output/composition
+  notes. Scope is backend diagnostic only; no Painter, main/operator layout,
+  storage, manifest/lockfile or reference safety-policy changes. Scoped checklist,
+  schema, API/license provenance and remaining work appended in `docs/delivery.md`.
+- Implemented-unqualified static-color fallback, not full text/image delivery:
+  fixed version-1 73-byte-max owned frames, no Rust memory layouts or file refs,
+  worker-only stdin/stdout I/O, inbound 2/outbound 4 inline frame capacities;
+  reconstruct immutable validated opaque-color cues, renderer-owned Ready after
+  native surface/device setup, epoch/sequence/lane enforcement and preparation
+  rejection without replacing prior scene. Native commit encodes a GPU pass,
+  calls queue.submit and native present **before Applied**; no GPU wait/readback
+  or pipe/file/decode/raster/logging in the frame callback. No Applied is emitted
+  by non-GPU process test fixtures. No main UI controls are wired.
+- Renderer-local receipt-read timestamp preserves inbound queue expiration;
+  budgets are 1–5000ms, not synchronized process clocks or hard pipe-transit
+  expiry. Controller timeout/disconnect remains Unknown and disables delivery;
+  old child must be retired/reaped before a fresh epoch, with no automatic replay.
+  Example normally closes at 24s; independent process-exit watchdog caps even
+  stuck startup at 25s. Driver bounds startup/receipts/capture/retirement, escalates
+  only owned children, records receipts and checks native cropped pixels.
+- Checks with shared `CARGO_TARGET_DIR=/home/user/workspace/repo/target`, `-j2`:
+  `cargo test --locked --all-targets -j2` **79 passed, 1 ignored child fixture**;
+  three integration tests invoke that fixture as actual Rust child processes.
+  Covers exchange/reject, independent renderer lane saturation/FIFO, sequence and
+  epoch rejection, real killed/stalled child disconnect, exact injected deadline,
+  fresh unknown/no replay. Six transport unit tests include all truncated frame
+  lengths, malformed/oversize header/body fields, full owned image/font rejection
+  instead of silent stripping, inbound queue expiry, prior-snapshot retention,
+  receipt round trips and 1000 nonblocking writer-overload attempts. Existing
+  Delivery/Preparer failure tests also passed unchanged.
+- `cargo clippy --locked --all-targets -j2 -- -D warnings`,
+  `cargo fmt --all -- --check`,
+  `cargo build --locked --example native_cues -j2`, Python AST parse and
+  `git diff --check`: passed. Initial alpha-malformation assertion accidentally
+  rewrote 255 with 255; corrected the test to alpha 0 and reran. An intermediate
+  shared-target build reused another worktree's Sela rlib despite correct local
+  sources; touching local `src/lib.rs` forced a root-crate rebuild (no
+  content or dependency change). Final all-target compile/tests/clippy passed
+  together; parent should serialize merged Cargo/native qualification runs.
+- Provisioned only own supervised `sela-cue-x11` Xvfb **:101**, 1024×768 (no WM
+  or compositor), never touched reserved :99/focus. Executed twice:
+  `DISPLAY=:101 VK_DRIVER_FILES=/dev/null CARGO_TARGET_DIR=/home/user/workspace/repo/target python3 scripts/native-cues.py`
+  with `--out .amp/in/artifacts/native-cues` then
+  `--out .amp/in/artifacts/native-cues-final`: passed. GL adapter startup logs
+  identify Mesa22.3.6 llvmpipe LLVM15.0.6 CPU renderer. Final summary ties eight
+  client-only PNGs to receipt sequences/timestamps and independently checks three
+  interior RGB samples each. Red/green apply, invalid-alpha/extent failure retain
+  red, stale sequence retains green, currently applied duplicate doesn't replace,
+  retired epoch rejects and restarted output remains unconfirmed until a fresh
+  explicit cue. Inspected actual red/retention/green/unconfirmed captures. This
+  is software virtual native evidence, **not physical scanout/GPU completion**.
+- Negative driver checks (missing DISPLAY/binary, invalid backend) and missing
+  audience CLI args returned nonzero. Separate inline subprocess check left stdin
+  open without commands: Ready arrived, standalone audience exited cleanly after
+  **24.060s** without supervisor EOF. No stuck-driver watchdog fault injection,
+  physical/Windows/macOS/reference checks, performance/RSS/latency budgets or
+  operator focus regression executed; parent owns serialized post-merge native
+  checks. Own display service stopped after checks; no push/publication.
+- Next: versioned owned text/font/image schema with total/per-field budgets,
+  renderer preparation/upload worker and GPU-ready ownership separated from
+  offscreen readback, then receipt-correlated asymmetric resource failure tests.
+  Preparation-intent coordinator, durable epochs, production supervision and
+  device-loss handling remain open. Static-color slice is implemented-unqualified;
+  M0-06/M0-07/M0-10 are not done and no Black/Clear/Logo semantics were invented.
