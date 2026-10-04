@@ -10,8 +10,8 @@ include timezone for timed hardware/rehearsal evidence.
   OpenGL; no service authoring or lyric presentation yet. An opt-in winit/wgpu
   audience-process diagnostic has measured independent animation.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
-- Active continuation: **M0-06** ordered delivery after the M0-05 CPU preparation
-  checkpoint. The user asked to continue; this extends the M0 feasibility work,
+- Active continuation: **M0-07** composition spike after the M0-05/M0-06 CPU
+  contract checkpoints. The user asked to continue; this extends M0 feasibility,
   not a production backend choice or waiver of the Windows/reference/M0-10 gate.
 - M0-02 reference ledger, M0-03 native harness and M0-04 audience spike were
   developed in separate worktrees and merged into local `main`, with ticket
@@ -42,7 +42,8 @@ remain `planned`. Update the current state above when switching work.
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, bounded synthetic slow preparation and clean/forced operator exit; Windows physical qualification open. |
 | M0-05 | implemented-unqualified | CPU snapshots and bounded worker tested; shaping/upload, renderer integration and applied-state checks remain. |
-| M0-06 | active | Ordered command/acknowledgment contract is next; reference mask semantics remain blocked. |
+| M0-06 | implemented-unqualified | Bounded ordered model with reserved capacity and receipt tests; IPC, native integration and reference mask semantics open. |
+| M0-07 | active | Next: explicit-font static composition/readback spike; transitions/reference/video and GPU qualification remain open. |
 
 ## Session records
 
@@ -454,3 +455,34 @@ PY
 - Delivery: local `feat(M0-05): checkpoint bounded CPU scene preparation` commit;
   no push or installer. Next: M0-06 bounded ordered submission and acknowledgment
   state; keep safety capacity tests separate from unobserved mask semantics.
+
+### M0-06 — Ordered delivery model checkpoint — 2026-10-04 UTC
+
+- State: **implemented-unqualified** partial slice. `src/delivery.rs` separates
+  requested/accepted/applied/unknown state, one global sequence per fresh epoch,
+  FIFO normal/safety admission with one outstanding slot each, renderer-side
+  rejection and idempotent pending/current duplicates. No IPC or native rendering
+  callback is implemented. Full contract and integration obligations:
+  [delivery.md](delivery.md).
+- Deadline is checked before the callback, not after changing output. Receipt
+  timeout/disconnect invalidates the session, clears requests and never replays
+  them. Last-confirmed history is not labelled live after disconnect. Ambiguous
+  stale receipts require newer confirmation or mark output unknown.
+- Verification: `cargo test --locked --all-targets -j 8`: **22 passed** (18 library,
+  3 GPUI, 1 spike). Eight new delivery tests cover all 24 receipt permutations,
+  both lane orders, 1000 rejected admissions per lane order, duplicate/reordered
+  commands, render failure retaining prior Arc, exact deadline/no callback,
+  restart/foreign/unsent receipts, renderer overload and real missing-file worker
+  recovery. `for run in $(seq 1 20); do cargo test --locked --lib -j 8 --quiet;
+  done` passed all 20 runs (18 tests/run); no randomized schedule claim.
+- `cargo build --locked --all-targets -j 8`, strict all-target clippy,
+  `cargo fmt --all -- --check`, `git diff --check` and inline documentation
+  checks passed. Formatted code and entire test module reread/reviewed.
+- Not run/claimed: actual safety-control semantics or timing, renderer IPC,
+  preparation-intent coordination, receipt-to-GPU-frame integration, physical
+  scanout, Windows/reference/hardware. Reserved lane currently holds a prepared
+  replacement snapshot, not an invented Black/Clear/Logo state machine. Combined
+  parent boxes remain open for those integration requirements.
+- Delivery: local `feat(M0-06): checkpoint ordered delivery and acknowledgment model`
+  commit, no push/installer. Next: M0-07 explicit-font composition/readback;
+  integrate resource readiness before applying this model to the native spike.

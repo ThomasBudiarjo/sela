@@ -292,17 +292,20 @@ Acceptance: a cue is either ready to apply or rejected without changing live.
 
 Depends on: M0-05. Tests: U, I.
 
-- [ ] Define sequence/epoch rules, accepted/applied/rejected acknowledgment meanings,
+CPU model slice: [delivery.md](delivery.md). Native IPC, preparation-intent
+coordination and reference mask semantics remain open.
+
+- [x] Define sequence/epoch rules, accepted/applied/rejected acknowledgment meanings,
   stale rejection and restart behavior; distinguish submission from visibility.
 - [ ] Implement a bounded command boundary with explicit overload policy and
   reserved safety-control capacity; retain ordering guarantees across lanes.
-- [ ] Model requested versus acknowledged state; never optimistically label a
+- [x] Model requested versus acknowledged state; never optimistically label a
   requested cue as live or replay old pending cues after reconnection.
 - [ ] Test reorder, duplicate, delayed preparation, out-of-order acknowledgments,
   saturation, renderer disconnect and timeout with asymmetric cue revisions.
 - [ ] Test safety commands under media-load saturation, including ordering when
   a mask and Go Live cross; use the M0-02 specification for operator semantics.
-- [ ] Expose actionable errors and counters without logging lyrics by default.
+- [x] Expose actionable errors and counters without logging lyrics by default.
 
 Acceptance: only a current prepared cue applies; failed/stale work cannot replace
 live; safety delivery has an explicit bound and no unbounded queue.
