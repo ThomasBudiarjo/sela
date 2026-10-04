@@ -33,6 +33,30 @@ returns the error and keeps all text/history/selection/counter intact. Parent
 owns validation across fields and the storage envelope: two individually legal
 fields can together exceed the song's storage budget.
 
+### Optional document-owned history (M1-05c)
+
+`use_document_history(on_edit: impl FnMut(&str, &mut App) + 'static)` opts a
+retained field into parent-owned history. The callback receives the new original
+UTF-8 bytes **synchronously for content-changing user edits only**. Loads via
+`set_text`, rejected/no-op edits and selection/focus changes never invoke it.
+This preserves ordering even for multiple callbacks in one GPUI app update;
+ordinary observe/notify can coalesce and is unsuitable for document chronology.
+
+The callback must not read/update the currently borrowed field, or initiate
+another edit; callers must not invoke native editing methods while the owning
+document entity is already borrowed. Song Library captures a WeakEntity and
+updates only its independent draft/history, with no field read or I/O. Parent
+loads remain safe because `set_text` does not call back. The optional method has
+a scoped dead-code allowance because the standalone example compiles this same
+module without a document owner; its actual behavior is tested in both targets.
+
+Opt-in disables local buffer snapshot recording and propagates semantic Undo/
+Redo actions to a contextual parent handler. Without opt-in, all existing field
+history/selection behavior remains unchanged. The parent must register/handle
+the actions and implement its own limits, baseline and close policies; see
+[song-library.md](song-library.md). Undo/redo document restoration uses validated
+`set_text` loads, resets field caret/composition and does not recursively record.
+
 InputError is `ByteLimit | LineLimit | Newline | InvalidRange`; rejected edits
 are not truncated, and a readable inline red error persists until another edit,
 load or undo/redo. `Enter` is consumed even in single-line fields (does nothing);

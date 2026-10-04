@@ -84,6 +84,7 @@ struct Buffer {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     edits: u64,
+    external_history: bool,
 }
 fn from16(text: &str, offset: usize) -> usize {
     let mut count = 0;
@@ -182,9 +183,11 @@ impl Buffer {
             Some(Some(r)) => Some(range16(text, r.clone())?),
             _ => None,
         };
-        self.undo.push(self.snapshot());
-        trim_history(&mut self.undo);
-        self.redo.clear();
+        if !self.external_history {
+            self.undo.push(self.snapshot());
+            trim_history(&mut self.undo);
+            self.redo.clear();
+        }
         self.text.replace_range(range.clone(), text);
         self.marked = preedit
             .and_then(|_| (!text.is_empty()).then_some(range.start..range.start + text.len()));
@@ -247,9 +250,12 @@ impl Buffer {
     }
 }
 
+type ContentObserver = Box<dyn FnMut(&str, &mut App)>;
+
 pub struct TextInput {
     focus: FocusHandle,
     buffer: Buffer,
+    document_edit: Option<ContentObserver>,
     multiline: bool,
     max: usize,
     tab_index: isize,
@@ -271,6 +277,7 @@ impl TextInput {
         let mut input = Self {
             focus: cx.focus_handle().tab_index(tab_index).tab_stop(true),
             buffer: Buffer::default(),
+            document_edit: None,
             multiline,
             max: max_bytes.min(HARD_BYTES),
             tab_index,
@@ -292,6 +299,16 @@ impl TextInput {
     }
     pub fn error(&self) -> Option<&InputError> {
         self.error.as_ref()
+    }
+    /// Synchronous content-only callback; must not read/update this field or edit
+    /// while its owner is borrowed. Loads/selection/errors never call it.
+    /// Undo/Redo bubble to the enclosing owner; standalone history is disabled.
+    #[allow(dead_code)] // Standalone input_check compiles the same component, without an owner.
+    pub fn use_document_history(&mut self, on_edit: impl FnMut(&str, &mut App) + 'static) {
+        self.document_edit = Some(Box::new(on_edit));
+        self.buffer.external_history = true;
+        self.buffer.undo.clear();
+        self.buffer.redo.clear();
     }
     /// Validated atomic load; resets history and selection, increments edit count.
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) -> Result<(), InputError> {
@@ -320,10 +337,19 @@ impl TextInput {
         preedit: Option<Option<Range<usize>>>,
         cx: &mut Context<Self>,
     ) {
+        let before = self
+            .document_edit
+            .as_ref()
+            .map(|_| self.buffer.text.clone());
         self.error = self
             .buffer
             .replace(range, text, preedit, self.multiline, self.max)
             .err();
+        if let Some(on_edit) = self.document_edit.as_mut()
+            && before.as_deref() != Some(&self.buffer.text)
+        {
+            on_edit(&self.buffer.text, cx);
+        }
         self.reveal = true;
         cx.notify();
     }
@@ -733,12 +759,20 @@ impl Render for TextInput {
                 }
             }))
             .on_action(cx.listener(|s, _: &Undo, _, cx| {
+                if s.document_edit.is_some() {
+                    cx.propagate();
+                    return;
+                }
                 s.buffer.history(false);
                 s.error = None;
                 s.reveal = true;
                 cx.notify()
             }))
             .on_action(cx.listener(|s, _: &Redo, _, cx| {
+                if s.document_edit.is_some() {
+                    cx.propagate();
+                    return;
+                }
                 s.buffer.history(true);
                 s.error = None;
                 s.reveal = true;
@@ -1026,6 +1060,33 @@ mod tests {
         assert!(b.undo.iter().map(|s| s.text.len()).sum::<usize>() <= HISTORY_BYTES);
         assert_eq!(b.undo.len(), 8);
     }
+    #[gpui::test]
+    fn document_owner_is_synchronous_content_only_without_field_history(cx: &mut TestAppContext) {
+        let (mut cx, input, _, _) = fixture(cx, true, "original");
+        let edits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = edits.clone();
+        cx.update(|_, cx| {
+            input.update(cx, |i, _| {
+                i.use_document_history(move |text, _| captured.borrow_mut().push(text.to_owned()))
+            })
+        });
+        cx.update(|w, cx| {
+            input.update(cx, |i, cx| {
+                i.replace_text_in_range(Some(0..8), "😀e\u{301}\r\n", w, cx);
+                i.replace_text_in_range(Some(0..6), "B", w, cx);
+                assert_eq!(edits.borrow().as_slice(), ["😀e\u{301}\r\n", "B"]);
+                assert!(i.buffer.undo.is_empty() && i.buffer.redo.is_empty());
+                i.replace_text_in_range(Some(Range { start: 2, end: 1 }), "bad", w, cx);
+                assert_eq!(edits.borrow().len(), 2);
+                i.set_text("loaded", cx).unwrap();
+                assert_eq!(edits.borrow().len(), 2);
+            })
+        });
+        cx.simulate_keystrokes("left shift-right ctrl-z ctrl-shift-z");
+        assert_eq!(input.read_with(&cx, |i, _| i.text().to_owned()), "loaded");
+        assert_eq!(edits.borrow().len(), 2);
+    }
+
     #[gpui::test]
     fn multiline_enter_vertical_direction_and_load_failure(cx: &mut TestAppContext) {
         let (mut cx, input, _, activated) = fixture(cx, true, "a😀e\u{301}\r\n\n");

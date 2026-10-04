@@ -1,4 +1,4 @@
-# M1-05b native song authoring
+# M1-05b/c native song authoring
 
 Implemented-unqualified under the owner's UI-first sequencing exception. This
 is a usable offline song editor, not a service scheduler or audience controller.
@@ -24,8 +24,9 @@ as test fixtures.
 - **Save / Ctrl+S** commits a new immutable revision. **Duplicate** saves the
   current draft under a new identity, even if the title is unchanged.
 - **Previous / Next / Add section / Remove** change the authored sections.
-  Field undo/redo is bounded; section removal/reordering has no document-level
-  undo yet. **Discard edits** restores the complete last-loaded/saved song.
+  **Ctrl+Z / Ctrl+Shift+Z** (Cmd on macOS) undo/redo the complete document in
+  chronological order, including metadata, lyrics and Add/Remove, even after
+  switching sections. **Discard edits** restores the complete last-loaded/saved song.
 - **Delete**, then **Confirm delete**, tombstones a clean saved song. Existing
   schedule snapshots retain their original immutable content.
 - Selecting another song or New refuses to replace unsaved edits. Ctrl+Q and
@@ -84,7 +85,90 @@ duplicate/delete/history, stale-save draft retention, incompatible-load atomicit
 catalog pagination/current revisions/tombstones and parent-directory failure.
 Storage tests separately cover locked/full database rollback and snapshot safety.
 
-Still open: full editor undo, arrangement/pagination/themes, indexed search,
+Still open: native qualification of document undo, arrangement/pagination/themes, indexed search,
 schedule UI, autosave/recovery, connected live output, installed-reference parity,
 actual platform IME/accessibility, Windows/macOS/Wayland/high-DPI/physical GPU and
 display qualification, performance measurements, and production installation.
+
+## M1-05c document history contract and scoped checklist
+
+State: **implemented-unqualified** on `ticket/m1-05-undo`, based on LOCAL main
+`2b62c77`. No layout/toolbar redesign, new visible controls, Painter or reference
+parity claim. These shortcuts and history boundaries are provisional Sela policy;
+installed EasyWorship 8.0.49 grouping, selection restoration and save boundaries
+remain unknown.
+
+- One history owner in `Library`; its snapshots contain the whole original-byte
+  `Song` and selected section index, not `Version`, saved baseline or UI fields.
+  Field user edits report synchronously through `use_document_history`; the
+  callback updates the owner without reading the currently borrowed field.
+  Ordinary GPUI observation remains for status/error notification only, not
+  chronological recording. This avoids notification coalescing losing edits.
+- Maximum **64 snapshots combined across undo/redo**, **8 MiB accounted combined
+  snapshot bytes** (UTF-8 string lengths plus document/section struct sizes).
+  Oldest undo entries are evicted first, then furthest redo entries if needed.
+  A snapshot larger than the budget is evicted; no truncation of document text.
+  Current draft/baseline, field buffers, allocator overhead and temporary clones
+  are outside this retention budget; this is not a hard RSS/performance claim.
+- Each content-changing native replacement/paste/cut/preedit callback or
+  structural operation is one step. No typing/composition coalescing yet.
+  No-op replacements, caret/selection movement, focus and Previous/Next are not
+  edits and do not erase redo. A new content edit truncates redo. Undo/redo loads
+  retained fields, clears composition/errors and resets their carets to zero;
+  it restores the affected section, not historical text selection/scroll.
+- **Save and Duplicate retain both history stacks**, advancing the saved baseline
+  and immutable expected-head Version only on successful reply. Undo afterward
+  is dirty relative to that new baseline and does not roll back durable revisions
+  or identity. Redo to the baseline becomes clean again. Saving while a redo
+  branch exists retains it. Successful save/duplicate does not reload fields or
+  reset the selected section/carets. Busy undo/redo is ignored.
+- **New, successful Load, Discard edits and successful Delete reset history**.
+  Discard restores the saved baseline/Version; loading a different song cannot
+  undo into the previous song. Invalid load, rejected input, failed structural
+  edits, failed submission and failed/conflicting saves preserve document/history
+  and baseline/Version. Add validates the post-operation envelope before applying;
+  128-section/empty-remove no-ops leave fields untouched. Dirty/pending close and
+  replacement guards remain authoritative; history alone does not imply dirty.
+- Standalone `TextInput` and `input_check` retain their original field history.
+  Only owned song fields disable local snapshots and propagate semantic Undo/
+  Redo to the contextual parent handler. No global key matching.
+
+Upstream review on 2026-10-04: `git ls-remote https://github.com/zed-industries/zed
+HEAD` returned the existing pin `a84689073d296dfd39987bc7dd478e43ef76d83a`.
+Inspected Apache framework `crates/gpui/src/app/context.rs` (weak entity,
+observe/subscribe, queued `emit` effects), `crates/gpui/src/app.rs` (`propagate`),
+`crates/gpui/src/app/entity_map.rs` (`WeakEntity::update`), and
+`crates/gpui/examples/input.rs`. Chose an original synchronous ownership seam
+instead of delayed content events because effects can run after navigation within
+one app update. No GPL application components/assets or dependency changes.
+
+- [x] Chronological asymmetric multi-section edit/Add/Remove/undo/redo; cross-section
+  navigation and selection preserve history; controls and fields resolve actions.
+- [x] Saved/duplicated baseline and immutable Version survive undo/redo; dirty
+  close, pending ignore, validation/conflict/unavailable-save retention tested.
+- [x] Redo branching, zero sections, 128 sections, post-Add payload failure,
+  Unicode/combining/emoji/CRLF, count and combined byte eviction covered.
+- [x] Synchronous content-only field seam and unchanged standalone history tested.
+- [ ] Parent serial native driver replay and visual content inspection (not run
+  in this worktree to avoid focus interference on shared `:99`).
+- [ ] Installed-reference, Windows/real IME/accessibility and measured performance.
+
+Parent replay after merging (run serially, build the merged source immediately
+before running; do not reuse a parallel worker's binary):
+
+```sh
+export CARGO_TARGET_DIR=/home/user/workspace/repo/target
+cargo build --locked --bin sela -j2
+SELA_BINARY="$CARGO_TARGET_DIR/debug/sela" DISPLAY=:99 VK_DRIVER_FILES=/dev/null \
+  python3 scripts/song-library.py
+```
+
+The extended driver checks save-then-undo dirty WM-close, metadata-focus undo of
+the latest lyric edit, control-focus structural undo/redo, a saved removal's
+independently decoded one-section payload, and restoration of both asymmetric
+sections after undo across another Save. Inspect `saved-document-undo.png`,
+`removed-section.png`, `restored-section.png`, `saved.png` and existing compact/
+reopened captures. Also manually navigate Previous/Next between lyric edits,
+undo each in chronological order, redo, branch with new typing, remove the final
+section at Remove-button focus and undo to restore it. No new appearance change;
+native action/focus/content qualification remains pending, not visual redesign.

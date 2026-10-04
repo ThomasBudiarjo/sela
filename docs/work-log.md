@@ -1057,3 +1057,63 @@ PY
   changes, preserving field editing and saved revision/dirty invariants; inspect
   reference semantics when access is available. Then M1-06 arrangement/pagination.
   Local per-subticket commits only; no push, publication or deployment authorized.
+
+### M1-05c — Bounded whole-document song undo/redo — 2026-10-04 UTC
+
+- State: **implemented-unqualified**, assigned worktree `/home/user/workspace/sela-undo`
+  on `ticket/m1-05-undo`, based on LOCAL main `2b62c77`, not origin/main. Read
+  AGENTS/plan/backlog/work log first; owner authorized this non-layout functionality.
+  Owns song_library/text_input, their notes, native song driver and this appended
+  record only. No Painter, storage/model/renderer/main/Cargo/backlog or header/index
+  changes; no new visible controls or reference-parity claim.
+- One chronological whole-Song/section snapshot owner: 64 retained snapshots and
+  8 MiB accounted bytes combined across undo/redo. Metadata/lyrics/native preedit
+  and Add/Remove share the timeline; navigation/selection/no-ops leave it alone.
+  New edits truncate redo. Original Unicode/emoji/combining/LF/CRLF preserved.
+  Post-Add validation makes structural payload failures atomic; cap/no-op actions
+  no longer reload fields. Current/baseline/allocator/transient memory is outside
+  retention accounting; no measured RSS/latency qualification.
+- Focused synchronous content callback seam avoids deferred/coalesced observer
+  history and stale section association, with no field read during its borrow.
+  Only owned fields disable local snapshot recording and bubble semantic Undo/
+  Redo; standalone component behavior remains covered. WeakEntity lifetime and
+  contextual actions follow inspected Apache GPUI APIs at current/pinned Zed
+  `a84689073d296dfd39987bc7dd478e43ef76d83a`; exact paths/provenance in owner note.
+- Save/Duplicate retain both stacks and selected section, advancing baseline and
+  immutable Version only on successful receipt. Undo after Save is dirty; redo to
+  baseline is clean. Save with a redo branch retains that branch. Busy undo/redo
+  ignored. New/successful Load/Discard/successful Delete reset history. Failed
+  validation/input/structural edits/submission/conflict/load retain history and
+  durable state. Dirty/pending close guards unchanged. Carets/composition reset
+  on document restoration; no selection restoration or edit coalescing claim.
+- Verification with `CARGO_TARGET_DIR=/home/user/workspace/repo/target`:
+  `cargo test --locked --all-targets -j2`: **76 passed**, zero failed/ignored;
+  `cargo clippy --locked --all-targets -j2 -- -D warnings`,
+  `cargo fmt --all -- --check`, `uvx ruff check scripts/song-library.py`,
+  Python AST parse and `git diff --check`: passed. Formatted/linter output reread.
+  New tests cover cross-navigation asymmetric edits/add/remove/zero sections,
+  Unicode, save/duplicate/redo boundaries, New/Load/Discard/Delete reset,
+  invalid-load redo retention, dirty close, pending-ignore, conflict/unavailable/
+  validation save failure, rejected native edits, 128-section/encoded-size caps,
+  count/combined-byte eviction and synchronous content-only callbacks.
+- Initial new tests had owned-index move/borrow compile errors (fixed with cloned
+  expected values/focus handles). Zero-section direct helper kept focus on the
+  removed lyric entity, unlike real Remove-button invocation; corrected the test
+  to exercise retained control focus and reran. Clippy collapsed nested if and
+  malformed-range fixture construction corrected; Ruff import/executable mode/
+  explicit expected search failure check fixed. Final checks passed; no failures
+  suppressed or native checks represented as executed.
+- Native focus-changing checks intentionally **not run** on shared `:99` while
+  parallel work proceeds. Extended `scripts/song-library.py` is lint/parse-checked
+  but native replay pending: after parent merge, build merged bin with shared
+  target and `-j2`, run serially with `SELA_BINARY="$CARGO_TARGET_DIR/debug/sela"
+  DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/song-library.py`.
+  Driver asserts save-undo dirty WM close and independent SQLite one-section
+  removal/two-section undo restoration. Inspect saved-document-undo, removed-
+  section, restored-section and existing compact/reopen PNGs. Owner note contains
+  exact replay and manual navigation/branch/final-section checks.
+- Remaining: native replay above, installed 8.0.49 semantics, Windows/platform IME/
+  accessibility/hardware and measured performance. Parent consolidated checklists
+  remain untouched. Next: integrate local commit and execute combined serial native
+  replay; then continue arrangement/pagination without claiming parity or waiving
+  qualification. Local coherent subticket commit only; no push/publication.
