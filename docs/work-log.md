@@ -11,9 +11,10 @@ include timezone for timed hardware/rehearsal evidence.
   audience-process diagnostic has measured independent animation; a separate
   static composition example now verifies explicit-font GPU readback.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
-- Active continuation: **M0-07** composition spike after the M0-05/M0-06 CPU
-  contract checkpoints. The user asked to continue; this extends M0 feasibility,
-  not a production backend choice or waiver of the Windows/reference/M0-10 gate.
+- Active continuation: **M0-07c** bounded software video-decoder/GPU interop spike
+  and **M1-02a** provisional operator shell in separate worktrees. The owner
+  explicitly permits UI implementation before physical renderer qualification;
+  this changes sequencing, not reference, hardware or service-ready claims.
 - M0-07a text and M0-07b GPU worktrees are merged into local `main`, retaining
   their individual subticket commits. Static composition is checked; resume
   native GPU-readiness/receipt integration and decoder interop next, with observed
@@ -24,7 +25,8 @@ include timezone for timed hardware/rehearsal evidence.
 - Resume M0-04 on Windows DX12 with two physical displays, DPI/topology changes,
   hotplug and physical capture; run the M0-02 installed-reference runbook alongside.
   No Windows runner is connected. These required checks block gate closure.
-- M1–M5 remain `planned`; M0-10 requires physical Windows evidence before full UI.
+- M1-02a may proceed under the approved early-UI exception; other milestones
+  remain planned and M0-10 still requires physical Windows evidence for closure.
 - Setup and application changes are local only; no push/publication authorized.
 - Parallel opportunity: M0-02 reference observation when a lawful EasyWorship
   8.0.49 installation on Windows is available.
@@ -49,6 +51,7 @@ remain `planned`. Update the current state above when switching work.
 | M0-05 | implemented-unqualified | CPU snapshots and bounded worker tested; shaping/upload, renderer integration and applied-state checks remain. |
 | M0-06 | implemented-unqualified | Bounded ordered model with reserved capacity and receipt tests; IPC, native integration and reference mask semantics open. |
 | M0-07 | implemented-unqualified | Explicit-font color/image contain/cover GPU readback; native integration, transitions/video and physical qualification open. |
+| M1-02 | active | Early-UI exception approved; M1-02a empty separate-pane shell and bounded splitters, no speculative live semantics. |
 
 ## Session records
 
@@ -612,3 +615,23 @@ PY
   installer or service-ready app. Resume partial M0-07 integration above. Connect
   an authorized Windows/reference environment to unblock observed transitions,
   M0-08 and the hardware gate; do not label static PNGs a usable worship app.
+
+### Sequencing approval and next slices — 2026-10-04 UTC
+
+- Owner cannot currently provide hardware and explicitly authorized continuing
+  operator UI first while renderer testing remains unavailable. Recorded the
+  exception in plan/backlog; no release or parity gate marked done/deferred.
+- M0-07c scope: bounded FFmpeg child decode of an original lossless FFV1 fixture,
+  complete RGBA frames to existing wgpu compositor, ordered frame/copy checks,
+  overload/cancel/decoder failure, exact limits and licensing/interop findings.
+- M1-02a scope: original native GPUI Schedule/Preview/Live over Resources shell,
+  empty/disconnected/disabled states, resource tabs, bounded splitters and compact
+  window. Historical Quick Start Guide supports pane families/resource tabs only;
+  exact 8.0.49 dimensions/focus/modes remain unverified. Initial geometry is
+  reversible development policy, not a new claim of compatibility.
+- Upstream review completed for pinned GPUI div drag/focus, canvas, window bounds
+  observation and test mouse APIs; current upstream comparison matched the pin.
+  Keep framework Apache APIs, not GPL Zed application UI components.
+- Independent worktrees will own video example/modules versus operator source/
+  tests/native driver. Merge with local ticket commits and combined checks;
+  serialize native focus-changing tests. No push/publication authorization.

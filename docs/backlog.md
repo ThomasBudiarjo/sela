@@ -31,6 +31,11 @@ Dependencies below are minimum prerequisites, not a demand for serial execution.
 Cross-cutting reference evidence is also required for every parity-sensitive
 workflow even when M0-02 is not repeated in its dependency line.
 
+Sequencing exception approved by the owner on 2026-10-04: provisional operator
+UI may proceed while physical renderer qualification is unavailable. M1-02a
+starts the reversible shell ahead of M0-10; reference unknowns and hardware/
+release gates remain open. This permission is not a feature-parity finding.
+
 ### Milestone navigation
 
 | Milestone | Tickets | Gate |
@@ -401,6 +406,10 @@ original database on migration failure.
 ### M1-02 — Operator shell, pane geometry and layout modes
 
 Depends on: M0-02, M0-03, M0-10. Tests: N, E if viable, H.
+
+Early slice M1-02a is authorized by the sequencing exception above: separate-pane
+empty shell, provisional geometry, splitters and resource tabs. Persisted layout,
+other modes and installed-reference behavior remain parent follow-through.
 
 - [ ] Inspect relevant current GPUI split-pane/list/focus code and record references.
 - [ ] Implement Schedule/Preview/Live/Resources positions and observed pane sizing,

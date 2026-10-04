@@ -33,6 +33,12 @@ assumed to provide independent presentation timing. A render thread does not
 survive process termination; a separate process still shares some system/GPU
 failure modes. Test rendering continuity and control responsiveness separately.
 
+**User-approved sequencing exception — 2026-10-04:** the owner authorized
+operator UI implementation while physical renderer testing is unavailable.
+Provisional M1 UI work may proceed before M0-10 closes. This does not qualify
+output, approve unobserved reference behavior, or waive release/hardware checks.
+Document reversible UI assumptions and leave dependent acceptance checks open.
+
 ## Compatibility evidence
 
 Use EasyWorship 8 build 8.0.49 as the initial reference (official download listing
