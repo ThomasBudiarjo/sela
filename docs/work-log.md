@@ -666,3 +666,33 @@ PY
   performance; no parity or audience qualification claim. Next: parent merges,
   reruns combined tests/native checks, maintains persistence/modes/qualification.
 - Delivery: local `feat(M1-02a)` commit only; no push/publication.
+
+### M0-07c — software decoder/GPU interop — 2026-10-04 UTC
+
+- Implemented-unqualified diagnostic in `examples/video_spike.rs` and
+  `examples/video/decoder.rs`; details, limits, source/legal review, exact
+  reproduction and remaining work in [video-spike.md](video-spike.md).
+- Original private 12-frame 320×180/12fps FFV1 BGRA Matroska decoded off caller
+  into capacity-one complete RGBA queue. Supervisor kills/reaps on cancellation,
+  Drop/deadline; polling does not join. Explicit local format/codec/protocol,
+  output-size forcing, 1920×1080/120-frame/32MiB/30s limits; no new dependencies.
+- Checks with `CARGO_TARGET_DIR=/home/user/workspace/repo/target`:
+  `cargo test --locked --example video_spike -j 8`: **9 passed**;
+  `cargo clippy --locked --example video_spike -j 8 -- -D warnings`,
+  `cargo build --locked --example video_spike -j 8`, `cargo fmt --all -- --check`
+  passed. Initial Clippy constant-chunk warning fixed; final files reread.
+- R: private mktemp XDG runtime, `target/debug/examples/video_spike
+  .amp/in/artifacts/video` (shared target absolute path) passed twice on Vulkan
+  llvmpipe/Mesa22.3.6, FFmpeg5.1.9-0+deb12u1 GPL build. All original frame bytes,
+  order, actual-font white glyph/uncovered GPU pixels, missing/corrupt errors,
+  deterministic queue-saturation deadline/cancel, child reaping checked.
+  Ordinary tests need neither FFmpeg nor GPU; static Unix child tests additionally
+  cover partial EOF, bounds, watchdog and asynchronous Drop.
+- First/last PNGs inspected under `.amp/in/artifacts/video`: readable actual text,
+  asymmetric green stripe, moving pink rectangle. No native X11 used. No native
+  hardware/Windows, original PTS/audio/zero-copy, frame-SLO or hostile-input
+  sandbox claim. Encoder fixture setup remains synchronous without a watchdog;
+  production lifecycle/resource qualification remains open.
+- Next: parent merge and combined validation/backlog update; carry unresolved
+  native surface/fence/PTS/audio/device/memory work forward. Local coherent
+  `feat(M0-07c)` commit only; no push or waived release gates.
