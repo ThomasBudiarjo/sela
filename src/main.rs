@@ -5,6 +5,10 @@ use gpui::{
 
 actions!(sela, [Quit]);
 
+fn bind_operator_keys(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new("ctrl-q", Quit, Some("Sela"))]);
+}
+
 struct Operator {
     focus: FocusHandle,
 }
@@ -66,7 +70,7 @@ fn main() {
             }
         })
         .detach();
-        cx.bind_keys([KeyBinding::new("ctrl-q", Quit, Some("Sela"))]);
+        bind_operator_keys(cx);
         let bounds = Bounds::centered(None, size(px(960.), px(600.)), cx);
         if let Err(error) = cx.open_window(
             WindowOptions {
@@ -89,3 +93,6 @@ fn main() {
         cx.activate(true);
     });
 }
+
+#[cfg(test)]
+mod tests;

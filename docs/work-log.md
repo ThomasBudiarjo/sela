@@ -263,3 +263,54 @@ assert len(ids) == len(set(ids)) == 9
 print('PASS: two owned files; local links/anchors and whitespace; nine unique ledger IDs')
 PY
 ```
+
+### M0-03 — Bounded operator harness — 2026-10-04 (Asia/Jakarta)
+
+- State: **implemented-unqualified**, bounded local checkpoint, not full parent
+  completion. Dependency M0-01 Linux bootstrap executed; its Windows gate remains
+  open. Scope: actual Operator action/focus tests, X11 smoke and native runbook.
+  No Cargo manifest/lock changes, audience spike or speculative operator features.
+- Files: `src/main.rs` (shared binding setup only), `src/tests.rs`,
+  `scripts/native-smoke.sh`, `docs/native-testing.md`, M0-03 backlog boxes and
+  this appended record. Upstream pin/path/license and accessibility findings are
+  recorded in the native runbook; inspected the existing pinned cargo checkout.
+- U/I: `CARGO_TARGET_DIR=/home/user/workspace/repo/target cargo test --locked -j 4`
+  passed **3 tests**, 0 failed/ignored. Actual Operator tree, production binding,
+  retained focus, input dispatch, blur/refocus, unbound key, wrong context and
+  explicit direct-action contrast. Capture observer does not replace the Quit
+  handler; upstream test platform quit is no-op, so only native proves exit.
+- Checks: `cargo fmt --all -- --check`,
+  `CARGO_TARGET_DIR=/home/user/workspace/repo/target cargo clippy --locked --all-targets -j 4 -- -D warnings`,
+  `CARGO_TARGET_DIR=/home/user/workspace/repo/target cargo build --locked -j 4`,
+  `bash -n scripts/native-smoke.sh`, `shellcheck scripts/native-smoke.sh`,
+  `git diff --check`: passed. Cargo serialized shared build locks normally.
+- Native: `DISPLAY=:99 VK_DRIVER_FILES=/dev/null scripts/native-smoke.sh /home/user/workspace/repo/target/debug/sela .amp/in/artifacts`
+  passed; immediately repeated without artifact argument, passed. Each run
+  launched twice, verified PID-window focus, Ctrl+J survival, 720x440 resize,
+  Ctrl+Q and Alt+F4 exit status 0 and window removal. Only test PID/windows used;
+  existing supervised Xvfb/Openbox/xcompmgr services were not changed/stopped.
+- Environment: Debian 12 x64 orb, Xvfb :99 1600x1000, Mesa llvmpipe software GL;
+  Vulkan black-capture limitation remains. Binary SHA-256 at verification:
+  `ac83cb51fbbe72b477b359d74c59d3facff6566be9de92c834a38912792ce88c`.
+- UI evidence: root captured then cropped, inspected
+  `.amp/in/artifacts/m0-03-native-small.png` (720x440): readable title,
+  limitation text and Quit control, no text clipping. Native stderr retained in
+  `.amp/in/artifacts/m0-03-native.log`; temporary root/profile/runtime cleaned.
+  Artifacts are local ignored evidence, not committed assets.
+- Failure checks: `DISPLAY=:99 scripts/native-smoke.sh /tmp/sela-no-such-binary`
+  returned nonzero with missing-binary diagnostic and no leftover smoke directory.
+  Explicit window XSendEvent input trial failed (BadWindow/quit timeout), cleaned
+  its process, and was replaced with focus-verified XTEST; two final passes above.
+  Concurrent focus-changing automation remains unsafe; coordinate native input.
+- Not run: Windows build/native UIA/Narrator, physical GPU/displays, Wayland,
+  performance, installed EasyWorship compatibility. No suitable Windows/physical
+  runner/reference in this orb. Manual equivalent and non-skipping policy are in
+  `docs/native-testing.md`; upstream AccessKit plumbing is not Sela accessibility
+  qualification. Wrong-context negative is headless only, not a fabricated UI.
+- Remaining: first M0-03 combined fixture/clock/failure checklist stays open:
+  conventions and temporary XDG dirs exist, but clocked domain and I/O fixtures
+  do not yet exist. Extend them when actual domain adapters arrive; no test-only
+  production flags. Integrator should rerun tests/native smoke after merging,
+  then execute Windows/manual accessibility fallback on a real runner.
+- Delivery: local `feat(M0-03): checkpoint bounded GPUI and X11 harness` commit;
+  no push/publication. Full ticket qualification remains open.

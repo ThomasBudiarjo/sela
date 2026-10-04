@@ -227,17 +227,20 @@ alone. Partial observations unblock only the workflows they actually cover.
 
 Depends on: M0-01. Tests: U, I, N, E feasibility.
 
+Bounded slice **implemented-unqualified**; see `docs/native-testing.md` and the
+M0-03 work-log record. Windows/native accessibility and physical checks remain open.
+
 - [ ] Add synthetic fixture conventions, isolated temporary profiles, fixed clocks
   and reproducible failure injection without production-only test shortcuts.
-- [ ] Inspect current GPUI test/action/focus patterns and Windows accessibility
+- [x] Inspect current GPUI test/action/focus patterns and Windows accessibility
   support; try a native open-window → focus → action → assert-state smoke test.
-- [ ] Evaluate stable element/action targeting; distinguish direct action tests
+- [x] Evaluate stable element/action targeting; distinguish direct action tests
   from true input-driven E2E and offscreen output from physical presentation.
-- [ ] If viable, keep one minimal automated smoke test and bounded timeouts; if
+- [x] If viable, keep one minimal automated smoke test and bounded timeouts; if
   not, record the precise blocker and a reproducible manual equivalent.
-- [ ] Separate headless CI from native/GPU jobs with explicit skip reasons;
+- [x] Separate headless CI from native/GPU jobs with explicit skip reasons;
   prohibit a skipped job from appearing as hardware qualification.
-- [ ] Define evidence format: build, environment, fixture, command, result, artifact.
+- [x] Define evidence format: build, environment, fixture, command, result, artifact.
 
 Acceptance: a useful layered test path exists; native E2E is optional, not a
 reason to switch GPUI to a web implementation or postpone all other testing.
