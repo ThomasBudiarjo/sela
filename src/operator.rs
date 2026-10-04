@@ -19,13 +19,14 @@ struct Split(usize);
 
 pub(super) struct Operator {
     pub(super) focus: FocusHandle,
-    pub(super) controls: [FocusHandle; 9],
+    pub(super) controls: [FocusHandle; 11],
     pub(super) ratios: [f32; 3],
     pub(super) collapsed: bool,
     pub(super) tab: usize,
     drag: Option<(usize, Point<gpui::Pixels>, f32)>,
     activation: Option<Subscription>,
     library_error: Option<String>,
+    new_menu: bool,
 }
 
 impl Operator {
@@ -43,6 +44,7 @@ impl Operator {
             drag: None,
             activation: None,
             library_error: None,
+            new_menu: false,
         }
     }
 
@@ -53,6 +55,7 @@ impl Operator {
                 self.collapsed = false;
                 self.drag = None;
             }
+            9 => self.new_menu = !self.new_menu,
             1 => window.dispatch_action(Box::new(Quit), cx),
             2 => {
                 self.collapsed = !self.collapsed;
@@ -62,7 +65,11 @@ impl Operator {
                 }
             }
             3..=7 if !self.collapsed => self.tab = index - 3,
-            8 if self.tab == 0 && !self.collapsed => {
+            8 | 10 => {
+                self.new_menu = false;
+                if index == 10 {
+                    self.controls[9].focus(window, cx);
+                }
                 self.library_error = crate::song_library::default_path()
                     .ok_or_else(|| {
                         "No user data directory. Launch with --library DATABASE_PATH.".to_string()
@@ -274,6 +281,7 @@ impl Render for Operator {
             .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
             .capture_any_mouse_up(cx.listener(|this, _, _, _| this.drag = None))
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -287,14 +295,14 @@ impl Render for Operator {
                     .flex_shrink_0()
                     .flex()
                     .items_center()
-                    .px_3()
-                    .gap_3()
+                    .px_2()
+                    .gap_1()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Sela"))
-                    .child(div().text_color(rgb(MUTED)).child("Development preview"))
-                    .child(self.button(0, "reset-layout", "Reset layout", cx))
-                    .child(self.button(1, "quit", "Quit · Ctrl+Q", cx)),
+                    .child(self.button(9, "new-menu", "New ▾", cx))
+                    .children(["Open", "Save", "Web", "Remote"].map(|label| div().px_1().text_color(rgb(0x92969c)).child(label)))
+                    .child(div().flex_1())
+                    .children(["Go Live", "Alerts", "Logo", "Black", "Clear", "Live"].map(|label| div().debug_selector(move || label.into()).px_1().text_color(rgb(0x92969c)).child(label))),
             )
             .child(
                 div()
@@ -319,26 +327,7 @@ impl Render for Operator {
                                 right,
                                 true,
                             )))
-                            .child(
-                                div()
-                                    .h(px(32.))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .text_size(px(11.))
-                                    .px_2()
-                                    .border_t_1()
-                                    .border_color(rgb(BORDER))
-                                    .children(["Go Live", "Black", "Clear", "Logo"].map(|label| {
-                                        div()
-                                            .debug_selector(move || label.into())
-                                            .px_1()
-                                            .py_1()
-                                            .text_color(rgb(0x81858b))
-                                            .child(label)
-                                    })),
-                            ),
+                            ,
                     ),
             )
             .when(!self.collapsed, |d| d.child(self.splitter(2, cx)))
@@ -360,7 +349,10 @@ impl Render for Operator {
                             "Collapse resources"
                         },
                         cx,
-                    )),
+                    ))
+                    .child(self.button(1, "quit", "Quit · Ctrl+Q", cx))
+                    .child(self.button(0, "reset-layout", "Reset layout", cx))
+                    .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child("Offline · output unavailable")),
             )
             .when(!self.collapsed, |d| {
                 d.child(
@@ -442,11 +434,11 @@ impl Render for Operator {
                                                 .text_color(rgb(MUTED))
                                                 .child(if self.tab == 0 { "Create, edit and save songs in the song library." } else { "This resource library is not implemented." }),
                                         )
-                                        .when(self.tab == 0, |d| d.child(self.button(8,"open-library","Open song library",cx)))
                                         .children(self.library_error.clone().map(|error| div().text_color(rgb(0xb33232)).child(error))),
                                 ),
                         ),
-                )
+                ).when(self.tab == 0, |d| d.child(div().h(px(30.)).flex_shrink_0().border_t_1().border_color(rgb(BORDER)).child(self.button(8,"open-library","+ New Song",cx))))
             })
+            .when(self.new_menu, |d| d.child(div().absolute().top(px(40.)).left(px(8.)).bg(rgb(SURFACE)).border_1().border_color(rgb(BORDER)).shadow_md().child(self.button(10, "new-song-menu", "New Song", cx))))
     }
 }

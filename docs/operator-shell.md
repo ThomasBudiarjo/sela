@@ -169,3 +169,51 @@ Open qualifications: installed reference observation, Windows/UIA/Narrator,
 physical GPU/display, mixed DPI, screen readers and performance. Text inputs,
 modals, multi-selection and actual navigation/live commands are not implemented
 in this shell; qualify their ownership with their future controls, not here.
+
+## M1-02c — Reference-directed toolbar correction
+
+Implemented-unqualified, local base `231fffb`, branch `ticket/m1-ui-reference`.
+No Painter. Personally fetched and inspected the official marketing interface
+image linked in the reference ledger. One toolbar: **New, Open, Save, Web,
+Remote** left; **Go Live, Alerts, Logo, Black, Clear, Live** right, above Live.
+There is no separate menu row in that image. Its build is not proven 8.0.49.
+Only New is supported in this operator toolbar; other labels are disabled,
+not focusable and have no handlers. Offline/output-unavailable status is explicit.
+The diagnostic color renderer is not connected. Bottom Live buttons are removed.
+
+New opens a small original menu with a real New Song item. Songs has a real
+bottom-left + New Song launcher. Both open a blank draft; the companion M1-05d
+slice supplies the corrected editor. Reset/Quit remain accessible in Resources
+chrome, with existing semantic shortcuts and bounded splitters preserved.
+New joins the existing keyboard traversal after the prior nine controls; its
+menu item follows it only when rendered. Activation returns operator focus to
+the surviving New button before removing the menu, so later Ctrl+Q routes.
+The menu overlays rather than reflows Schedule/Preview/Live/Resources.
+These menu/focus/compact policies are provisional, not installed observations.
+
+Upstream checked before implementation: current HEAD and pinned dependency both
+`a84689073d296dfd39987bc7dd478e43ef76d83a`, confirmed with `git ls-remote`.
+Personally inspected Apache-2.0 `crates/gpui/examples/tab_stop.rs`,
+`crates/gpui/src/elements/div.rs`, `crates/gpui/src/window.rs`,
+`crates/gpui/src/tab_stop.rs` and `crates/gpui/LICENSE-APACHE`. Original GPUI
+Div/control/focus implementation; no GPL application UI, assets or code copied.
+
+- [x] Correct action groups/order; remove bottom Live controls; honest disabled state.
+- [x] Real New menu and Songs +; preserve splitters/collapse/reset/Quit.
+- [x] Actual-tree keyboard/menu/no-reflow tests and inert output assertions.
+- [x] Updated native coordinates without dropping focus/selection pixel assertions;
+  both launch routes and independent editor dirty-close guarantee replayed.
+- [x] Inspect actual normal/New menu/compact/keyboard/drag captures.
+- [ ] Installed 8.0.49, Windows/accessibility/DPI, physical output and performance.
+
+Combined checks with M1-05d: `CARGO_TARGET_DIR=/home/user/workspace/repo/target
+cargo test --locked --all-targets -j4`: **96 passed, 1 ignored child fixture**
+(fixture is invoked by three process tests); both new test names observed.
+Strict all-target Clippy, fmt check, Ruff for both native drivers and diff check
+passed. Build immediately before serial `DISPLAY=:99 VK_DRIVER_FILES=/dev/null
+CARGO_TARGET_DIR=/home/user/workspace/repo/target python3 scripts/operator-shell.py`
+passed, as did song-library driver and native-smoke against the same binary.
+Existing shared X11 services untouched. Retained actual ignored evidence:
+`.amp/in/artifacts/operator-shell/{normal,new-menu,compact,keyboard-collapsed,
+keyboard-reset,drag-minimum,editor-close-guard}.png`. Initial driver detected focus
+on the removed menu item; repaired the implementation, not the exit assertion.

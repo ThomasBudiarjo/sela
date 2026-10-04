@@ -213,7 +213,7 @@ fn assert_control(cx: &mut VisualTestContext, operator: &Entity<Operator>, index
 #[gpui::test]
 fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
     let (mut cx, operator, seen) = fixture(cx);
-    for index in 0..9 {
+    for index in 0..10 {
         cx.simulate_keystrokes("tab");
         assert_control(&mut cx, &operator, index);
         assert_eq!(operator.read_with(&cx, |o, _| o.tab), 0);
@@ -221,8 +221,8 @@ fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab");
     assert_control(&mut cx, &operator, 0);
     cx.simulate_keystrokes("shift-tab");
-    assert_control(&mut cx, &operator, 8);
-    for index in (0..8).rev() {
+    assert_control(&mut cx, &operator, 9);
+    for index in (0..9).rev() {
         cx.simulate_keystrokes("shift-tab");
         assert_control(&mut cx, &operator, index);
     }
@@ -259,6 +259,25 @@ fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn new_menu_is_keyboard_accessible_without_reflowing_panes(cx: &mut TestAppContext) {
+    let (mut cx, operator, _) = fixture(cx);
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    let schedule = cx.debug_bounds("Schedule").unwrap();
+    let live = cx.debug_bounds("Live").unwrap();
+    cx.update(|w, cx| operator.read(cx).controls[9].clone().focus(w, cx));
+    cx.simulate_keystrokes("enter");
+    assert!(cx.debug_bounds("new-song-menu").is_some());
+    assert_eq!(cx.debug_bounds("Schedule").unwrap(), schedule);
+    assert_eq!(cx.debug_bounds("Live").unwrap(), live);
+    cx.simulate_keystrokes("tab");
+    assert_control(&mut cx, &operator, 10);
+    cx.simulate_keystrokes("shift-tab space");
+    assert_control(&mut cx, &operator, 9);
+    assert!(cx.debug_bounds("new-song-menu").is_none());
+    assert_eq!(cx.debug_bounds("Schedule").unwrap(), schedule);
+}
+
+#[gpui::test]
 fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
     let (mut cx, operator, seen) = fixture(cx);
     cx.simulate_resize(size(px(1280.), px(800.)));
@@ -273,8 +292,10 @@ fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
     assert_control(&mut cx, &operator, 2);
     assert!(cx.debug_bounds("Songs").is_none());
     cx.simulate_keystrokes("tab");
+    assert_control(&mut cx, &operator, 9);
+    cx.simulate_keystrokes("tab");
     assert_control(&mut cx, &operator, 0);
-    cx.simulate_keystrokes("shift-tab space");
+    cx.simulate_keystrokes("shift-tab shift-tab space");
     assert_control(&mut cx, &operator, 2);
     assert!(!operator.read_with(&cx, |o, _| o.collapsed));
     cx.simulate_keystrokes("tab");
@@ -282,7 +303,7 @@ fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
     let b = cx.debug_bounds("collapse-resources").unwrap();
     cx.simulate_click(b.center(), Default::default());
     assert_control(&mut cx, &operator, 2);
-    cx.simulate_keystrokes("tab enter");
+    cx.simulate_keystrokes("tab tab enter");
     assert_control(&mut cx, &operator, 0);
     assert!(!operator.read_with(&cx, |o, _| o.collapsed));
     cx.update(|window, cx| window.blur(cx));

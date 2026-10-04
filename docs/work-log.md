@@ -1276,3 +1276,34 @@ PY
   Preparation-intent coordinator, durable epochs, production supervision and
   device-loss handling remain open. Static-color slice is implemented-unqualified;
   M0-06/M0-07/M0-10 are not done and no Black/Clear/Logo semantics were invented.
+
+### M1-02c — Reference-directed toolbar correction — 2026-10-04 UTC
+
+- Implemented-unqualified on `ticket/m1-ui-reference`, LOCAL main `231fffb`
+  (all four non-UI merges), not origin/main. Read instructions/plan/backlog/log.
+  Owner explicitly requested actual UI correction; no Painter, dependency,
+  storage, arrangement or renderer changes. Scoped checklist/provenance in
+  `docs/operator-shell.md`, documented-only evidence D-UI-01 in reference ledger.
+- Personally fetched/inspected official toolbar image: exact left/right action
+  order, right group above Live, no bottom live controls or invented output
+  handlers. Its build is unknown, not verified 8.0.49. Original clean GPUI chrome,
+  preserved pane/splitter geometry; Reset/Quit moved to Resources chrome.
+- Real New menu and bottom Songs + open blank authoring; companion M1-05d follows.
+  New/menu join semantic traversal, menu overlays without reflow. Fixed removed
+  menu-item focus after native replay caught failed operator close. No assertion
+  dropped. Disabled output controls remain inert, no color-diagnostic wiring.
+- Combined slice checks: `CARGO_TARGET_DIR=/home/user/workspace/repo/target cargo
+  test --locked --all-targets -j4`: **96 passed, 1 ignored child fixture** (three
+  process tests invoke it); new test names actually observed. Root sources touched
+  before initial build to defeat shared-worktree stale cache. Strict all-target
+  Clippy (`-D warnings`), fmt, Ruff both drivers, diff check and bin build passed.
+- Serial `DISPLAY=:99 VK_DRIVER_FILES=/dev/null CARGO_TARGET_DIR=/home/user/workspace/repo/target
+  python3 scripts/operator-shell.py`, song-library driver and native-smoke against
+  shared target binary passed. X11 services untouched. Actual normal/New menu/
+  compact/focus/collapse/reset/drag/editor-guard PNGs inspected under
+  `.amp/in/artifacts/operator-shell/`; screenshots are ignored local evidence.
+- Windows/installed8.0.49/accessibility/DPI/physical GPU/display/performance unrun:
+  no suitable reference/hardware environment; no parity or release qualification.
+  Local subticket commit only, no push. Next: retain companion editor correction,
+  parent reviews/reruns integration and consolidates backlog; exact reference
+  interaction and audience qualification gates remain open.

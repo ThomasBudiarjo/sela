@@ -200,3 +200,19 @@ append identified results/artifacts and map only those proven workflows to tests
 Follow with W04/W05 and exhaustive W06; qualify Sela independently with G01 when
 M0-03/M0-08/M0-09 are ready. No installed access, masks, focus, display timing,
 provider rights or parity is inferred from this documentation checkpoint.
+
+## D-UI-01 — Official toolbar image (documented-only, 2026-10-04)
+
+- Source: <https://www.easyworship.com/software/features>; directly fetched and
+  visually inspected <https://cdn.easyworship.com/files/software/features/ew-interface.webp>.
+- Visible single toolbar left New, Open, Save, Web, Remote; right Go Live,
+  Alerts, Logo, Black, Clear, Live, in that order, above the Live pane.
+  No separate menu row is visible. Schedule/Preview/Live span the upper area,
+  tabbed Resources the lower area. Image dimensions 1736×954; not a native
+  measurement or DPI/layout specification. Existing bounded pane ratios remain
+  provisional rather than pretending these pixels prove exact 8.0.49 geometry.
+- **Build unidentified, not proven EasyWorship 8.0.49.** Marketing imagery is
+  documented evidence only, not an installed observation. Shortcuts, focus,
+  menus, masks, selection, output behavior and responsive layout remain unknown.
+- Used to correct M1-02c action placement with original GPUI styling; reference
+  screenshot/song/background assets were not copied into application or fixtures.

@@ -17,8 +17,11 @@ def main():
     artifacts.mkdir(parents=True, exist_ok=True)
     binary = Path(os.environ.get("CARGO_TARGET_DIR", "target")).resolve() / "debug/sela"
     with tempfile.TemporaryDirectory(prefix="sela-shell-") as scratch:
-        env = dict(os.environ, XDG_RUNTIME_DIR=scratch,
-                   XDG_DATA_HOME=str(Path(scratch) / "data"))
+        env = dict(
+            os.environ,
+            XDG_RUNTIME_DIR=scratch,
+            XDG_DATA_HOME=str(Path(scratch) / "data"),
+        )
         with open(Path(scratch) / "app.log", "w") as log:
             app = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
             try:
@@ -119,7 +122,7 @@ def main():
                 capture("normal")
                 pointer(600, 20)  # Keep hover out of keyboard-focus captures.
                 key("Tab")
-                capture("focus-reset", focused=(220, 10))
+                capture("focus-reset", focused=(420, 500))
                 key("Tab", "Tab", "Tab", "Tab")
                 capture(
                     "focus-scriptures-unselected", focused=(80, 528), selected=(20, 554)
@@ -132,11 +135,11 @@ def main():
                 capture("focus-media-selected", focused=(170, 528), selected=(180, 554))
                 key("shift+Tab", "shift+Tab", "shift+Tab", "Return")
                 capture("keyboard-collapsed", focused=(100, 777))
-                key("Tab")
-                capture("collapsed-focus-reset", focused=(220, 10))
+                key("Tab", "Tab")
+                capture("collapsed-focus-reset", focused=(420, 777))
                 key("Return")
-                capture("keyboard-reset", focused=(220, 10), selected=(180, 554))
-                pointer(270, 20)
+                capture("keyboard-reset", focused=(420, 500), selected=(180, 554))
+                pointer(425, 510)
                 time.sleep(0.2)
                 capture("hover-reset")
                 resize(720, 440)
@@ -146,7 +149,7 @@ def main():
                 resize(1280, 800)
                 click(160, 510)
                 capture("collapsed")
-                click(270, 20)  # Reset layout, original top-bar control.
+                click(425, 777)  # Reset remains accessible in Resources chrome.
                 pointer(307, 180)
                 run("xdotool", "mousedown", "1")
                 pointer(50, 180)
@@ -154,10 +157,29 @@ def main():
                 run("xdotool", "mouseup", "1")
                 time.sleep(0.3)
                 capture("drag-minimum")
-                click(25, 539)  # Songs tab, then the real editor launcher.
-                key("Tab", "Tab", "Tab", "Tab", "Tab", "Return")
+                click(25, 539)
+                click(50, 785)  # Real Songs bottom + opens a clean new draft.
                 time.sleep(1)
-                windows = run("xdotool", "search", "--onlyvisible", "--pid", str(app.pid)).splitlines()
+                windows = run(
+                    "xdotool", "search", "--onlyvisible", "--pid", str(app.pid)
+                ).splitlines()
+                assert len(windows) == 2, windows
+                first_editor = next(w for w in windows if w != window)
+                run("xdotool", "windowactivate", "--sync", first_editor)
+                run("xdotool", "key", "--clearmodifiers", "ctrl+q")
+                time.sleep(0.3)
+                assert app.poll() is None
+                assert (
+                    run("xdotool", "search", "--onlyvisible", "--pid", str(app.pid))
+                    == window
+                )
+                click(35, 20)
+                capture("new-menu")
+                key("Tab", "Return")  # Semantic menu item activation.
+                time.sleep(1)
+                windows = run(
+                    "xdotool", "search", "--onlyvisible", "--pid", str(app.pid)
+                ).splitlines()
                 assert len(windows) == 2, windows
                 library = next(w for w in windows if w != window)
                 run("xdotool", "windowactivate", "--sync", library)
@@ -165,12 +187,17 @@ def main():
                 focus()
                 run("xdotool", "key", "--clearmodifiers", "ctrl+q")
                 time.sleep(0.3)
-                assert app.poll() is None, "closing operator must not abandon the editor"
-                assert run("xdotool", "search", "--onlyvisible", "--pid", str(app.pid)) == library
+                assert app.poll() is None, (
+                    "closing operator must not abandon the editor"
+                )
+                assert (
+                    run("xdotool", "search", "--onlyvisible", "--pid", str(app.pid))
+                    == library
+                )
                 window = library
                 key("ctrl+q")
                 capture("editor-close-guard")
-                run("xdotool", "key", "--clearmodifiers", "shift+Tab", "shift+Tab", "Return")
+                click(220, 95)
                 assert app.wait(timeout=10) == 0
                 print(
                     "PASS: native size/focus/survival/exit and independent editor-close guard; keyboard "
