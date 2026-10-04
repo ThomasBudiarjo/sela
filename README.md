@@ -19,6 +19,11 @@ use `target/debug/sela --library /absolute/path/to/library.sqlite` for an explic
 profile. Opening the library creates a local SQLite database. See the
 [song editor guide](docs/song-library.md) for data locations, controls and limits.
 
+Existing schema-1 profiles upgrade to schema 2 only after a verified sibling
+`<profile>.schema1-backup` is created. Preserve that backup: a failed upgrade never
+overwrites it, and retry/recovery may require a fresh profile destination. See the
+[storage contract](docs/storage.md) before testing migration on valuable data.
+
 See [bootstrap and Windows instructions](docs/gpui-bootstrap.md) for dependency
 provenance, prerequisites, verification commands and qualification limits.
 Windows build/native verification and the independent-audience feasibility gate
@@ -55,13 +60,19 @@ records documentation evidence and the still-required Windows observations.
 
 The opt-in [static composition diagnostic](docs/composition-spike.md) prepares
 owned font/image resources and verifies actual GPU text-over-color/image readback.
-It is not yet connected to the native live-output loop or service UI.
+Its composition code is also used by the separate native cue diagnostic, not yet
+by the service UI.
 
 The [native cue diagnostic](docs/delivery.md) now tests bounded cross-process
-static-color commands and native presentation receipts, including stale/failed
-cue retention and restart without replay. It does not deliver lyrics or implement
-Black/Clear/Logo. [Verified backup/restore](docs/storage.md) is available through
+owned text/font/image commands, worker preparation/upload and native presentation
+receipts, including stale/failed/expired cue retention and restart without replay.
+It is not wired to the song editor or Go Live and does not implement Black/Clear/Logo.
+[Verified backup/restore](docs/storage.md) is available through
 the storage worker API, not yet through an operator recovery interface.
+
+Section IDs and named arrangements persist with immutable song revisions and
+survive editor save/load/duplicate/undo. Arrangement-editing controls and audience
+pagination are not yet available; see the [arrangement contract](docs/arrangement.md).
 
 The [operator shell](docs/operator-shell.md) provides separate panes, resizable
 dividers, collapsible Resources and five resource tabs. Songs opens the working

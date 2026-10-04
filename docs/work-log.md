@@ -6,16 +6,16 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
-- Active continuation: **M1-06b** backed-up arrangement/section-ID persistence
-  and lossless editor round trips; **M0-06c/M0-07d** bounded owned resource
-  transport and native prepared composition. Independent worktrees, local commits
-  per slice. Owner permits postponing Windows/physical qualification to the end;
-  available automated checks continue before commits. No gate is marked passed.
+- Latest continuation merged and checked: **M1-06b** backed-up arrangement/
+  section-ID persistence and lossless editor round trips; **M0-06c/M0-07d** owned
+  resource transport and native worker-prepared text/image composition. Individual
+  local commits retained. Owner permits Windows/physical qualification at the end;
+  available automated/native checks continue before commits. No gate is waived.
 - Application: native GPUI technical preview builds and renders on Linux software
   OpenGL, with persistent offline song authoring; no service schedule UI or live
   lyric presentation yet. The Linux preview is reinstalled and native-tested.
-  Opt-in winit/wgpu diagnostics cover independent animation, static-color native
-  cue delivery/receipts and separate explicit-font/image GPU readback.
+  Opt-in winit/wgpu diagnostics cover independent animation, owned text/image
+  native cue delivery/receipts and separate explicit-font/image GPU readback.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
 - Latest parallel wave is merged into local `main`, retaining each subticket:
   **M1-05c** document undo, **M1-01b** verified backup/restore and process-abort
@@ -23,18 +23,18 @@ include timezone for timed hardware/rehearsal evidence.
   native pipes. **M1-02c/M1-05d** correct toolbar/editor placement from documented
   official references; no Painter. Parent regression fixes and combined checks
   are committed. These slices are implemented-unqualified, not completed parents.
-- Next concrete backend slice: M1-06 persistence prerequisite, explicit section
-  IDs and arrangement revisions with a real schema-1 migration gated by verified
-  backup, lossless old-song/schedule recovery and undo adapter tests. Domain IDs
-  must not derive from display labels or vector positions. Renderer work can run
-  separately: bounded owned font/image/text transport and preparation/upload
-  before native Ready/Applied. No current live UI wiring or mask-policy guesses.
+- Next concrete slices: M1-06 arrangement controls and explicit missing-reference
+  repair, followed by reference-directed pagination/fitting. Storage schema 2 and
+  editor undo already retain explicit IDs and variants; do not regenerate them.
+  Renderer can proceed separately with resized-output preparation/retention and
+  production preparation-intent/pre-resolved-safety coordination before wiring
+  live controls. Native preparation is currently FIFO diagnostic, not a proven
+  safety-priority path. No mask-policy guesses or service-ready claims.
 - The owner permits UI implementation before physical renderer qualification;
   this changes sequencing, not reference, hardware or service-ready claims.
-- M0-07a text and M0-07b GPU worktrees are merged into local `main`, retaining
-  their individual subticket commits. Static composition is checked; resume
-  native GPU-readiness/receipt integration next, with observed
-  transition behavior pending reference access.
+- M0-07a/b/c/d text/GPU/video/native-resource slices are locally merged. Native
+  GPU-ready bindings and receipts are checked on software GL; resize, transitions,
+  production performance and physical qualification remain open.
 - M0-02 reference ledger, M0-03 native harness and M0-04 audience spike were
   developed in separate worktrees and merged into local `main`, with ticket
   commits and an M0-04 integration/failure-check checkpoint.
@@ -64,14 +64,14 @@ remain `planned`. Update the current state above when switching work.
 | M0-02 | blocked | Public-source ledger and executable observation runbook; lawful installed 8.0.49/Windows access missing, zero installed observations. |
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, bounded synthetic slow preparation and clean/forced operator exit; Windows physical qualification open. |
-| M0-05 | implemented-unqualified | CPU snapshots and bounded worker tested; shaping/upload, renderer integration and applied-state checks remain. |
-| M0-06 | implemented-unqualified | Ordered model and bounded native static-color IPC/receipts; owned text/images, production coordination and reference mask semantics open. |
-| M0-07 | implemented-unqualified | Explicit-font color/image and decoded FFV1 GPU readback; native integration, transitions and physical qualification open. |
-| M1-01 | implemented-unqualified | Durable song/schedule snapshots, bounded worker, verified backup/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
+| M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
+| M0-06 | implemented-unqualified | Ordered bounded native owned-resource IPC/receipts and failure/expiry retention; production safety coordination/supervision and reference mask semantics open. |
+| M0-07 | implemented-unqualified | Explicit-font/image native worker preparation/submission plus static/FFV1 GPU readback; resized output, transitions, performance and physical qualification open. |
+| M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
 | M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, documented-reference editor and receipt-gated OK; installed-reference/Windows/IME/accessibility qualification open. |
-| M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs and immutable bounded domain with repeated-section tests; persistence/migration, editor integration and pagination open. |
+| M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
 
 ## Session records
@@ -1625,3 +1625,46 @@ PY
   strip or shifted crop. Receipt sequence/pixel checks are executed evidence;
   images alone do not prove timing or physical scanout. No application behavior
   change. Local M0-07d follow-up, no push.
+
+### M1-06b / M0-06c / M0-07d — Merged verification — 2026-10-04 UTC
+
+- Merged both independent worktrees into LOCAL main, preserving all three
+  implementation commits. Only conflict was append-only work-log records; both
+  retained. Parent reviewed migration backup/transaction boundaries, historical
+  payload/ID/arrangement resolution, editor history, bounded wire parsing,
+  preparation queue ownership, GPU-ready bindings and native receipt ordering.
+- Held `/tmp/sela-cargo-continuation.lock`, touched merged src/examples/test roots
+  and observed actual compilation. `cargo test --locked --all-targets -j4`:
+  **112 passed, zero failed, 1 ignored subprocess fixture**, explicitly invoked by
+  four process tests. `cargo clippy --locked --all-targets -j4 -- -D warnings`,
+  `cargo fmt --all -- --check`, `cargo build --locked --all-targets -j4`, Ruff on
+  all three native Python drivers and `git diff --check` passed.
+- Serial `DISPLAY=:99 VK_DRIVER_FILES=/dev/null` runs of
+  `python3 scripts/song-library.py`, `python3 scripts/operator-shell.py` and
+  `scripts/native-smoke.sh "$PWD/target/debug/sela"` passed. Song replay verifies
+  schema2 distinct IDs and retention across structural removal/undo/save against
+  independent SQLite reads, plus existing payload/close/reopen assertions.
+- Native resources driver initially failed under Openbox; fixed and verified
+  actual client coordinates as recorded immediately above. Final run: PASS,
+  15 captures, actual text coverage/asymmetric pixels, identical retained RGB
+  hashes after invalid font, missing glyph, overflow, oversized text, stale and
+  expired cues, fresh restart without replay. Evidence in
+  `.amp/in/artifacts/native-resources-integrated/summary.json` and its PNGs;
+  text-asymmetric-image and expired-retains-text-image personally inspected.
+- Shared GPU helper regression: private temporary XDG runtime, explicit Vulkan
+  llvmpipe, `target/debug/examples/composition_spike <temporary-output> vulkan`
+  passed pixel/color/contain/cover/overflow checks; `target/debug/examples/video_spike
+  <temporary-output>` passed 12 exact ordered RGBA frames, actual-text GPU pixels,
+  missing/corrupt, saturated deadline/cancel and retained-last-frame checks.
+  Disposable outputs removed. These runs are checks, not performance qualification.
+- Reinstalled with `cargo install --path . --locked --offline --debug --bin sela
+  --root "$PWD/.amp/install" -j4`; installed `--version` prints
+  `Sela 0.1.0 (technical preview)`. Installed native-smoke passed Ctrl+Q and WM
+  close. No original profile opened/migrated during testing; fixtures are disposable.
+- README/backlog/current-state and arrangement replay checklist updated. UI layout
+  unchanged; no arrangement controls, pagination or Go Live wiring claimed.
+  Windows/installed reference, real GPU/projector, mixed DPI, accessibility/IME,
+  power-loss/volume faults, production budgets and physical soaks remain open,
+  with final hardware verification postponed at the owner's request.
+- Delivery: local commits and merges only, no push/publication/deployment.
+  Resume arrangement UI/repair or renderer resize/safety coordination as above.

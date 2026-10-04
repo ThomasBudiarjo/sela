@@ -297,10 +297,11 @@ Acceptance: a cue is either ready to apply or rejected without changing live.
 
 Depends on: M0-05. Tests: U, I.
 
-CPU model and M0-06b native static-color IPC slices: [delivery.md](delivery.md).
-Bounded pipes, native submit/present receipts, stale/failure scene retention and
-fresh-epoch/no-replay checks pass. Owned text/image transport, preparation-intent
-coordination, production supervision and reference mask semantics remain open.
+CPU model and M0-06b/c native owned-resource IPC: [delivery.md](delivery.md).
+Bounded font/text/image frames, worker preparation/upload, native submit/present
+receipts, stale/failed/expired scene retention and fresh-epoch/no-replay checks
+pass in the standalone diagnostic. Production preparation-intent coordination,
+pre-resolved safety resources, supervision and reference mask semantics remain open.
 
 - [x] Define sequence/epoch rules, accepted/applied/rejected acknowledgment meanings,
   stale rejection and restart behavior; distinguish submission from visibility.
@@ -323,7 +324,9 @@ Depends on: M0-05, M0-06. Tests: U, R, H, P.
 
 Static diagnostic: [composition-spike.md](composition-spike.md), including actual
 font/GPU readback. [Video diagnostic](video-spike.md) establishes a software
-FFV1/RGBA copy path; native surfaces, transitions and hardware remain open.
+FFV1/RGBA copy path. M0-07d now renders worker-prepared explicit-font text over
+asymmetric images on a native surface, with receipt-correlated retention checks.
+Resized-output preparation, transitions, production budgets and hardware remain open.
 
 - [x] Render text over solid color and still images with explicit logical/physical
   coordinates, aspect fit/crop, alpha and color-space assumptions.
@@ -397,16 +400,17 @@ Depends on: M0-05, M0-10. Tests: U, I.
 M1-01a/b are locally merged as prerequisites to the UI-first exception:
 [storage contract](storage.md). Songs/revisions/schedule snapshots and a bounded
 worker exist. Verified online backup and fresh-profile restore include live WAL
-and actual process-abort tests. Themes/assets/arrangements, real destructive
-upgrades, recovery UI and power-loss qualification remain open. No physical-output
-gate is waived.
+and actual process-abort tests. M1-06b adds schema-2 section IDs/arrangements and
+transactional schema-1 upgrade gated by verified backup, including actual aborted
+migration rollback. Themes/assets, destructive upgrades, recovery UI and power-loss
+qualification remain open. No physical-output gate is waived.
 
 - [ ] Define songs, revisions, arrangements, themes, schedules and asset references;
   document stable IDs and transaction boundaries; media bytes stay outside SQLite.
 - [ ] Add versioned migrations, backups before destructive upgrade and recovery
   behavior for newer/unsupported schema versions.
 - [x] Run database work on bounded background workers with cancellation rules.
-- [ ] Test fresh/old/corrupt database, locked database, disk full, failed migration
+- [x] Test fresh/old/corrupt database, locked database, disk full, failed migration
   and rollback using disposable fixtures.
 - [x] Prove failed writes cannot leave half a committed schedule revision.
 
@@ -498,10 +502,11 @@ library changes. No licensed lyrics required for tests.
 
 Depends on: M1-05, M0-07. Tests: U, R, N.
 
-M1-06a pure immutable [arrangement model](arrangement.md) is locally merged and
-unit-tested, including asymmetric repeated sections and stable occurrence IDs.
-It is not persisted or wired to the editor. Explicit-ID migration, repository
-adapter, UI/undo integration and pagination remain follow-through work.
+M1-06a/b [arrangement model and persistence](arrangement.md) are locally merged:
+immutable exact-revision data, backed-up legacy migration and stable section/
+variant/occurrence IDs. Editor save/load/duplicate/undo round trips preserve them;
+native replay independently verifies section IDs in SQLite. Arrangement editing
+controls, explicit reference repair, pagination and fitting remain open.
 
 - [x] Model ordered section occurrences and arrangement variants without duplicating
   the underlying song or losing occurrence identity.

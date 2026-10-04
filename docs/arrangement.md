@@ -76,7 +76,8 @@ editor integration preserves stored data without introducing arrangement control
   missing references; failed edit preservation; empty/Unicode/exact limits.
 - [x] Persist IDs/variants; backed-up migration retaining old revisions (M1-06b).
 - [x] Editor data selection/undo/save/load preserves IDs and arrangements (GPUI tests).
-- [ ] Native replay of schema-2 editor; native arrangement controls.
+- [x] Native replay of schema-2 editor, independent persisted-ID checks (parent integration).
+- [ ] Native arrangement-editing controls and explicit reference repair.
 - [ ] Reference-observed manual breaks, splitting, pagination/font fitting,
   overflow feedback, fonts/bidi/aspect changes and deterministic layout.
 - [ ] Renderer preparation/acknowledgment isolation and native/Windows/hardware
