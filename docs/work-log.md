@@ -1462,3 +1462,23 @@ PY
   reviews combined contracts and runs integration/native checks. Shared Cargo
   target must be serialized and root-source compilation observed to avoid the
   previously detected stale-worktree artifact reuse. No push authorized.
+
+### M0-06c — Owned resource wire checkpoint — 2026-10-04 UTC
+
+- Resumed renderer continuation on `ticket/m0-06-resources` from parent LOCAL
+  main f161dc3, not origin/main. Read engineering/plan/backlog/work-log,
+  delivery/composition/preparation notes. No main/UI/storage/dependency edits.
+- Added version-2 bounded font/UTF-8/normalized-RGBA transport and immutable
+  worker-only owned reconstruction; v1 color/receipt/Ready remains compatible.
+  Exact schema, per-field/aggregate and channel memory ceiling in delivery.md.
+  Timestamp precedes v2 body transfer and survives queued reconstruction.
+- Serialized shared-target Cargo under `/tmp/sela-cargo-continuation.lock`,
+  touching root sources: `cargo test --locked --lib transport -j4` **6 passed**,
+  including actual image/font byte round trips, truncated/oversized/trailing
+  resource frames and existing 1000-attempt overload/deadline tests. Compilation
+  of this worktree was observed. Cargo fmt executed; native helper slice remains
+  unstaged for the next subticket. All-target attempt exposed native helper-only
+  compile/dead-code issues, being corrected before M0-07d verification.
+- State: implemented-unqualified transport checkpoint, not native resource proof.
+  Next: bounded native worker raster/upload, submit-only bindings, asymmetric
+  text/image retained-state replay; Windows/physical/reference proof stays open.

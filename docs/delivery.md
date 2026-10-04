@@ -228,3 +228,30 @@ renderer preparation worker and nonblocking GPU-ready commit. Reuse composition
 policies/tests but separate its blocking readback path, then extend this driver
 to asymmetric text/image captures and failed-resource retention. Do not wire main
 UI or mark complete feature parity from static-color success.
+
+## M0-06c — Owned resource transport continuation
+
+Version 1 remains byte-compatible for colors/receipts/Ready. Version 2 command
+header is `SCUE`, u8 version=2, u8 kind=1, reserved u16=0, then u32 body length
+(little endian). The first 61 body bytes match v1 command metadata. Background
+tag 0 carries opaque RGBA4; tag 1 carries resource ID u128/revision u64, extent
+u32/u32 and a u32-length normalized straight-alpha RGBA blob. Text tag 0 means
+absent; tag 1 carries font ID/revision, font size u16, length-prefixed UTF-8,
+then length-prefixed face-0 font bytes. No paths, mutable handles or hashes of
+external files cross this boundary. Trailing bytes and unknown tags fail.
+
+Body declarations outside 67..64MiB+128 fail before payload allocation. Per-field
+limits remain 64KiB text, 8MiB font and 64MiB decoded image; aggregate owned
+resources must fit 64MiB. `PreparedCue::from_owned` validates image length,
+capabilities, font parsing and aggregate bounds, **not glyph/layout/GPU readiness**.
+Frame construction and reconstruction are worker-only APIs for resource cues.
+V2 receiver-local budget starts before reading length/body, so body transfer,
+inbound queue and subsequent preparation delay cannot restart it. No shared-clock
+or pipe-before-header deadline guarantee is claimed.
+
+Pipe capacities remain 2 inbound/4 outbound plus executing frames, now each up
+to 64MiB+136 rather than inline 73 bytes. Thus a single endpoint can retain eight
+maximal frames (~512MiB), excluding caller copies, kernel buffers and allocator
+overhead. This explicit diagnostic ceiling is **not** a production RSS target.
+Use Delivery's one-Cue/one-Safety admission; never use the pipe as a work backlog.
+Native readiness and software captures are recorded separately below.
