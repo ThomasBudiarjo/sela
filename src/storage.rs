@@ -51,6 +51,8 @@ pub enum Error {
     Busy,
     Canceled,
     Closed,
+    Exists,
+    Budget,
 }
 impl From<rusqlite::Error> for Error {
     fn from(e: rusqlite::Error) -> Self {
@@ -163,7 +165,173 @@ PRAGMA application_id=1397050433; PRAGMA user_version=1;";
 pub struct Repository {
     db: Connection,
 }
+
+// Private same-filesystem staging. Process termination may leave this directory;
+// it is never a published backup and is never automatically trusted or restored.
+struct Staging(PathBuf);
+impl Drop for Staging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+const MAX_BACKUP_BYTES: i64 = 256 * 1024 * 1024;
+
+fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicBool) -> Result<()> {
+    use rusqlite::backup::{Backup, StepResult};
+    if destination.as_os_str().len() > 4096 || destination.file_name().is_none() {
+        return Err(Error::Invalid);
+    }
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut name = destination.as_os_str().to_owned();
+        name.push(suffix);
+        match std::fs::symlink_metadata(std::path::Path::new(&name)) {
+            Ok(_) => return Err(Error::Exists),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(_) => return Err(Error::Io),
+        }
+    }
+    let app: i64 = source.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+    let version: i64 = source.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if app != APP || version != 1 {
+        return Err(Error::Unsupported);
+    }
+    let page_size: i64 = source.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+    let pages: i64 = source.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+    if pages.saturating_mul(page_size) > MAX_BACKUP_BYTES {
+        return Err(Error::Budget);
+    }
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let nonce: String = source.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
+    let directory = parent.join(format!(".sela-backup-{nonce}"));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&directory).map_err(|_| Error::Io)?;
+    let staging = Staging(directory);
+    let path = staging.0.join("database");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(&path).map_err(|_| Error::Io)?;
+    let mut target = Connection::open(&path)?;
+    target.execute_batch("PRAGMA synchronous=FULL; PRAGMA cache_size=-2048;")?;
+    target.busy_timeout(Duration::from_millis(100))?;
+    let start = std::time::Instant::now();
+    {
+        let backup = Backup::new(source, &mut target)?;
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                return Err(Error::Canceled);
+            }
+            if start.elapsed() >= Duration::from_secs(5) {
+                return Err(Error::Budget);
+            }
+            let step = backup.step(64)?;
+            #[cfg(test)]
+            if std::env::var_os("SELA_ABORT_BACKUP_STEP").is_some() {
+                assert!(matches!(step, StepResult::More));
+                std::process::abort();
+            }
+            if i64::from(backup.progress().pagecount).saturating_mul(page_size) > MAX_BACKUP_BYTES {
+                return Err(Error::Budget);
+            }
+            match step {
+                StepResult::Done => break,
+                StepResult::More => (),
+                StepResult::Busy | StepResult::Locked => return Err(Error::Locked),
+                _ => return Err(Error::Io),
+            }
+        }
+    }
+    // A WAL source can transfer WAL header mode. Convert only the private copy.
+    target.execute_batch("PRAGMA journal_mode=DELETE;")?;
+    target.close().map_err(|(_, e)| Error::from(e))?;
+    let verified = Repository::open(&path)?;
+    verified.verify_history(cancel, start)?;
+    verified.db.close().map_err(|(_, e)| Error::from(e))?;
+    std::fs::File::open(&path)
+        .and_then(|f| f.sync_all())
+        .map_err(|_| Error::Io)?;
+    if cancel.load(Ordering::Acquire) {
+        return Err(Error::Canceled);
+    }
+    // hard_link is atomic no-replace (unlike rename). No fallible operation after
+    // publication affects the reported outcome; directory durability is unqualified.
+    std::fs::hard_link(&path, destination).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::Exists
+        } else {
+            Error::Io
+        }
+    })?;
+    Ok(())
+}
 impl Repository {
+    /// Blocking, worker-only. Publishes a verified standalone database, never overwrites.
+    pub fn backup_new(&self, destination: &std::path::Path, cancel: &AtomicBool) -> Result<()> {
+        copy_new(&self.db, destination, cancel)
+    }
+    /// Read-only input; no migration, reset or in-place recovery. Parent must exist.
+    pub fn restore_new(
+        source: &std::path::Path,
+        destination: &std::path::Path,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        if source.as_os_str().len() > 4096 {
+            return Err(Error::Invalid);
+        }
+        let db = Connection::open_with_flags(
+            source,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        db.busy_timeout(Duration::from_millis(100))?;
+        db.execute_batch("PRAGMA cache_size=-2048;")?;
+        copy_new(&db, destination, cancel)
+    }
+    fn verify_history(&self, cancel: &AtomicBool, start: std::time::Instant) -> Result<()> {
+        let check_budget = || {
+            if cancel.load(Ordering::Acquire) {
+                Err(Error::Canceled)
+            } else if start.elapsed() >= Duration::from_secs(5) {
+                Err(Error::Budget)
+            } else {
+                Ok(())
+            }
+        };
+        // Heads must resolve and positions must describe a contiguous ordered list.
+        if self.db.prepare("SELECT 1 FROM songs s WHERE head<1 OR deleted NOT IN (0,1) OR NOT EXISTS(SELECT 1 FROM song_revisions r WHERE r.id=s.id AND r.revision=s.head) UNION ALL SELECT 1 FROM schedules s WHERE head<1 OR NOT EXISTS(SELECT 1 FROM schedule_revisions r WHERE r.id=s.id AND r.revision=s.head) UNION ALL SELECT 1 FROM items GROUP BY id,revision HAVING min(position)!=0 OR max(position)!=count(*)-1")?.exists([])? {
+            return Err(Error::Corrupt);
+        }
+        let mut statement = self.db.prepare("SELECT payload FROM song_revisions")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            check_budget()?;
+            Song::decode(&row.get::<_, Vec<u8>>(0)?)?;
+        }
+        let mut statement = self
+            .db
+            .prepare("SELECT id,revision FROM schedule_revisions")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            check_budget()?;
+            let id: Vec<u8> = row.get(0)?;
+            self.schedule(Version {
+                id: Id(id.try_into().map_err(|_| Error::Corrupt)?),
+                revision: row.get(1)?,
+            })?;
+        }
+        Ok(())
+    }
     /// Bounded stable-ID pagination; cursor is exclusive, not a search/ranking API.
     pub fn heads(&self, schedules: bool, after: Option<Id>) -> Result<Vec<Version>> {
         let sql = if schedules {
@@ -386,8 +554,16 @@ pub enum Command {
     Song(Version),
     Schedule(Version),
     DeleteSong(Version),
-    Heads { schedules: bool, after: Option<Id> },
+    Heads {
+        schedules: bool,
+        after: Option<Id>,
+    },
     Catalog(Option<Id>),
+    BackupNew(PathBuf),
+    RestoreNew {
+        source: PathBuf,
+        destination: PathBuf,
+    },
 }
 #[derive(Debug)]
 pub enum Reply {
@@ -398,6 +574,7 @@ pub enum Reply {
     Deleted,
     Heads(Vec<Version>),
     Catalog(Vec<(Version, String)>),
+    Copied,
 }
 struct Request {
     command: Command,
@@ -415,6 +592,14 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::DeleteSong(v) => repo.delete_song(v).map(|()| Reply::Deleted),
         Command::Heads { schedules, after } => repo.heads(schedules, after).map(Reply::Heads),
         Command::Catalog(after) => repo.catalog(after).map(Reply::Catalog),
+        Command::BackupNew(path) => repo
+            .backup_new(&path, &request.canceled)
+            .map(|()| Reply::Copied),
+        Command::RestoreNew {
+            source,
+            destination,
+        } => Repository::restore_new(&source, &destination, &request.canceled)
+            .map(|()| Reply::Copied),
     }
 }
 /// Cancellation only wins before the worker starts a command. Always poll its result.
@@ -489,6 +674,13 @@ impl Worker {
             Command::SaveSchedule(_, s) if s.items.len() > MAX_ITEMS || s.title.len() > 1024 => {
                 return Err(Error::Invalid);
             }
+            Command::BackupNew(p) if p.as_os_str().len() > 4096 => return Err(Error::Invalid),
+            Command::RestoreNew {
+                source,
+                destination,
+            } if source.as_os_str().len() > 4096 || destination.as_os_str().len() > 4096 => {
+                return Err(Error::Invalid);
+            }
             _ => (),
         }
         let canceled = Arc::new(AtomicBool::new(false));
@@ -525,6 +717,241 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn backup_restore_history_wal_and_worker() {
+        let (d, p, mut repo) = fixture();
+        repo.db
+            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+            .unwrap();
+        let original = song();
+        let a = repo.save_song(None, original.clone()).unwrap();
+        let mut distinct = song();
+        distinct.sections[0].lyrics = "Asymmetric second occurrence\n三".into();
+        let b = repo.save_song(None, distinct.clone()).unwrap();
+        let snapshot = Schedule {
+            title: "Historical order".into(),
+            items: vec![b, a, b],
+        };
+        let s = repo.save_schedule(None, snapshot.clone()).unwrap();
+        let mut edit = song();
+        edit.title = "Edited".into();
+        let next = repo.save_song(Some(a), edit.clone()).unwrap();
+        repo.delete_song(next).unwrap();
+        let backup = d.path().join("backup");
+        repo.backup_new(&backup, &AtomicBool::new(false)).unwrap();
+        let restored = d.path().join("restored");
+        let mut worker = Worker::open(p).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        let worker_backup = d.path().join("worker-backup");
+        worker
+            .submit(Command::BackupNew(worker_backup.clone()))
+            .unwrap();
+        assert!(matches!(
+            worker.submit(Command::Catalog(None)),
+            Err(Error::Busy)
+        ));
+        assert!(matches!(wait(&mut worker), Ok(Reply::Copied)));
+        worker
+            .submit(Command::RestoreNew {
+                source: backup.clone(),
+                destination: restored.clone(),
+            })
+            .unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Copied)));
+        for path in [backup, restored, worker_backup] {
+            let reopened = Repository::open(&path).unwrap();
+            assert_eq!(reopened.song(a).unwrap(), original);
+            assert_eq!(reopened.song(next).unwrap(), edit);
+            assert_eq!(reopened.heads(false, None).unwrap(), vec![b]);
+            assert_eq!(
+                reopened.schedule(s).unwrap(),
+                (
+                    snapshot.clone(),
+                    vec![distinct.clone(), original.clone(), distinct.clone()]
+                )
+            );
+        }
+    }
+    #[test]
+    fn backup_failures_never_publish_or_replace() {
+        let (d, p, mut repo) = fixture();
+        let cancel = AtomicBool::new(false);
+        let before = std::fs::read(&p).unwrap();
+        assert_eq!(repo.backup_new(&p, &cancel), Err(Error::Exists));
+        assert_eq!(std::fs::read(&p).unwrap(), before);
+        let output = d.path().join("output");
+        std::fs::write(&output, b"retain").unwrap();
+        assert_eq!(repo.backup_new(&output, &cancel), Err(Error::Exists));
+        assert_eq!(std::fs::read(&output).unwrap(), b"retain");
+        std::fs::remove_file(&output).unwrap();
+        let alias = d.path().join("source-alias");
+        std::fs::hard_link(&p, &alias).unwrap();
+        assert_eq!(repo.backup_new(&alias, &cancel), Err(Error::Exists));
+        let sidecar = d.path().join("output-wal");
+        std::fs::write(&sidecar, b"retain sidecar").unwrap();
+        assert_eq!(repo.backup_new(&output, &cancel), Err(Error::Exists));
+        assert_eq!(std::fs::read(&sidecar).unwrap(), b"retain sidecar");
+        std::fs::remove_file(sidecar).unwrap();
+        assert_eq!(
+            repo.backup_new(&output, &AtomicBool::new(true)),
+            Err(Error::Canceled)
+        );
+        let other = Connection::open(&p).unwrap();
+        other.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        assert_eq!(repo.backup_new(&output, &cancel), Err(Error::Locked));
+        other.execute_batch("ROLLBACK").unwrap();
+        let committed = repo.save_song(None, song()).unwrap();
+        // An uncommitted competing writer is excluded, not copied as mixed state.
+        other
+            .execute_batch("BEGIN IMMEDIATE; UPDATE songs SET head=999")
+            .unwrap();
+        repo.backup_new(&output, &cancel).unwrap();
+        assert_eq!(
+            Repository::open(&output)
+                .unwrap()
+                .heads(false, None)
+                .unwrap(),
+            vec![committed]
+        );
+        other.execute_batch("ROLLBACK").unwrap();
+        std::fs::remove_file(&output).unwrap();
+        let v = repo.save_song(None, song()).unwrap();
+        repo.db
+            .execute(
+                "UPDATE song_revisions SET payload=x'ff' WHERE id=?",
+                params![&v.id.0[..]],
+            )
+            .unwrap();
+        assert_eq!(repo.backup_new(&output, &cancel), Err(Error::Corrupt));
+        assert!(!output.exists());
+        {
+            let bytes = b"not sqlite".as_slice();
+            let input = d.path().join("input");
+            std::fs::write(&input, bytes).unwrap();
+            assert_eq!(
+                Repository::restore_new(&input, &output, &cancel),
+                Err(Error::Corrupt)
+            );
+            assert_eq!(std::fs::read(input).unwrap(), bytes);
+        }
+        repo.db.execute_batch("PRAGMA user_version=2").unwrap();
+        drop(repo);
+        let before = std::fs::read(&p).unwrap();
+        assert_eq!(
+            Repository::restore_new(&p, &output, &cancel),
+            Err(Error::Unsupported)
+        );
+        assert_eq!(std::fs::read(&p).unwrap(), before);
+        assert!(!output.exists());
+        assert!(!std::fs::read_dir(d.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".sela-backup-")
+        }));
+    }
+    // Spawn this same test executable: abort skips destructors and SQLite close.
+    #[test]
+    fn process_termination_during_backup_never_publishes() {
+        const CHILD: &str = "SELA_ABORT_BACKUP_STEP";
+        if let Some(directory) = std::env::var_os(CHILD) {
+            let directory = std::path::Path::new(&directory);
+            let repo = Repository::open(&directory.join("source")).unwrap();
+            repo.backup_new(&directory.join("output"), &AtomicBool::new(false))
+                .unwrap();
+            panic!("backup interruption hook did not run");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("source");
+        let mut repo = Repository::open(&path).unwrap();
+        let mut large = song();
+        large.sections[0].lyrics = "x".repeat(200_000);
+        let a = repo.save_song(None, large.clone()).unwrap();
+        repo.save_song(None, large.clone()).unwrap();
+        drop(repo);
+        let before = std::fs::read(&path).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::process_termination_during_backup_never_publishes",
+            ])
+            .env(CHILD, d.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            assert_eq!(status.signal(), Some(6));
+        }
+        assert!(!status.success());
+        assert!(!d.path().join("output").exists());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(Repository::open(&path).unwrap().song(a).unwrap(), large);
+        assert!(std::fs::read_dir(d.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".sela-backup-")
+        }));
+    }
+    #[test]
+    fn process_termination_recovers_committed_and_uncommitted_writes() {
+        const CHILD: &str = "SELA_STORAGE_CRASH_FIXTURE";
+        if let Some(path) = std::env::var_os(CHILD) {
+            let mut repo = Repository::open(std::path::Path::new(&path)).unwrap();
+            let a = repo.save_song(None, song()).unwrap();
+            repo.save_schedule(
+                None,
+                Schedule {
+                    title: "Committed service".into(),
+                    items: vec![a, a],
+                },
+            )
+            .unwrap();
+            repo.db.execute_batch("PRAGMA cache_size=1; BEGIN IMMEDIATE; UPDATE songs SET head=999; DELETE FROM items; INSERT INTO song_revisions SELECT id,999,zeroblob(200000) FROM songs;").unwrap();
+            std::process::abort();
+        }
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("crash");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::process_termination_recovers_committed_and_uncommitted_writes",
+                "--nocapture",
+            ])
+            .env(CHILD, &p)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success());
+        let repo = Repository::open(&p).unwrap();
+        let heads = repo.heads(false, None).unwrap();
+        assert_eq!(heads.len(), 1);
+        assert_eq!(heads[0].revision, 1);
+        assert_eq!(repo.song(heads[0]).unwrap(), song());
+        let schedules = repo.heads(true, None).unwrap();
+        assert_eq!(schedules.len(), 1);
+        assert_eq!(
+            repo.schedule(schedules[0]).unwrap(),
+            (
+                Schedule {
+                    title: "Committed service".into(),
+                    items: vec![heads[0], heads[0]]
+                },
+                vec![song(), song()]
+            )
+        );
+        assert_eq!(
+            repo.db
+                .query_row("SELECT count(*) FROM song_revisions", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
     #[test]
     fn cancellation_before_start_never_writes() {
         let (_d, _p, mut repo) = fixture();

@@ -1057,3 +1057,54 @@ PY
   changes, preserving field editing and saved revision/dirty invariants; inspect
   reference semantics when access is available. Then M1-06 arrangement/pagination.
   Local per-subticket commits only; no push, publication or deployment authorized.
+
+### M1-01b — Verified database backup / restore prerequisite — 2026-10-04 UTC
+
+- **Implemented-unqualified** on `ticket/m1-01-backup`, independent worktree
+  `/home/user/workspace/sela-backup`, based on LOCAL main `2b62c77`, not origin.
+  Read guidance, plan/backlog/work log. Owned only storage implementation/tests,
+  storage contract, existing rusqlite feature and this appended record; no UI,
+  domain module/backlog/index/header edits, new crates or dependency upgrades.
+- Added `BackupNew` / `RestoreNew` and `Copied` on capacity-one Worker;
+  read-only restore input, fresh destination, no current-profile switching,
+  online SQLite consistent committed snapshot including WAL. Private same-parent
+  staging, supported-schema/quick-check/FK/history verification, explicit close
+  and file sync precede atomic no-overwrite hard-link publication. Source and
+  existing destination/aliases/SQLite sidecars are never overwritten.
+- Budgets: 64 pages/step, 256MiB logical DB, cooperative five seconds,
+  100ms lock timeout, 2MiB per connection cache target, 4096-byte paths,
+  historical decode one bounded song/schedule at a time. No hard RSS/disk/OS-I/O
+  deadline. `Locked` fails rather than indefinite retries. Copy cancellation
+  differs from writes: sampled between steps/rows and before publication;
+  cancellation that loses publication race reports actual outcome. Drop detaches.
+- Exact provenance and scoped checklist in `docs/storage.md`: SQLite backup.html,
+  c3ref/backup_finish.html, WAL sections 2–4 and pinned rusqlite 0.40.2 local
+  src/backup.rs. Enabled backup feature only; Cargo.lock unchanged.
+- Executed with `CARGO_TARGET_DIR=/home/user/workspace/repo/target`:
+  `cargo test --locked --lib storage::tests -j2`: **14 passed**;
+  `cargo test --locked --all-targets -j2`: **74 passed**, zero failed/ignored;
+  `cargo clippy --locked --all-targets -j2 -- -D warnings`,
+  `cargo fmt --all -- --check`, `git diff --check`: passed. Initial Clippy
+  single-element test-loop lint corrected without suppression; checks repeated.
+- Four new executed tests cover Unicode original/edit/tombstone revisions and
+  asymmetric B,A,B schedule backup/reopen/worker restore on live WAL; competing
+  uncommitted writer/exclusive lock; content-corrupt verification failure;
+  corrupt/newer restore input byte retention; source/destination/hardlink/sidecar
+  collision and cancellation; bounded worker saturation. Actual child process
+  abort after partial online-backup step leaves no output and unchanged source.
+  Separate actual child abort after committed song/schedule plus cache-spilled
+  uncommitted head/revision/item changes reopens with committed song and ordered
+  schedule intact and uncommitted revision absent. Disposable data only.
+- No power-loss guarantee: directory metadata is not synced; hard-link outcome
+  is authoritative, cleanup best effort. Abort can leave private abandoned staging;
+  post-publication/pre-ack process death means caller outcome unknown, inspect
+  destination rather than overwrite. Trusted local directory/hard-link-capable
+  filesystem required; hostile directory/sidecar races excluded. Windows ACLs,
+  filesystem qualification, sync/volume failure injection, continuous-writer
+  restart stress and measured large-library budgets remain unexecuted.
+- Schema 1 has no actual destructive upgrade: its verified-backup-before-mutation
+  migration gate remains open, not simulated or silently marked done. Parent
+  M1-01/M1-12/M1-13 integration, rotation, recovery UI and portable assets open.
+  Next: parent merge/consolidate checklist; future concrete migration must consume
+  verified backup acknowledgment before mutating and execute its own rollback
+  checks. Local per-subticket commit only; no push/publication/deployment.
