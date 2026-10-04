@@ -1,5 +1,8 @@
 //! Provisional native authoring window. All durable I/O belongs to storage::Worker.
-use crate::{ActivateControl, FocusNext, FocusPrevious, Quit, text_input::TextInput};
+use crate::{
+    ActivateControl, FocusNext, FocusPrevious, Quit,
+    text_input::{Redo, TextInput, Undo},
+};
 use gpui::{prelude::*, *};
 use sela::storage::{Command, Error, Id, Reply, Section, Song, Version, Worker};
 use std::{path::PathBuf, time::Duration};
@@ -68,6 +71,75 @@ fn blank() -> Song {
     }
 }
 
+const HISTORY_LIMIT: usize = 64;
+const HISTORY_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone)]
+struct Document {
+    song: Song,
+    section: usize,
+}
+impl Document {
+    fn bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.song.title.len()
+            + self.song.authors.len()
+            + self.song.copyright.len()
+            + self.song.license.len()
+            + self
+                .song
+                .sections
+                .iter()
+                .map(|s| std::mem::size_of::<Section>() + s.label.len() + s.lyrics.len())
+                .sum::<usize>()
+    }
+}
+#[derive(Default)]
+struct History {
+    undo: Vec<Document>,
+    redo: Vec<Document>,
+}
+impl History {
+    fn trim(&mut self) {
+        while self.undo.len() + self.redo.len() > HISTORY_LIMIT
+            || self
+                .undo
+                .iter()
+                .chain(&self.redo)
+                .map(Document::bytes)
+                .sum::<usize>()
+                > HISTORY_BYTES
+        {
+            if !self.undo.is_empty() {
+                self.undo.remove(0);
+            } else if !self.redo.is_empty() {
+                self.redo.remove(0);
+            } else {
+                break;
+            }
+        }
+    }
+    fn record(&mut self, before: Document) {
+        self.redo.clear();
+        self.undo.push(before);
+        self.trim();
+    }
+    fn step(&mut self, current: Document, redo: bool) -> Option<Document> {
+        let next = if redo {
+            self.redo.pop()
+        } else {
+            self.undo.pop()
+        }?;
+        if redo {
+            self.undo.push(current);
+        } else {
+            self.redo.push(current);
+        }
+        self.trim();
+        Some(next)
+    }
+}
+
 struct Library {
     focus: FocusHandle,
     fields: [Entity<TextInput>; 6],
@@ -83,6 +155,7 @@ struct Library {
     version: Option<Version>,
     draft: Song,
     baseline: Song,
+    history: History,
     section: usize,
     status: String,
     confirm_close: bool,
@@ -91,16 +164,31 @@ struct Library {
 
 impl Library {
     fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
+        // Provisional document shortcuts, scoped to this window; field actions bubble.
+        for modifier in ["ctrl", "cmd"] {
+            cx.bind_keys([
+                KeyBinding::new(&format!("{modifier}-z"), Undo, Some("SongLibrary")),
+                KeyBinding::new(&format!("{modifier}-shift-z"), Redo, Some("SongLibrary")),
+            ]);
+        }
         let fields = std::array::from_fn(|i| {
+            let owner = cx.weak_entity();
             cx.new(|cx| {
-                TextInput::new(
+                let mut input = TextInput::new(
                     "",
                     i == 5,
                     [1024, 4096, 4096, 4096, 256, 256 * 1024][i],
                     20 + i as isize,
                     cx,
                 )
-                .expect("empty text is valid")
+                .expect("empty text is valid");
+                input.use_document_history(move |text, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.field_edit(i, text);
+                        cx.notify();
+                    });
+                });
+                input
             })
         });
         let (worker, pending, status) = match Worker::open(path) {
@@ -124,6 +212,7 @@ impl Library {
             version: None,
             draft: blank(),
             baseline: blank(),
+            history: History::default(),
             section: 0,
             status,
             confirm_close: false,
@@ -166,6 +255,61 @@ impl Library {
     }
     fn dirty(&self, cx: &App) -> bool {
         self.current(cx) != self.baseline
+    }
+    // Called synchronously by the field. Never read the borrowed field here.
+    fn field_edit(&mut self, index: usize, text: &str) {
+        let mut song = self.draft.clone();
+        let value = match index {
+            0 => &mut song.title,
+            1 => &mut song.authors,
+            2 => &mut song.copyright,
+            3 => &mut song.license,
+            4 => match song.sections.get_mut(self.section) {
+                Some(s) => &mut s.label,
+                None => return,
+            },
+            _ => match song.sections.get_mut(self.section) {
+                Some(s) => &mut s.lyrics,
+                None => return,
+            },
+        };
+        *value = text.into();
+        self.record(song);
+    }
+    fn record(&mut self, song: Song) {
+        if song != self.draft {
+            self.history.record(Document {
+                song: self.draft.clone(),
+                section: self.section,
+            });
+            self.draft = song;
+            self.confirm_delete = false;
+        }
+    }
+    fn history(&mut self, redo: bool, cx: &mut Context<Self>) {
+        if self.pending.is_some() {
+            return;
+        }
+        self.record(self.current(cx));
+        if let Some(next) = self.history.step(
+            Document {
+                song: self.draft.clone(),
+                section: self.section,
+            },
+            redo,
+        ) {
+            self.draft = next.song;
+            self.section = next.section;
+            self.confirm_delete = false;
+            self.load_fields(cx);
+            self.status = if redo {
+                "Document redone"
+            } else {
+                "Document undone"
+            }
+            .into();
+            cx.notify();
+        }
     }
     fn may_close(&mut self, cx: &mut Context<Self>) -> bool {
         if self.pending.is_some() {
@@ -214,6 +358,7 @@ impl Library {
     fn begin(&mut self, song: Song, version: Option<Version>, cx: &mut Context<Self>) {
         self.draft = song.clone();
         self.baseline = song;
+        self.history = History::default();
         self.version = version;
         self.section = 0;
         self.confirm_delete = false;
@@ -273,7 +418,11 @@ impl Library {
                 }
             }
             (Some(Pending::Save(song)), Ok(Reply::Saved(v))) => {
-                self.begin(song, Some(v), cx);
+                // Save/duplicate advance only the durable baseline and identity.
+                self.baseline = song;
+                self.version = Some(v);
+                self.confirm_delete = false;
+                self.confirm_close = false;
                 self.cursor = None;
                 self.refresh(cx);
             }
@@ -293,6 +442,7 @@ impl Library {
         if self.pending.is_some() {
             return;
         }
+        self.record(self.current(cx));
         match index {
             0 if self.may_replace(cx) => {
                 self.begin(blank(), None, cx);
@@ -346,28 +496,53 @@ impl Library {
                 if bounded.validate().is_err() {
                     self.status = "Song too large. Shorten this section before switching.".into();
                 } else {
-                    self.draft = song;
+                    let before = Document {
+                        song: song.clone(),
+                        section: self.section,
+                    };
+                    let mut candidate = song;
+                    let mut section = self.section;
                     match index {
-                        5 => self.section = self.section.saturating_sub(1),
+                        5 => section = section.saturating_sub(1),
                         6 => {
-                            self.section =
-                                (self.section + 1).min(self.draft.sections.len().saturating_sub(1))
+                            section = (section + 1).min(candidate.sections.len().saturating_sub(1))
                         }
-                        7 if self.draft.sections.len() < 128 => {
-                            self.draft.sections.push(Section {
-                                label: format!("Section {}", self.draft.sections.len() + 1),
+                        7 if candidate.sections.len() < 128 => {
+                            candidate.sections.push(Section {
+                                label: format!("Section {}", candidate.sections.len() + 1),
                                 lyrics: String::new(),
                             });
-                            self.section = self.draft.sections.len() - 1;
+                            section = candidate.sections.len() - 1;
                         }
-                        8 if !self.draft.sections.is_empty() => {
-                            self.draft.sections.remove(self.section);
-                            self.section = self
-                                .section
-                                .min(self.draft.sections.len().saturating_sub(1));
+                        8 if !candidate.sections.is_empty() => {
+                            candidate.sections.remove(section);
+                            section = section.min(candidate.sections.len().saturating_sub(1));
                         }
                         _ => (),
                     }
+                    if candidate == before.song && section == before.section {
+                        if index == 7 {
+                            self.status = "At most 128 sections. Original unchanged.".into();
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    let mut bounded = candidate.clone();
+                    if bounded.title.trim().is_empty() {
+                        bounded.title = "Untitled".into();
+                    }
+                    if bounded.validate().is_err() {
+                        self.status =
+                            "Section change exceeds the song limit. Original unchanged.".into();
+                        cx.notify();
+                        return;
+                    }
+                    if candidate != before.song {
+                        self.history.record(before);
+                        self.confirm_delete = false;
+                    }
+                    self.draft = candidate;
+                    self.section = section;
                     self.load_fields(cx);
                 }
             }
@@ -467,6 +642,8 @@ impl Render for Library {
             .on_action(cx.listener(|_, _: &FocusNext, w, cx| w.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, w, cx| w.focus_prev(cx)))
             .on_action(cx.listener(|s, _: &Save, w, cx| s.action(1, w, cx)))
+            .on_action(cx.listener(|s, _: &Undo, _, cx| s.history(false, cx)))
+            .on_action(cx.listener(|s, _: &Redo, _, cx| s.history(true, cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -711,6 +888,245 @@ mod tests {
         cx.update(|w, cx| view.update(cx, |v, cx| v.action(index, w, cx)));
     }
 
+    fn edit(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize, text: &str) {
+        let input = view.read_with(cx, |v, _| v.fields[index].clone());
+        cx.update(|w, cx| {
+            input.update(cx, |f, cx| {
+                let end = f.text().encode_utf16().count();
+                f.replace_text_in_range(Some(0..end), text, w, cx);
+                f.focus_handle(cx).focus(w, cx);
+            })
+        });
+    }
+
+    #[gpui::test]
+    fn chronological_document_history_across_navigation_and_structures(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
+        edit(&mut cx, &view, 0, "Café 😀");
+        edit(&mut cx, &view, 5, "First e\u{301}\r\n\n");
+        let first = view.read_with(&cx, |v, cx| v.current(cx));
+        action(&mut cx, &view, 7);
+        edit(&mut cx, &view, 4, "Chorus B");
+        edit(&mut cx, &view, 5, "Second asymmetric 😀\nlast");
+        let two = view.read_with(&cx, |v, cx| v.current(cx));
+        action(&mut cx, &view, 5);
+        let count = view.read_with(&cx, |v, _| v.history.undo.len());
+        cx.simulate_keystrokes("left shift-right");
+        action(&mut cx, &view, 6);
+        action(&mut cx, &view, 5);
+        assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), count);
+        edit(&mut cx, &view, 5, "First changed");
+        action(&mut cx, &view, 8);
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.current(cx).sections[0].clone()),
+            two.sections[1]
+        );
+        // Control-focus and field-focus both resolve the same semantic document action.
+        cx.update(|w, cx| view.read(cx).buttons[8].clone().focus(w, cx));
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx).sections.len()), 2);
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), two);
+        assert_eq!(view.read_with(&cx, |v, _| v.section), 0);
+        cx.simulate_keystrokes("ctrl-shift-z ctrl-shift-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx).sections.len()), 1);
+        cx.simulate_keystrokes("ctrl-z ctrl-z");
+        action(&mut cx, &view, 6);
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.current(cx).sections[1].lyrics.clone()),
+            ""
+        );
+        cx.simulate_keystrokes("ctrl-z ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), first);
+        edit(&mut cx, &view, 1, "Branch author");
+        assert!(view.read_with(&cx, |v, _| v.history.redo.is_empty()));
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.current(cx).authors),
+            "Branch author"
+        );
+        action(&mut cx, &view, 4);
+        assert!(view.read_with(&cx, |v, _| v.history.undo.is_empty()
+            && v.history.redo.is_empty()));
+    }
+
+    #[gpui::test]
+    fn save_duplicate_undo_keep_baseline_version_and_failed_save_history(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let (mut cx, view) = fixture(cx, path.clone());
+        edit(&mut cx, &view, 0, "Saved title");
+        edit(&mut cx, &view, 5, "Saved lyrics");
+        action(&mut cx, &view, 1);
+        // Busy undo cannot modify an in-flight payload.
+        cx.simulate_keystrokes("ctrl-z");
+        wait(&mut cx, &view);
+        let saved = view.read_with(&cx, |v, _| v.version.unwrap());
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(view.read_with(&cx, |v, cx| v.dirty(cx)
+            && v.version == Some(saved)
+            && v.baseline.sections[0].lyrics == "Saved lyrics"));
+        cx.update(|_, cx| view.update(cx, |v, cx| assert!(!v.may_close(cx))));
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert!(!view.read_with(&cx, |v, cx| v.dirty(cx)));
+        // Saving from an undone position must preserve the future branch.
+        cx.simulate_keystrokes("ctrl-z");
+        action(&mut cx, &view, 1);
+        wait(&mut cx, &view);
+        let undone_saved = view.read_with(&cx, |v, _| v.version.unwrap());
+        assert_eq!(view.read_with(&cx, |v, _| v.history.redo.len()), 1);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert!(view.read_with(&cx, |v, cx| v.dirty(cx) && v.version == Some(undone_saved)));
+        action(&mut cx, &view, 1);
+        wait(&mut cx, &view);
+        action(&mut cx, &view, 2);
+        wait(&mut cx, &view);
+        let duplicate = view.read_with(&cx, |v, _| v.version.unwrap());
+        assert_ne!(duplicate.id, saved.id);
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(view.read_with(&cx, |v, cx| v.dirty(cx) && v.version == Some(duplicate)));
+        cx.simulate_keystrokes("ctrl-shift-z");
+        let mut other = Repository::open(&path).unwrap();
+        let baseline = other.song(duplicate).unwrap();
+        other.save_song(Some(duplicate), baseline.clone()).unwrap();
+        edit(&mut cx, &view, 5, "Conflict draft");
+        let before = view.read_with(&cx, |v, _| v.history.undo.len());
+        action(&mut cx, &view, 1);
+        wait(&mut cx, &view);
+        assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), before);
+        assert!(
+            view.read_with(&cx, |v, _| v.status.starts_with("Changed elsewhere")
+                && v.baseline == baseline
+                && v.version == Some(duplicate))
+        );
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), baseline);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.current(cx).sections[0].lyrics.clone()),
+            "Conflict draft"
+        );
+        // Validation failures retain both stacks too.
+        edit(&mut cx, &view, 0, "");
+        action(&mut cx, &view, 1);
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.current(cx).title),
+            "Saved title"
+        );
+        action(&mut cx, &view, 4);
+        cx.update(|_, cx| view.update(cx, |v, cx| v.select(saved, cx)));
+        wait(&mut cx, &view);
+        assert!(view.read_with(&cx, |v, _| v.history.undo.is_empty()
+            && v.history.redo.is_empty()));
+        edit(&mut cx, &view, 1, "New boundary");
+        cx.simulate_keystrokes("ctrl-z");
+        action(&mut cx, &view, 0);
+        assert!(view.read_with(&cx, |v, cx| v.current(cx) == blank()
+            && v.history.undo.is_empty()
+            && v.history.redo.is_empty()
+            && v.version.is_none()));
+    }
+
+    #[test]
+    fn combined_history_count_and_byte_budget() {
+        let mut history = History::default();
+        for n in 0..100 {
+            let mut song = blank();
+            song.title = n.to_string();
+            history.record(Document { song, section: 0 });
+        }
+        assert_eq!(history.undo.len(), HISTORY_LIMIT);
+        assert_eq!(history.undo[0].song.title, "36");
+        let mut song = blank();
+        song.sections[0].lyrics = "😀".repeat(64 * 1024);
+        for _ in 0..100 {
+            history.record(Document {
+                song: song.clone(),
+                section: 0,
+            });
+        }
+        assert!(history.undo.len() < HISTORY_LIMIT);
+        assert!(history.undo.iter().map(Document::bytes).sum::<usize>() <= HISTORY_BYTES);
+        for _ in 0..100 {
+            history.step(
+                Document {
+                    song: song.clone(),
+                    section: 0,
+                },
+                false,
+            );
+        }
+        assert!(history.undo.is_empty());
+        assert!(history.redo.iter().map(Document::bytes).sum::<usize>() <= HISTORY_BYTES);
+        history.record(Document {
+            song: blank(),
+            section: 0,
+        });
+        assert!(history.redo.is_empty());
+    }
+
+    #[gpui::test]
+    fn structural_limits_zero_sections_and_unavailable_save_are_atomic(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().to_path_buf()); // DB open fails, not a writable file.
+        edit(&mut cx, &view, 0, "T");
+        edit(&mut cx, &view, 5, "Retain me 😀");
+        let original = view.read_with(&cx, |v, cx| v.current(cx));
+        let count = view.read_with(&cx, |v, _| v.history.undo.len());
+        action(&mut cx, &view, 1);
+        wait(&mut cx, &view);
+        assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), count);
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
+        cx.simulate_keystrokes("ctrl-z ctrl-shift-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
+        // Real Remove is invoked at control focus, not a soon-hidden lyric field.
+        cx.update(|w, cx| view.read(cx).buttons[8].clone().focus(w, cx));
+        action(&mut cx, &view, 8);
+        assert!(view.read_with(&cx, |v, cx| v.current(cx).sections.is_empty()));
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        action(&mut cx, &view, 7);
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx).sections.len()), 1);
+
+        let mut full = blank();
+        full.title = "T".into();
+        full.sections[0].lyrics = "x".repeat(256 * 1024 - 32);
+        full.validate().unwrap();
+        cx.update(|_, cx| view.update(cx, |v, cx| v.begin(full.clone(), None, cx)));
+        edit(&mut cx, &view, 1, "a");
+        cx.simulate_keystrokes("ctrl-z");
+        let redo = view.read_with(&cx, |v, _| v.history.redo.len());
+        action(&mut cx, &view, 7);
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), full);
+        assert_eq!(view.read_with(&cx, |v, _| v.history.redo.len()), redo);
+        assert_eq!(view.read_with(&cx, |v, _| v.section), 0);
+        // A rejected native edit must not become an undo entry or truncate redo.
+        edit(&mut cx, &view, 0, &"😀".repeat(257));
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), full);
+        assert_eq!(view.read_with(&cx, |v, _| v.history.redo.len()), redo);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx).authors), "a");
+
+        let mut many = blank();
+        many.title = "128 sections".into();
+        many.sections = (0..128)
+            .map(|n| Section {
+                label: n.to_string(),
+                lyrics: format!("unique {n}"),
+            })
+            .collect();
+        cx.update(|_, cx| view.update(cx, |v, cx| v.begin(many.clone(), None, cx)));
+        edit(&mut cx, &view, 0, "Changed");
+        cx.simulate_keystrokes("ctrl-z");
+        action(&mut cx, &view, 7);
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), many);
+        assert_eq!(view.read_with(&cx, |v, _| v.history.redo.len()), 1);
+    }
+
     #[gpui::test]
     fn save_reopen_sections_duplicate_and_close_guard(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
@@ -775,6 +1191,8 @@ mod tests {
             saved,
             "historical content retained"
         );
+        assert!(view.read_with(&cx, |v, _| v.history.undo.is_empty()
+            && v.history.redo.is_empty()));
     }
 
     #[gpui::test]
@@ -801,6 +1219,8 @@ mod tests {
             "My unsaved edit"
         );
         action(&mut cx, &view, 4);
+        edit(&mut cx, &view, 1, "Future author");
+        cx.simulate_keystrokes("ctrl-z");
         latest.authors = "metadata\nnot supported by this editor".into();
         let incompatible = other.save_song(None, latest).unwrap();
         cx.update(|_, cx| view.update(cx, |v, cx| v.select(incompatible, cx)));
@@ -810,5 +1230,13 @@ mod tests {
             "Shared original"
         );
         assert!(view.read_with(&cx, |v, _| v.status.contains("Original unchanged")));
+        assert_eq!(view.read_with(&cx, |v, _| v.history.redo.len()), 1);
+        // Pending load hid fields; restore a rendered contextual focus explicitly.
+        cx.update(|w, cx| view.read(cx).focus.clone().focus(w, cx));
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.current(cx).authors),
+            "Future author"
+        );
     }
 }

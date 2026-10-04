@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Native authoring checks against a disposable profile, not a mock UI."""
 import os
-from pathlib import Path
 import sqlite3
 import struct
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 
 
 def run(*args):
@@ -47,7 +47,7 @@ def main():
                 for _ in range(100):
                     assert app.poll() is None, "application exited during startup"
                     found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
-                                           text=True, capture_output=True, timeout=5)
+                                           text=True, capture_output=True, timeout=5, check=False)
                     if found.stdout.strip():
                         window = found.stdout.splitlines()[0]
                         break
@@ -135,6 +135,31 @@ def main():
                 assert records == expected, records
                 time.sleep(0.3)
                 capture("saved")
+                # Save keeps document history. Undo from Title must undo the
+                # latest lyric edit, not a separate title-field history.
+                click(400, 130)
+                key("ctrl+z")
+                capture("saved-document-undo")
+                key("alt+F4")
+                assert app.poll() is None, "undo after save must make the draft dirty"
+                assert payload(database) == expected
+                key("shift+Tab", "Return")
+                click(400, 130)
+                key("ctrl+shift+z")
+                # Section controls precede fields in the existing tab order:
+                # Title -> Refresh -> Remove. Undo/redo must work at control focus.
+                key("shift+Tab", "shift+Tab", "Return")
+                capture("removed-section")
+                key("ctrl+z", "ctrl+shift+z")
+                key("ctrl+s")
+                time.sleep(0.5)
+                assert payload(database) == [expected[0][:6]], "Remove must remove only Chorus"
+                click(400, 130)
+                key("ctrl+z")
+                capture("restored-section")
+                key("ctrl+shift+z", "ctrl+z", "ctrl+s")
+                time.sleep(0.5)
+                assert payload(database) == expected, "structural undo must restore both distinct sections"
                 click(400, 130)
                 key("ctrl+a")
                 write("Unsaved replacement")
@@ -170,7 +195,7 @@ def main():
                 key("ctrl+q")
                 assert app.wait(timeout=10) == 0
                 assert payload(database) == expected
-                print("PASS: native validation, two-section multiline entry, save, independent SQLite bytes, "
+                print("PASS: native validation, two-section multiline entry, save/document undo/redo, structural undo, independent SQLite bytes, "
                       "WM dirty-close guard, keep editing, discard-close, reopen, resize and clean close")
             finally:
                 if app.poll() is None:
