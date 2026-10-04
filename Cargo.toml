@@ -8,6 +8,7 @@ description = "Offline worship presentation — native feasibility preview"
 repository = "https://github.com/thomasbudiarjo/sela"
 
 [dependencies]
+unicode-segmentation = "=1.13.3"
 rusqlite = { version = "=0.40.2", features = ["bundled", "limits"] }
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 sha2 = "=0.10.9"

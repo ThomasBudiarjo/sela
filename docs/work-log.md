@@ -900,3 +900,68 @@ PY
   ownership and licensing must be documented with the implementation.
 - Local checkpoint only; no push/install/release claim. Windows/reference gates
   remain open; they do not stop approved provisional operator implementation.
+
+### M1-05a — Native text-entry component — 2026-10-04 UTC
+
+- State: **implemented-unqualified**, assigned large bounded component slice on
+  `ticket/m1-05-input` in `/home/user/workspace/sela-input`, based on LOCAL main
+  `3523641`, not origin/main. Read guidance/plan/backlog/work log; owner's UI-first
+  prerequisite approval applies. No Painter, parent M1-05 completion or waived
+  physical/reference gates. No main/operator/storage/lib/backlog/plan/README edits.
+- Owns `src/text_input.rs`, permanent native `examples/input_check.rs`,
+  `docs/text-input.md`, `LICENSE-GPUI-APACHE`, direct pinned unicode-segmentation
+  manifest/root lock entry and this appended record. No dependency upgrades;
+  1.13.3 was already locked. Original buffer/history/logical-row layout; Apache
+  GPUI native handler/custom Element scaffolding attribution/modifications retained.
+- Personally read pinned/current Zed a846890 GPUI examples/input.rs/tab_stop.rs,
+  src/input.rs/text_system.rs/window.rs; current HEAD verified with
+  `git ls-remote https://github.com/zed-industries/zed HEAD`. No GPL editor/ui code
+  or assets copied. API, policies and license boundary in text-input note.
+- Retained Focusable fields; validated atomic load; explicit errors/counter;
+  UTF8/UTF16 clamp/reject policy, fixed composition-relative endpoints,
+  marked underline/unmark notification, anchor/head direction, grapheme movement/
+  collapsed deletion, copy/cut/paste, contextual Enter without root activation,
+  bounded snapshots, real multiline logical rows including trailing empty rows,
+  horizontal/vertical clipped scrolling, caret reveal and scroll-aware IME/hit
+  geometry. No storage/network. Single-line rejects rather than flattens newlines;
+  original Unicode/LF/CRLF preserved, new Enter inserts LF.
+- Verification (`CARGO_TARGET_DIR=/home/user/workspace/repo/target`):
+  `cargo test --locked --all-targets -j4`: **58 passed**, 8 new module tests,
+  zero failed/ignored; `cargo clippy --locked --all-targets -j4 -- -D warnings`,
+  `cargo build --locked --example input_check -j4`,
+  `cargo fmt --all -- --check`, `git diff --check`: passed, repeated after final
+  cut/resize fixes. Formatted code reread. `cmp LICENSE-GPUI-APACHE` against pinned
+  upstream license passed. Initial imported GPUI test macro recursion and paint
+  borrow errors corrected; no suppressions or skipped checks.
+- Tests: nonzero-prefix surrogate+combining IME relative selection and explicit
+  precedence; malformed range/selection atomicity and surrogate clamp; byte budget
+  on both sides with prefix/suffix; line/history count+byte limits; grapheme deletion
+  including scalar-interior caret; CRLF/blank/trailing rows; native callbacks for
+  scrolled hit/range geometry and trailing empty caret; reversed selection/vertical
+  movement; load rollback; clipboard newline policy and real parent action leak
+  negative. Headless callbacks are not an actual IME service session.
+- Native: `DISPLAY=:99 VK_DRIVER_FILES=/dev/null` bounded inline Python subprocess/
+  xdotool driver against shared target's `debug/examples/input_check`; full run
+  passed PID-focus, typing/Tab/Enter, clipboard/errors, undo/redo, horizontal/
+  vertical scroll, scrolled edit, mouse drag, WM close exit 0. Final binary repeat
+  passed native cut/paste Unicode roundtrip, undo/redo, 420×440 resize/selection,
+  close exit 0. Private temp runtime/root captures removed, owned apps reaped;
+  existing Xvfb/Openbox services untouched. First driver failed only because it
+  wrongly required Alt+F4 survival; corrected exit assertion then reran.
+- Inspected actual local ignored `.amp/in/artifacts/input-check/` initial, newline/
+  byte-error, redo, horizontal-scroll, scrolled-edit, mouse-selection, cut-empty,
+  cut-paste-roundtrip and compact-selection PNGs: readable, correct content/error,
+  clipboard preserves 47-byte Unicode/CRLF fixture, empty/trailing caret, clipped
+  long text, revealed edited row, selection aligned to visible rows. Summary
+  JSON separates asserted focus/exit from visual content evidence. Exact manual
+  replay and binary commands are in text-input note; no scratch driver retained.
+- Not run: actual platform IME/dead keys/CJK/dictation, Windows/macOS/Wayland,
+  screen reader/accessibility/mixed DPI/bidi geometry, physical GPU/reference,
+  measured performance/RSS or editor DB/save/close integration. No qualification,
+  performance or parity claim. Snapshot composition is not coalesced; no sticky
+  vertical column, blinking caret, word/double-click selection or soft wrap claim.
+- Next: parent imports module and retains fields, registers contextual bindings,
+  observes counter/text/error, validates combined storage envelope and owns save/
+  close Worker flow. Rerun combined checks/native fixture; execute actual platform
+  IME/accessibility and installed reference checks on authorized native runners.
+- Delivery: coherent local `feat(M1-05a)` subticket commit only; no push/publication.
