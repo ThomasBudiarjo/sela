@@ -1482,3 +1482,50 @@ PY
 - State: implemented-unqualified transport checkpoint, not native resource proof.
   Next: bounded native worker raster/upload, submit-only bindings, asymmetric
   text/image retained-state replay; Windows/physical/reference proof stays open.
+
+### M0-07d — Worker-prepared native text/image submission — 2026-10-04 UTC
+
+- Added bounded native worker (one executing/one waiting/one completion), owned
+  reconstruction/font shaping/raster/upload outside event callbacks and shared
+  `ReadyComposition` bindings. Existing offscreen `render` still performs diagnostic
+  readback; native `submit_native` never invokes it. Upload staging flush and <=2s
+  GPU completion wait occur only on worker; upload failure retires, no retry loop.
+- GPU-ready admission retains RendererSession FIFO/epoch/duplicate/deadline
+  enforcement; Applied only follows Queue::submit/native notify/present. Added
+  ordered Busy rejection for saturated preparation. Resource deadline includes
+  body transfer, queue, preparation/upload and result wait. Valid resource-size
+  framing allowance corrected to +160 bytes (image+text metadata requires 133).
+- Exact final verification, under shared-target flock with touched sources and
+  actual compilation: `cargo test --locked --all-targets -j4` **105 passed,
+  1 ignored child fixture** (four process tests execute it); strict
+  `cargo clippy --locked --all-targets -j4 -- -D warnings`,
+  `cargo fmt --all -- --check`, `cargo build --locked --example native_cues -j4`,
+  `uvx ruff check scripts/native-cues.py`, `git diff --check` all passed.
+  Eight transport tests include source/text/image/aggregate byte boundaries,
+  malformed/truncated/trailing framing, queued v2 expiry, exact owned font/image
+  bytes and 1000 overload rejections retaining revision23. New real-child test
+  checks actual UTF-8/font/asymmetric RGBA across pipes; no fake Applied there.
+- `DISPLAY=:102 VK_DRIVER_FILES=/dev/null CARGO_TARGET_DIR=/home/user/workspace/repo/target
+  python3 scripts/native-cues.py --backend gl --out
+  .amp/in/artifacts/native-resources-final` passed twice during final development;
+  last pass includes fatal-upload retirement code. Dedicated supervised
+  `sela-resources-xvfb`, 1024×768, Mesa22.3.6/llvmpipe LLVM15 CPU GL, was stopped
+  afterward; no shared :99 service/input/focus touched. Fifteen native client
+  PNGs, receipt timestamps, pixel samples and full RGB hashes plus adapter logs
+  persist in that ignored artifact directory. Actual text/image and expired
+  retention captures inspected: readable Signal café/Beacon, six asymmetric tiles,
+  no clipped glyph/row corruption. Driver checks six colors, real white coverage,
+  identical retained RGB after missing glyph, overflow, invalid font, oversized
+  text, stale sequence and 1ms expiry; retired resource epoch/startup no replay.
+- State: implemented-unqualified diagnostic resource slice, not main operator
+  wiring, installed-reference parity or physical output. Explicit channel/CPU/GPU
+  ceilings and stricter native text limits/provenance in owner notes. Resize keeps
+  owned resources but requires new-extent preparation; visible resized retention
+  unqualified. Upload/device-loss/watchdog fault injection, measured memory/frame
+  pacing, Windows/DX12/Metal, physical GPU/display, mixed DPI and reference remain
+  unrun. No dependency/GPUI/Painter/storage/editor changes or push.
+- Parent next: merge local resource subtickets, preserve append-only log records,
+  consolidate central backlog/current state, touch merged root sources under
+  flock and rerun integration plus serial native/operator regressions. Continue
+  production intent/pre-resolved safety coordinator and resize preparation before
+  live-control wiring; do not close parent M0 gates from software-native captures.

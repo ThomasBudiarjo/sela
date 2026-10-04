@@ -23,6 +23,12 @@ pub struct Compositor {
     info: wgpu::AdapterInfo,
 }
 
+/// Renderer-owned bindings uploaded on the preparation worker, not read back.
+#[allow(dead_code)] // Used by native_cues; offscreen examples share this module.
+pub struct ReadyComposition {
+    bindings: wgpu::BindGroup,
+}
+
 fn byte_len(size: Extent, cap: u32) -> Result<usize> {
     if size.width == 0
         || size.height == 0
@@ -103,6 +109,20 @@ impl Compositor {
         let info = adapter.get_info();
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+        Ok(Self::from_device(
+            device,
+            queue,
+            info,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        ))
+    }
+
+    pub fn from_device(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        info: wgpu::AdapterInfo,
+        format: wgpu::TextureFormat,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("static composition"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -120,7 +140,7 @@ impl Compositor {
                 module: &shader,
                 entry_point: Some("fs"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::TextureFormat::Rgba8UnormSrgb.into())],
+                targets: &[Some(format.into())],
             }),
             primitive: Default::default(),
             depth_stencil: None,
@@ -128,12 +148,12 @@ impl Compositor {
             multiview_mask: None,
             cache: None,
         });
-        Ok(Self {
+        Self {
             device,
             queue,
             pipeline,
             info,
-        })
+        }
     }
 
     pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
@@ -173,6 +193,105 @@ impl Compositor {
             },
             texture.size(),
         );
+    }
+
+    /// Validation/allocation/upload only; invoke on a bounded worker. No readback.
+    #[allow(dead_code)] // Native entry point, unused by offscreen examples.
+    pub fn prepare_native(
+        &self,
+        size: Extent,
+        background: Image<'_>,
+        alpha: &[u8],
+        fit: Fit,
+    ) -> Result<ReadyComposition> {
+        validate(
+            size,
+            &background,
+            alpha,
+            self.device.limits().max_texture_dimension_2d,
+        )?;
+        let image_size = Extent {
+            width: background.width,
+            height: background.height,
+        };
+        let image = self.texture(
+            image_size,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        let mask = self.texture(
+            size,
+            wgpu::TextureFormat::R8Unorm,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        self.upload(&image, background.rgba, background.width * 4);
+        self.upload(&mask, alpha, size.width);
+        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: true,
+        });
+        {
+            let mut data = uniform.get_mapped_range_mut(..);
+            for (i, value) in rectangle(size, image_size, fit).into_iter().enumerate() {
+                data.slice(i * 4..i * 4 + 4)
+                    .copy_from_slice(&value.to_ne_bytes());
+            }
+        }
+        uniform.unmap();
+        let image_view = image.create_view(&Default::default());
+        let mask_view = mask.create_view(&Default::default());
+        let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&image_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&mask_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform.as_entire_binding(),
+                },
+            ],
+        });
+        // write_texture stages until submit. Flush and bound this worker's
+        // in-flight upload staging before exposing readiness; NEVER in redraw.
+        let upload = self.queue.submit([]);
+        self.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(upload),
+            timeout: Some(Duration::from_secs(2)),
+        })?;
+        Ok(ReadyComposition { bindings })
+    }
+
+    /// Nonblocking encode/submit boundary. No upload, wait, map or readback.
+    #[allow(dead_code)] // Native entry point, unused by offscreen examples.
+    pub fn submit_native(&self, view: &wgpu::TextureView, ready: &ReadyComposition) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &ready.bindings, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit([encoder.finish()]);
     }
 
     /// Blocking GPU completion/readback, for diagnostics on a worker only.

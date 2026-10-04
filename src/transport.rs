@@ -20,7 +20,7 @@ const COMMAND: u8 = 1;
 const ACK: u8 = 2;
 const READY: u8 = 3;
 const MAX_BODY: usize = 65;
-pub const MAX_RESOURCE_BODY: usize = crate::scene::MAX_SCENE_BYTES + 128;
+pub const MAX_RESOURCE_BODY: usize = crate::scene::MAX_SCENE_BYTES + 160;
 
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "Invalid cue protocol frame")
@@ -156,6 +156,7 @@ impl Frame {
             return Err(invalid());
         }
         let mut f = Self::new(COMMAND);
+        f.bytes.reserve_exact(command.cue().resource_bytes() + 160);
         f.bytes[4] = 2;
         f.bytes[6..8].fill(0);
         f.bytes.truncate(HEADER + 61);
@@ -209,8 +210,8 @@ impl Frame {
         }
         Ok(stamp)
     }
-    /// Relative renderer-local budget starts when the worker finishes reading
-    /// the frame (including inbound channel delay, but not OS pipe transit).
+    /// Relative budget starts after v1 read, or before v2 length/body transfer.
+    /// Queue/preparation delay never restarts it; pre-header transit is excluded.
     /// Controller's original acknowledgment deadline bounds end-to-end uncertainty.
     pub fn into_command(self, now: Instant, caps: RendererCapabilities) -> io::Result<Command> {
         if self.bytes[5] != COMMAND {
@@ -385,7 +386,7 @@ fn get_stamp(b: &[u8]) -> Stamp {
     }
 }
 
-/// Two bounded workers. At most two inbound and four outbound inline frames,
+/// Two bounded workers. At most two inbound and four outbound owned frames,
 /// plus one executing per worker. No unbounded event/log queue. Dropping this
 /// handle does not join potentially stuck OS I/O: owner must terminate/reap the
 /// child and retire its pipes before creating another session.
@@ -763,6 +764,15 @@ mod tests {
                 decoded.cue().resource_bytes(),
                 command.cue().resource_bytes()
             );
+            let queued = Frame::read(wire.as_slice()).unwrap();
+            let later = queued.received_at.unwrap() + Duration::from_secs(6);
+            let mut renderer = RendererSession::new(Epoch(42));
+            assert_eq!(
+                renderer
+                    .accept(queued.into_command(later, caps).unwrap(), later)
+                    .outcome,
+                Outcome::Rejected(DeliveryError::TimedOut)
+            );
             if let Some(text) = decoded.cue().text() {
                 assert_eq!(text.content(), "Original diagnostic text");
                 assert_eq!(text.font(), command.cue().text().unwrap().font());
@@ -789,5 +799,118 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn owned_resource_validation_and_aggregate_budget() {
+        use crate::scene::{MAX_SCENE_BYTES, MAX_SOURCE_BYTES, MAX_TEXT_BYTES, PrepareError};
+        let version = ContentVersion {
+            id: 71,
+            revision: 13,
+        };
+        let extent = Extent {
+            width: 641,
+            height: 360,
+        };
+        let caps = RendererCapabilities {
+            max_texture_dimension: 8192,
+        };
+        let construct =
+            |background, text| PreparedCue::from_owned(version, extent, background, text, caps);
+        for (font, text, expected) in [
+            (
+                b"OTTOgarbage".to_vec(),
+                "Signal".to_owned(),
+                PrepareError::InvalidFont,
+            ),
+            (
+                vec![0; MAX_SOURCE_BYTES + 1],
+                "Signal".to_owned(),
+                PrepareError::TooLarge,
+            ),
+            (
+                vec![],
+                "A".repeat(MAX_TEXT_BYTES + 1),
+                PrepareError::TooLarge,
+            ),
+        ] {
+            assert_eq!(
+                construct(
+                    PreparedBackground::Color([17, 53, 99, 255]),
+                    Some((text, version, font.into(), 32))
+                )
+                .err(),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            construct(
+                PreparedBackground::Image {
+                    version,
+                    extent: Extent {
+                        width: 3,
+                        height: 2
+                    },
+                    rgba: vec![0; 23].into(),
+                },
+                None
+            )
+            .err(),
+            Some(PrepareError::InvalidImage)
+        );
+        let font = include_bytes!("../tests/fixtures/DejaVuSans.ttf");
+        assert_eq!(
+            construct(
+                PreparedBackground::Image {
+                    version,
+                    extent: Extent {
+                        width: 4096,
+                        height: 4096
+                    },
+                    rgba: vec![0; MAX_SCENE_BYTES].into(),
+                },
+                Some(("Signal".into(), version, font.as_slice().into(), 32))
+            )
+            .err(),
+            Some(PrepareError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn preparation_overload_consumes_identity_without_replacing_live() {
+        let now = Instant::now();
+        let mut renderer = RendererSession::new(Epoch(42));
+        renderer.accept(command(), now);
+        renderer.present(now, |_| Ok(())).unwrap();
+        for sequence in 2..1002 {
+            let stamp = Stamp {
+                epoch: Epoch(42),
+                sequence,
+            };
+            assert_eq!(
+                renderer.reject_overload(stamp).outcome,
+                Outcome::Rejected(DeliveryError::Busy)
+            );
+            assert_eq!(renderer.applied().unwrap().version().revision, 23);
+            assert!(renderer.pending().is_none());
+        }
+        assert_eq!(
+            renderer
+                .reject_overload(Stamp {
+                    epoch: Epoch(42),
+                    sequence: 1001
+                })
+                .outcome,
+            Outcome::Rejected(DeliveryError::Stale)
+        );
+        assert_eq!(
+            renderer
+                .reject_overload(Stamp {
+                    epoch: Epoch(99),
+                    sequence: 1002
+                })
+                .outcome,
+            Outcome::Rejected(DeliveryError::WrongEpoch)
+        );
     }
 }

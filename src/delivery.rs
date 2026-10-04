@@ -301,13 +301,22 @@ impl RendererSession {
     /// A structurally framed command failed renderer-owned resource validation.
     /// Consume its ordering identity without touching pending/applied resources.
     pub fn reject_preparation(&mut self, stamp: Stamp) -> Acknowledgment {
+        self.reject_before_admission(stamp, DeliveryError::RenderFailed)
+    }
+
+    /// Bounded preparation queue was saturated. No eviction or retry queue.
+    pub fn reject_overload(&mut self, stamp: Stamp) -> Acknowledgment {
+        self.reject_before_admission(stamp, DeliveryError::Busy)
+    }
+
+    fn reject_before_admission(&mut self, stamp: Stamp, reason: DeliveryError) -> Acknowledgment {
         let error = if stamp.epoch != self.epoch {
             DeliveryError::WrongEpoch
         } else if stamp.sequence <= self.consumed {
             DeliveryError::Stale
         } else {
             self.consumed = stamp.sequence;
-            DeliveryError::RenderFailed
+            reason
         };
         Acknowledgment {
             stamp,

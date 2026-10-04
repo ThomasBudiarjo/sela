@@ -4,7 +4,7 @@ use sela::{
     delivery::{
         Acknowledgment, Delivery, DeliveryError, Epoch, Lane, LiveState, Outcome, RendererSession,
     },
-    scene::{ContentVersion, Extent, PreparedCue, RendererCapabilities},
+    scene::{ContentVersion, Extent, PreparedBackground, PreparedCue, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
 use std::{
@@ -32,7 +32,33 @@ fn pipe_child() {
         let stamp = frame.command_stamp().unwrap();
         let now = Instant::now();
         let ack = match frame.into_command(now, CAPS) {
-            Ok(command) => session.accept(command, now),
+            Ok(command) => {
+                if mode == "resources" {
+                    let cue = command.cue();
+                    let text = cue.text().unwrap();
+                    assert_eq!(text.content(), "Signal café\nBeacon");
+                    assert_eq!(
+                        text.font_version(),
+                        ContentVersion {
+                            id: 71,
+                            revision: 13
+                        }
+                    );
+                    assert_eq!(text.font(), include_bytes!("fixtures/DejaVuSans.ttf"));
+                    let PreparedBackground::Image { rgba, extent, .. } = cue.background() else {
+                        panic!("lost image")
+                    };
+                    assert_eq!(
+                        *extent,
+                        Extent {
+                            width: 3,
+                            height: 2
+                        }
+                    );
+                    assert_eq!(rgba.as_ref(), &(1..=24).collect::<Vec<u8>>());
+                }
+                session.accept(command, now)
+            }
             Err(_) => session.reject_preparation(stamp),
         };
         Frame::acknowledgment(ack).write(std::io::stderr()).unwrap();
@@ -202,4 +228,56 @@ fn stalled_child_timeout_disconnect_and_fresh_session_no_replay() {
     let mut fresh = Delivery::new(Epoch(43));
     assert!(fresh.take_next().is_none());
     assert_eq!(fresh.live(), LiveState::Unknown);
+}
+
+#[test]
+fn actual_child_owned_font_text_asymmetric_image() {
+    let (_child, pipes) = spawn("resources");
+    receive(&pipes).into_ready().unwrap();
+    let resource_version = ContentVersion {
+        id: 71,
+        revision: 13,
+    };
+    let cue = PreparedCue::from_owned(
+        ContentVersion {
+            id: 19,
+            revision: 23,
+        },
+        Extent {
+            width: 641,
+            height: 360,
+        },
+        PreparedBackground::Image {
+            version: resource_version,
+            extent: Extent {
+                width: 3,
+                height: 2,
+            },
+            rgba: (1..=24).collect::<Vec<u8>>().into(),
+        },
+        Some((
+            "Signal café\nBeacon".into(),
+            resource_version,
+            include_bytes!("fixtures/DejaVuSans.ttf").as_slice().into(),
+            32,
+        )),
+        CAPS,
+    )
+    .unwrap();
+    let now = Instant::now();
+    let mut delivery = Delivery::new(Epoch(42));
+    delivery
+        .submit(Arc::new(cue), Lane::Cue, now, now + Duration::from_secs(2))
+        .unwrap();
+    pipes
+        .try_send(Frame::command(&delivery.take_next().unwrap(), now).unwrap())
+        .unwrap();
+    assert_eq!(
+        receive(&pipes).into_acknowledgment().unwrap().outcome,
+        Outcome::Accepted
+    );
+    assert_eq!(
+        receive(&pipes).into_acknowledgment().unwrap().outcome,
+        Outcome::Rejected(DeliveryError::RenderFailed)
+    );
 }
