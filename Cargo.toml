@@ -16,6 +16,9 @@ zlog = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd3
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["wayland", "x11"] }
 
 [dev-dependencies]
+winit = "=0.30.12"
+wgpu = "=29.0.4"
+pollster = "=0.4.0"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["test-support"] }
 
 [profile.dev]
