@@ -4,8 +4,8 @@ State: **implemented-unqualified** subticket; no production backend decision,
 transition/video implementation, physical display or EasyWorship parity claim.
 Depends on local M0-05/M0-06 contracts, not an assumption that origin has them.
 Only `examples/composition/gpu.rs` and documentation belong to this slice.
-The integrator owns the permanent example, explicit-font mask integration and
-parent checklist; the temporary example used below was removed before commit.
+The permanent [composition example](composition-spike.md) now integrates the
+explicit-font mask; the temporary example used below was removed before commit.
 
 ## API and pixel policy
 
@@ -125,37 +125,9 @@ passed**, including two new GPU-free module tests. Initial successful GPU run
 without private XDG directory printed two runtime warnings; private-runtime reruns
 passed without them. No global environment mutation inside the module.
 
-To reproduce after removal (until permanent parent harness is assembled), create
-a disposable `examples/compose_gpu_check.rs` with this entry point, run the same
-commands and remove only that file afterward:
-
-```rust
-#[path = "composition/gpu.rs"]
-mod gpu;
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let c = gpu::Compositor::new(wgpu::Backends::VULKAN)?;
-    println!("{:?}", c.adapter_info());
-    c.check_readback()?;
-    let size = sela::scene::Extent { width: 321, height: 180 };
-    let mut alpha = vec![0; (size.width * size.height) as usize];
-    for y in 40..140 { for x in 65..150 {
-        if !(80..=134).contains(&x) || (82..98).contains(&y) {
-            alpha[(y * size.width + x) as usize] = 255;
-        }
-    }}
-    for y in 45..135 { for x in 200..230 {
-        alpha[(y * size.width + x) as usize] = 128;
-    }}
-    let source = [255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,128];
-    let pixels = c.render(size, gpu::Image { width: 2, height: 2, rgba: &source },
-        &alpha, gpu::Fit::Contain)?;
-    std::fs::create_dir_all(".amp/in/artifacts")?;
-    image::save_buffer(".amp/in/artifacts/m0-07b-gpu.png", &pixels,
-        size.width, size.height, image::ColorType::Rgba8)?;
-    println!("PASS GPU checks; PNG saved (321x180)");
-    Ok(())
-}
-```
+Reproduce the retained pixel assertions using the permanent command in
+[composition-spike.md](composition-spike.md). It calls `check_readback()` before
+rendering actual text. There is no need to recreate a disposable harness.
 
 Reviewed `.amp/in/artifacts/m0-07b-gpu.png` via media inspection: centered 2x2
 image with black sidebars, red/green/blue/muted-yellow quadrants, opaque white
@@ -166,10 +138,10 @@ shaping claim until parent integrates the parallel explicit-font CPU raster.
 
 ## Integration and open qualification
 
-Declare `#[path = "composition/gpu.rs"] mod gpu;` in the common Cargo example;
-then its unit tests run under ordinary all-target checks. Call `check_readback`
-only in explicit GPU diagnostic mode, and `render` with rasterizer's exact-size
-mask. Parent owns final rendered text fixtures/goldens, checklist and harness.
+The common Cargo example includes this module, so its unit tests now run under
+ordinary all-target checks. `check_readback` runs only in explicit GPU diagnostic
+mode; `render` receives the rasterizer's exact-size mask. The parent integration
+note records actual-font checks; reviewed cross-platform goldens remain open.
 Source and destination transition lifetime, observed cuts/fades, video surfaces,
 Windows DX12, physical GPU/display/scanout, hotplug/device failure, native E2E,
 timing/CPU/GPU/memory measurement and backend selection remain unrun/open.

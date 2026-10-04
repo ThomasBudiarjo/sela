@@ -314,9 +314,12 @@ live; safety delivery has an explicit bound and no unbounded queue.
 
 Depends on: M0-05, M0-06. Tests: U, R, H, P.
 
-- [ ] Render text over solid color and still images with explicit logical/physical
+Static diagnostic: [composition-spike.md](composition-spike.md), including actual
+font/GPU readback. Native integration, transitions/video and hardware remain open.
+
+- [x] Render text over solid color and still images with explicit logical/physical
   coordinates, aspect fit/crop, alpha and color-space assumptions.
-- [ ] Establish shaping/font fallback/line-break ownership and deterministic
+- [x] Establish shaping/font fallback/line-break ownership and deterministic
   reference fonts; include non-ASCII and overflow fixtures.
 - [ ] Implement cut/fade and interrupted-transition behavior from observations;
   retain immutable source/destination scenes for the required lifetime.

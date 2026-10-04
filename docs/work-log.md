@@ -8,11 +8,16 @@ include timezone for timed hardware/rehearsal evidence.
 
 - Application: native GPUI technical preview builds and renders on Linux software
   OpenGL; no service authoring or lyric presentation yet. An opt-in winit/wgpu
-  audience-process diagnostic has measured independent animation.
+  audience-process diagnostic has measured independent animation; a separate
+  static composition example now verifies explicit-font GPU readback.
 - M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
 - Active continuation: **M0-07** composition spike after the M0-05/M0-06 CPU
   contract checkpoints. The user asked to continue; this extends M0 feasibility,
   not a production backend choice or waiver of the Windows/reference/M0-10 gate.
+- M0-07a text and M0-07b GPU worktrees are merged into local `main`, retaining
+  their individual subticket commits. Static composition is checked; resume
+  native GPU-readiness/receipt integration and decoder interop next, with observed
+  transition behavior pending reference access.
 - M0-02 reference ledger, M0-03 native harness and M0-04 audience spike were
   developed in separate worktrees and merged into local `main`, with ticket
   commits and an M0-04 integration/failure-check checkpoint.
@@ -43,7 +48,7 @@ remain `planned`. Update the current state above when switching work.
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, bounded synthetic slow preparation and clean/forced operator exit; Windows physical qualification open. |
 | M0-05 | implemented-unqualified | CPU snapshots and bounded worker tested; shaping/upload, renderer integration and applied-state checks remain. |
 | M0-06 | implemented-unqualified | Bounded ordered model with reserved capacity and receipt tests; IPC, native integration and reference mask semantics open. |
-| M0-07 | active | Next: explicit-font static composition/readback spike; transitions/reference/video and GPU qualification remain open. |
+| M0-07 | implemented-unqualified | Explicit-font color/image contain/cover GPU readback; native integration, transitions/video and physical qualification open. |
 
 ## Session records
 
@@ -564,3 +569,46 @@ PY
   mask into `render`; rerun all-target checks and inspect actual font frames.
 - Delivery: local `feat(M0-07b): add offscreen GPU composition and readback`
   commit; no push/publication/backend selection or waived qualification.
+
+### M0-07 — Parallel integration and actual-font GPU frames — 2026-10-04 UTC
+
+- Merged text/GPU worktrees via separate merge commits; only conflict was two
+  appended work-log records, both retained. Reviewed both implementations and
+  dependency diff. Added permanent `composition_spike` example linking the actual
+  M0-05 preparer, explicit-font worker and GPU composition; no fake web UI or
+  optimistic M0-06 rendering acknowledgment. README and module handoffs now link
+  [composition-spike.md](composition-spike.md) instead of requiring scratch code.
+- `cargo test --locked --all-targets -j 8`: **27 passed**, 0 failed/ignored.
+  `cargo clippy --locked --all-targets -j 8 -- -D warnings`,
+  `cargo build --locked --all-targets -j 8`, `cargo fmt --all -- --check`, diff and
+  inline documentation checks passed. Initial format-macro compile typo fixed;
+  Clippy's const-expression chunk autofix produced invalid syntax and rolled
+  itself back; corrected the const generic braces manually and reran strict checks.
+  Final code/formatter output reread.
+- R: `XDG_RUNTIME_DIR="$runtime" target/debug/examples/composition_spike
+  .amp/in/artifacts/composition vulkan` passed twice, with private mktemp runtime
+  removed afterward. Full per-pixel GPU checks plus actual white-font mask and
+  uncovered-background checks. Both source image/font files removed before
+  rendering. Overflow fixture rejected, never silently clipped/uploaded.
+- Inspected all 641×360 color/contain/cover images: readable Latin accents,
+  combining mark and connected Arabic; correct contain sidebars/cover filling,
+  no glyph boxes/clipping/row corruption. Latest retained representative frame
+  inspected again after measured repeat. Evidence in `.amp/in/artifacts/composition/`.
+- P diagnostic only: Debian12 x64, 16-vCPU Xeon 2.60GHz, debug, Vulkan CPU adapter
+  llvmpipe LLVM15.0.6 Mesa22.3.6. `/usr/bin/time -v` measured one full binary run:
+  wall 0.51s, max RSS 115540KiB, no swaps; preparation/raster 42.226ms,
+  color/contain/cover allocation/upload/readback 5.271/77.773/12.595ms.
+  No frame-time/SLO/physical-GPU claim; note records variability and exact boundary.
+- N regression: `DISPLAY=:99 VK_DRIVER_FILES=/dev/null scripts/native-smoke.sh
+  "$PWD/target/debug/sela"` passed focus/unbound key/resize/Ctrl+Q/WM-close/exit.
+  CLI failure checks via `subprocess.run(..., timeout=10)` passed for missing
+  arguments and unsupported backend, nonzero with diagnostic and no output dir.
+- Remaining: native audience GPU-ready scene/IPC/receipt integration; video
+  surface/copy/sync spike; observed cut/fade/interruption/masks; goldens, resource
+  recovery, production memory/performance, Windows/hardware. Refreshed Amp
+  `list_runners`: **none connected**. Lawful installed 8.0.49 and physical Windows
+  dual-display checks are still required; M0-10/full-M1 gate is not waived.
+- Delivery: local integration checkpoint, worktree commits retained; no push,
+  installer or service-ready app. Resume partial M0-07 integration above. Connect
+  an authorized Windows/reference environment to unblock observed transitions,
+  M0-08 and the hardware gate; do not label static PNGs a usable worship app.

@@ -1,7 +1,7 @@
 # M0-07a explicit-font CPU text diagnostic
 
 This opt-in module is `examples/composition/text.rs`, not product typography or
-operator UI. The integrating composition example must include it explicitly.
+operator UI. The [composition example](composition-spike.md) includes it explicitly.
 Call `raster(font, text, width, height, font_size)` on a preparation worker, never
 the UI thread or render frame path. It returns `Result<Vec<u8>, TextError>`:
 row-major `width * height` white-text alpha coverage (zero is transparent).
@@ -83,7 +83,11 @@ not GPU golden output or proof of full Arabic typography. Integrator should wire
 this module into the real composition example and rerun these tests via that
 example. No standalone harness is intentionally retained.
 
-Not executed: native/GPU composition, upload/readback/alpha golden comparisons,
+The permanent integration now runs these tests with
+`cargo test --locked --example composition_spike` and adds actual-font GPU
+readback/inspection. See [composition-spike.md](composition-spike.md) for evidence.
+
+Not executed by this CPU slice: native/GPU composition, alpha golden comparisons,
 physical display/Windows qualification, performance/RSS/cancellation measurement,
 installed EasyWorship reference, transitions or text-over-video. Parent M0-07
 remains active/qualification-open; no backlog boxes are closed by this slice.

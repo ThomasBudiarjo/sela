@@ -24,6 +24,10 @@ diagnostic geometry, not lyric presentation. [Native tests](docs/native-testing.
 exercise the real GPUI window; the [reference ledger](docs/reference-observations.md)
 records documentation evidence and the still-required Windows observations.
 
+The opt-in [static composition diagnostic](docs/composition-spike.md) prepares
+owned font/image resources and verifies actual GPU text-over-color/image readback.
+It is not yet connected to the native live-output loop or service UI.
+
 ## Product direction
 
 - GPUI is the operator frontend, not the live presentation renderer.
