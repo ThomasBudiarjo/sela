@@ -31,6 +31,19 @@ def payload(path):
     return result
 
 
+def section_ids(path):
+    with sqlite3.connect(path, timeout=1) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        return [
+            row[0]
+            for row in db.execute(
+                "SELECT i.section FROM songs s JOIN section_ids i "
+                "ON i.song=s.id AND i.revision=s.head WHERE s.deleted=0 "
+                "ORDER BY s.id,i.position"
+            )
+        ]
+
+
 def main():
     artifacts = Path(".amp/in/artifacts/song-library")
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -176,6 +189,8 @@ def main():
                         break
                     time.sleep(0.05)
                 records = payload(database)
+                identities = section_ids(database)
+                assert len(identities) == 2 and len(set(identities)) == 2
                 expected = [
                     [
                         "Original native song",
@@ -210,6 +225,7 @@ def main():
                 assert payload(database) == [expected[0][:6]], (
                     "Remove must remove only Chorus"
                 )
+                assert section_ids(database) == identities[:1]
                 click(200, 135)
                 key("ctrl+z")
                 capture("restored-section")
@@ -218,6 +234,7 @@ def main():
                 assert payload(database) == expected, (
                     "structural undo must restore both distinct sections"
                 )
+                assert section_ids(database) == identities
                 click(200, 135)
                 key("ctrl+a")
                 write("Unsaved replacement")

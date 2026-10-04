@@ -1,4 +1,7 @@
 //! Durable song history and ordered schedule snapshots. Use `Worker` on UI threads.
+use crate::arrangement::{
+    Arrangement, Occurrence, OccurrenceId, SectionId, SourceSnapshot, Variant, VariantId,
+};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{
     path::PathBuf,
@@ -22,6 +25,7 @@ pub struct Version {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
+    pub id: SectionId,
     pub label: String,
     pub lyrics: String,
 }
@@ -32,6 +36,7 @@ pub struct Song {
     pub copyright: String,
     pub license: String,
     pub sections: Vec<Section>,
+    pub variants: Vec<Variant>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Schedule {
@@ -76,7 +81,40 @@ fn text_ok(s: &str, max: usize) -> bool {
     s.len() <= max
 }
 impl Song {
+    pub fn arrangement(&self, version: Version) -> Result<Arrangement> {
+        let sections = self
+            .sections
+            .iter()
+            .map(|s| crate::arrangement::Section {
+                id: s.id,
+                label: s.label.clone(),
+                lyrics: s.lyrics.clone(),
+            })
+            .collect();
+        Arrangement::new(
+            SourceSnapshot::new(version, sections).map_err(|_| Error::Invalid)?,
+            self.variants.clone(),
+        )
+        .map_err(|_| Error::Invalid)
+    }
     pub fn validate(&self) -> Result<()> {
+        self.validate_text()?;
+        for (index, section) in self.sections.iter().enumerate() {
+            if self.sections[..index].iter().any(|s| s.id == section.id) {
+                return Err(Error::Invalid);
+            }
+        }
+        // Unarranged legacy text retains its original codec budget. Creating an
+        // arrangement also requires the domain's stricter text-plus-ID budget.
+        if !self.variants.is_empty() {
+            self.arrangement(Version {
+                id: Id([0; 16]),
+                revision: 1,
+            })?;
+        }
+        Ok(())
+    }
+    fn validate_text(&self) -> Result<()> {
         if !text_ok(&self.title, 1024)
             || self.title.trim().is_empty()
             || [&self.authors, &self.copyright, &self.license]
@@ -140,10 +178,12 @@ impl Song {
             authors: it.next().unwrap(),
             copyright: it.next().unwrap(),
             license: it.next().unwrap(),
+            variants: Vec::new(),
             sections: {
                 let mut v = Vec::new();
                 while let Some(label) = it.next() {
                     v.push(Section {
+                        id: SectionId(Id([0; 16])), // unbound legacy text, never identity
                         label,
                         lyrics: it.next().unwrap(),
                     });
@@ -151,7 +191,7 @@ impl Song {
                 v
             },
         };
-        song.validate().map_err(|_| Error::Corrupt)?;
+        song.validate_text().map_err(|_| Error::Corrupt)?;
         Ok(song)
     }
 }
@@ -161,6 +201,30 @@ CREATE TABLE schedules(id BLOB PRIMARY KEY CHECK(length(id)=16), head INTEGER NO
 CREATE TABLE schedule_revisions(id BLOB NOT NULL REFERENCES schedules(id), revision INTEGER NOT NULL, title TEXT NOT NULL, PRIMARY KEY(id,revision));
 CREATE TABLE items(id BLOB NOT NULL, revision INTEGER NOT NULL, position INTEGER NOT NULL, song BLOB NOT NULL, song_revision INTEGER NOT NULL, PRIMARY KEY(id,revision,position), FOREIGN KEY(id,revision) REFERENCES schedule_revisions(id,revision), FOREIGN KEY(song,song_revision) REFERENCES song_revisions(id,revision));
 PRAGMA application_id=1397050433; PRAGMA user_version=1;";
+const SCHEMA2: &str = "CREATE TABLE section_ids(song BLOB NOT NULL, revision INTEGER NOT NULL, position INTEGER NOT NULL, section BLOB NOT NULL CHECK(length(section)=16), PRIMARY KEY(song,revision,position), UNIQUE(song,revision,section), FOREIGN KEY(song,revision) REFERENCES song_revisions(id,revision));
+CREATE TABLE variants(song BLOB NOT NULL, revision INTEGER NOT NULL, position INTEGER NOT NULL, variant BLOB NOT NULL CHECK(length(variant)=16), name TEXT NOT NULL, PRIMARY KEY(song,revision,variant), UNIQUE(song,revision,position), FOREIGN KEY(song,revision) REFERENCES song_revisions(id,revision));
+CREATE TABLE occurrences(song BLOB NOT NULL, revision INTEGER NOT NULL, variant BLOB NOT NULL, position INTEGER NOT NULL, occurrence BLOB NOT NULL CHECK(length(occurrence)=16), section BLOB NOT NULL, PRIMARY KEY(song,revision,variant,position), UNIQUE(song,revision,variant,occurrence), FOREIGN KEY(song,revision,variant) REFERENCES variants(song,revision,variant), FOREIGN KEY(song,revision,section) REFERENCES section_ids(song,revision,section));
+PRAGMA user_version=2;";
+
+impl SectionId {
+    /// CPU-only allocation with a process-local counter; no random-device I/O.
+    /// IDs are opaque, not derived from lyrics, labels or vector positions.
+    pub fn allocate() -> Self {
+        use sha2::{Digest, Sha256};
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let mut hash = Sha256::new();
+        hash.update(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+                .to_le_bytes(),
+        );
+        hash.update(std::process::id().to_le_bytes());
+        hash.update(COUNTER.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+        Self(Id(hash.finalize()[..16].try_into().unwrap()))
+    }
+}
 /// Synchronous API: exclusively for background threads; all methods may perform I/O.
 pub struct Repository {
     db: Connection,
@@ -192,7 +256,7 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     }
     let app: i64 = source.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     let version: i64 = source.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if app != APP || version != 1 {
+    if app != APP || ![1, 2].contains(&version) {
         return Err(Error::Unsupported);
     }
     let page_size: i64 = source.query_row("PRAGMA page_size", [], |r| r.get(0))?;
@@ -256,7 +320,7 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     // A WAL source can transfer WAL header mode. Convert only the private copy.
     target.execute_batch("PRAGMA journal_mode=DELETE;")?;
     target.close().map_err(|(_, e)| Error::from(e))?;
-    let verified = Repository::open(&path)?;
+    let verified = Repository::open_internal(&path, false)?;
     verified.verify_history(cancel, start)?;
     verified.db.close().map_err(|(_, e)| Error::from(e))?;
     std::fs::File::open(&path)
@@ -312,11 +376,14 @@ impl Repository {
         if self.db.prepare("SELECT 1 FROM songs s WHERE head<1 OR deleted NOT IN (0,1) OR NOT EXISTS(SELECT 1 FROM song_revisions r WHERE r.id=s.id AND r.revision=s.head) UNION ALL SELECT 1 FROM schedules s WHERE head<1 OR NOT EXISTS(SELECT 1 FROM schedule_revisions r WHERE r.id=s.id AND r.revision=s.head) UNION ALL SELECT 1 FROM items GROUP BY id,revision HAVING min(position)!=0 OR max(position)!=count(*)-1")?.exists([])? {
             return Err(Error::Corrupt);
         }
-        let mut statement = self.db.prepare("SELECT payload FROM song_revisions")?;
+        let mut statement = self.db.prepare("SELECT id,revision FROM song_revisions")?;
         let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
             check_budget()?;
-            Song::decode(&row.get::<_, Vec<u8>>(0)?)?;
+            self.song(Version {
+                id: read_id(row.get(0)?)?,
+                revision: row.get(1)?,
+            })?;
         }
         let mut statement = self
             .db
@@ -362,6 +429,9 @@ impl Repository {
             .collect()
     }
     pub fn open(path: &std::path::Path) -> Result<Self> {
+        Self::open_internal(path, true)
+    }
+    fn open_internal(path: &std::path::Path, upgrade: bool) -> Result<Self> {
         use rusqlite::{OpenFlags, limits::Limit};
         let mut db = Connection::open_with_flags(
             path,
@@ -387,7 +457,8 @@ impl Repository {
                 return Err(Error::Unsupported);
             }
             tx.execute_batch(SCHEMA)?;
-        } else if app != APP || version != 1 {
+            tx.execute_batch(SCHEMA2)?;
+        } else if app != APP || ![1, 2].contains(&version) {
             return Err(Error::Unsupported);
         }
         let check: String = tx.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
@@ -400,10 +471,59 @@ impl Repository {
         // Verify required columns before accepting an otherwise foreign schema.
         tx.prepare("SELECT s.deleted,r.payload FROM songs s JOIN song_revisions r ON s.id=r.id")?;
         tx.prepare("SELECT r.title,i.position,i.song_revision FROM schedule_revisions r JOIN items i ON r.id=i.id AND r.revision=i.revision JOIN schedules s ON s.id=r.id")?;
+        if version == 1 && upgrade {
+            // Hold the writer reservation across backup and migration. The separate
+            // read connection copies the same committed state, without attempting
+            // an online backup from a connection with an active write transaction.
+            let source = Connection::open_with_flags(
+                path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?;
+            source.busy_timeout(Duration::from_millis(100))?;
+            let mut backup = path.as_os_str().to_owned();
+            backup.push(".schema1-backup");
+            copy_new(
+                &source,
+                std::path::Path::new(&backup),
+                &AtomicBool::new(false),
+            )?;
+            tx.execute_batch(SCHEMA2)?;
+            let mut statement = tx.prepare("SELECT id,revision,payload FROM song_revisions")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let id: Vec<u8> = row.get(0)?;
+                let revision: i64 = row.get(1)?;
+                let mut song = Song::decode(&row.get::<_, Vec<u8>>(2)?)?;
+                for (position, section) in song.sections.iter_mut().enumerate() {
+                    section.id = SectionId(read_id(tx.query_row(
+                        "SELECT randomblob(16)",
+                        [],
+                        |r| r.get(0),
+                    )?)?);
+                    tx.execute(
+                        "INSERT INTO section_ids VALUES(?,?,?,?)",
+                        params![id, revision, position as i64, &section.id.0.0[..]],
+                    )?;
+                    #[cfg(test)]
+                    if std::env::var_os("SELA_ABORT_MIGRATION_ROW").is_some() {
+                        std::process::abort();
+                    }
+                }
+                song.validate().map_err(|_| Error::Corrupt)?;
+            }
+        }
+        if version == 2 || upgrade {
+            tx.prepare("SELECT section FROM section_ids")?;
+            tx.prepare("SELECT variant,name FROM variants")?;
+            tx.prepare("SELECT occurrence,section FROM occurrences")?;
+        }
         tx.commit()?;
         Ok(Self { db })
     }
     pub fn song(&self, v: Version) -> Result<Song> {
+        if v.revision <= 0 {
+            return Err(Error::Corrupt);
+        }
         let b: Vec<u8> = self
             .db
             .query_row(
@@ -413,7 +533,57 @@ impl Repository {
             )
             .optional()?
             .ok_or(Error::Missing)?;
-        Song::decode(&b)
+        let mut song = Song::decode(&b)?;
+        let schema: i64 = self.db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if schema == 1 {
+            return Ok(song);
+        } // private legacy backup verification only
+        let mut statement = self.db.prepare("SELECT position,section FROM section_ids WHERE song=? AND revision=? ORDER BY position LIMIT 129")?;
+        let ids = statement
+            .query_map(params![&v.id.0[..], v.revision], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if ids.len() != song.sections.len() {
+            return Err(Error::Corrupt);
+        }
+        for (index, (position, id)) in ids.into_iter().enumerate() {
+            if position != index as i64 {
+                return Err(Error::Corrupt);
+            }
+            song.sections[index].id = SectionId(read_id(id)?);
+        }
+        let mut statement = self.db.prepare("SELECT position,variant,name FROM variants WHERE song=? AND revision=? ORDER BY position LIMIT 17")?;
+        let mut rows = statement.query(params![&v.id.0[..], v.revision])?;
+        while let Some(row) = rows.next()? {
+            if row.get::<_, i64>(0)? != song.variants.len() as i64 {
+                return Err(Error::Corrupt);
+            }
+            let id = read_id(row.get(1)?)?;
+            let mut occurrences = Vec::new();
+            let mut stmt = self.db.prepare("SELECT position,occurrence,section FROM occurrences WHERE song=? AND revision=? AND variant=? ORDER BY position LIMIT 513")?;
+            let mut entries = stmt.query(params![&v.id.0[..], v.revision, &id.0[..]])?;
+            while let Some(entry) = entries.next()? {
+                if entry.get::<_, i64>(0)? != occurrences.len() as i64 {
+                    return Err(Error::Corrupt);
+                }
+                occurrences.push(Occurrence {
+                    id: OccurrenceId(read_id(entry.get(1)?)?),
+                    section: SectionId(read_id(entry.get(2)?)?),
+                });
+            }
+            song.variants.push(Variant {
+                id: VariantId(id),
+                name: row.get(2)?,
+                occurrences,
+            });
+        }
+        song.validate().map_err(|_| Error::Corrupt)?;
+        Ok(song)
+    }
+    /// Resolves only the requested immutable revision, including tombstoned history.
+    pub fn arrangement(&self, v: Version) -> Result<Arrangement> {
+        self.song(v)?.arrangement(v)
     }
     pub fn schedule(&self, v: Version) -> Result<(Schedule, Vec<Song>)> {
         let title: String = self
@@ -461,6 +631,42 @@ impl Repository {
             "INSERT INTO song_revisions VALUES(?,?,?)",
             params![&v.id.0[..], v.revision, song.encode()],
         )?;
+        for (position, section) in song.sections.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO section_ids VALUES(?,?,?,?)",
+                params![
+                    &v.id.0[..],
+                    v.revision,
+                    position as i64,
+                    &section.id.0.0[..]
+                ],
+            )?;
+        }
+        for (position, variant) in song.variants.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO variants VALUES(?,?,?,?,?)",
+                params![
+                    &v.id.0[..],
+                    v.revision,
+                    position as i64,
+                    &variant.id.0.0[..],
+                    variant.name
+                ],
+            )?;
+            for (position, occurrence) in variant.occurrences.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO occurrences VALUES(?,?,?,?,?,?)",
+                    params![
+                        &v.id.0[..],
+                        v.revision,
+                        &variant.id.0.0[..],
+                        position as i64,
+                        &occurrence.id.0.0[..],
+                        &occurrence.section.0.0[..]
+                    ],
+                )?;
+            }
+        }
         tx.commit()?;
         Ok(v)
     }
@@ -510,6 +716,9 @@ impl Repository {
         Ok(v)
     }
 }
+fn read_id(bytes: Vec<u8>) -> Result<Id> {
+    Ok(Id(bytes.try_into().map_err(|_| Error::Corrupt)?))
+}
 fn advance(
     tx: &rusqlite::Transaction<'_>,
     table: &str,
@@ -552,6 +761,7 @@ pub enum Command {
     SaveSong(Option<Version>, Song),
     SaveSchedule(Option<Version>, Schedule),
     Song(Version),
+    Arrangement(Version),
     Schedule(Version),
     DeleteSong(Version),
     Heads {
@@ -570,6 +780,7 @@ pub enum Reply {
     Opened,
     Saved(Version),
     Song(Song),
+    Arrangement(Arrangement),
     Schedule(Schedule, Vec<Song>),
     Deleted,
     Heads(Vec<Version>),
@@ -588,6 +799,7 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::SaveSong(v, s) => repo.save_song(v, s).map(Reply::Saved),
         Command::SaveSchedule(v, s) => repo.save_schedule(v, s).map(Reply::Saved),
         Command::Song(v) => repo.song(v).map(Reply::Song),
+        Command::Arrangement(v) => repo.arrangement(v).map(Reply::Arrangement),
         Command::Schedule(v) => repo.schedule(v).map(|(s, songs)| Reply::Schedule(s, songs)),
         Command::DeleteSong(v) => repo.delete_song(v).map(|()| Reply::Deleted),
         Command::Heads { schedules, after } => repo.heads(schedules, after).map(Reply::Heads),
@@ -717,6 +929,379 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn legacy(path: &std::path::Path) -> Version {
+        let db = Connection::open(path).unwrap();
+        db.execute_batch(SCHEMA).unwrap();
+        let v = Version {
+            id: Id([41; 16]),
+            revision: 1,
+        };
+        db.execute("INSERT INTO songs VALUES(?,2,0)", params![&v.id.0[..]])
+            .unwrap();
+        for revision in 1..=2 {
+            db.execute(
+                "INSERT INTO song_revisions VALUES(?,?,?)",
+                params![&v.id.0[..], revision, song().encode()],
+            )
+            .unwrap();
+        }
+        let schedule = Id([42; 16]);
+        db.execute(
+            "INSERT INTO schedules VALUES(?,1)",
+            params![&schedule.0[..]],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO schedule_revisions VALUES(?,1,'Legacy snapshots')",
+            params![&schedule.0[..]],
+        )
+        .unwrap();
+        for (position, revision) in [2, 1, 2].into_iter().enumerate() {
+            db.execute(
+                "INSERT INTO items VALUES(?,1,?,?,?)",
+                params![&schedule.0[..], position as i64, &v.id.0[..], revision],
+            )
+            .unwrap();
+        }
+        v
+    }
+    #[test]
+    fn migration_retains_bytes_assigns_once_per_revision_and_restores_schema1() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("legacy");
+        let v = legacy(&path);
+        let wal = Connection::open(&path).unwrap();
+        wal.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE songs SET head=2;",
+        )
+        .unwrap();
+        let repo = Repository::open(&path).unwrap();
+        let first = repo.song(v).unwrap();
+        let second = repo.song(Version { revision: 2, ..v }).unwrap();
+        assert_ne!(first.sections[0].id, second.sections[0].id);
+        assert_ne!(first.sections[0].id, first.sections[1].id);
+        assert_eq!(first.encode(), song().encode());
+        let schedule = Version {
+            id: Id([42; 16]),
+            revision: 1,
+        };
+        assert_eq!(
+            repo.schedule(schedule).unwrap().1,
+            vec![second.clone(), first.clone(), second]
+        );
+        let backup = d.path().join("legacy.schema1-backup");
+        let before = std::fs::read(&backup).unwrap();
+        let restored = d.path().join("restored-legacy");
+        Repository::restore_new(&backup, &restored, &AtomicBool::new(false)).unwrap();
+        for p in [&backup, &restored] {
+            let db = Connection::open(p).unwrap();
+            assert_eq!(
+                db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                db.query_row(
+                    "SELECT payload FROM song_revisions WHERE revision=1",
+                    [],
+                    |r| r.get::<_, Vec<u8>>(0)
+                )
+                .unwrap(),
+                song().encode()
+            );
+            assert_eq!(
+                db.prepare("SELECT song_revision FROM items ORDER BY position")
+                    .unwrap()
+                    .query_map([], |r| r.get::<_, i64>(0))
+                    .unwrap()
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap(),
+                vec![2, 1, 2]
+            );
+        }
+        drop(repo);
+        assert_eq!(Repository::open(&path).unwrap().song(v).unwrap(), first);
+        assert_eq!(std::fs::read(&backup).unwrap(), before);
+    }
+    #[test]
+    fn migration_process_abort_rolls_back_rows_and_retains_verified_backup() {
+        const CHILD: &str = "SELA_ABORT_MIGRATION_ROW";
+        if let Some(path) = std::env::var_os(CHILD) {
+            let _ = Repository::open(std::path::Path::new(&path));
+            panic!("migration abort hook did not run");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("legacy");
+        legacy(&path);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "storage::tests::migration_process_abort_rolls_back_rows_and_retains_verified_backup"])
+            .env(CHILD, &path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().unwrap();
+        assert!(!status.success());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            assert_eq!(status.signal(), Some(6));
+        }
+        let db = Connection::open(&path).unwrap();
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(
+            !db.prepare("SELECT 1 FROM sqlite_schema WHERE name='section_ids'")
+                .unwrap()
+                .exists([])
+                .unwrap()
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT payload FROM song_revisions WHERE revision=1",
+                [],
+                |r| r.get::<_, Vec<u8>>(0)
+            )
+            .unwrap(),
+            song().encode()
+        );
+        let backup = d.path().join("legacy.schema1-backup");
+        Repository::open_internal(&backup, false)
+            .unwrap()
+            .verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert!(matches!(Repository::open(&path), Err(Error::Exists)));
+    }
+    #[test]
+    fn maximum_legacy_payload_migrates_losslessly_without_inventing_arrangements() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("legacy");
+        let v = legacy(&path);
+        let mut large = song();
+        large.title = "x".into();
+        large.authors.clear();
+        large.copyright.clear();
+        large.license.clear();
+        for section in &mut large.sections {
+            section.label.clear();
+            section.lyrics.clear();
+        }
+        large.sections[0].lyrics = "x".repeat(MAX_SONG_BYTES - large.encode().len());
+        assert_eq!(large.encode().len(), MAX_SONG_BYTES);
+        Connection::open(&path)
+            .unwrap()
+            .execute(
+                "UPDATE song_revisions SET payload=?",
+                params![large.encode()],
+            )
+            .unwrap();
+        let mut worker = Worker::open(path.clone()).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        worker.submit(Command::Song(v)).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Song(s)) if s.encode() == large.encode()));
+        let repo = Repository::open(&path).unwrap();
+        assert_eq!(repo.song(v).unwrap().encode(), large.encode());
+        // The arrangement domain accounts ID overhead, unlike the legacy codec.
+        assert!(matches!(repo.arrangement(v), Err(Error::Invalid)));
+    }
+    #[test]
+    fn migration_backup_gate_conflict_corruption_lock_and_ddl_rollback() {
+        for failure in ["backup", "payload", "writer", "ddl"] {
+            let d = tempfile::tempdir().unwrap();
+            let path = d.path().join("legacy");
+            legacy(&path);
+            let db = Connection::open(&path).unwrap();
+            let backup = d.path().join("legacy.schema1-backup");
+            let expected = match failure {
+                "backup" => {
+                    std::fs::write(&backup, b"retain").unwrap();
+                    Error::Exists
+                }
+                "payload" => {
+                    db.execute_batch("UPDATE song_revisions SET payload=x'ff'")
+                        .unwrap();
+                    Error::Corrupt
+                }
+                "writer" => {
+                    db.execute_batch("BEGIN IMMEDIATE; UPDATE songs SET deleted=1")
+                        .unwrap();
+                    Error::Locked
+                }
+                _ => {
+                    db.execute_batch("CREATE TABLE section_ids(block_upgrade)")
+                        .unwrap();
+                    Error::Corrupt
+                }
+            };
+            let before = std::fs::read(&path).unwrap();
+            assert!(
+                matches!(Repository::open(&path), Err(e) if e == expected),
+                "{failure}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{failure}");
+            assert_eq!(
+                db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            if failure == "backup" {
+                assert_eq!(std::fs::read(backup).unwrap(), b"retain");
+            } else if failure == "ddl" {
+                let old = Repository::open_internal(&backup, false).unwrap();
+                old.verify_history(&AtomicBool::new(false), std::time::Instant::now())
+                    .unwrap();
+                assert!(
+                    !db.prepare("SELECT 1 FROM sqlite_schema WHERE name='variants'")
+                        .unwrap()
+                        .exists([])
+                        .unwrap()
+                );
+            } else {
+                assert!(!backup.exists());
+            }
+        }
+    }
+    fn arranged_song() -> Song {
+        let mut s = song();
+        s.sections[1].label = s.sections[0].label.clone();
+        s.sections[1].lyrics = "Chorus original\r\n".into();
+        s.sections.push(Section {
+            id: SectionId(Id([3; 16])),
+            label: "Verse".into(),
+            lyrics: "Verse two distinct".into(),
+        });
+        s.variants = vec![Variant {
+            id: VariantId(Id([8; 16])),
+            name: "V1/C/V2/C/C".into(),
+            occurrences: [0, 1, 2, 1, 1]
+                .into_iter()
+                .enumerate()
+                .map(|(i, n)| Occurrence {
+                    id: OccurrenceId(Id([i as u8; 16])),
+                    section: s.sections[n].id,
+                })
+                .collect(),
+        }];
+        s
+    }
+    #[test]
+    fn arrangements_exact_revision_reorder_atomic_missing_and_worker_roundtrip() {
+        let (d, path, mut repo) = fixture();
+        let original = arranged_song();
+        let first = repo.save_song(None, original.clone()).unwrap();
+        let schedule = repo
+            .save_schedule(
+                None,
+                Schedule {
+                    title: "Historical".into(),
+                    items: vec![first, first],
+                },
+            )
+            .unwrap();
+        let mut edited = original.clone();
+        edited.sections.swap(0, 2);
+        edited.sections[1].lyrics = "New chorus".into();
+        let second = repo.save_song(Some(first), edited.clone()).unwrap();
+        let resolved = repo.arrangement(first).unwrap();
+        assert_eq!(resolved.source().version(), first);
+        assert_eq!(
+            resolved
+                .resolve(original.variants[0].id)
+                .unwrap()
+                .iter()
+                .map(|o| o.section.lyrics.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "one\r\n\n二\n",
+                "Chorus original\r\n",
+                "Verse two distinct",
+                "Chorus original\r\n",
+                "Chorus original\r\n"
+            ]
+        );
+        let mut missing = edited.clone();
+        missing.sections.remove(1);
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(repo.save_song(Some(second), missing), Err(Error::Invalid));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            repo.save_song(Some(first), edited.clone()),
+            Err(Error::Conflict)
+        );
+        repo.db.execute_batch("CREATE TRIGGER fail_occurrence BEFORE INSERT ON occurrences WHEN NEW.position=3 BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+        assert!(repo.save_song(Some(second), edited.clone()).is_err());
+        assert_eq!(repo.heads(false, None).unwrap(), vec![second]);
+        repo.db
+            .execute_batch("DROP TRIGGER fail_occurrence")
+            .unwrap();
+        repo.delete_song(second).unwrap();
+        assert_eq!(
+            repo.schedule(schedule).unwrap().1,
+            vec![original.clone(), original.clone()]
+        );
+        let backup = d.path().join("schema2-backup");
+        repo.backup_new(&backup, &AtomicBool::new(false)).unwrap();
+        let restored = d.path().join("schema2-restored");
+        Repository::restore_new(&backup, &restored, &AtomicBool::new(false)).unwrap();
+        assert_eq!(
+            Repository::open(&restored).unwrap().song(second).unwrap(),
+            edited
+        );
+        let mut worker = Worker::open(path).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        worker.submit(Command::Song(first)).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Song(s)) if s == original));
+        worker.submit(Command::Arrangement(first)).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Arrangement(a)) if a == resolved));
+        worker
+            .submit(Command::SaveSong(None, original.clone()))
+            .unwrap();
+        let duplicate = match wait(&mut worker).unwrap() {
+            Reply::Saved(v) => v,
+            _ => panic!(),
+        };
+        worker.submit(Command::Song(duplicate)).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Song(s)) if s == original));
+    }
+    #[test]
+    fn persisted_arrangement_corruption_is_not_truncated_and_never_backed_up() {
+        let (d, path, mut repo) = fixture();
+        let original = arranged_song();
+        let v = repo.save_song(None, original.clone()).unwrap();
+        let mut duplicate = original.clone();
+        duplicate.sections[2].id = duplicate.sections[0].id;
+        assert_eq!(repo.save_song(Some(v), duplicate), Err(Error::Invalid));
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        // Break a later occurrence, not the first, on a deliberately corrupt fixture.
+        other
+            .execute(
+                "UPDATE occurrences SET section=zeroblob(16) WHERE position=3",
+                [],
+            )
+            .unwrap();
+        assert_eq!(repo.song(v), Err(Error::Corrupt));
+        assert_eq!(repo.arrangement(v), Err(Error::Corrupt));
+        let output = d.path().join("bad-backup");
+        assert_eq!(
+            repo.backup_new(&output, &AtomicBool::new(false)),
+            Err(Error::Corrupt)
+        );
+        assert!(!output.exists());
+        other
+            .execute(
+                "UPDATE occurrences SET section=? WHERE position=3",
+                params![&original.sections[1].id.0.0[..]],
+            )
+            .unwrap();
+        other
+            .execute("UPDATE section_ids SET position=7 WHERE position=2", [])
+            .unwrap();
+        assert_eq!(repo.song(v), Err(Error::Corrupt));
+        assert_eq!(
+            repo.backup_new(&output, &AtomicBool::new(false)),
+            Err(Error::Corrupt)
+        );
+        assert!(!output.exists());
+    }
     #[test]
     fn backup_restore_history_wal_and_worker() {
         let (d, p, mut repo) = fixture();
@@ -834,7 +1419,7 @@ mod tests {
             );
             assert_eq!(std::fs::read(input).unwrap(), bytes);
         }
-        repo.db.execute_batch("PRAGMA user_version=2").unwrap();
+        repo.db.execute_batch("PRAGMA user_version=3").unwrap();
         drop(repo);
         let before = std::fs::read(&p).unwrap();
         assert_eq!(
@@ -970,12 +1555,15 @@ mod tests {
             authors: "Original 作者".into(),
             copyright: "© test".into(),
             license: "test-only".into(),
+            variants: Vec::new(),
             sections: vec![
                 Section {
+                    id: SectionId(Id([1; 16])),
                     label: "Verse".into(),
                     lyrics: "one\r\n\n二\n".into(),
                 },
                 Section {
+                    id: SectionId(Id([2; 16])),
                     label: "".into(),
                     lyrics: "".into(),
                 },
@@ -1046,7 +1634,7 @@ mod tests {
     }
     #[test]
     fn rejects_newer_foreign_corrupt_without_replacement() {
-        for sql in ["PRAGMA user_version=2", "PRAGMA application_id=42"] {
+        for sql in ["PRAGMA user_version=3", "PRAGMA application_id=42"] {
             let (_d, p, r) = fixture();
             r.db.execute_batch(sql).unwrap();
             drop(r);

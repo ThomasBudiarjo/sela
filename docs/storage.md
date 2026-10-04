@@ -46,13 +46,14 @@ neither paths nor SQLite messages nor lyric payloads; don't log Commands/Replies
 
 ## Schema and durable meaning
 
-Version 1 uses `application_id=0x53454c41`, `user_version=1`, foreign keys on,
+Current schema 2 uses `application_id=0x53454c41`, `user_version=2`, foreign keys on,
 default rollback journal and synchronous FULL. `songs` tracks head/tombstone;
 `song_revisions` stores immutable original UTF-8 payloads. Encoding is repeated
 little-endian u32 byte-length + UTF-8: title, authors, copyright, license, then
 label/lyrics pairs until EOF. No normalization, line-break conversion, splitting,
 wrapping or provider assumptions. Empty sections and zero sections are preserved;
-blank title is invalid. Binary codec is internal to schema version 1, not a bundle.
+blank title is invalid. The original schema-1 text codec remains unchanged in
+schema 2; explicit identities and arrangements live in revision-keyed tables.
 
 `schedules` tracks head; `schedule_revisions` stores title; `items` records ordered
 positions and exact immutable song revisions. Repeated occurrences are retained.
@@ -64,15 +65,16 @@ No automatic garbage collection, library-refresh or cascade deletion exists.
 Snapshot occurrence identity currently is `(schedule ID, revision, position)`;
 stable cross-edit/live selection identity belongs to M1-09, not this storage slice.
 
-Only the non-destructive empty schema 0 → 1 migration exists. A schema-0 database
+Fresh schema 0 initializes schema 2. Existing schema 1 upgrades only after the
+verified backup gate documented below. A schema-0 database
 with user objects is foreign and rejected. Migration and validation share one
 transaction; failed migration drops/rolls back it. Nonmatching application IDs,
 newer/unsupported versions, SQLite quick-check/foreign-key failures and malformed
 payload reads are rejected. No reset, overwrite, rename or recovery mutation.
 Required column checks run at open; payload semantic validation runs on bounded
 reads. This is not an adversarial SQLite sandbox or exhaustive schema attestation.
-There is no destructive upgrade yet; a future upgrade must implement a verified
-backup before mutation, not reuse this empty-database migration indiscriminately.
+Backup verification never invokes upgrading open. Versions above 2 remain
+`Unsupported`; no migration resets, overwrites or replaces those profiles.
 
 ## Bounds and remaining parent work
 
@@ -89,7 +91,7 @@ backup before mutation, not reuse this empty-database migration indiscriminately
   SQLite non-lock work have no hard wall-clock deadline; all stay off UI/frame.
 - Total historical disk growth, retention/backups, crash/power-loss injection,
   autosave/close protocols, search and large-library performance remain open.
-- Arrangements, themes, fonts and asset schemas are deliberately **not** invented;
+- Themes, fonts and asset schemas are deliberately **not** invented;
   parent M1-01/M1-06/M1-08/M1-09/M1-11 own their concrete snapshot contracts.
 - GPUI editor integration, native/Windows, installed reference and physical
   qualification were not executed for this framework-independent slice.
@@ -231,3 +233,93 @@ Executed on Linux x64 orb with shared target and `-j2`:
 `cargo test --locked --all-targets -j2` (74 pass, zero failed/ignored),
 `cargo clippy --locked --all-targets -j2 -- -D warnings`,
 `cargo fmt --all -- --check`, `git diff --check`.
+
+## M1-06b — stable IDs / persisted arrangements / backed-up schema 2
+
+State: **implemented-unqualified**, from LOCAL main `f161dc3`, branch
+`ticket/m1-06-persistence`. This section supersedes M1-01b's historical
+"future migration" checklist above. No dependency, operator geometry, live
+scene, renderer, or output-control change; all exercised profiles are disposable.
+
+`Section` now carries `arrangement::SectionId`; `Song` also carries bounded
+`Vec<Variant>`. Existing SaveSong/Song/Schedule replies round-trip the complete
+document. `Repository::arrangement(Version)` and worker `Command::Arrangement`
+return `Reply::Arrangement` for exactly that stored immutable revision, never
+the head. The pure `Song::arrangement(version)` adapter validates caller-provided
+pairing; use the repository/worker adapter when provenance matters. SaveSong
+persists text, section-position/ID mappings, ordered named variants and ordered
+occurrences in the same IMMEDIATE transaction as head advancement. Foreign keys
+and uniqueness supplement domain validation. Missing references reject the
+whole save/read; no variant truncation, implicit retargeting or lyric refresh.
+
+`section_ids`, `variants`, `occurrences` are keyed by immutable song ID/revision.
+Positions only store order; identity is the persisted opaque ID. Old payloads,
+schedule titles/items/order and tombstones are untouched. Each legacy immutable
+revision receives fresh SQLite random section IDs once, even when its labels,
+indices or text equal another revision. No ambiguous old cross-revision
+continuity is invented. Legacy has no variants, so migration invents none.
+New edits/whole-document undo retain IDs and variants. Duplicate creates a new
+song ID, retaining document-local IDs; identity remains scoped to the song.
+
+Opening schema 1 on the worker reserves the writer with BEGIN IMMEDIATE, then
+copies through a separate read-only connection to `<profile>.schema1-backup`.
+The verified, synced, no-overwrite publication must succeed before migration
+DDL or mappings begin. The reservation excludes competing commits between the
+backup snapshot and migration, including WAL writers. Copy verification opens
+with migration **disabled**, checks schema 1 history as legacy text, and leaves
+the published backup schema 1. RestoreNew similarly preserves schema 1 or 2;
+only a later explicit Repository/Worker open upgrades a restored schema-1 file.
+DDL/mappings/user_version commit atomically. Error or process death before
+commit rolls them back; a published backup remains for recovery. Fresh empty
+initialization does not need a backup because no legacy history exists.
+
+An existing backup/alias/sidecar, permission/full/budget/lock/integrity failure
+blocks opening/mutation, not just backup notification. Backup is never reused,
+upgraded, overwritten, rotated or removed automatically. After failed migration,
+the retained deterministic backup can make retry return `Exists`: preserve both
+files, inspect/recover via RestoreNew to a fresh profile (whose migration backup
+path is fresh), rather than delete/overwrite the backup blindly. Recovery UI and
+profile switching remain parent work. Online backup preserves content/schema,
+not identical SQLite file header/page bytes; historical payload bytes are exact.
+
+Original text codec limits still apply, including a full 256KiB legacy payload.
+Unarranged songs are validated for text and unique section IDs without tightening
+their legacy byte budget. Creating a SourceSnapshot/arranged song additionally
+requires the existing 256KiB text-plus-24-bytes-per-section domain budget;
+oversized legacy text remains readable/editable but arrangement creation can
+fail atomically until explicitly shortened. Variants retain the existing 16 /
+512 occurrences each / 64KiB aggregate domain budgets. Bounded SQL reads include
+one overflow row and check contiguous positions, full mapping count and IDs.
+Schedule completion can additionally own up to 32 arrangement payloads (2MiB
+structural accounting plus vectors). Transient validation clones and SQL row
+strings are not hard RSS guarantees; no measured latency claim. Migration loops
+one bounded revision at a time; the backup's 256MiB/five-second cooperative budget
+does not impose a hard migration deadline or post-upgrade database disk quota.
+
+Editor allocation is CPU-only SHA-256 truncated to 128 bits over nanosecond
+wall-clock/PID/process atomic counter, not labels/indices/content and not a
+cryptographic random/identity guarantee. Counter separates concurrent allocations;
+duplicate IDs within a song fail validation/constraints rather than overwrite.
+Undo restores old IDs rather than calling the allocator. Imported/caller-provided
+IDs still require truthful provenance. Clock/PID reuse or adversarial collision
+qualification is not claimed; SQLite random IDs remain migration's allocator.
+
+Scoped evidence: six new storage tests plus one GPUI test cover legacy WAL and
+revision-local IDs, old schedule 2/1/2 bytes/order, schema-1 backup/restore and
+schema-2 arrangement backup/restore, conflict/corrupt backup gate/real writer lock,
+DDL rollback, actual SIGABRT after mapping insertion with rollback and retained
+backup, maximum legacy codec boundary, duplicate IDs/labels, V1/C/V2/C/C exact
+revision, reordering, late missing reference/corrupt order no partial read/copy,
+late occurrence insert rollback, worker round trips and editor save/duplicate/
+undo/redo/rejected Remove. Existing historical schedule, capacity-one worker,
+disk-full and process-abort backup/write contracts also run unchanged in intent.
+
+Verification: serialized shared target, source timestamps refreshed before each
+Cargo batch; actual root compilation and new test names observed. Commands:
+`flock /tmp/sela-cargo-continuation.lock bash -c 'touch src/*.rs; export CARGO_TARGET_DIR=/home/user/workspace/repo/target; cargo test --locked --all-targets -j4'`
+(104 passed, 1 ignored subprocess fixture invoked by three process tests);
+same lock/touch/export with `cargo clippy --locked --all-targets -j4 -- -D warnings`
+and `cargo fmt --all -- --check`; `uvx ruff check scripts/song-library.py`,
+Python AST parse and `git diff --check` passed. Native replay is parent-owned
+and was not run on shared :99. Windows/hard-link/ACL/physical GPU, installed
+reference, real volume/power-loss failure and performance remain unqualified.
