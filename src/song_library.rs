@@ -247,6 +247,7 @@ impl Library {
             }),
         };
         this.load_fields(cx);
+        this.sync_input_lock(cx);
         for (index, field) in this.fields.iter().enumerate() {
             this.subscriptions
                 .push(cx.observe(field, move |this, field, cx| {
@@ -322,7 +323,7 @@ impl Library {
         }
     }
     fn history(&mut self, redo: bool, cx: &mut Context<Self>) {
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.committed_close {
             return;
         }
         self.record(self.current(cx));
@@ -361,7 +362,7 @@ impl Library {
         true
     }
     fn may_replace(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.committed_close {
             return false;
         }
         if self.dirty(cx) {
@@ -402,6 +403,12 @@ impl Library {
         self.load_fields(cx);
         cx.notify();
     }
+    fn sync_input_lock(&self, cx: &mut Context<Self>) {
+        let locked = self.pending.is_some() || self.committed_close;
+        for field in &self.fields {
+            field.update(cx, |f, _| f.set_read_only(locked));
+        }
+    }
     fn submit(&mut self, command: Command, pending: Pending, cx: &mut Context<Self>) {
         if self.pending.is_some() {
             return;
@@ -418,6 +425,7 @@ impl Library {
             }
             Err(e) => self.status = error_message(e).into(),
         }
+        self.sync_input_lock(cx);
         cx.notify();
     }
     fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -461,8 +469,11 @@ impl Library {
                 self.confirm_close = false;
                 self.cursor = None;
                 if self.close_after_save {
-                    self.committed_close = true;
+                    self.committed_close = !self.dirty(cx);
                     self.close_after_save = false;
+                    if !self.committed_close {
+                        self.status = "Saved revision; newer edits remain unsaved.".into();
+                    }
                 } else {
                     self.refresh(cx);
                 }
@@ -478,10 +489,11 @@ impl Library {
             }
             _ => self.status = "Unexpected storage reply. Close and reopen the library.".into(),
         }
+        self.sync_input_lock(cx);
         cx.notify();
     }
     fn action(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.committed_close {
             return;
         }
         self.record(self.current(cx));
@@ -625,7 +637,7 @@ impl Library {
     }
 
     fn select_section(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.pending.is_some() || index >= self.draft.sections.len() {
+        if self.pending.is_some() || self.committed_close || index >= self.draft.sections.len() {
             return;
         }
         let song = self.current(cx);
@@ -1267,6 +1279,106 @@ mod tests {
             && v.dirty(cx)
             && v.status.starts_with("Changed elsewhere")
             && v.current(cx).title == "Retained conflict draft"));
+    }
+
+    #[gpui::test]
+    fn pending_operations_reject_native_edits_before_redraw(cx: &mut TestAppContext) {
+        for operation in ["ok", "load", "delete", "failed-save"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("library.sqlite");
+            let mut repo = Repository::open(&path).unwrap();
+            let mut original = blank();
+            original.title = "Original".into();
+            original.sections[0].lyrics = "Original verse".into();
+            let first = repo.save_song(None, original.clone()).unwrap();
+            let mut other = original.clone();
+            other.title = "Different load target".into();
+            let second = repo.save_song(None, other.clone()).unwrap();
+            let (mut cx, view) = fixture(cx, path);
+            cx.update(|_, cx| view.update(cx, |v, cx| v.select(first, cx)));
+            wait(&mut cx, &view);
+            if operation == "failed-save" {
+                repo.save_song(Some(first), other.clone()).unwrap();
+            }
+            let input = view.read_with(&cx, |v, _| v.fields[5].clone());
+            // One update: no redraw can detach the old input handler between
+            // submission and the direct native replacement/preedit callbacks.
+            cx.update(|w, cx| {
+                view.update(cx, |v, cx| match operation {
+                    "load" => v.select(second, cx),
+                    "delete" => {
+                        v.action(3, w, cx);
+                        v.action(3, w, cx);
+                    }
+                    _ => v.action(15, w, cx),
+                });
+                let history = view.read(cx).history.undo.len();
+                let edits = input.read(cx).edit_count();
+                input.update(cx, |f, cx| {
+                    f.replace_text_in_range(Some(0..0), "Late commit", w, cx);
+                    f.replace_and_mark_text_in_range(Some(0..0), "Late preedit", Some(0..2), w, cx);
+                });
+                assert_eq!(input.read(cx).text(), "Original verse", "{operation}");
+                assert_eq!(input.read(cx).edit_count(), edits);
+                assert_eq!(view.read(cx).history.undo.len(), history);
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while view.read(cx).pending.is_some() {
+                    view.update(cx, |v, cx| v.poll(cx));
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let expected = match operation {
+                    "load" => other.clone(),
+                    "delete" => view.read(cx).baseline.clone(),
+                    _ => original.clone(),
+                };
+                assert_eq!(view.read(cx).current(cx), expected);
+                assert_eq!(view.read(cx).committed_close, operation == "ok");
+                // Completion-to-close also has no redraw yet. Other terminal
+                // replies, including storage errors, must re-enable editing.
+                input.update(cx, |f, cx| {
+                    f.replace_text_in_range(Some(0..0), "After", w, cx)
+                });
+                if operation == "ok" {
+                    view.update(cx, |v, cx| {
+                        v.history(false, cx);
+                        v.action(7, w, cx);
+                    });
+                    assert_eq!(view.read(cx).current(cx), original);
+                    assert_eq!(repo.song(view.read(cx).version.unwrap()).unwrap(), original);
+                } else {
+                    assert!(input.read(cx).text().starts_with("After"));
+                    assert!(view.read(cx).dirty(cx));
+                }
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn ok_requires_current_document_to_match_saved_snapshot(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
+        edit(&mut cx, &view, 0, "Submitted title");
+        cx.update(|w, cx| {
+            view.update(cx, |v, cx| v.action(15, w, cx));
+            // Deliberately bypass the native input lock via programmatic load:
+            // auto-close still must independently compare with the saved snapshot.
+            let title = view.read(cx).fields[0].clone();
+            title
+                .update(cx, |f, cx| f.set_text("Newer title", cx))
+                .unwrap();
+        });
+        wait(&mut cx, &view);
+        assert!(view.read_with(&cx, |v, cx| !v.committed_close
+            && !v.close_after_save
+            && v.dirty(cx)
+            && v.baseline.title == "Submitted title"
+            && v.current(cx).title == "Newer title"));
+        edit(&mut cx, &view, 0, "Still editable");
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.current(cx).title),
+            "Still editable"
+        );
     }
 
     #[gpui::test]

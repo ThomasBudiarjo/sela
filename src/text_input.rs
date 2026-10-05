@@ -260,6 +260,7 @@ pub struct TextInput {
     max: usize,
     tab_index: isize,
     error: Option<InputError>,
+    read_only: bool,
     layout: Vec<(Range<usize>, ShapedLine)>,
     bounds: Option<Bounds<Pixels>>,
     scroll: Point<Pixels>,
@@ -282,6 +283,7 @@ impl TextInput {
             max: max_bytes.min(HARD_BYTES),
             tab_index,
             error: None,
+            read_only: false,
             layout: Vec::new(),
             bounds: None,
             scroll: point(px(0.), px(0.)),
@@ -299,6 +301,12 @@ impl TextInput {
     }
     pub fn error(&self) -> Option<&InputError> {
         self.error.as_ref()
+    }
+    /// Synchronous mutation gate, including retained native IME handlers before
+    /// redraw. Programmatic set_text remains available for acknowledged loads.
+    #[allow(dead_code)] // Standalone input_check has no pending document operations.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
     }
     /// Synchronous content-only callback; must not read/update this field or edit
     /// while its owner is borrowed. Loads/selection/errors never call it.
@@ -337,6 +345,9 @@ impl TextInput {
         preedit: Option<Option<Range<usize>>>,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let before = self
             .document_edit
             .as_ref()
@@ -759,6 +770,9 @@ impl Render for TextInput {
                 }
             }))
             .on_action(cx.listener(|s, _: &Undo, _, cx| {
+                if s.read_only {
+                    return;
+                }
                 if s.document_edit.is_some() {
                     cx.propagate();
                     return;
@@ -769,6 +783,9 @@ impl Render for TextInput {
                 cx.notify()
             }))
             .on_action(cx.listener(|s, _: &Redo, _, cx| {
+                if s.read_only {
+                    return;
+                }
                 if s.document_edit.is_some() {
                     cx.propagate();
                     return;

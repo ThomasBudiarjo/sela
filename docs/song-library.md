@@ -41,7 +41,10 @@ original files as test fixtures.
   Keep editing, Discard and close, or Save and then close again.
 - Concurrent edits are not silently overwritten: a stale save retains the draft
   and offers recovery through Duplicate or discard/reopen. Pending operations
-  temporarily hide editing controls so late replies cannot discard newer typing.
+  synchronously lock field mutations, including retained native IME handlers
+  before redraw; controls also hide while busy. Editing resumes after completion
+  or failure, except while a committed OK is closing. OK additionally compares
+  the current document to the acknowledged saved snapshot before closing.
 
 The list is bounded to 128 entries per ID-ordered page, not title search/ranking.
 After the final page, Refresh / first page returns to the start. Fields support

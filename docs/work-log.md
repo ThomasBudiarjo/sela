@@ -1683,3 +1683,31 @@ PY
   `cargo clippy --locked --lib -j4 -- -D warnings` and fmt passed.
 - No UI/protocol shape change. Remaining Oracle fixes are pending native editor
   input and renderer backpressure; combined checks follow those changes.
+
+### M1-05 — Oracle pending-input ownership fix — 2026-10-05 UTC
+
+- Synchronously lock TextInput mutations when storage work is accepted (including
+  initial open), before the next redraw can detach the native handler. Native
+  replace/preedit and local undo/redo cannot change buffer/history while locked.
+  Programmatic acknowledged loads remain possible. Unlock on completion/error,
+  unless a committed OK is awaiting window removal; owner actions/history are
+  also blocked during that final interval. OK independently compares the current
+  document against the Saved snapshot before closing.
+- Inspected pinned Zed a84689073d296dfd39987bc7dd478e43ef76d83a:
+  crates/gpui/src/window.rs handle_input (5245–5266) and
+  crates/gpui_linux/src/linux/x11/window.rs handle_ime_commit/preedit (1224–1247).
+  Input-handler lifetime extends until redraw, so hidden controls are not a lock.
+  Existing Apache GPUI APIs only, no new dependency or copied application code.
+- GPUI regression first failed with late commit/preedit bytes in the field after
+  OK submission. Now exercises OK, Load, Delete and conflicting Save, injecting
+  both callbacks in the same App update before any redraw/poll, checking unchanged
+  field/edit-count/history, actual durable reply, and unlock/close behavior.
+  Separate test bypasses native lock with a programmatic load and proves OK cannot
+  close over a mismatched snapshot. No layout/appearance changes.
+- `cargo test --locked --all-targets -j4`: 117 passed, 1 ignored subprocess fixture
+  (includes parallel in-progress renderer regressions). Strict all-target Clippy,
+  fmt and all-target build passed. Serial DISPLAY=:99 VK_DRIVER_FILES=/dev/null
+  song-library.py, operator-shell.py and native-smoke.sh target/debug/sela passed,
+  including independent SQLite/undo/reopen/OK/dirty-close/focus checks. Native IME
+  interleaving is simulated via its actual input-handler API; Windows/real IME
+  device qualification remains open. Local commit only; renderer fix follows.
