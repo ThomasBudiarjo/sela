@@ -6,6 +6,9 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- Active Oracle fixes: M1-05 pending native-input ownership, M0-07d preparation
+  backpressure ordering, and M0-06 disconnected receipt invalidation. Each gets
+  regression coverage and its own local commit; no push authorized.
 - Latest continuation merged and checked: **M1-06b** backed-up arrangement/
   section-ID persistence and lossless editor round trips; **M0-06c/M0-07d** owned
   resource transport and native worker-prepared text/image composition. Individual
@@ -1668,3 +1671,15 @@ PY
   with final hardware verification postponed at the owner's request.
 - Delivery: local commits and merges only, no push/publication/deployment.
   Resume arrangement UI/repair or renderer resize/safety coordination as above.
+
+### M0-06 — Oracle disconnected receipt fix — 2026-10-05 UTC
+
+- A matched Rejected(Disconnected) now invalidates the session, clears both
+  pending lanes and exposes Unknown; prior confirmation remains diagnostic history
+  only. Late acknowledgments cannot revive it and new sends require a fresh session.
+- Regression first failed (Confirmed revision 3 instead of Unknown), then passed
+  for both Cue/Safety orderings, two dispatched pending commands, late Applied
+  and new sends. `cargo test --locked --lib delivery::tests -j4`: 9 passed;
+  `cargo clippy --locked --lib -j4 -- -D warnings` and fmt passed.
+- No UI/protocol shape change. Remaining Oracle fixes are pending native editor
+  input and renderer backpressure; combined checks follow those changes.

@@ -232,11 +232,13 @@ impl Delivery {
         // A stale receipt may describe a duplicate of an earlier applied command,
         // not proof that the original failed. Without a newer confirmed state,
         // conservatively invalidate the session instead of claiming old output.
-        if matches!(ack.outcome, Outcome::Rejected(DeliveryError::WrongEpoch))
-            || (ack.outcome == Outcome::Rejected(DeliveryError::Stale)
-                && self
-                    .last_confirmed
-                    .is_none_or(|(stamp, _)| stamp.sequence < ack.stamp.sequence))
+        if matches!(
+            ack.outcome,
+            Outcome::Rejected(DeliveryError::WrongEpoch | DeliveryError::Disconnected)
+        ) || (ack.outcome == Outcome::Rejected(DeliveryError::Stale)
+            && self
+                .last_confirmed
+                .is_none_or(|(stamp, _)| stamp.sequence < ack.stamp.sequence))
         {
             self.counters.rejected = self.counters.rejected.saturating_add(1);
             self.disconnect();

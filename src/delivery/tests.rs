@@ -253,6 +253,45 @@ fn deadline_is_checked_before_output_callback_and_missing_ack_is_unknown() {
 }
 
 #[test]
+fn disconnected_receipt_invalidates_both_lanes_and_preserves_only_history() {
+    for lanes in [[Lane::Cue, Lane::Safety], [Lane::Safety, Lane::Cue]] {
+        let now = Instant::now();
+        let mut delivery = Delivery::new(EPOCH);
+        let mut renderer = RendererSession::new(EPOCH);
+        submit(&mut delivery, 3, Lane::Cue, now);
+        apply(&mut delivery, &mut renderer, now);
+        let failed = submit(&mut delivery, 17, lanes[0], now);
+        let other = submit(&mut delivery, 29, lanes[1], now);
+        delivery.take_next().unwrap();
+        delivery.take_next().unwrap();
+        assert!(delivery.acknowledge(
+            Acknowledgment {
+                stamp: failed,
+                outcome: Outcome::Rejected(DeliveryError::Disconnected),
+            },
+            now
+        ));
+        assert_eq!(delivery.live(), LiveState::Unknown);
+        assert_eq!(delivery.last_confirmed(), Some(spec(3).version));
+        assert!(delivery.pending.is_empty());
+        assert!(!delivery.acknowledge(
+            Acknowledgment {
+                stamp: other,
+                outcome: Outcome::Applied,
+            },
+            now
+        ));
+        for lane in lanes {
+            assert_eq!(
+                delivery.submit(cue(41), lane, now, now + Duration::from_secs(3)),
+                Err(DeliveryError::Disconnected)
+            );
+        }
+        assert_eq!(delivery.counters().rejected, 1);
+    }
+}
+
+#[test]
 fn disconnected_session_is_not_replayed_and_foreign_or_unsent_acks_are_ignored() {
     let now = Instant::now();
     let mut delivery = Delivery::new(EPOCH);
