@@ -244,6 +244,23 @@ def run():
             ack(child, new_epoch, 1, 0)
             ack(child, new_epoch, 1, 1)
             capture(child, "fresh-explicit-green", green[:3], 1)
+            # Both legal lanes arrive without awaiting the first acknowledgment.
+            # Accepted may interleave, but terminal presentation remains FIFO.
+            blue = (31, 53, 179, 255)
+            send(child, new_epoch, 2, red)
+            send(child, new_epoch, 3, blue, lane=1)
+            outcomes = {2: [], 3: []}
+            applied = []
+            for _ in range(4):
+                body = receive(child, 2)
+                assert int.from_bytes(body[:16], "little") == new_epoch
+                sequence = struct.unpack("<Q", body[16:24])[0]
+                outcomes[sequence].append(body[24])
+                if body[24] == 1:
+                    applied.append(sequence)
+            assert outcomes == {2: [0, 1], 3: [0, 1]}, outcomes
+            assert applied == [2, 3], applied
+            capture(child, "consecutive-lanes-blue", blue[:3], 3)
             retire(child)
             (args.out / "summary.json").write_text(json.dumps({"status": "PASS",
                 "backend": args.backend, "qualification": "native virtual-display submission/capture only, not physical scanout",

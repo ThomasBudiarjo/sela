@@ -107,6 +107,7 @@ struct Audience {
     next: Instant,
     compositor: Option<Arc<composition::Compositor>>,
     preparation: Option<SyncSender<Frame>>,
+    waiting: Option<Frame>,
     completions: Option<Receiver<Completion>>,
     ready: VecDeque<(Stamp, composition::ReadyComposition)>,
     applied_ready: Option<composition::ReadyComposition>,
@@ -118,6 +119,30 @@ struct Completion {
 enum PreparationFailure {
     Resource,
     Upload,
+}
+// One bounded backpressure slot; never admit/reject a later stamp ahead of
+// already queued preparation. Retaining Frame also retains its original deadline.
+fn forward_preparation(
+    jobs: &SyncSender<Frame>,
+    waiting: &mut Option<Frame>,
+    mut poll: impl FnMut() -> io::Result<Option<Frame>>,
+) -> io::Result<bool> {
+    let frame = match waiting.take() {
+        Some(frame) => frame,
+        None => match poll()? {
+            Some(frame) => frame,
+            None => return Ok(false),
+        },
+    };
+    frame.command_stamp()?;
+    match jobs.try_send(frame) {
+        Ok(()) => Ok(true),
+        Err(mpsc::TrySendError::Full(frame)) => {
+            *waiting = Some(frame);
+            Ok(false)
+        }
+        Err(mpsc::TrySendError::Disconnected(_)) => Err(io::ErrorKind::BrokenPipe.into()),
+    }
 }
 fn prepare_frame(
     frame: Frame,
@@ -399,31 +424,14 @@ impl ApplicationHandler for Audience {
         }
         // Hard per-tick work limit; pipe flood cannot monopolize frame scheduling.
         for _ in 0..2 {
-            let frame = match self.pipes.poll() {
-                Ok(Some(frame)) => frame,
-                Ok(None) => break,
+            match forward_preparation(
+                self.preparation.as_ref().unwrap(),
+                &mut self.waiting,
+                || self.pipes.poll(),
+            ) {
+                Ok(true) => {}
+                Ok(false) => break,
                 Err(_) => {
-                    el.exit();
-                    return;
-                }
-            };
-            let stamp = match frame.command_stamp() {
-                Ok(s) => s,
-                Err(_) => {
-                    el.exit();
-                    return;
-                }
-            };
-            match self.preparation.as_ref().unwrap().try_send(frame) {
-                Ok(()) => {}
-                Err(mpsc::TrySendError::Full(_)) => {
-                    let ack = self.session.reject_overload(stamp);
-                    if self.pipes.try_send(Frame::acknowledgment(ack)).is_err() {
-                        el.exit();
-                        return;
-                    }
-                }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
                     el.exit();
                     return;
                 }
@@ -474,10 +482,153 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         next: start,
         compositor: None,
         preparation: None,
+        waiting: None,
         completions: None,
         ready: VecDeque::with_capacity(2),
         applied_ready: None,
     };
     EventLoop::new()?.run_app(&mut app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sela::{
+        delivery::{Delivery, Lane},
+        scene::{ContentVersion, Extent},
+    };
+
+    fn frame(delivery: &mut Delivery, lane: Lane, revision: u64) -> Frame {
+        let now = Instant::now();
+        let cue = PreparedCue::diagnostic_color(
+            ContentVersion { id: 17, revision },
+            Extent {
+                width: 641,
+                height: 360,
+            },
+            [37, 59, 83, 255],
+            RendererCapabilities {
+                max_texture_dimension: 4096,
+            },
+        )
+        .unwrap();
+        delivery
+            .submit(Arc::new(cue), lane, now, now + Duration::from_secs(3))
+            .unwrap();
+        let mut wire = Vec::new();
+        Frame::command(&delivery.take_next().unwrap(), now)
+            .unwrap()
+            .write(&mut wire)
+            .unwrap();
+        Frame::read(wire.as_slice()).unwrap()
+    }
+
+    #[test]
+    fn backpressured_preparation_keeps_earlier_cue_and_safety_in_order() {
+        for lanes in [[Lane::Cue, Lane::Safety], [Lane::Safety, Lane::Cue]] {
+            let mut delivery = Delivery::new(Epoch(83));
+            let mut source = VecDeque::from([
+                frame(&mut delivery, lanes[0], 7),
+                frame(&mut delivery, lanes[1], 29),
+            ]);
+            let mut renderer = RendererSession::new(Epoch(83));
+            let (jobs, worker) = mpsc::sync_channel(1);
+            let mut waiting = None;
+            // Deliberately withhold the worker receive: second legal lane must
+            // backpressure, not advance consumed past the queued first stamp.
+            assert!(forward_preparation(&jobs, &mut waiting, || Ok(source.pop_front())).unwrap());
+            assert!(!forward_preparation(&jobs, &mut waiting, || Ok(source.pop_front())).unwrap());
+            assert_eq!(
+                waiting.as_ref().unwrap().command_stamp().unwrap().sequence,
+                2
+            );
+            for _ in 0..10 {
+                assert!(
+                    !forward_preparation(&jobs, &mut waiting, || panic!(
+                        "must not drain pipe while full"
+                    ))
+                    .unwrap()
+                );
+            }
+            for revision in [7, 29] {
+                let command = worker
+                    .try_recv()
+                    .unwrap()
+                    .into_command(
+                        Instant::now(),
+                        RendererCapabilities {
+                            max_texture_dimension: 4096,
+                        },
+                    )
+                    .unwrap();
+                let accepted = renderer.accept(command, Instant::now());
+                assert_eq!(accepted.outcome, Outcome::Accepted);
+                assert!(delivery.acknowledge(accepted, Instant::now()));
+                let applied = renderer
+                    .present(Instant::now(), |cue| {
+                        assert_eq!(cue.version().revision, revision);
+                        Ok(())
+                    })
+                    .unwrap();
+                assert!(delivery.acknowledge(applied, Instant::now()));
+                if revision == 7 {
+                    assert!(
+                        forward_preparation(&jobs, &mut waiting, || panic!(
+                            "retained frame comes first"
+                        ))
+                        .unwrap()
+                    );
+                }
+            }
+            assert!(waiting.is_none());
+            assert_eq!(renderer.applied().unwrap().version().revision, 29);
+            assert_eq!(
+                delivery.live(),
+                sela::delivery::LiveState::Confirmed(ContentVersion {
+                    id: 17,
+                    revision: 29
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn retained_preparation_keeps_deadline_and_worker_disconnect_is_fatal() {
+        let mut delivery = Delivery::new(Epoch(83));
+        let first = frame(&mut delivery, Lane::Cue, 7);
+        let second = frame(&mut delivery, Lane::Safety, 29);
+        let (jobs, worker) = mpsc::sync_channel(1);
+        jobs.try_send(first).ok().unwrap();
+        let mut waiting = Some(second);
+        assert!(!forward_preparation(&jobs, &mut waiting, || panic!("no new input")).unwrap());
+        worker.try_recv().unwrap();
+        assert!(forward_preparation(&jobs, &mut waiting, || panic!("no new input")).unwrap());
+        let later = Instant::now() + Duration::from_secs(6);
+        let command = worker
+            .try_recv()
+            .unwrap()
+            .into_command(
+                later,
+                RendererCapabilities {
+                    max_texture_dimension: 4096,
+                },
+            )
+            .unwrap();
+        let mut renderer = RendererSession::new(Epoch(83));
+        assert_eq!(
+            renderer.accept(command, later).outcome,
+            Outcome::Rejected(DeliveryError::TimedOut)
+        );
+        assert!(renderer.pending().is_none());
+        drop(worker);
+        let mut other = Delivery::new(Epoch(97));
+        waiting = Some(frame(&mut other, Lane::Cue, 41));
+        assert_eq!(
+            forward_preparation(&jobs, &mut waiting, || panic!("no new input"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::BrokenPipe
+        );
+    }
 }

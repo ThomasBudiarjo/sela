@@ -300,7 +300,10 @@ Depends on: M0-05. Tests: U, I.
 CPU model and M0-06b/c native owned-resource IPC: [delivery.md](delivery.md).
 Bounded font/text/image frames, worker preparation/upload, native submit/present
 receipts, stale/failed/expired scene retention and fresh-epoch/no-replay checks
-pass in the standalone diagnostic. Production preparation-intent coordination,
+pass in the standalone diagnostic. Oracle regressions cover matched disconnected
+receipts invalidating both lanes and bounded preparation backpressure preserving
+FIFO/deadlines; consecutive native Cue/Safety receipts and final pixels pass.
+Production preparation-intent coordination,
 pre-resolved safety resources, supervision and reference mask semantics remain open.
 
 - [x] Define sequence/epoch rules, accepted/applied/rejected acknowledgment meanings,
@@ -483,7 +486,9 @@ bounded chronological whole-document undo across section/metadata edits, and
 documented-reference editor layout with receipt-gated OK. See
 [use/check instructions](song-library.md). Native replay verifies save/undo,
 structural undo, reopen and dirty-close retention against independent SQLite
-bytes. Installed-reference workflow/field confirmation, Windows/IME/accessibility
+bytes. Direct native-handler regressions verify pending operations reject late
+commit/preedit before redraw and OK cannot close over a newer document snapshot.
+Installed-reference workflow/field confirmation, Windows/IME/accessibility
 and production qualification remain open.
 
 - [ ] Implement title, authors, copyright/license identifiers, lyrics and labeled

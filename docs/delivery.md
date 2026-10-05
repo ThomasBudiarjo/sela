@@ -263,8 +263,11 @@ uses a single preparation worker with one queued frame and one buffered result.
 Worker-only reconstruction/font parsing, explicit-font shaping/raster, allocation,
 GPU upload and a two-second upload-completion wait precede native admission.
 No resource file is opened by the audience. The pipe reader/writer remain separate
-bounded workers. Saturated preparation rejects `Busy` and consumes ordering
-identity; no eviction or retry backlog. Proper Delivery admission supplies at most
+bounded workers. Saturated preparation retains one frame and stops pipe intake
+until that frame can be enqueued, without changing its receiver timestamp or
+consuming a newer ordering identity ahead of earlier preparation. Lane overload
+is still rejected by RendererSession in preparation-completion order. No eviction
+or unbounded retry backlog. Proper Delivery admission supplies at most
 one Cue and one Safety; these are replacement lanes, not implemented mask policy.
 Preparation is FIFO, not a preemptible real-time safety path.
 
@@ -279,7 +282,8 @@ At most two ready pending bindings, one applied binding, one buffered completion
 and one executing upload are retained. Each background/mask pair is at most
 64MiB+16MiB (~400MiB for five), excluding upload staging, driver allocations,
 surface buffers and alignment. Native CPU ownership adds one queued resource
-frame, one executing reconstruction (temporarily both frame and copied payload),
+frame plus one retained backpressure frame (at most 64MiB+168 owned bytes extra),
+one executing reconstruction (temporarily both frame and copied payload),
 one completion and two pending/one applied cues to the pipe ceiling above.
 Raster output plus inset mask can add 32MiB, font shaping copies/cache are bounded
 by the diagnostic input limits but not measured RSS. No persistent cache exists.

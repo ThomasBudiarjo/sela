@@ -6,9 +6,9 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
-- Active Oracle fixes: M1-05 pending native-input ownership, M0-07d preparation
-  backpressure ordering, and M0-06 disconnected receipt invalidation. Each gets
-  regression coverage and its own local commit; no push authorized.
+- All three Oracle findings fixed: M1-05 pending native-input ownership, M0-07d
+  preparation backpressure ordering, and M0-06 disconnected receipt invalidation.
+  Regression/native checks passed; separate local fix commits, no push authorized.
 - Latest continuation merged and checked: **M1-06b** backed-up arrangement/
   section-ID persistence and lossless editor round trips; **M0-06c/M0-07d** owned
   resource transport and native worker-prepared text/image composition. Individual
@@ -1705,9 +1705,46 @@ PY
   Separate test bypasses native lock with a programmatic load and proves OK cannot
   close over a mismatched snapshot. No layout/appearance changes.
 - `cargo test --locked --all-targets -j4`: 117 passed, 1 ignored subprocess fixture
-  (includes parallel in-progress renderer regressions). Strict all-target Clippy,
+  (includes in-progress renderer regressions). Strict all-target Clippy,
   fmt and all-target build passed. Serial DISPLAY=:99 VK_DRIVER_FILES=/dev/null
   song-library.py, operator-shell.py and native-smoke.sh target/debug/sela passed,
   including independent SQLite/undo/reopen/OK/dirty-close/focus checks. Native IME
   interleaving is simulated via its actual input-handler API; Windows/real IME
   device qualification remains open. Local commit only; renderer fix follows.
+
+### M0-07d — Oracle preparation ordering fix and final checks — 2026-10-05 UTC
+
+- Saturated preparation retains one bounded Frame and stops pipe intake until
+  enqueued, rather than rejecting a later stamp before earlier preparation has
+  completed. Preserves receiver timestamp/deadline; worker disconnect is fatal.
+  Documented extra CPU ownership ceiling of 64MiB+168 bytes. Still FIFO diagnostic
+  preparation, not production safety-priority or measured memory qualification.
+- Deterministic queue-full regression withholds the worker receive, tests both
+  Cue/Safety orders with asymmetric revisions 7/29, repeated blocked polls (no
+  further pipe intake), and ordered Accepted/Applied. Separate test checks expired
+  retained deadlines and disconnected preparation worker.
+- `cargo test --locked --all-targets -j4`: 117 passed, zero failed, one ignored
+  subprocess fixture explicitly invoked by four process tests.
+  `cargo clippy --locked --all-targets -j4 -- -D warnings`,
+  `cargo fmt --all -- --check`, `cargo build --locked --all-targets -j4` and
+  `uvx ruff check scripts/native-cues.py scripts/song-library.py
+  scripts/operator-shell.py` passed. Combined native editor/operator/smoke checks
+  recorded above also passed with all three fixes present.
+- `DISPLAY=:99 VK_DRIVER_FILES=/dev/null python3 scripts/native-cues.py --backend
+  gl --out .amp/in/artifacts/oracle-fixes-native`: PASS, 16 captures. New real-process
+  case sends Cue 2 then Safety 3 without waiting for acknowledgments; both receive
+  Accepted then Applied, terminal order is 2 then 3, final blue RGB is (31,53,179).
+  Existing failure/expiry retention and fresh-session/no-replay assertions pass.
+  Evidence: `.amp/in/artifacts/oracle-fixes-native/summary.json`; inspected
+  `consecutive-lanes-blue.png`, uniform blue without old content/decorations.
+- Reinstalled using `cargo install --path . --locked --offline --debug --bin sela
+  --root "$PWD/.amp/install" -j4`; `.amp/install/bin/sela --version` prints
+  `Sela 0.1.0 (technical preview)`. `DISPLAY=:99 VK_DRIVER_FILES=/dev/null
+  scripts/native-smoke.sh "$PWD/.amp/install/bin/sela"`: PASS for focus, resize,
+  Ctrl+Q and WM close with clean exit/window removal. Temporary profile only.
+- All three requested Oracle fixes are implemented and locally verified. Backlog
+  evidence updated without closing parent qualification gates. Windows/real IME,
+  installed reference, GPU/projector, production safety/performance and installer
+  checks remain open. Next implementation slices remain arrangement controls/
+  missing-reference repair or renderer resize/safety coordination. Local commits
+  only; no push, publication or deployment.
