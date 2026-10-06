@@ -107,6 +107,16 @@ client capture, the first launch log and a JSON summary are kept, and only when
 an artifact directory is supplied. The X11 scripts (`song-library.py`,
 `operator-shell.py`) have not been ported; their Windows coverage is open.
 
+`scripts/live-output-windows.py` checks the operator driving the real audience
+renderer (M1-10b). Build `sela` and `--example seed_library` first; the script
+seeds a new temporary library with original songs, launches the operator with a
+private profile and drives it by keyboard only. Unlike the smoke, it never
+re-activates the operator between keys (`native_win.press`), so an audience
+window that takes focus fails the run. It finds the audience as the operator's
+child process window, compares screen captures of its client area after Go
+Live / Next / Previous, and checks that Live off and Ctrl+Q end the child. The
+audience monitor (`--monitor`, default `secondary`) must be unobstructed.
+
 ## Upstream and accessibility
 
 Inspected pinned checkout `a84689073d296dfd39987bc7dd478e43ef76d83a`:

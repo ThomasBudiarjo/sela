@@ -1,7 +1,9 @@
 //! Framework-independent preparation and presentation contracts.
 pub mod arrangement;
 pub mod delivery;
+pub mod output;
 pub mod preparation;
 pub mod scene;
+pub mod slides;
 pub mod storage;
 pub mod transport;

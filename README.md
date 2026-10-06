@@ -66,7 +66,8 @@ by the service UI.
 The [native cue diagnostic](docs/delivery.md) now tests bounded cross-process
 owned text/font/image commands, worker preparation/upload and native presentation
 receipts, including stale/failed/expired cue retention and restart without replay.
-It is not wired to the song editor or Go Live and does not implement Black/Clear/Logo.
+The operator's Go Live uses the same renderer through `sela --audience`; Black/Clear/Logo
+are not implemented.
 [Verified backup/restore](docs/storage.md) is available through
 the storage worker API, not yet through an operator recovery interface.
 
@@ -76,8 +77,13 @@ pagination are not yet available; see the [arrangement contract](docs/arrangemen
 
 The [operator shell](docs/operator-shell.md) provides separate panes, resizable
 dividers, collapsible Resources and five resource tabs. Songs opens the working
-editor; other resource libraries are not implemented. Live controls remain
-unavailable until an audience renderer is connected. The opt-in
+editor; other resource libraries are not implemented. **Live ○ Off** starts the
+audience output on the secondary monitor (`SELA_AUDIENCE_MONITOR` picks another
+monitor index or `window`). Pick a song in Songs, a slide in Preview, then
+**Go Live**; Live shows only what the renderer confirmed on screen, and
+**‹ Previous / Next ›** step through the live song. Plain white-on-black text,
+no themes, schedule items or masks yet. `sela --operator-library PATH` opens the
+operator on another library. The opt-in
 [video diagnostic](docs/video-spike.md) checks original FFV1 frames through FFmpeg
 and GPU composition; it is not a production video player.
 

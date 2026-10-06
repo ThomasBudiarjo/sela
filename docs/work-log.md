@@ -6,6 +6,11 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Operator live output (M1-10b, 2026-10-06):** Live on starts `sela --audience`
+  on the secondary monitor; Songs → Preview slide → Go Live shows white text on
+  the audience, and Live marks only renderer-acknowledged slides. Windows native
+  keyboard check passes. Next: M1-10 safety buttons with M0-08, schedule items
+  (M1-09), slide shortcuts after W02/W04 observation, hotplug with the owner.
 - **Windows host available (2026-10-06):** Windows 11 Home, i7-14650HX, Intel UHD
   + RTX 4060 Laptop, three displays at mixed scale. M0-01 is **done**: locked
   Windows build/clippy/fmt/tests pass and the native operator window passes the
@@ -85,7 +90,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
 | M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, documented-reference editor and receipt-gated OK; installed-reference/Windows/IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
-| M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b operator supervisor/Go Live/Live acknowledgment and all checklist items open. |
+| M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
 
 ## Session records
@@ -1946,3 +1951,54 @@ PY
 - Next: M1-10b operator supervisor that spawns `sela --audience` with a fresh
   epoch, Go Live from preview slides, Live pane showing confirmed/unknown/
   disconnected state, next/previous.
+
+### M1-10b — Operator live output and acknowledged Live — 2026-10-06 (UTC+7)
+
+- State: **active** parent, implemented-unqualified slice; no checklist box
+  closed (safety buttons, preparing state off the UI thread, observed 8.0.49
+  behavior, masked Go Live and latency remain open).
+- New `src/output.rs` `Supervisor`: spawns one audience child per session off the UI
+  thread with a fresh SHA-256 epoch; Starting → Connected{extent, caps} or
+  Lost (spawn failure, 15s startup timeout, exit, protocol or delivery error).
+  One cue in flight (3s acknowledgment) plus one wanted cue that coalesces to the
+  latest; rejected cues keep the prior confirmed state; children are killed and
+  reaped off-thread on drop. `Delivery::is_connected` added.
+- New `src/slides.rs`: one slide per section, versions `revision << 16 | index`,
+  white centered DejaVu Sans on black. Font size fitted from glyph advances
+  (5% margin) within the audience text limits (96px, 32 lines, 4096 bytes,
+  4096px area); missing glyphs fail before delivery.
+- `src/operator.rs`: storage-worker catalog in Songs (refreshed on activation),
+  Preview slide tiles (click, Enter/Space, double-click = Go Live per SRC-02,
+  documented-only), Live ○/● toggle, Go Live, Previous/Next stopping at the ends,
+  Live pane with output line, "On screen", "Sending…" and rejection lines, red
+  confirmed / amber sending borders; resend on settled surface change. No replay
+  into a new session. `sela --operator-library PATH`; `SELA_AUDIENCE_MONITOR`,
+  `SELA_AUDIENCE_BACKEND`.
+- Tests: `tests/output_process.rs` (fake audience child: apply, reject, resize,
+  wrong epoch, exit, hang, silent), supervisor and slide unit tests, operator
+  tests `go_live_requires_preview_and_output`,
+  `go_live_shows_renderer_acknowledged_slide`,
+  `rejected_or_lost_output_is_never_shown_as_live`, updated keyboard traversal,
+  and `audience::tests::operator_slide_cues_fit_the_audience_text_preparer`.
+- Native: new `scripts/live-output-windows.py`, `examples/seed_library.rs`,
+  `native_win.press`. The first run failed correctly: the real renderer rejected
+  a 256px cue (limit 96px); Live showed "Last cue not shown" and "nothing
+  confirmed", audience stayed black. Fixed the fit, added the cross-check test.
+- Checks: `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` (144 passed, 3 ignored fixtures),
+  `cargo build --locked` and `cargo build --locked --example seed_library` pass.
+  `python -m ruff check scripts` passes; `ruff format` applied to the new script
+  only (five older scripts are not ruff-formatted; unchanged).
+  `python scripts/live-output-windows.py` PASS three times (`--out` default,
+  `-r1`, `-r2`) on the laptop panel 2560x1600 @168 DPI, DX12, RTX 4060 Laptop:
+  operator kept the foreground, Go Live/Next/Previous observed 171–188 ms after
+  the key at capture granularity, Next stopped at the end, Live off and Ctrl+Q
+  ended the child. `slides::cue` on the UI thread: p50 0.10 ms, p95 0.11 ms, max
+  0.79 ms (200 runs, 2560x1600, dev profile, throwaway example not committed).
+- Not run: primary-monitor output with the operator on the same monitor, Linux/
+  macOS native, Intel adapter, audience hotplug, installed 8.0.49 W02/W03,
+  physical scanout latency, screen reader.
+- Next: M0-08 mask semantics then Black/Clear/Logo buttons; M1-09 schedule items
+  as Live sources; W02 observation (needs owner-assisted fixtures) for slide
+  shortcuts, selection and double-click; move cue preparation to a worker if
+  themes or images make it measurable.

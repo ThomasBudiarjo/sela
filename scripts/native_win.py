@@ -174,6 +174,14 @@ def chord(hwnd: int, keys: str) -> None:
     _send([_key_input(c, False) for c in codes] + [_key_input(c, True) for c in reversed(codes)])
 
 
+def press(hwnd: int, keys: str) -> None:
+    """Like chord, but never re-activates: fails if the window lost the foreground."""
+    if user32.GetForegroundWindow() != hwnd:
+        raise Failure(f"window {hwnd:#x} lost the foreground before {keys!r}")
+    codes = [_vk(k) for k in keys.split("+")]
+    _send([_key_input(c, False) for c in codes] + [_key_input(c, True) for c in reversed(codes)])
+
+
 def dpi(hwnd: int) -> int:
     return int(user32.GetDpiForWindow(hwnd))
 

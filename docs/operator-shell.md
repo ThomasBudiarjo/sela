@@ -217,3 +217,64 @@ Existing shared X11 services untouched. Retained actual ignored evidence:
 `.amp/in/artifacts/operator-shell/{normal,new-menu,compact,keyboard-collapsed,
 keyboard-reset,drag-minimum,editor-close-guard}.png`. Initial driver detected focus
 on the removed menu item; repaired the implementation, not the exit assertion.
+
+## M1-10b — Operator live output, Go Live and acknowledged Live
+
+Implemented-unqualified on local `main`. Supersedes the inert Go Live / Live
+statements in the M1-02 sections above. The operator now drives the real
+`sela --audience` renderer (M1-10a). Owner's request to integrate the UI with the
+engine is the sequencing approval; M1-03, M1-09 and M0-08 remain open.
+
+- **Live ○ Off / ● On** (toolbar, rightmost) starts or ends one audience child
+  through `output::Supervisor` with a fresh epoch. `SELA_AUDIENCE_MONITOR`
+  chooses `secondary` (default), a monitor index or `window`;
+  `SELA_AUDIENCE_BACKEND` overrides the graphics backend. Off ends the child. A
+  new session never replays earlier intent: Go Live must be repeated.
+- **Songs** lists the library catalog, loaded by the storage worker and refreshed
+  when the window is activated. Clicking or Enter/Space on a song previews it.
+  `sela --operator-library PATH` opens the operator on a chosen library.
+- **Preview** shows one slide per song section (trimmed lyrics, label below).
+  Selecting a slide never touches the audience. Double-click sends it to output,
+  per the historical v7 Quick Start (SRC-02, documented-only for 8.0.49).
+- **Go Live** sends the selected Preview slide. **‹ Previous / Next ›** step the
+  Live item and stop at its first/last slide (Sela policy, unobserved).
+- **Live** shows only what the renderer acknowledged as Applied: a red border on
+  the confirmed slide and "On screen: Song · Section". A cue still in flight is an
+  amber border plus "Sending…". At most one cue is in flight and the latest wanted
+  cue replaces any older unsent one, so rapid input cannot apply an older slide
+  last. A rejected cue shows "Last cue not shown: …" and keeps the prior Live
+  state; a lost renderer shows "output state unknown". A settled surface change
+  resends the current slide at the new extent.
+- Slide cues are white centered DejaVu Sans on black (provisional until a theme
+  ticket). Size is fitted from the font's glyph advances, 5% margin, within the
+  renderer's text limits (96px, 32 lines, 4096 bytes, 4096px text area). Missing
+  glyphs or oversize text fail before delivery and leave Live unchanged.
+- Tab order: the ten existing controls, then Live output, Go Live, Previous,
+  Next, song rows and preview slides. Sela accessibility policy, not observed.
+
+Not implemented: schedule items, Black/Clear/Logo, Alerts, themes, arrangements
+on output, slide-level keyboard shortcuts (Page Down, arrows), auto-follow,
+combined/contiguous modes and multi-output targeting.
+
+Cue construction runs on the UI thread. Measured `slides::cue` for a two-line
+slide at 2560x1600, 200 runs, dev profile: p50 0.10 ms, p95 0.11 ms, max 0.79 ms.
+Each cue carries the 760 KB (759,720-byte) bundled font over the pipe; visible latency below is
+an upper bound at capture granularity, not scanout timing.
+
+### Windows native evidence — 2026-10-06 (UTC+7)
+
+`cargo build --locked && cargo build --locked --example seed_library`, then
+`python scripts/live-output-windows.py` (keyboard only, operator foreground
+asserted before every key without re-activating it). PASS three times on the
+laptop panel (`secondary`, 2560x1600 @168 DPI, DX12, RTX 4060 Laptop): no audience
+before Live on; child window covers the monitor without taking focus; empty first
+frame; Go Live, Next, Next, Previous changed the captured output (observed
+171–188 ms after the key); Next at the end changed nothing; Previous restored the
+second slide exactly; Live off and Ctrl+Q ended the child; second session empty.
+Evidence: `.amp\in\artifacts\live-output-windows{,-r1,-r2}\`. The first run caught a
+real renderer rejection (fitted 256px exceeded the 96px limit): Live showed "Last
+cue not shown" and "nothing confirmed" while the audience stayed black. That fix
+added `audience::tests::operator_slide_cues_fit_the_audience_text_preparer`.
+
+Open: installed 8.0.49 observation (W02/W03), audience monitor hotplug, primary-
+monitor output, Linux/macOS native runs, mask states and measured Go Live latency.

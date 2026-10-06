@@ -206,6 +206,10 @@ impl Delivery {
         }
     }
 
+    pub fn is_connected(&self) -> bool {
+        self.connected
+    }
+
     /// Diagnostic history only, never a claim about a disconnected output.
     pub fn last_confirmed(&self) -> Option<ContentVersion> {
         self.last_confirmed.map(|(_, version)| version)

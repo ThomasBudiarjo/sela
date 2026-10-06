@@ -23,7 +23,7 @@ pub struct Extent {
     pub height: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RendererCapabilities {
     pub max_texture_dimension: u32,
 }

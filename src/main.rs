@@ -68,6 +68,32 @@ fn audience_main(args: &[std::ffi::OsString]) -> ! {
     }
 }
 
+/// Child command for one audience session. `SELA_AUDIENCE_MONITOR` selects a
+/// monitor index, `secondary` (default) or `window`; `SELA_AUDIENCE_BACKEND`
+/// overrides the graphics backend.
+fn audience_launcher() -> operator::Launcher {
+    std::sync::Arc::new(|epoch| {
+        let program = std::env::current_exe().unwrap_or_default();
+        let mut command = std::process::Command::new(program);
+        command
+            .arg("--audience")
+            .arg(format!("{:x}", epoch.0))
+            .arg(std::env::var_os("SELA_AUDIENCE_MONITOR").unwrap_or_else(|| "secondary".into()));
+        if let Some(backend) = std::env::var_os("SELA_AUDIENCE_BACKEND") {
+            command.arg(backend);
+        }
+        sela::output::Launch {
+            command,
+            frames: sela::output::Stream::Stdout,
+        }
+    })
+}
+
+enum Mode {
+    Operator(Option<std::path::PathBuf>),
+    Editor(std::path::PathBuf),
+}
+
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() == 1 && args[0] == "--version" {
@@ -77,13 +103,16 @@ fn main() {
     if args.first().is_some_and(|a| a == "--audience") {
         audience_main(&args[1..]);
     }
-    let library = if args.len() == 2 && args[0] == "--library" {
-        Some(std::path::PathBuf::from(&args[1]))
-    } else if args.is_empty() {
-        None
-    } else {
-        eprintln!("usage: sela [--version | --library DATABASE_PATH]");
-        std::process::exit(2);
+    let mode = match args.as_slice() {
+        [] => Mode::Operator(song_library::default_path()),
+        [flag, path] if flag == "--library" => Mode::Editor(path.into()),
+        [flag, path] if flag == "--operator-library" => Mode::Operator(Some(path.into())),
+        _ => {
+            eprintln!(
+                "usage: sela [--version | --library DATABASE_PATH | --operator-library DATABASE_PATH]"
+            );
+            std::process::exit(2);
+        }
     };
     zlog::init();
     zlog::init_output_stderr();
@@ -95,14 +124,17 @@ fn main() {
         })
         .detach();
         bind_operator_keys(cx);
-        if let Some(path) = library {
-            if let Err(error) = song_library::open(path, cx) {
-                eprintln!("{error}");
-                cx.quit();
+        let library = match mode {
+            Mode::Editor(path) => {
+                if let Err(error) = song_library::open(path, cx) {
+                    eprintln!("{error}");
+                    cx.quit();
+                }
+                cx.activate(true);
+                return;
             }
-            cx.activate(true);
-            return;
-        }
+            Mode::Operator(library) => library,
+        };
         let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
         if let Err(error) = cx.open_window(
             WindowOptions {
@@ -115,7 +147,7 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                let operator = cx.new(Operator::new);
+                let operator = cx.new(|cx| Operator::new(library, audience_launcher(), cx));
                 operator.read(cx).focus.clone().focus(window, cx);
                 operator
             },

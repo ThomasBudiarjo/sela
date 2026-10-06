@@ -680,6 +680,47 @@ mod tests {
     }
 
     #[test]
+    fn operator_slide_cues_fit_the_audience_text_preparer() {
+        let caps = RendererCapabilities {
+            max_texture_dimension: 8192,
+        };
+        let texts = [
+            "One".to_string(),
+            "First original line\nSecond original line".to_string(),
+            "W".repeat(48),
+            "WWWW MMMM\n".repeat(31) + "WWWW MMMM",
+            "Café a\u{301} déjà vu — \u{201c}quoted\u{201d}".to_string(),
+        ];
+        for (width, height) in [
+            (640, 360),
+            (1280, 720),
+            (1920, 1080),
+            (2560, 1600),
+            (4160, 2160),
+        ] {
+            let extent = Extent { width, height };
+            for text in &texts {
+                let slide = sela::slides::Slide {
+                    label: String::new(),
+                    text: text.clone(),
+                };
+                let version = ContentVersion { id: 1, revision: 1 };
+                let cue = sela::slides::cue(version, &slide, extent, caps).unwrap();
+                let t = cue.text().unwrap();
+                text::raster_aligned(
+                    t.font(),
+                    t.content(),
+                    width - 64,
+                    height - 64,
+                    f32::from(t.font_size()),
+                    true,
+                )
+                .unwrap_or_else(|e| panic!("{width}x{height} {text:?}: {e:?}"));
+            }
+        }
+    }
+
+    #[test]
     fn backend_names_are_explicit() {
         assert_eq!(parse_backend("dx12"), Some(wgpu::Backends::DX12));
         assert_eq!(parse_backend("vulkan"), Some(wgpu::Backends::VULKAN));
