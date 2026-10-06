@@ -270,6 +270,7 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
         .unwrap_or(std::path::Path::new("."));
     let nonce: String = source.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
     let directory = parent.join(format!(".sela-backup-{nonce}"));
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
@@ -323,7 +324,10 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     let verified = Repository::open_internal(&path, false)?;
     verified.verify_history(cancel, start)?;
     verified.db.close().map_err(|(_, e)| Error::from(e))?;
-    std::fs::File::open(&path)
+    // Windows FlushFileBuffers requires a handle with write access.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
         .and_then(|f| f.sync_all())
         .map_err(|_| Error::Io)?;
     if cancel.load(Ordering::Acquire) {
