@@ -1,7 +1,8 @@
 use super::*;
+use crate::text_input::{self, TextInput};
 use gpui::{
-    CursorStyle, Empty, FontWeight, MouseButton, PathPromptOptions, Pixels, Point, SharedString,
-    Subscription, Task,
+    CursorStyle, Empty, Entity, Focusable, FontWeight, MouseButton, PathPromptOptions, Pixels,
+    Point, SharedString, Subscription, Task,
 };
 use sela::{
     delivery::{Epoch, LiveState},
@@ -10,8 +11,9 @@ use sela::{
     output::{Launch, Refusal, Status, Supervisor},
     preparation::{PreparationEvent, Preparer},
     scene::{ContentVersion, Extent, PrepareError, RendererCapabilities},
+    schedule::{EntryId, Schedule},
     slides::{self, Sizing, Slide},
-    storage::{self, Reply, Version, Worker},
+    storage::{self, MAX_ITEMS, Reply, Version, Worker},
 };
 use std::{
     collections::VecDeque,
@@ -52,8 +54,21 @@ pub(super) const IMPORT_IMAGE: usize = 18;
 pub(super) const USE_AS_LOGO: usize = 19;
 pub(super) const IMAGE_MENU_LOGO: usize = 20;
 pub(super) const NORMALIZE: usize = 21;
-const CONTROLS: usize = 22;
+pub(super) const OPEN_SCHEDULE: usize = 22;
+pub(super) const SAVE_SCHEDULE: usize = 23;
+pub(super) const ADD_TO_SCHEDULE: usize = 24;
+pub(super) const MOVE_UP: usize = 25;
+pub(super) const MOVE_DOWN: usize = 26;
+pub(super) const REMOVE_ITEM: usize = 27;
+pub(super) const DIALOG_CONFIRM: usize = 28;
+pub(super) const DIALOG_CANCEL: usize = 29;
+pub(super) const NEW_SCHEDULE: usize = 30;
+pub(super) const ITEM_MENU_REMOVE: usize = 31;
+const CONTROLS: usize = 32;
 const SONG_TAB_INDEX: isize = 100;
+const SCHEDULE_TAB_INDEX: isize = 500;
+const SAVED_TAB_INDEX: isize = 700;
+const DIALOG_TAB_INDEX: isize = 900;
 const SLIDE_TAB_INDEX: isize = 1000;
 const IMAGE_TAB_INDEX: isize = 2000;
 const POLL: Duration = Duration::from_millis(16);
@@ -82,20 +97,81 @@ fn layer_name(layer: Layer) -> &'static str {
 /// Builds the audience child command for a fresh session epoch.
 pub(super) type Launcher = Arc<dyn Fn(Epoch) -> Launch + Send + Sync>;
 
+/// Keyboard order follows control indices, with room to place the New menu's
+/// second item next to the first and dialog buttons after their rows.
+fn tab_position(index: usize) -> isize {
+    match index {
+        NEW_SCHEDULE => 2 * 11 + 1,
+        DIALOG_CONFIRM => DIALOG_TAB_INDEX + 1,
+        DIALOG_CANCEL => DIALOG_TAB_INDEX + 2,
+        _ => 2 * (index as isize + 1),
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Split(usize);
+
+/// A library song dragged towards the Schedule.
+#[derive(Clone)]
+struct SongDrag {
+    version: Version,
+    title: String,
+}
+
+/// A schedule entry dragged to a new position.
+#[derive(Clone, Copy)]
+struct EntryDrag(EntryId);
+
+struct DragLabel(SharedString);
+
+impl Render for DragLabel {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded(px(4.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(SURFACE))
+            .shadow_md()
+            .text_size(px(12.))
+            .text_color(rgb(TEXT))
+            .child(self.0.clone())
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct Item {
     pub(super) version: Version,
+    /// The schedule entry this was previewed from; `None` for a library song.
+    pub(super) entry: Option<EntryId>,
     pub(super) title: String,
     pub(super) slides: Vec<Slide>,
+}
+
+/// What follows once unsaved schedule changes are discarded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Then {
+    Open,
+    New,
+    Quit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Dialog {
+    SaveAs,
+    Open,
+    Unsaved(Then),
+    Remove(EntryId),
 }
 
 enum Request {
     Open,
     Catalog,
     Song(Version),
+    SaveSchedule(storage::Schedule),
+    ScheduleCatalog,
+    OpenSchedule(Version),
 }
 
 pub(super) struct Operator {
@@ -147,6 +223,22 @@ pub(super) struct Operator {
     /// Not persisted; Sela has no settings store yet.
     pub(super) sizing: Sizing,
     pub(super) size_cap: Option<(Version, Extent, Sizing, Option<u16>)>,
+    pub(super) schedule: Schedule,
+    pub(super) selected_entry: Option<EntryId>,
+    schedule_rows: Vec<FocusHandle>,
+    pub(super) schedule_message: Option<String>,
+    /// One schedule storage job waiting for the worker.
+    queued: Option<(storage::Command, Request)>,
+    /// `None` while the saved list is loading.
+    pub(super) saved_schedules: Option<Vec<(Version, String)>>,
+    saved_rows: Vec<FocusHandle>,
+    pub(super) dialog: Option<Dialog>,
+    dialog_return: Option<FocusHandle>,
+    pub(super) dialog_message: Option<String>,
+    pub(super) title_input: Option<Entity<TextInput>>,
+    item_menu: Option<(EntryId, Point<Pixels>)>,
+    /// A library double-click waiting for its song to load.
+    live_on_load: Option<Version>,
     _poller: Option<Task<()>>,
 }
 
@@ -192,7 +284,7 @@ impl Operator {
             focus: cx.focus_handle(),
             controls: std::array::from_fn(|index| {
                 cx.focus_handle()
-                    .tab_index(index as isize + 1)
+                    .tab_index(tab_position(index))
                     .tab_stop(true)
             }),
             ratios: [0.24, 0.62, 0.62],
@@ -236,6 +328,19 @@ impl Operator {
             media_message,
             sizing: Sizing::default(),
             size_cap: None,
+            schedule: Schedule::default(),
+            selected_entry: None,
+            schedule_rows: Vec::new(),
+            schedule_message: None,
+            queued: None,
+            saved_schedules: None,
+            saved_rows: Vec::new(),
+            dialog: None,
+            dialog_return: None,
+            dialog_message: None,
+            title_input: None,
+            item_menu: None,
+            live_on_load: None,
             _poller: Some(poller),
         }
     }
@@ -257,6 +362,7 @@ impl Operator {
                         || self.controls[IMPORT_IMAGE..=NORMALIZE]
                             .iter()
                             .any(|f| f.is_focused(window))
+                        || self.controls[ADD_TO_SCHEDULE].is_focused(window)
                         || self.song_rows.iter().any(|f| f.is_focused(window))
                         || self.image_rows.iter().any(|f| f.is_focused(window)))
                 {
@@ -309,9 +415,271 @@ impl Operator {
                     self.send(index);
                 }
             }
+            OPEN_SCHEDULE => self.open_schedule(window, cx),
+            SAVE_SCHEDULE => self.save_schedule(window, cx),
+            ADD_TO_SCHEDULE if !self.collapsed && self.tab == 0 => {
+                match self
+                    .selected_song
+                    .filter(|_| self.selected_entry.is_none())
+                    .and_then(|v| self.catalog.iter().find(|(c, _)| *c == v).cloned())
+                {
+                    Some((version, title)) => self.add_entry(usize::MAX, version, title),
+                    None => self.schedule_message = Some("Select a song in Songs first".into()),
+                }
+            }
+            MOVE_UP | MOVE_DOWN => match self.selected_entry {
+                Some(id) => {
+                    self.schedule.move_by(id, index == MOVE_UP);
+                }
+                None => self.schedule_message = Some("Select a schedule item first".into()),
+            },
+            REMOVE_ITEM => match self.selected_entry {
+                Some(id) => self.open_dialog(Dialog::Remove(id), window, cx),
+                None => self.schedule_message = Some("Select a schedule item first".into()),
+            },
+            ITEM_MENU_REMOVE => {
+                if let Some((id, _)) = self.item_menu.take() {
+                    self.open_dialog(Dialog::Remove(id), window, cx);
+                }
+            }
+            NEW_SCHEDULE if self.new_menu => {
+                self.new_menu = false;
+                self.controls[9].focus(window, cx);
+                self.guard(Then::New, window, cx);
+            }
+            DIALOG_CONFIRM => match self.dialog {
+                Some(Dialog::SaveAs) => {
+                    let title = self
+                        .title_input
+                        .as_ref()
+                        .map(|input| input.read(cx).text().trim().to_owned())
+                        .unwrap_or_default();
+                    if title.is_empty() {
+                        self.dialog_message = Some("Enter a title for the schedule".into());
+                    } else if self.queue_save(title) {
+                        self.close_dialog(window, cx);
+                    }
+                }
+                Some(Dialog::Remove(id)) => {
+                    self.close_dialog(window, cx);
+                    self.remove_entry(id);
+                }
+                Some(Dialog::Unsaved(then)) => {
+                    self.close_dialog(window, cx);
+                    self.proceed(then, window, cx);
+                }
+                Some(Dialog::Open) | None => return,
+            },
+            DIALOG_CANCEL if self.dialog.is_some() => self.close_dialog(window, cx),
             _ => return,
         }
         cx.notify();
+    }
+
+    fn add_entry(&mut self, at: usize, version: Version, title: String) {
+        self.schedule_message = match self.schedule.insert(at, version, title) {
+            Ok(_) => None,
+            Err(_) => Some(format!("The schedule is full ({MAX_ITEMS} items)")),
+        };
+    }
+
+    /// Never touches Live: a removed live item stays on screen (see `live_lines`).
+    fn remove_entry(&mut self, id: EntryId) {
+        if self.schedule.remove(id).is_some() && self.selected_entry == Some(id) {
+            self.selected_entry = None;
+        }
+    }
+
+    fn select_entry(&mut self, id: EntryId) {
+        if let Some(entry) = self.schedule.get(id) {
+            self.selected_entry = Some(id);
+            self.selected_song = Some(entry.version);
+            self.live_on_load = None;
+            self.schedule_message = None;
+        }
+    }
+
+    /// Down/Up. Stops at either end; provisional (EasyWorship unobserved).
+    fn step_schedule(&mut self, forward: bool) {
+        match self.schedule.neighbor(self.selected_entry, forward) {
+            Some(id) => self.select_entry(id),
+            None if self.schedule.entries().is_empty() => {
+                self.schedule_message = Some("The schedule is empty".into());
+            }
+            None => {}
+        }
+    }
+
+    fn remove_selected(&mut self) {
+        match self.selected_entry {
+            Some(id) => self.remove_entry(id),
+            None => self.schedule_message = Some("Select a schedule item first".into()),
+        }
+    }
+
+    fn open_dialog(&mut self, dialog: Dialog, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog.is_none() {
+            self.dialog_return = window.focused(cx);
+        }
+        self.dialog = Some(dialog);
+        self.dialog_message = None;
+        self.item_menu = None;
+        self.new_menu = false;
+        if dialog == Dialog::SaveAs {
+            let input = self.title_input.get_or_insert_with(|| {
+                cx.new(|cx| {
+                    TextInput::new("", false, 1024, DIALOG_TAB_INDEX, cx)
+                        .expect("empty text is valid")
+                })
+            });
+            input.update(cx, |input, cx| {
+                let _ = input.set_text("", cx);
+            });
+            input.read(cx).focus_handle(cx).focus(window, cx);
+        } else {
+            // The non-destructive choice, so Enter never discards by accident.
+            self.controls[DIALOG_CANCEL].focus(window, cx);
+        }
+    }
+
+    fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dialog = None;
+        self.dialog_message = None;
+        match self.dialog_return.take() {
+            Some(handle) => handle.focus(window, cx),
+            None => self.focus.focus(window, cx),
+        }
+    }
+
+    /// Runs `then` now, or asks first when the schedule has unsaved changes.
+    fn guard(&mut self, then: Then, window: &mut Window, cx: &mut Context<Self>) {
+        if self.schedule.is_dirty() {
+            self.open_dialog(Dialog::Unsaved(then), window, cx);
+        } else {
+            self.proceed(then, window, cx);
+        }
+    }
+
+    fn proceed(&mut self, then: Then, window: &mut Window, cx: &mut Context<Self>) {
+        match then {
+            Then::Open => {
+                if self.worker.is_none() {
+                    self.schedule_message = Some("No song library open".into());
+                } else if self.queue(
+                    storage::Command::ScheduleCatalog(None),
+                    Request::ScheduleCatalog,
+                ) {
+                    self.saved_schedules = None;
+                    self.open_dialog(Dialog::Open, window, cx);
+                }
+            }
+            Then::New => {
+                self.schedule.clear();
+                self.selected_entry = None;
+                self.schedule_message = None;
+            }
+            Then::Quit => window.remove_window(),
+        }
+    }
+
+    fn open_schedule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.guard(Then::Open, window, cx);
+    }
+
+    fn save_schedule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.worker.is_none() {
+            self.schedule_message = Some("No song library open".into());
+            return;
+        }
+        match self.schedule.title().map(str::to_owned) {
+            Some(title) => {
+                self.queue_save(title);
+            }
+            None => self.open_dialog(Dialog::SaveAs, window, cx),
+        }
+    }
+
+    fn queue_save(&mut self, title: String) -> bool {
+        let snapshot = self.schedule.snapshot(&title);
+        let command = storage::Command::SaveSchedule(self.schedule.saved(), snapshot.clone());
+        let queued = self.queue(command, Request::SaveSchedule(snapshot));
+        if queued {
+            self.schedule_message = Some("Saving…".into());
+        }
+        queued
+    }
+
+    fn queue(&mut self, command: storage::Command, request: Request) -> bool {
+        if self.queued.is_some() || self.schedule_request() {
+            self.schedule_message =
+                Some("Wait for the schedule to finish saving or opening".into());
+            return false;
+        }
+        self.queued = Some((command, request));
+        true
+    }
+
+    fn schedule_request(&self) -> bool {
+        matches!(
+            self.request,
+            Some(Request::SaveSchedule(_) | Request::ScheduleCatalog | Request::OpenSchedule(_))
+        )
+    }
+
+    fn open_saved(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((version, title)) = self
+            .saved_schedules
+            .as_ref()
+            .and_then(|list| list.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        if self.queue(
+            storage::Command::Schedule(version),
+            Request::OpenSchedule(version),
+        ) {
+            self.schedule_message = Some(format!("Opening “{title}”…"));
+            self.close_dialog(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Quit and window-close guard: unsaved schedule changes are confirmed
+    /// first, and a save in progress finishes before the window closes.
+    pub(super) fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let saving = matches!(self.request, Some(Request::SaveSchedule(_)))
+            || matches!(self.queued, Some((_, Request::SaveSchedule(_))));
+        if saving {
+            self.schedule_message = Some("Saving the schedule… try again when it is saved".into());
+        } else if self.schedule.is_dirty() {
+            self.open_dialog(Dialog::Unsaved(Then::Quit), window, cx);
+        } else {
+            return true;
+        }
+        cx.notify();
+        false
+    }
+
+    /// Double-click in Songs goes straight to Live (documented), from the
+    /// first slide (provisional).
+    fn song_to_live(&mut self, index: usize) {
+        let Some((version, _)) = self.catalog.get(index).cloned() else {
+            return;
+        };
+        self.selected_song = Some(version);
+        self.selected_entry = None;
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.version == version && p.entry.is_none())
+        {
+            self.live_on_load = None;
+            self.preview_slide = 0;
+            self.go_live();
+        } else {
+            self.live_on_load = Some(version);
+        }
     }
 
     pub(super) fn poll(&mut self, cx: &mut Context<Self>) {
@@ -580,6 +948,7 @@ impl Operator {
             return false;
         };
         let mut changed = false;
+        let mut live_now = false;
         if let Some(reply) = worker.poll() {
             changed = true;
             match (self.request.take(), reply) {
@@ -593,20 +962,67 @@ impl Operator {
                 {
                     self.preview = Some(Item {
                         version,
+                        entry: self.selected_entry,
                         title: song.title.clone(),
                         slides: slides::slides(&song),
                     });
                     self.preview_slide = 0;
+                    if self.live_on_load == Some(version) && self.selected_entry.is_none() {
+                        self.live_on_load = None;
+                        live_now = true;
+                    }
+                }
+                (Some(Request::SaveSchedule(snapshot)), Ok(Reply::Saved(version))) => {
+                    self.schedule_message = Some(format!("Saved “{}”", snapshot.title));
+                    self.schedule.mark_saved(version, snapshot);
+                }
+                (Some(Request::ScheduleCatalog), Ok(Reply::ScheduleCatalog(mut list))) => {
+                    list.sort_by_key(|a| a.1.to_lowercase());
+                    self.saved_schedules = Some(list);
+                }
+                (Some(Request::OpenSchedule(version)), Ok(Reply::Schedule(stored, songs))) => {
+                    let title = stored.title.clone();
+                    let titles = songs.into_iter().map(|song| song.title).collect();
+                    self.schedule_message =
+                        Some(match self.schedule.open(version, stored, titles) {
+                            Ok(()) => {
+                                self.selected_entry = None;
+                                format!("Opened “{title}”")
+                            }
+                            Err(_) => "The saved schedule could not be read".into(),
+                        });
+                }
+                (Some(Request::SaveSchedule(_)), Err(storage::Error::Conflict)) => {
+                    self.schedule_message = Some(
+                        "Not saved: this schedule was saved elsewhere since it was opened".into(),
+                    );
+                }
+                (
+                    Some(
+                        Request::SaveSchedule(_)
+                        | Request::ScheduleCatalog
+                        | Request::OpenSchedule(_),
+                    ),
+                    Err(error),
+                ) => {
+                    self.schedule_message = Some(format!("Schedule storage failed ({error:?})"));
+                    if self.dialog == Some(Dialog::Open) {
+                        self.saved_schedules = Some(Vec::new());
+                    }
                 }
                 (_, Err(error)) => self.library_error = Some(storage_message(error)),
                 _ => {}
             }
         }
         if self.request.is_none() {
-            let wanted = self
-                .selected_song
-                .filter(|v| self.preview.as_ref().is_none_or(|p| p.version != *v));
-            let request = if let Some(version) = wanted {
+            let wanted = self.selected_song.filter(|v| {
+                self.preview
+                    .as_ref()
+                    .is_none_or(|p| (p.version, p.entry) != (*v, self.selected_entry))
+            });
+            let request = if let Some(job) = self.queued.take() {
+                Some(job)
+            } else if let Some(version) = wanted {
                 Some((storage::Command::Song(version), Request::Song(version)))
             } else if self.catalog_stale {
                 self.catalog_stale = false;
@@ -615,8 +1031,17 @@ impl Operator {
                 None
             };
             if let Some((command, request)) = request {
+                let schedule = matches!(
+                    request,
+                    Request::SaveSchedule(_) | Request::ScheduleCatalog | Request::OpenSchedule(_)
+                );
                 match worker.submit(command) {
                     Ok(_) => self.request = Some(request),
+                    Err(error) if schedule => {
+                        self.schedule_message =
+                            Some(format!("Schedule storage failed ({error:?})"));
+                        changed = true;
+                    }
                     Err(error) => {
                         self.library_error = Some(storage_message(error));
                         changed = true;
@@ -624,12 +1049,17 @@ impl Operator {
                 }
             }
         }
+        if live_now {
+            self.go_live();
+        }
         changed
     }
 
     fn select_song(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some((version, _)) = self.catalog.get(index) {
             self.selected_song = Some(*version);
+            self.selected_entry = None;
+            self.live_on_load = None;
             cx.notify();
         }
     }
@@ -999,6 +1429,14 @@ impl Operator {
                 lines.push((format!("On screen: {slide}"), color));
             }
         }
+        if self
+            .live
+            .as_ref()
+            .and_then(|item| item.entry)
+            .is_some_and(|id| self.schedule.get(id).is_none())
+        {
+            lines.push(("Live item is no longer in the schedule".into(), DARK_MUTED));
+        }
         if let Some(layer) = output.and_then(Supervisor::mask_pending) {
             lines.push((format!("Sending mask: {}…", layer_name(layer)), SENDING));
         }
@@ -1121,7 +1559,12 @@ impl Operator {
                     .iter()
                     .enumerate()
                     .map(|(index, (version, title))| {
-                        let selected = self.selected_song == Some(*version);
+                        let selected =
+                            self.selected_song == Some(*version) && self.selected_entry.is_none();
+                        let drag = SongDrag {
+                            version: *version,
+                            title: title.clone(),
+                        };
                         div()
                             .id(("song", index))
                             .debug_selector(move || format!("song-{index}"))
@@ -1142,13 +1585,23 @@ impl Operator {
                                 window.prevent_default();
                                 this.select_song(index, cx);
                             }))
-                            .on_click(cx.listener(move |this, event, window, cx| {
-                                if matches!(event, gpui::ClickEvent::Keyboard(_)) {
-                                    return;
-                                }
-                                this.song_rows[index].focus(window, cx);
-                                this.select_song(index, cx);
-                            }))
+                            .on_click(cx.listener(
+                                move |this, event: &gpui::ClickEvent, window, cx| {
+                                    if matches!(event, gpui::ClickEvent::Keyboard(_)) {
+                                        return;
+                                    }
+                                    this.song_rows[index].focus(window, cx);
+                                    if event.click_count() >= 2 {
+                                        this.song_to_live(index);
+                                        cx.notify();
+                                    } else {
+                                        this.select_song(index, cx);
+                                    }
+                                },
+                            ))
+                            .on_drag(drag, |drag, _, _, cx| {
+                                cx.new(|_| DragLabel(drag.title.clone().into()))
+                            })
                             .child(if title.trim().is_empty() {
                                 "Untitled".to_string()
                             } else {
@@ -1156,6 +1609,363 @@ impl Operator {
                             })
                     }),
             )
+            .into_any_element()
+    }
+
+    fn schedule_pane(&mut self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let count = self.schedule.entries().len();
+        while self.schedule_rows.len() < count {
+            let index = self.schedule_rows.len() as isize;
+            self.schedule_rows.push(
+                cx.focus_handle()
+                    .tab_index(SCHEDULE_TAB_INDEX + index)
+                    .tab_stop(true),
+            );
+        }
+        let confirmed = self.output.as_ref().and_then(|o| match o.live() {
+            LiveState::Confirmed(version) => Some(version),
+            LiveState::Unknown => None,
+        });
+        // Marked only once the renderer acknowledged a slide of this entry.
+        let on_screen = self
+            .live_index(confirmed)
+            .and(self.live.as_ref())
+            .and_then(|item| item.entry);
+        let header = match self.schedule.title() {
+            Some(title) => format!("Schedule · {title}"),
+            None => "Schedule".into(),
+        };
+        let idle = self.selected_entry.is_none();
+        let rows = self
+            .schedule
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let id = entry.id;
+                let title = entry.title.clone();
+                let selected = self.selected_entry == Some(id);
+                div()
+                    .id(("schedule-item", index))
+                    .debug_selector(move || format!("schedule-item-{index}"))
+                    .track_focus(&self.schedule_rows[index])
+                    .key_context("SelaControl")
+                    .flex_shrink_0()
+                    .h(px(28.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .cursor_pointer()
+                    .bg(rgb(if selected { 0xe3e7f3 } else { SURFACE }))
+                    .hover(|d| d.bg(rgb(HOVER)))
+                    .focus(|d| d.bg(rgb(0xdce3fa)))
+                    .drag_over::<SongDrag>(|s, _, _, _| s.bg(rgb(0xdce3fa)))
+                    .drag_over::<EntryDrag>(|s, _, _, _| s.bg(rgb(0xdce3fa)))
+                    .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
+                        window.prevent_default();
+                        this.select_entry(id);
+                        cx.notify();
+                    }))
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            if matches!(event, gpui::ClickEvent::Keyboard(_))
+                                || event.is_right_click()
+                            {
+                                return;
+                            }
+                            this.schedule_rows[index].focus(window, cx);
+                            this.select_entry(id);
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                            this.schedule_rows[index].focus(window, cx);
+                            this.select_entry(id);
+                            this.item_menu = Some((id, event.position));
+                            cx.notify();
+                        }),
+                    )
+                    .on_drag(EntryDrag(id), {
+                        let title = title.clone();
+                        move |_, _, _, cx| cx.new(|_| DragLabel(title.clone().into()))
+                    })
+                    // Dropping on a row inserts a song before it, or moves the
+                    // dragged entry into its place (provisional).
+                    .on_drop(cx.listener(move |this, drag: &SongDrag, _, cx| {
+                        this.add_entry(index, drag.version, drag.title.clone());
+                        cx.notify();
+                    }))
+                    .on_drop(cx.listener(move |this, drag: &EntryDrag, _, cx| {
+                        this.schedule.move_to(drag.0, index);
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .w(px(18.))
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(MUTED))
+                            .child(format!("{}", index + 1)),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().child(title))
+                    .when(on_screen == Some(id), |d| {
+                        d.child(
+                            div()
+                                .debug_selector(|| "schedule-live-marker".into())
+                                .flex_shrink_0()
+                                .text_size(px(11.))
+                                .text_color(rgb(ON_SCREEN))
+                                .child("● Live"),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        div()
+            .debug_selector(|| "Schedule".into())
+            .w(px(width))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(
+                div()
+                    .h(px(32.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(CHROME))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(header),
+                    )
+                    .when(self.schedule.is_dirty(), |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(11.))
+                                .text_color(rgb(MUTED))
+                                .child("Unsaved"),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .id("schedule-list")
+                    .debug_selector(|| "schedule-list".into())
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .bg(rgb(SURFACE))
+                    .drag_over::<SongDrag>(|s, _, _, _| s.bg(rgb(0xeef1fa)))
+                    .on_drop(cx.listener(|this, drag: &SongDrag, _, cx| {
+                        this.add_entry(usize::MAX, drag.version, drag.title.clone());
+                        cx.notify();
+                    }))
+                    .on_drop(cx.listener(|this, drag: &EntryDrag, _, cx| {
+                        this.schedule.move_to(drag.0, usize::MAX);
+                        cx.notify();
+                    }))
+                    .when(rows.is_empty(), |d| {
+                        d.items_center()
+                            .justify_center()
+                            .p_3()
+                            .text_color(rgb(MUTED))
+                            .text_center()
+                            .child("Drag songs here or use Add to Schedule")
+                    })
+                    .children(rows),
+            )
+            .children(self.schedule_message.clone().map(|message| {
+                div()
+                    .debug_selector(|| "schedule-message".into())
+                    .flex_shrink_0()
+                    .px_3()
+                    .py_1()
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .truncate()
+                    .child(message)
+            }))
+            .child(
+                div()
+                    .h(px(30.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_1()
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(CHROME))
+                    .children(
+                        [
+                            (MOVE_UP, "schedule-up", "Up"),
+                            (MOVE_DOWN, "schedule-down", "Down"),
+                            (REMOVE_ITEM, "schedule-remove", "Remove"),
+                        ]
+                        .map(|(index, id, label)| {
+                            self.button(index, id, label, cx)
+                                .when(idle, |d| d.text_color(rgb(DISABLED)))
+                        }),
+                    ),
+            )
+    }
+
+    fn dialog_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let dialog = self.dialog?;
+        let heading = match dialog {
+            Dialog::SaveAs => "Save schedule as".to_string(),
+            Dialog::Open => "Open schedule".into(),
+            Dialog::Unsaved(Then::Open) => "Open another schedule without saving changes?".into(),
+            Dialog::Unsaved(Then::New) => "Start a new schedule without saving changes?".into(),
+            Dialog::Unsaved(Then::Quit) => "Quit without saving schedule changes?".into(),
+            Dialog::Remove(id) => match self.schedule.get(id) {
+                Some(entry) => format!("Remove “{}” from the schedule?", entry.title),
+                None => "Remove this item from the schedule?".into(),
+            },
+        };
+        let confirm = match dialog {
+            Dialog::SaveAs => Some("Save"),
+            Dialog::Open => None,
+            Dialog::Unsaved(_) => Some("Discard changes"),
+            Dialog::Remove(_) => Some("Remove"),
+        };
+        let body = match dialog {
+            Dialog::SaveAs => self.title_input.clone().map(IntoElement::into_any_element),
+            Dialog::Open => Some(self.saved_list(cx)),
+            _ => None,
+        };
+        Some(
+            div()
+                .debug_selector(|| "schedule-dialog".into())
+                .occlude()
+                .absolute()
+                .top(px(44.))
+                .left(px(8.))
+                .w(px(380.))
+                .p_3()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(SURFACE))
+                .shadow_md()
+                // Enter in the title field saves; the field itself ignores it.
+                .capture_action(cx.listener(|this, _: &text_input::Enter, window, cx| {
+                    if this.dialog == Some(Dialog::SaveAs) {
+                        cx.stop_propagation();
+                        this.activate(DIALOG_CONFIRM, window, cx);
+                    }
+                }))
+                .child(div().font_weight(FontWeight::MEDIUM).child(heading))
+                .children(body)
+                .children(self.dialog_message.clone().map(|message| {
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(ERROR))
+                        .child(message)
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_1()
+                        .children(confirm.map(|label| {
+                            self.button(DIALOG_CONFIRM, "dialog-confirm", label, cx)
+                                .text_color(rgb(TEXT))
+                        }))
+                        .child(self.button(
+                            DIALOG_CANCEL,
+                            "dialog-cancel",
+                            if matches!(dialog, Dialog::Remove(_)) {
+                                "Keep"
+                            } else {
+                                "Cancel"
+                            },
+                            cx,
+                        )),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn saved_list(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(list) = &self.saved_schedules else {
+            return div()
+                .text_color(rgb(MUTED))
+                .child("Loading saved schedules…")
+                .into_any_element();
+        };
+        if list.is_empty() {
+            return div()
+                .text_color(rgb(MUTED))
+                .child("No saved schedules")
+                .into_any_element();
+        }
+        while self.saved_rows.len() < list.len() {
+            let index = self.saved_rows.len() as isize;
+            self.saved_rows.push(
+                cx.focus_handle()
+                    .tab_index(SAVED_TAB_INDEX + index)
+                    .tab_stop(true),
+            );
+        }
+        div()
+            .id("saved-schedules")
+            .max_h(px(240.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .border_1()
+            .border_color(rgb(BORDER))
+            .children(list.iter().enumerate().map(|(index, (_, title))| {
+                div()
+                    .id(("saved", index))
+                    .debug_selector(move || format!("saved-{index}"))
+                    .track_focus(&self.saved_rows[index])
+                    .key_context("SelaControl")
+                    .flex_shrink_0()
+                    .h(px(28.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgb(HOVER)))
+                    .focus(|d| d.bg(rgb(0xdce3fa)))
+                    .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
+                        window.prevent_default();
+                        this.open_saved(index, window, cx);
+                    }))
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            if !matches!(event, gpui::ClickEvent::Keyboard(_)) {
+                                this.open_saved(index, window, cx);
+                            }
+                        }),
+                    )
+                    .child(div().truncate().child(title.clone()))
+            }))
             .into_any_element()
     }
 
@@ -1467,7 +2277,31 @@ impl Render for Operator {
         div()
             .key_context("Sela SelaShow")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|_, _: &Quit, window, _| window.remove_window()))
+            .on_action(cx.listener(|this, _: &Quit, window, cx| {
+                if this.may_close(window, cx) {
+                    window.remove_window();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SaveSchedule, window, cx| {
+                this.save_schedule(window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &OpenSchedule, window, cx| {
+                this.open_schedule(window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NextScheduleItem, _, cx| {
+                this.step_schedule(true);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &PreviousScheduleItem, _, cx| {
+                this.step_schedule(false);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &RemoveScheduleItem, _, cx| {
+                this.remove_selected();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &ToggleBlack, _, cx| {
                 this.toggle_mask(Mask::Black);
                 cx.notify();
@@ -1507,8 +2341,10 @@ impl Render for Operator {
                     .border_b_1()
                     .border_color(rgb(BORDER))
                     .child(self.button(9, "new-menu", "New ▾", cx))
+                    .child(self.button(OPEN_SCHEDULE, "open-schedule", "Open", cx))
+                    .child(self.button(SAVE_SCHEDULE, "save-schedule", "Save", cx))
                     .children(
-                        ["Open", "Save", "Web", "Remote"]
+                        ["Web", "Remote"]
                             .map(|label| div().px_1().text_color(rgb(0x92969c)).child(label)),
                     )
                     .child(div().flex_1())
@@ -1536,7 +2372,7 @@ impl Render for Operator {
                     .h(px(upper))
                     .flex_shrink_0()
                     .flex()
-                    .child(pane("Schedule", "Schedule is empty", left, false))
+                    .child(self.schedule_pane(left, cx))
                     .child(self.splitter(0, cx))
                     .child(self.preview_pane(middle, cx))
                     .child(self.splitter(1, cx))
@@ -1688,6 +2524,18 @@ impl Render for Operator {
                             .border_t_1()
                             .border_color(rgb(BORDER))
                             .child(self.button(8, "open-library", "+ New Song", cx))
+                            .child(
+                                self.button(
+                                    ADD_TO_SCHEDULE,
+                                    "add-to-schedule",
+                                    "Add to Schedule",
+                                    cx,
+                                )
+                                .when(
+                                    self.selected_song.is_none() || self.selected_entry.is_some(),
+                                    |d| d.text_color(rgb(DISABLED)),
+                                ),
+                            )
                             .child(div().flex_1())
                             .child(
                                 self.button(
@@ -1751,6 +2599,7 @@ impl Render for Operator {
                 |d, position| {
                     d.child(
                         div()
+                            .occlude()
                             .absolute()
                             .left(position.x)
                             .top(position.y)
@@ -1774,6 +2623,7 @@ impl Render for Operator {
             .when(self.new_menu, |d| {
                 d.child(
                     div()
+                        .occlude()
                         .absolute()
                         .top(px(40.))
                         .left(px(8.))
@@ -1781,45 +2631,33 @@ impl Render for Operator {
                         .border_1()
                         .border_color(rgb(BORDER))
                         .shadow_md()
-                        .child(self.button(10, "new-song-menu", "New Song", cx)),
+                        .child(self.button(10, "new-song-menu", "New Song", cx))
+                        .child(self.button(NEW_SCHEDULE, "new-schedule-menu", "New Schedule", cx)),
                 )
             })
+            .when_some(self.item_menu, |d, (_, position)| {
+                d.child(
+                    div()
+                        .occlude()
+                        .absolute()
+                        .left(position.x)
+                        .top(position.y)
+                        .bg(rgb(SURFACE))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .shadow_md()
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.item_menu = None;
+                            cx.notify();
+                        }))
+                        .child(self.button(
+                            ITEM_MENU_REMOVE,
+                            "item-menu-remove",
+                            "Remove From Schedule",
+                            cx,
+                        )),
+                )
+            })
+            .children(self.dialog_overlay(cx))
     }
-}
-
-fn pane(title: &'static str, text: &'static str, width: f32, dark: bool) -> impl IntoElement {
-    div()
-        .debug_selector(|| title.into())
-        .w(px(width))
-        .h_full()
-        .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .overflow_hidden()
-        .child(
-            div()
-                .h(px(32.))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .px_3()
-                .font_weight(FontWeight::MEDIUM)
-                .border_b_1()
-                .border_color(rgb(BORDER))
-                .bg(rgb(CHROME))
-                .child(title),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .p_3()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(13.))
-                .bg(rgb(if dark { CANVAS } else { SURFACE }))
-                .text_color(rgb(if dark { 0xb2b6be } else { MUTED }))
-                .child(text),
-        )
 }

@@ -1,6 +1,8 @@
 use super::*;
-use crate::operator::{CLEAR, Indicator, LIVE_OUTPUT, LOGO, Launcher, NEXT, NORMALIZE};
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use crate::operator::{
+    CLEAR, Indicator, LIVE_OUTPUT, LOGO, Launcher, NEXT, NORMALIZE, OPEN_SCHEDULE, REMOVE_ITEM,
+};
+use gpui::{Entity, Focusable, TestAppContext, VisualTestContext};
 use sela::{
     arrangement::SectionId,
     delivery::{DeliveryError, Epoch, LiveState, Outcome, Payload, RendererSession},
@@ -309,6 +311,7 @@ fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
         .chain(LIVE_OUTPUT..=NEXT)
         .chain(LOGO..=CLEAR)
         .chain([NORMALIZE])
+        .chain(OPEN_SCHEDULE..=REMOVE_ITEM)
         .collect();
     for index in order.iter().copied() {
         cx.simulate_keystrokes("tab");
@@ -398,8 +401,9 @@ fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
     let b = cx.debug_bounds("collapse-resources").unwrap();
     cx.simulate_click(b.center(), Default::default());
     assert_control(&mut cx, &operator, 2);
-    // 2 → 9 → Live output, Go Live, Previous, Next → Logo, Black, Clear → 0.
-    cx.simulate_keystrokes("tab tab tab tab tab tab tab tab tab enter");
+    // 2 → 9 → Live output, Go Live, Previous, Next → Logo, Black, Clear →
+    // Open, Save → schedule Up, Down, Remove → 0.
+    cx.simulate_keystrokes("tab tab tab tab tab tab tab tab tab tab tab tab tab tab enter");
     assert_control(&mut cx, &operator, 0);
     assert!(!operator.read_with(&cx, |o, _| o.collapsed));
     assert!(operator.read_with(&cx, |o, _| o.output.is_none()));
@@ -943,5 +947,475 @@ fn media_logo_is_imported_persisted_and_shown(cx: &mut TestAppContext) {
     let (mut cx, operator, _) = with_library(&mut cx.cx, Some(library), "apply");
     settle(&mut cx, &operator, "stored logo", |o| {
         o.logo.as_ref().is_some_and(|logo| logo.name == "logo.png")
+    });
+}
+
+const SECOND_SONG: &str = "Quiet Canticle";
+
+fn library_with_songs(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let path = library_with_song(dir);
+    Repository::open(&path)
+        .unwrap()
+        .save_song(
+            None,
+            Song {
+                title: SECOND_SONG.into(),
+                authors: String::new(),
+                copyright: String::new(),
+                license: String::new(),
+                variants: Vec::new(),
+                sections: vec![Section {
+                    id: SectionId::allocate(),
+                    label: "Verse 1".into(),
+                    lyrics: "Quiet original line".into(),
+                }],
+            },
+        )
+        .unwrap();
+    path
+}
+
+/// Catalog order follows random song IDs; find rows by title.
+fn song_row(cx: &mut VisualTestContext, operator: &Entity<Operator>, title: &str) -> &'static str {
+    let index = operator
+        .read_with(cx, |o, _| o.catalog.iter().position(|(_, t)| t == title))
+        .unwrap();
+    ["song-0", "song-1"][index]
+}
+
+fn entry_titles(o: &Operator) -> Vec<String> {
+    o.schedule
+        .entries()
+        .iter()
+        .map(|e| e.title.clone())
+        .collect()
+}
+
+fn previewed(o: &Operator) -> Option<(Option<sela::schedule::EntryId>, &str)> {
+    o.preview
+        .as_ref()
+        .map(|item| (item.entry, item.title.as_str()))
+}
+
+fn add_song(cx: &mut VisualTestContext, operator: &Entity<Operator>, title: &str) {
+    let row = song_row(cx, operator, title);
+    click(cx, row);
+    click(cx, "add-to-schedule");
+}
+
+#[gpui::test]
+fn schedule_add_reorder_select_navigate_and_remove(cx: &mut TestAppContext) {
+    use crate::operator::Dialog;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_songs(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    click(&mut cx, "add-to-schedule");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.schedule_message.clone()),
+        Some("Select a song in Songs first".into())
+    );
+    add_song(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, "add-to-schedule");
+    add_song(&mut cx, &operator, SECOND_SONG);
+    let ids: Vec<_> = operator.read_with(&cx, |o, _| {
+        assert_eq!(entry_titles(o), ["Signal Hymn", "Signal Hymn", SECOND_SONG]);
+        assert!(o.schedule.is_dirty());
+        o.schedule.entries().iter().map(|e| e.id).collect()
+    });
+    assert_ne!(ids[0], ids[1], "duplicates are separate entries");
+
+    // Down/Up select schedule items and preview them; never Live.
+    cx.simulate_keystrokes("down");
+    settle(&mut cx, &operator, "first item previewed", |o| {
+        previewed(o) == Some((Some(ids[0]), "Signal Hymn"))
+    });
+    cx.simulate_keystrokes("down down");
+    settle(&mut cx, &operator, "third item previewed", |o| {
+        previewed(o) == Some((Some(ids[2]), SECOND_SONG))
+    });
+    cx.simulate_keystrokes("down");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.selected_entry),
+        Some(ids[2])
+    );
+    cx.simulate_keystrokes("up");
+    settle(&mut cx, &operator, "second item previewed", |o| {
+        previewed(o) == Some((Some(ids[1]), "Signal Hymn"))
+    });
+    assert!(operator.read_with(&cx, |o, _| o.output.is_none() && o.live.is_none()));
+
+    click(&mut cx, "schedule-up");
+    click(&mut cx, "schedule-down");
+    click(&mut cx, "schedule-down");
+    operator.read_with(&cx, |o, _| {
+        let order: Vec<_> = o.schedule.entries().iter().map(|e| e.id).collect();
+        assert_eq!(order, [ids[0], ids[2], ids[1]]);
+        assert_eq!(
+            o.selected_entry,
+            Some(ids[1]),
+            "selection follows the entry"
+        );
+    });
+
+    // Remove From Schedule asks first; Keep leaves it.
+    click(&mut cx, "schedule-remove");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.dialog),
+        Some(Dialog::Remove(ids[1]))
+    );
+    assert_control(&mut cx, &operator, crate::operator::DIALOG_CANCEL);
+    cx.simulate_keystrokes("enter");
+    assert_control(&mut cx, &operator, REMOVE_ITEM);
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.schedule.entries().len()),
+        3
+    );
+    click(&mut cx, "schedule-remove");
+    click(&mut cx, "dialog-confirm");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(entry_titles(o), ["Signal Hymn", SECOND_SONG]);
+        assert_eq!((o.dialog, o.selected_entry), (None, None));
+    });
+
+    // Right-click menu, then Ctrl+Del (no confirmation).
+    let position = cx.debug_bounds("schedule-item-1").unwrap().center();
+    cx.simulate_mouse_down(position, gpui::MouseButton::Right, Default::default());
+    cx.simulate_mouse_up(position, gpui::MouseButton::Right, Default::default());
+    click(&mut cx, "item-menu-remove");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.dialog),
+        Some(Dialog::Remove(ids[2]))
+    );
+    click(&mut cx, "dialog-cancel");
+    cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+    cx.simulate_keystrokes("ctrl-delete");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(entry_titles(o), ["Signal Hymn"]);
+        assert_eq!(o.selected_entry, None);
+    });
+    cx.simulate_keystrokes("ctrl-delete");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.schedule_message.clone()),
+        Some("Select a schedule item first".into())
+    );
+}
+
+fn drag(cx: &mut VisualTestContext, from: &'static str, to: &'static str) {
+    use gpui::{MouseButton, point};
+    let start = cx.debug_bounds(from).unwrap().center();
+    let end = cx.debug_bounds(to).unwrap().center();
+    cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(
+        start + point(px(8.), px(8.)),
+        MouseButton::Left,
+        Default::default(),
+    );
+    cx.simulate_mouse_move(end, MouseButton::Left, Default::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Default::default());
+}
+
+#[gpui::test]
+fn drag_songs_into_the_schedule_reorder_and_cancel(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_songs(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    let hymn = song_row(&mut cx, &operator, "Signal Hymn");
+    let canticle = song_row(&mut cx, &operator, SECOND_SONG);
+    drag(&mut cx, hymn, "schedule-list");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| entry_titles(o)),
+        ["Signal Hymn"]
+    );
+    drag(&mut cx, canticle, "schedule-item-0");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| entry_titles(o)),
+        [SECOND_SONG, "Signal Hymn"],
+        "a drop on a row inserts before it"
+    );
+    drag(&mut cx, "schedule-item-0", "schedule-item-1");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| entry_titles(o)),
+        ["Signal Hymn", SECOND_SONG]
+    );
+    drag(&mut cx, "schedule-item-1", "schedule-list");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| entry_titles(o)),
+        ["Signal Hymn", SECOND_SONG],
+        "dropping the last item on the list end keeps it last"
+    );
+
+    // Released outside the Schedule: nothing changes.
+    drag(&mut cx, hymn, "Preview");
+    drag(&mut cx, "schedule-item-0", "Live");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(entry_titles(o), ["Signal Hymn", SECOND_SONG]);
+        assert_eq!(o.selected_entry, None, "a drag is not a click");
+        assert!(o.live.is_none());
+    });
+    drag(&mut cx, hymn, "schedule-list");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| entry_titles(o)),
+        ["Signal Hymn", SECOND_SONG, "Signal Hymn"],
+        "the drag ended; a new one works"
+    );
+}
+
+#[gpui::test]
+fn live_item_identity_survives_reorder_duplicates_and_removal(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_songs(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    add_song(&mut cx, &operator, SECOND_SONG);
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+    cx.simulate_keystrokes("down");
+    let live_id = operator.read_with(&cx, |o, _| o.selected_entry.unwrap());
+    settle(&mut cx, &operator, "preview", |o| {
+        previewed(o) == Some((Some(live_id), "Signal Hymn"))
+    });
+    cx.simulate_keystrokes("pagedown");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.live.as_ref().unwrap().entry),
+        Some(live_id)
+    );
+    let marker = cx.debug_bounds("schedule-live-marker").unwrap().center();
+    assert!(
+        cx.debug_bounds("schedule-item-0")
+            .unwrap()
+            .contains(&marker)
+    );
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+
+    click(&mut cx, "schedule-down");
+    add_song(&mut cx, &operator, "Signal Hymn");
+    cx.run_until_parked();
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(entry_titles(o), [SECOND_SONG, "Signal Hymn", "Signal Hymn"]);
+        assert_eq!(o.schedule.index(live_id), Some(1));
+        assert_eq!(submitted(o), sent, "reordering never sends a cue");
+        assert_eq!(o.live.as_ref().unwrap().entry, Some(live_id));
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
+    });
+    // The marker follows the moved entry, not its old row or the duplicate.
+    let marker = cx.debug_bounds("schedule-live-marker").unwrap().center();
+    assert!(
+        cx.debug_bounds("schedule-item-1")
+            .unwrap()
+            .contains(&marker)
+    );
+
+    click(&mut cx, "schedule-item-1");
+    cx.simulate_keystrokes("ctrl-delete");
+    cx.run_until_parked();
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(entry_titles(o), [SECOND_SONG, "Signal Hymn"]);
+        assert!(o.schedule.get(live_id).is_none());
+        assert_eq!(
+            submitted(o),
+            sent,
+            "removing the live item leaves the output"
+        );
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
+        assert!(has_line(o, "Live item is no longer in the schedule"));
+    });
+    assert!(cx.debug_bounds("schedule-live-marker").is_none());
+    click(&mut cx, "live-next");
+    settle(
+        &mut cx,
+        &operator,
+        "the removed item still navigates",
+        |o| o.on_screen() == Some("Signal Hymn · Chorus"),
+    );
+}
+
+#[gpui::test]
+fn save_and_reopen_pin_revisions_behind_an_unsaved_guard(cx: &mut TestAppContext) {
+    use crate::operator::{Dialog, Then};
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_songs(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    add_song(&mut cx, &operator, SECOND_SONG);
+    let pinned = operator.read_with(&cx, |o, _| o.schedule.entries()[0].version);
+
+    cx.simulate_keystrokes("ctrl-s");
+    let input = operator.read_with(&cx, |o, _| {
+        assert_eq!(o.dialog, Some(Dialog::SaveAs));
+        o.title_input.clone().unwrap()
+    });
+    cx.update(|window, cx| assert!(input.read(cx).focus_handle(cx).is_focused(window)));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.dialog_message.clone()),
+        Some("Enter a title for the schedule".into())
+    );
+    cx.update(|_, cx| input.update(cx, |i, cx| i.set_text("Sunday", cx).unwrap()));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+    assert_control(&mut cx, &operator, crate::operator::ADD_TO_SCHEDULE);
+    settle(&mut cx, &operator, "saved", |o| {
+        o.schedule.saved().is_some() && !o.schedule.is_dirty()
+    });
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.schedule.title().map(str::to_owned)),
+        Some("Sunday".into())
+    );
+
+    // A library edit never updates the scheduled revision.
+    let mut repository = Repository::open(&path).unwrap();
+    let mut revised = repository.song(pinned).unwrap();
+    revised.title = "Signal Hymn (revised)".into();
+    revised.sections[0].lyrics = "Revised line".into();
+    repository.save_song(Some(pinned), revised).unwrap();
+    drop(repository);
+
+    cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+    cx.simulate_keystrokes("down ctrl-delete");
+    assert!(operator.read_with(&cx, |o, _| o.schedule.is_dirty()));
+    cx.simulate_keystrokes("ctrl-o");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.dialog),
+        Some(Dialog::Unsaved(Then::Open))
+    );
+    cx.simulate_keystrokes("enter");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.dialog, None, "Cancel is the default");
+        assert_eq!(entry_titles(o), [SECOND_SONG]);
+    });
+    click(&mut cx, "open-schedule");
+    click(&mut cx, "dialog-confirm");
+    assert_eq!(operator.read_with(&cx, |o, _| o.dialog), Some(Dialog::Open));
+    settle(&mut cx, &operator, "saved list", |o| {
+        o.saved_schedules
+            .as_ref()
+            .is_some_and(|list| list.len() == 1 && list[0].1 == "Sunday")
+    });
+    click(&mut cx, "saved-0");
+    settle(&mut cx, &operator, "reopened", |o| {
+        o.schedule_message.as_deref() == Some("Opened “Sunday”")
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(entry_titles(o), ["Signal Hymn", SECOND_SONG]);
+        assert_eq!(o.schedule.entries()[0].version, pinned);
+        assert!(!o.schedule.is_dirty());
+        assert_eq!(o.dialog, None);
+    });
+    cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+    cx.simulate_keystrokes("down");
+    settle(&mut cx, &operator, "pinned revision previewed", |o| {
+        o.preview.as_ref().is_some_and(|p| {
+            p.version == pinned && p.slides[0].text.starts_with("First original line")
+        })
+    });
+
+    // A saved schedule saves again without asking for a title.
+    click(&mut cx, "schedule-down");
+    let first = operator.read_with(&cx, |o, _| o.schedule.saved().unwrap());
+    cx.simulate_keystrokes("ctrl-s");
+    assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+    settle(&mut cx, &operator, "second revision", |o| {
+        o.schedule
+            .saved()
+            .is_some_and(|v| v.id == first.id && v.revision == first.revision + 1)
+            && !o.schedule.is_dirty()
+    });
+    let (stored, _) = Repository::open(&path)
+        .unwrap()
+        .schedule(operator.read_with(&cx, |o, _| o.schedule.saved().unwrap()))
+        .unwrap();
+    assert_eq!(stored.title, "Sunday");
+    assert_eq!(stored.items[1], pinned);
+}
+
+#[gpui::test]
+fn quit_and_new_schedule_are_guarded(cx: &mut TestAppContext) {
+    use crate::operator::{Dialog, Then};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_song(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    let may_close = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)))
+    };
+    assert!(may_close(&mut cx), "a clean schedule closes");
+    add_song(&mut cx, &operator, "Signal Hymn");
+    assert!(!may_close(&mut cx));
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.dialog),
+        Some(Dialog::Unsaved(Then::Quit))
+    );
+    click(&mut cx, "dialog-cancel");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.schedule.entries().len()),
+        1
+    );
+
+    click(&mut cx, "new-menu");
+    click(&mut cx, "new-schedule-menu");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.dialog),
+        Some(Dialog::Unsaved(Then::New))
+    );
+    click(&mut cx, "dialog-confirm");
+    operator.read_with(&cx, |o, _| {
+        assert!(o.schedule.entries().is_empty());
+        assert!(!o.schedule.is_dirty());
+        assert_eq!(o.dialog, None);
+    });
+
+    // A save in flight finishes before the window may close.
+    add_song(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, "save-schedule");
+    let input = operator.read_with(&cx, |o, _| o.title_input.clone().unwrap());
+    cx.update(|_, cx| input.update(cx, |i, cx| i.set_text("Evening", cx).unwrap()));
+    click(&mut cx, "dialog-confirm");
+    assert!(!may_close(&mut cx));
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.dialog, None);
+        assert!(
+            o.schedule_message
+                .as_deref()
+                .unwrap()
+                .starts_with("Saving the schedule")
+        );
+    });
+    settle(&mut cx, &operator, "saved", |o| !o.schedule.is_dirty());
+    assert!(may_close(&mut cx));
+}
+
+#[gpui::test]
+fn library_double_click_goes_straight_to_live(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_song(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    double_click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.live.as_ref().unwrap().entry, None);
+        assert!(o.schedule.entries().is_empty(), "not added to the schedule");
+    });
+    click(&mut cx, "live-next");
+    settle(&mut cx, &operator, "chorus", |o| {
+        o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+    // Already previewed: a second double-click restarts from the first slide.
+    double_click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "verse again", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
     });
 }

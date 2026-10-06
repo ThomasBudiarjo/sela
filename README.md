@@ -3,8 +3,8 @@
 An open-source, offline-first worship presentation platform built with Rust and
 GPUI. Windows is the first-class deployment target; macOS and Linux are planned.
 
-**Status: native technical preview with offline song authoring. Service schedules
-and live presentation are not yet implemented or qualified for use in a service.**
+**Status: native technical preview with offline song authoring, basic song
+schedules and live output. None of it is qualified for use in a service yet.**
 
 ## Build the technical preview
 
@@ -87,7 +87,10 @@ monitor index or `window`). Pick a song in Songs, a slide in Preview, then
 (Ctrl+L/B/C; Page Down is Go Live) light up once the audience confirms them;
 Media → Images imports a picture and sets it as the logo. Plain white-on-black
 text, resized to fit each slide (optionally the same size on every slide), no
-themes or schedule items yet. `sela --operator-library PATH` opens the
+themes yet. **Add to Schedule** (or drag a song into Schedule) builds a service
+order of pinned song revisions; Ctrl+S / Ctrl+O save and open it, with an
+unsaved-changes guard on Open, New Schedule and quit. Double-click a song to
+send it straight to Live. `sela --operator-library PATH` opens the
 operator on another library. The opt-in
 [video diagnostic](docs/video-spike.md) checks original FFV1 frames through FFmpeg
 and GPU composition; it is not a production video player.

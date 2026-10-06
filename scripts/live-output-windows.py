@@ -37,8 +37,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 AUDIENCE_TITLE = "Sela audience output"
 OPERATOR_TITLE = "Sela — Technical preview"
 # Operator tab order: controls 0-9, Live output, Go Live, Previous, Next,
-# Logo, Black, Clear, Normalize text size (Songs tab), songs, slides.
-TABS_TO_FIRST_SONG = 19
+# Logo, Black, Clear, Normalize text size (Songs tab), Open, Save, Add to
+# Schedule, schedule Up/Down/Remove, songs, schedule items, slides.
+TABS_TO_FIRST_SONG = 25
 # Original fixture logo: one opaque color, neither black nor text white.
 LOGO_RGB = (30, 110, 210)
 # Operator `MASK_ON` fill of an acknowledged mask button, as BGR.
@@ -314,9 +315,9 @@ def main() -> int:
         if audience(app.process.pid, 0.5):
             raise nw.Failure("an audience output exists before Live output is on")
 
-        # Slide 0 -> song 0 -> Normalize -> Clear, Black, Logo -> Next ->
-        # Previous -> Go Live -> Live output.
-        run.keys(*["shift+tab"] * 9, "enter")
+        # Slide 0 -> song 0 -> Remove, Down, Up, Add, Save, Open -> Normalize ->
+        # Clear, Black, Logo -> Next -> Previous -> Go Live -> Live output.
+        run.keys(*["shift+tab"] * 15, "enter")
         started = time.monotonic()
         found = audience(app.process.pid, 15)
         if not found:

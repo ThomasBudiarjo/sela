@@ -432,6 +432,28 @@ impl Repository {
             .map(|version| Ok((version, self.song(version)?.title)))
             .collect()
     }
+    /// Saved schedules at their current revision, with titles; items are not
+    /// resolved. Same paging as `heads`.
+    pub fn schedule_catalog(&self, after: Option<Id>) -> Result<Vec<(Version, String)>> {
+        self.heads(true, after)?
+            .into_iter()
+            .map(|version| {
+                let title: String = self
+                    .db
+                    .query_row(
+                        "SELECT title FROM schedule_revisions WHERE id=? AND revision=?",
+                        params![&version.id.0[..], version.revision],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .ok_or(Error::Corrupt)?;
+                if title.len() > 1024 || title.trim().is_empty() {
+                    return Err(Error::Corrupt);
+                }
+                Ok((version, title))
+            })
+            .collect()
+    }
     pub fn open(path: &std::path::Path) -> Result<Self> {
         Self::open_internal(path, true)
     }
@@ -773,6 +795,7 @@ pub enum Command {
         after: Option<Id>,
     },
     Catalog(Option<Id>),
+    ScheduleCatalog(Option<Id>),
     BackupNew(PathBuf),
     RestoreNew {
         source: PathBuf,
@@ -789,6 +812,7 @@ pub enum Reply {
     Deleted,
     Heads(Vec<Version>),
     Catalog(Vec<(Version, String)>),
+    ScheduleCatalog(Vec<(Version, String)>),
     Copied,
 }
 struct Request {
@@ -808,6 +832,7 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::DeleteSong(v) => repo.delete_song(v).map(|()| Reply::Deleted),
         Command::Heads { schedules, after } => repo.heads(schedules, after).map(Reply::Heads),
         Command::Catalog(after) => repo.catalog(after).map(Reply::Catalog),
+        Command::ScheduleCatalog(after) => repo.schedule_catalog(after).map(Reply::ScheduleCatalog),
         Command::BackupNew(path) => repo
             .backup_new(&path, &request.canceled)
             .map(|()| Reply::Copied),
@@ -1742,6 +1767,56 @@ mod tests {
         let last = repo.catalog(Some(first[127].0.id)).unwrap();
         assert_eq!(last, expected[128..]);
         assert!(repo.catalog(Some(last[0].0.id)).unwrap().is_empty());
+    }
+    #[test]
+    fn schedule_catalog_lists_current_titles() {
+        let (_d, _p, mut repo) = fixture();
+        let a = repo.save_song(None, song()).unwrap();
+        let first = repo
+            .save_schedule(
+                None,
+                Schedule {
+                    title: "Morning".into(),
+                    items: vec![a, a],
+                },
+            )
+            .unwrap();
+        let first = repo
+            .save_schedule(
+                Some(first),
+                Schedule {
+                    title: "Morning (revised)".into(),
+                    items: vec![a],
+                },
+            )
+            .unwrap();
+        let second = repo
+            .save_schedule(
+                None,
+                Schedule {
+                    title: "Evening".into(),
+                    items: Vec::new(),
+                },
+            )
+            .unwrap();
+        let mut expected = vec![
+            (first, "Morning (revised)".to_string()),
+            (second, "Evening".to_string()),
+        ];
+        expected.sort_by_key(|(v, _)| v.id.0);
+        assert_eq!(repo.schedule_catalog(None).unwrap(), expected);
+        assert!(
+            repo.schedule_catalog(Some(expected[1].0.id))
+                .unwrap()
+                .is_empty()
+        );
+        repo.db
+            .execute(
+                "UPDATE schedule_revisions SET title=' ' WHERE id=?",
+                params![&second.id.0[..]],
+            )
+            .unwrap();
+        assert_eq!(repo.schedule_catalog(None), Err(Error::Corrupt));
     }
     #[test]
     fn worker_creates_parent_and_reports_unusable_parent_without_replacement() {

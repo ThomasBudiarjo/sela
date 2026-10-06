@@ -357,3 +357,82 @@ through the simulated path prompt.
 Open: installed observation of the cases in EW8-OBS-020, W04 focus contexts,
 logo fit, Linux/macOS native runs, UIA names for the mask buttons and the
 image context menu, and physical scanout timing.
+
+## M1-09a — Basic schedule
+
+Implemented-unqualified on local `main`. Phase 4 of the approved 2026-10-06
+spec; a first slice of [M1-09](backlog.md#m1-09--schedule-editing-and-versioned-content-snapshots).
+The framework-free model is `src/schedule.rs`; saving and opening use the
+existing schedule tables through the storage worker, never the UI thread.
+
+- **Items are pinned song revisions.** Add to Schedule (Songs footer) or a
+  drag from Songs adds the song revision the library shows now. Editing the song
+  later does not change the item; reopening a saved schedule resolves the saved
+  revisions, not today's library. The same song can appear more than once.
+  Up to 32 items (the storage limit); a full schedule says so and adds nothing.
+- **Schedule pane**: header "Schedule · title" (or "Schedule" when untitled)
+  and "Unsaved" while it differs from what was last saved or opened. Rows show
+  a number and the song title. Selecting a row previews its slides; Page Down
+  (Go Live) sends the preview slide as before. Down/Up select the next/previous
+  item and stop at the ends.
+- **Reorder and remove**: drag a row onto another row to move it there, footer
+  **Up / Down** buttons, or right-click → Remove From Schedule. The footer
+  **Remove** and the menu ask first ("Remove “title” from the schedule?"), with
+  focus on Keep. Ctrl+Delete removes the selected item without asking. A song
+  dropped on a row is inserted before it; dropped on the empty list area it is
+  appended. Releasing a drag outside the pane does nothing.
+- **Live identity**: each item has a session-local ID, so the Live item stays
+  the same item when items before it move, are removed or are duplicates of it.
+  "● Live" marks a row only once the renderer confirmed one of its slides.
+  Removing or moving the live item never sends a cue: the audience keeps the
+  current slide and Live shows "Live item is no longer in the schedule".
+- **Save / Open**: Ctrl+S or **Save** saves. An untitled schedule asks for a
+  title first (Enter confirms); a titled one saves a new revision in place.
+  Edits made while a save is in flight stay "Unsaved". If the schedule was saved
+  elsewhere since it was opened, the save is refused ("Not saved: this schedule
+  was saved elsewhere since it was opened"). Ctrl+O or **Open** lists saved
+  schedules by title (case-insensitive); click a title, or focus it and press
+  Enter, to open it.
+- **Unsaved guard**: Open, **New ▾ → New Schedule**, Ctrl+Q and closing the
+  window ask "… without saving schedule changes?" (Cancel or Discard changes)
+  when the schedule is unsaved. Quit waits while a save is in progress.
+- **Library double-click** goes straight to Live from the song's first slide
+  (EasyWorship documents this); single-click still previews.
+- The save, open, remove dialogs and the item and New menus block clicks to the
+  panes behind them. The same fix applies to the Media image menu.
+- Tab order adds Open, Save, Add to Schedule, Up, Down, Remove and New
+  Schedule (while the New menu is open); schedule rows follow the song rows,
+  and the open dialog cycles its own saved titles and buttons. Ctrl+S, Ctrl+O, Up, Down and Ctrl+Delete are GPUI actions
+  in the `SelaShow && !SelaTextInput` context.
+
+Provisional (not observed in EasyWorship 8.0.49): the Up/Down move buttons,
+Ctrl+Delete without confirmation, Down/Up stopping at the ends, drop-on-row inserting before the
+row, double-click starting at the first slide, and the dialog wording. Not yet
+implemented: duplicate/copy item, multi-item select and move, autoscroll while
+dragging, themes and media items, schedule-level next/previous from Live, an
+explicit library refresh for pinned items, and persistent item IDs (reopening
+allocates new ones).
+
+### Windows native evidence — 2026-10-06 (UTC+7)
+
+`python scripts/schedule-windows.py --out .amp\in\artifacts\schedule-windows-m1-09a-r2`
+PASS (secondary 2560x1600, DX12). Keyboard only: adds a song twice and a
+second song, selects with Down/Up, removes one with Ctrl+Delete, moves one up,
+saves as "sunday" with Ctrl+S and reads the saved title, order and pinned
+revisions back from SQLite. With Live output on, Page Down sends the first item
+and Down + Page Down the second, each changing the audience capture (62 and
+63 ms, capture polling); Ctrl+Delete on the live item leaves the audience
+frame unchanged. WM_CLOSE and Ctrl+Q both stay open behind the unsaved guard;
+Cancel keeps the window, Discard quits. A second launch reopens "sunday" with
+Ctrl+O. `scripts/live-output-windows.py` still passes with the new controls.
+
+GPUI tests: `schedule_add_reorder_select_navigate_and_remove`,
+`drag_songs_into_the_schedule_reorder_and_cancel`,
+`live_item_identity_survives_reorder_duplicates_and_removal`,
+`save_and_reopen_pin_revisions_behind_an_unsaved_guard`,
+`quit_and_new_schedule_are_guarded`, `library_double_click_goes_straight_to_live`,
+plus `schedule::tests` and `storage` `schedule_catalog_lists_current_titles`.
+Mouse drag and drop is covered by GPUI tests only.
+
+Open: installed observation of schedule shortcuts, context menu, drag/drop
+insertion and delete confirmation; Linux/macOS native runs; UIA names.

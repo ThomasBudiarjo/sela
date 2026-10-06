@@ -6,6 +6,14 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Basic schedule (M1-09a, 2026-10-06):** Schedule items pin song revisions;
+  add by button or drag, remove (confirmed, or Ctrl+Delete), reorder by drag or
+  Up/Down, Down/Up select, Ctrl+S/Ctrl+O save and open, unsaved guard on Open,
+  New Schedule, Ctrl+Q and window close. The live item keeps its identity
+  across reorder/removal and no cue is sent. Library double-click goes to Live.
+  Windows native keyboard check passes. Implemented-unqualified. The approved
+  2026-10-06 spec is complete; next: choose the next dependency-ready ticket
+  (M1-09 remaining items, W04 observation, or M1-04/M1-08).
 - **Masks and picture logo (M0-08a + M1-10c, 2026-10-06):** Logo/Black/Clear
   toolbar buttons and Ctrl+L/B/C (Page Down = Go Live) drive the real audience;
   indicators follow renderer acknowledgments; Media → Images imports a picture
@@ -13,8 +21,7 @@ include timezone for timed hardware/rehearsal evidence.
   implemented-unqualified.
 - **Better slide output (M1-06c, 2026-10-06):** first-arrangement order, text
   up to 288px, "Normalize text size across slides" toggle, Ctrl+Enter section
-  split with undo. Implemented-unqualified. Next: Phase 4 M1-09a (basic
-  schedule) per the approved 2026-10-06 spec.
+  split with undo. Implemented-unqualified.
 - **EasyWorship masks observed (M0-02, 2026-10-06):** RUN-W03 recorded the
   single-song W02/W03 static cases (EW8-OBS-014–020): Black and Logo replace
   each other, Clear stacks, masks survive Go Live/navigation/Live off, Live
@@ -2155,3 +2162,62 @@ PY
   EasyWorship 8.0.49 observation of auto-size and split, Linux/macOS.
 - Next: Phase 4 M1-09a — Schedule pane items pinned to song revisions, add/
   remove/reorder, Save/Open with Ctrl+S/Ctrl+O, live item identity.
+
+### M1-09a — Basic schedule — 2026-10-06 (UTC+7)
+
+- State: **implemented-unqualified**. Scope: Phase 4 of the approved
+  2026-10-06 spec (early start with the same approval as M1-10; M1-04 and
+  M1-08 have not started).
+- Added `src/schedule.rs` (framework-free): entries with session-local
+  `EntryId`s pinning song `Version`s, insert/push (full at 32 = storage
+  `MAX_ITEMS`), remove, move_to/move_by, neighbor (stops at the ends), snapshot,
+  `mark_saved` (edits during a save stay dirty), open (checks title count),
+  clear; dirty compares entry versions with the last saved/opened baseline.
+  `Repository::schedule_catalog` and `Command/Reply::ScheduleCatalog` list
+  current schedule titles.
+- Operator: Schedule pane (header, Unsaved, rows, "● Live" only after renderer
+  acknowledgment, drag/drop from Songs and between rows, right-click Remove
+  From Schedule, footer Up/Down/Remove, message line); Add to Schedule in the
+  Songs footer; Open/Save toolbar buttons; New ▾ → New Schedule. Dialogs for
+  save-as title, open list, remove confirmation and unsaved guard. Storage
+  requests go through one queued worker job. Live identity is the entry, so
+  reorder/removal never sends a cue; Live notes "Live item is no longer in the
+  schedule". Library double-click goes to Live from the first slide. Window
+  close (`on_window_should_close`) and Ctrl+Q use `may_close`. Actions
+  SaveSchedule/OpenSchedule/Next/PreviousScheduleItem/RemoveScheduleItem bound
+  to Ctrl+S/Ctrl+O/Down/Up/Ctrl+Delete in `SelaShow && !SelaTextInput`.
+  Overlays (dialogs, item, New and Media image menus) now `occlude()` so clicks
+  no longer fall through to rows behind them (found by a GPUI test).
+- Decisions (provisional, unobserved in 8.0.49): Up/Down move buttons,
+  Ctrl+Delete removes without confirmation, Down/Up stop at the ends, a song
+  dropped on a row inserts before it, library double-click starts at slide 1,
+  item IDs are not persisted. Library edits never update scheduled revisions.
+- Tests: `schedule::tests`, `storage` `schedule_catalog_lists_current_titles`,
+  GPUI `schedule_add_reorder_select_navigate_and_remove`,
+  `drag_songs_into_the_schedule_reorder_and_cancel`,
+  `live_item_identity_survives_reorder_duplicates_and_removal`,
+  `save_and_reopen_pin_revisions_behind_an_unsaved_guard`,
+  `quit_and_new_schedule_are_guarded`, `library_double_click_goes_straight_to_live`;
+  two traversal tests updated for the new controls.
+- Checks (Windows 11, RTX 4060 Laptop): `cargo fmt --all -- --check`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` (lib 82, bin 55 + 2 ignored, integration
+  and example suites all pass), `cargo build --locked`,
+  `python -m ruff check scripts`, `ruff format --check` on
+  `schedule-windows.py` and `live-output-windows.py` pass.
+- Native: `cargo build --locked --example seed_library` (now with
+  `--second-song`), then
+  `python scripts/live-output-windows.py --out .amp\in\artifacts\live-output-windows-m1-09a`
+  PASS (tab counts 25 to the first song, 15 back to Live output) and
+  `python scripts/schedule-windows.py --out .amp\in\artifacts\schedule-windows-m1-09a-r2`
+  PASS (secondary 2560x1600, DX12): keyboard add/duplicate/select/remove/
+  reorder, Ctrl+S save read back from SQLite, two items sent live (62/63 ms,
+  capture polling), live item removal keeps the frame, WM_CLOSE and Ctrl+Q
+  guarded, reopen with Ctrl+O. The first run failed on a missing `down` key in
+  `native_win.py` (added Up/Down/Delete). Captures inspected; a doubled border
+  around the title field was removed.
+- Not run: native mouse drag/drop (GPUI tests only), EasyWorship 8.0.49
+  observation of schedule shortcuts/menus/drop insertion, Linux/macOS, UIA.
+- Next: the approved spec is complete. Choose the next dependency-ready ticket:
+  remaining M1-09 items (duplicate, multi-move, autoscroll, explicit refresh),
+  schedule-level Live navigation (M1-10), or W04 observation.

@@ -120,6 +120,17 @@ Since M1-10c it also seeds a solid-color logo into the private profile, toggles
 Ctrl+B / Ctrl+C / Ctrl+L on and off over the live slide (checking the audience
 frame, the restored slide and the lit toolbar button from operator captures) and
 checks that a Logo left on returns after Live off/on.
+Since M1-09a the seed adds a second song (`seed_library --second-song`) and the
+tab counts include the schedule controls.
+
+`scripts/schedule-windows.py` (M1-09a) reuses those helpers to drive the
+Schedule by keyboard: add (including a duplicate), Down/Up, Ctrl+Delete, Up
+reorder, Ctrl+S with a typed title, then reads the saved schedule back from
+SQLite. With Live output on it sends two items with Page Down and checks the
+audience changes, then removes the live item and checks the audience does not.
+It checks the unsaved guard for WM_CLOSE and Ctrl+Q (Cancel stays, Discard
+quits) and reopens the schedule with Ctrl+O in a second launch. Mouse drag and
+drop is not driven natively. `native_win.py` gained Up, Down and Delete keys.
 
 ## Upstream and accessibility
 

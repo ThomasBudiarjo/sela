@@ -60,7 +60,7 @@ WNDENUMPROC = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
 user32.EnumWindows.argtypes = [WNDENUMPROC, w.LPARAM]
 
 VK = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "tab": 0x09, "enter": 0x0D, "space": 0x20, "f4": 0x73,
-      "pagedown": 0x22}
+      "pagedown": 0x22, "up": 0x26, "down": 0x28, "delete": 0x2E}
 KEYEVENTF_KEYUP = 0x0002
 SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0002, 0x0004, 0x0010
 

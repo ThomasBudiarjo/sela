@@ -579,6 +579,13 @@ advanced shape/layer tooling remains tracked in M4-01.
 
 Depends on: M1-04, M1-06, M1-08. Tests: U, I, N.
 
+Progress: M1-09a (song items pinned to revisions, add/remove/reorder by buttons
+and drag, Save/Open with Ctrl+S/Ctrl+O, unsaved guard, stable live item
+identity) is **implemented-unqualified**; see
+[operator shell](operator-shell.md#m1-09a--basic-schedule). Duplicate/copy,
+multi-item move, autoscroll, theme/asset references and explicit library
+refresh remain open.
+
 - [ ] Add/remove/reorder/duplicate items and observed context/drag-drop actions,
   including correct insertion target, autoscroll and canceled drag.
 - [ ] Persist song/theme versions and asset/font references in schedule snapshots.
@@ -601,7 +608,8 @@ Images and picture logo) are **implemented-unqualified**; see
 
 - [ ] Connect preview preparation, slide selection, Go Live, next/previous and
   safety buttons to domain commands rather than editing state directly.
-  (Done for single songs and masks; schedule items wait for M1-09.)
+  (Done for single songs, masks and selected schedule items (M1-09a);
+  schedule-level next/previous from Live is open.)
 - [ ] Show preparing/failed/disconnected/requested states separately from Live.
 - [ ] Implement observed double-click, boundary navigation, auto-follow and
   contiguous/combined mode behavior using reference observations.

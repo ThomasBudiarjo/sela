@@ -13,7 +13,12 @@ actions!(
         ToggleBlack,
         ToggleLogo,
         ToggleClear,
-        GoLive
+        GoLive,
+        SaveSchedule,
+        OpenSchedule,
+        NextScheduleItem,
+        PreviousScheduleItem,
+        RemoveScheduleItem
     ]
 );
 
@@ -29,6 +34,11 @@ fn bind_operator_keys(cx: &mut App) {
         KeyBinding::new("ctrl-l", ToggleLogo, Some(SHOW)),
         KeyBinding::new("ctrl-c", ToggleClear, Some(SHOW)),
         KeyBinding::new("pagedown", GoLive, Some(SHOW)),
+        KeyBinding::new("ctrl-s", SaveSchedule, Some(SHOW)),
+        KeyBinding::new("ctrl-o", OpenSchedule, Some(SHOW)),
+        KeyBinding::new("down", NextScheduleItem, Some(SHOW)),
+        KeyBinding::new("up", PreviousScheduleItem, Some(SHOW)),
+        KeyBinding::new("ctrl-delete", RemoveScheduleItem, Some(SHOW)),
         KeyBinding::new("ctrl-q", Quit, Some("Sela")),
         KeyBinding::new("tab", FocusNext, Some("Sela")),
         KeyBinding::new("shift-tab", FocusPrevious, Some("Sela")),
@@ -174,6 +184,11 @@ fn main() {
             },
             |window, cx| {
                 let operator = cx.new(|cx| Operator::new(library, audience_launcher(), cx));
+                let weak = operator.downgrade();
+                window.on_window_should_close(cx, move |window, cx| {
+                    weak.update(cx, |operator, cx| operator.may_close(window, cx))
+                        .unwrap_or(true)
+                });
                 operator.read(cx).focus.clone().focus(window, cx);
                 operator
             },

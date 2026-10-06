@@ -6,6 +6,7 @@ pub mod masks;
 pub mod output;
 pub mod preparation;
 pub mod scene;
+pub mod schedule;
 pub mod slides;
 pub mod storage;
 pub mod transport;
