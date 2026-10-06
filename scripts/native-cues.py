@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Bounded, opt-in native pipe/receipt/capture driver; does not change displays.
 
-No input/focus events. X11 captures are cropped from root to this child's client.
+No input/focus events. X11 captures are cropped from root to this child's client;
+Windows captures BitBlt this child's visible client area from the screen.
 Every capture is associated with an observed receipt and independently checked.
 """
 import argparse
@@ -9,23 +10,31 @@ import hashlib
 import json
 import os
 import pathlib
+import queue
 import secrets
-import select
 import struct
 import subprocess
+import sys
 import tempfile
+import threading
 import time
+
+WINDOWS = sys.platform == "win32"
+if WINDOWS:
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import native_win as nw
 
 
 def run():
     root = pathlib.Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=pathlib.Path, default=pathlib.Path(
-        os.environ.get("CARGO_TARGET_DIR", root / "target")) / "debug/examples/native_cues")
+        os.environ.get("CARGO_TARGET_DIR", root / "target")) / "debug/examples"
+        / ("native_cues.exe" if WINDOWS else "native_cues"))
     parser.add_argument("--backend", choices=["gl", "vulkan", "dx12", "metal"], default="gl")
     parser.add_argument("--out", type=pathlib.Path, default=root / ".amp/in/artifacts/native-cues")
     args = parser.parse_args()
-    if not os.environ.get("DISPLAY"):
+    if not WINDOWS and not os.environ.get("DISPLAY"):
         parser.error("requires an existing authorized X11 DISPLAY; driver never starts one")
     if not args.binary.is_file():
         parser.error(f"build native_cues first: {args.binary}")
@@ -34,6 +43,7 @@ def run():
     (args.out / "summary.json").unlink(missing_ok=True)
     history = []
     children = []
+    readers = {}
     epoch = int.from_bytes(secrets.token_bytes(16), "little") or 1
 
     with tempfile.TemporaryDirectory(prefix="sela-native-cues-") as scratch:
@@ -42,17 +52,29 @@ def run():
         def cmd(*argv):
             return subprocess.check_output(argv, env=env, timeout=5, text=True).strip()
 
+        def pump(stream, sink):
+            # Portable bounded-wait reads: Windows pipes do not support select().
+            while chunk := stream.read(65536):
+                sink.put(chunk)
+            sink.put(b"")
+
         def read_exact(child, size, deadline):
-            data = bytearray()
+            pending = readers[child.pid]
+            data = pending["buffer"]
             while len(data) < size:
                 remain = deadline - time.monotonic()
-                if remain <= 0 or not select.select([child.stdout], [], [], max(0, remain))[0]:
+                try:
+                    chunk = pending["queue"].get(timeout=max(0, remain)) if remain > 0 else None
+                except queue.Empty:
+                    chunk = None
+                if chunk is None:
                     raise TimeoutError("receipt missing; output unknown, do not replay")
-                chunk = os.read(child.stdout.fileno(), size - len(data))
                 if not chunk:
                     raise RuntimeError("child disconnected; output unknown, do not replay")
                 data.extend(chunk)
-            return data
+            result = bytes(data[:size])
+            del data[:size]
+            return result
 
         def receive(child, kind, timeout=3):
             deadline = time.monotonic() + timeout
@@ -71,10 +93,34 @@ def run():
                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          stderr=logs, env=env, bufsize=0)
             children.append(child)
+            readers[child.pid] = {"queue": queue.Queue(), "buffer": bytearray()}
+            threading.Thread(target=pump, args=(child.stdout, readers[child.pid]["queue"]),
+                             daemon=True).start()
             body = receive(child, 3, timeout=10)
             assert int.from_bytes(body[:16], "little") == session
             assert struct.unpack("<I", body[16:])[0] >= 641
             return child
+
+        def write_all(child, packet, timeout=3):
+            # Bounded writer: if a renderer stops consuming, the supervisor fails
+            # instead of hanging. A stuck thread is unblocked when the child is killed.
+            failure = []
+
+            def writer():
+                try:
+                    view = memoryview(packet)
+                    while view:
+                        view = view[child.stdin.write(view[:65536]):]
+                except OSError as error:
+                    failure.append(error)
+
+            thread = threading.Thread(target=writer, daemon=True)
+            thread.start()
+            thread.join(timeout)
+            if thread.is_alive():
+                raise TimeoutError("resource writer blocked; retire child, output unknown")
+            if failure:
+                raise failure[0]
 
         def send(child, session, seq, color, lane=0, extent=(641, 360)):
             # Fixed schema, inline owned resource values, no paths/pointers.
@@ -82,9 +128,9 @@ def run():
                     + (19).to_bytes(16, "little") + struct.pack("<QII4B", seq + 22, *extent, *color))
             assert len(body) == 65
             packet = struct.pack("<4sBBH", b"SCUE", 1, 1, len(body)) + body
-            # One <= PIPE_BUF write, only in supervisor. Deadline bounds child
+            # One small packet, only in supervisor. Deadline bounds child
             # lifetime; renderer's pipe reader is independent of its frame loop.
-            assert os.write(child.stdin.fileno(), packet) == len(packet)
+            write_all(child, packet)
 
         def ack(child, session, seq, outcome):
             body = receive(child, 2)
@@ -104,38 +150,31 @@ def run():
                     + b"\x01" + version + struct.pack("<HI", 32, len(content)) + content
                     + struct.pack("<I", len(font)) + font)
             packet = struct.pack("<4sBBHI", b"SCUE", 2, 1, 0, len(body)) + body
-            # Resource packets exceed PIPE_BUF. Bounded nonblocking writes prevent
-            # the supervisor from hanging if a renderer stops consuming them.
-            fd = child.stdin.fileno()
-            os.set_blocking(fd, False)
-            end = time.monotonic() + 3
-            offset = 0
-            while offset < len(packet):
-                remain = end - time.monotonic()
-                if remain <= 0 or not select.select([], [fd], [], remain)[1]:
-                    raise TimeoutError("resource writer blocked; retire child, output unknown")
-                try:
-                    offset += os.write(fd, packet[offset:offset + 65536])
-                except BlockingIOError:
-                    continue
-            os.set_blocking(fd, True)
+            write_all(child, packet)
 
         def window(child):
             end = time.monotonic() + 5
             while time.monotonic() < end:
                 if child.poll() is not None:
                     raise RuntimeError("child exited before capture")
-                try:
-                    return cmd("xdotool", "search", "--onlyvisible", "--pid", str(child.pid)).splitlines()[0]
-                except subprocess.CalledProcessError:
-                    time.sleep(0.05)
+                if WINDOWS:
+                    found = nw.top_windows(child.pid)
+                    if found:
+                        return found[0]
+                else:
+                    try:
+                        return cmd("xdotool", "search", "--onlyvisible", "--pid", str(child.pid)).splitlines()[0]
+                    except subprocess.CalledProcessError:
+                        pass
+                time.sleep(0.05)
             raise TimeoutError("owned window not found")
 
-        def capture(child, label, expected, receipt_seq, text=False):
-            # Allow virtual compositor to sample submitted frame; this is not
-            # scanout timing, a GPU wait, or evidence of every frame's visibility.
-            time.sleep(0.15)
-            target = window(child)
+        def grab(target, output):
+            """Returns (width, height, packed 8-bit RGB) and writes the PNG."""
+            if WINDOWS:
+                width, height, bgra = nw.capture_client(target)
+                nw.write_png(output, width, height, bgra)
+                return width, height, nw.bgra_to_rgb(bgra)
             # xdotool's absolute origin can include a decoration offset under a
             # reparenting WM. Use actual client coordinates, as the GPUI drivers do.
             geom = {}
@@ -148,23 +187,30 @@ def run():
             image = pathlib.Path(scratch) / "root.png"
             subprocess.run(["import", "-window", "root", str(image)], env=env, check=True, timeout=5)
             bounds = "{WIDTH}x{HEIGHT}+{X}+{Y}".format(**geom)
-            output = args.out / f"{label}.png"
             subprocess.run(["convert", str(image), "-crop", bounds, "+repage", str(output)],
                            env=env, check=True, timeout=5)
-            assert (int(geom["WIDTH"]), int(geom["HEIGHT"])) == (641, 360)
+            raw = subprocess.check_output(["convert", str(output), "-depth", "8", "rgb:-"], env=env, timeout=5)
+            return int(geom["WIDTH"]), int(geom["HEIGHT"]), raw
+
+        def capture(child, label, expected, receipt_seq, text=False):
+            # Allow the compositor to sample the submitted frame; this is not
+            # scanout timing, a GPU wait, or evidence of every frame's visibility.
+            time.sleep(0.15)
+            output = args.out / f"{label}.png"
+            width, height, raw = grab(window(child), output)
+            assert (width, height) == (641, 360), (width, height)
+            assert len(raw) == width * height * 3
             # Check multiple interior points; center-only could miss a stale scene.
             pixels = []
             points = [(32, 32), (320, 180), (608, 327)]
             if text:
                 points = [(100, 160), (320, 160), (540, 160), (100, 280), (320, 280), (540, 280)]
             for index, (x, y) in enumerate(points):
-                pixel = subprocess.check_output(["convert", str(output), "-crop", f"1x1+{x}+{y}",
-                                                 "+repage", "-depth", "8", "rgb:-"], env=env, timeout=5)
-                assert len(pixel) == 3
+                offset = (y * width + x) * 3
+                pixel = raw[offset:offset + 3]
                 wanted = expected[index] if text else expected
                 assert all(abs(a - b) <= 2 for a, b in zip(pixel, wanted)), (label, list(pixel), wanted)
                 pixels.append(list(pixel))
-            raw = subprocess.check_output(["convert", str(output), "-depth", "8", "rgb:-"], env=env, timeout=5)
             if text:
                 white = sum(min(raw[i:i + 3]) >= 245 for i in range(0, len(raw), 3))
                 assert white > 100, ("no actual text coverage", white)
@@ -184,7 +230,6 @@ def run():
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait(timeout=2)
-            child.stdout.close()
             assert child.returncode == 0, ("audience did not retire cleanly", child.returncode)
 
         try:
@@ -263,7 +308,8 @@ def run():
             capture(child, "consecutive-lanes-blue", blue[:3], 3)
             retire(child)
             (args.out / "summary.json").write_text(json.dumps({"status": "PASS",
-                "backend": args.backend, "qualification": "native virtual-display submission/capture only, not physical scanout",
+                "backend": args.backend, "platform": sys.platform,
+                "qualification": "native submission/capture only, not physical scanout timing",
                 "epoch_hex": f"{epoch:x}", "new_epoch_hex": f"{new_epoch:x}", "events": history}, indent=2) + "\n")
             print("PASS: native command/receipt/pixel retention/restart; physical scanout unqualified")
         finally:
@@ -273,8 +319,6 @@ def run():
                 child.wait(timeout=3)
                 if child.stdin and not child.stdin.closed:
                     child.stdin.close()
-                if child.stdout and not child.stdout.closed:
-                    child.stdout.close()
 
 
 if __name__ == "__main__":

@@ -227,6 +227,7 @@ impl ApplicationHandler for Audience {
         });
         let surface = instance.create_surface(window.clone()).unwrap();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::from_env().unwrap_or_default(),
             compatible_surface: Some(&surface),
             ..Default::default()
         }))

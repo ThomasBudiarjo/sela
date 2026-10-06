@@ -105,7 +105,10 @@ impl Compositor {
             backends,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::from_env().unwrap_or_default(),
+            ..Default::default()
+        }))?;
         let info = adapter.get_info();
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;

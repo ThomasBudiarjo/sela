@@ -64,9 +64,15 @@ fn encode(command: &mut Command, deadline: Duration) -> Result<(), Box<dyn Error
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 1 {
-        return Err("usage: video_spike OUTPUT_DIRECTORY".into());
+    if args.is_empty() || args.len() > 2 {
+        return Err("usage: video_spike OUTPUT_DIRECTORY [vulkan|dx12|metal]".into());
     }
+    let backend = match args.get(1).and_then(|s| s.to_str()).unwrap_or("vulkan") {
+        "vulkan" => wgpu::Backends::VULKAN,
+        "dx12" => wgpu::Backends::DX12,
+        "metal" => wgpu::Backends::METAL,
+        _ => return Err("unsupported explicit backend".into()),
+    };
     let tmp = tempfile::tempdir()?;
     let raw = tmp.path().join("original.rgba");
     let video = tmp.path().join("original.mkv");
@@ -128,7 +134,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )
     .map_err(|e| format!("{e:?}"))?;
     assert!(alpha.contains(&255));
-    let gpu = gpu::Compositor::new(wgpu::Backends::VULKAN)?;
+    let gpu = gpu::Compositor::new(backend)?;
     println!("adapter={:?}", gpu.adapter_info());
     gpu.check_readback()?;
     std::fs::create_dir_all(&args[0])?;

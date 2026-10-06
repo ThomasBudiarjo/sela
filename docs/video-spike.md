@@ -18,8 +18,18 @@ rmdir "$runtime"
 
 All passed on Debian 12 x64, FFmpeg 5.1.9-0+deb12u1, Vulkan llvmpipe
 LLVM15.0.6 / Mesa22.3.6. Eleven ordinary tests do not invoke FFmpeg or GPU;
-Unix child tests use only trusted static `sh -c` commands. Windows lifecycle
-tests and hardware qualification remain open. Initial strict Clippy rejected
+Unix child tests use only trusted static `sh -c` commands; they are
+`cfg(unix)`, so Windows runs six of the example's tests. Hardware qualification
+remains open.
+
+Windows, 2026-10-06: `target\debug\examples\video_spike.exe <out> dx12` (the
+optional backend argument now matches `composition_spike`: `vulkan` default,
+`dx12`, `metal`) passed all 12 exact ordered frames, actual-text GPU pixels,
+missing/corrupt input, saturated deadline/cancel and the retained-last-frame check.
+It passed with `WGPU_POWER_PREF=low` (Intel UHD, DX12), `high` (RTX 4060, DX12)
+and `high` with `vulkan` (RTX 4060). External FFmpeg was the gyan.dev 7.1.1
+"full" GPL build via Scoop; Sela does not bundle it. The Windows child
+lifecycle uses the same supervisor (kill and reap) without the Unix-only tests. Initial strict Clippy rejected
 constant `chunks_exact`; replaced with `as_chunks`, reran all commands.
 
 CLI privately generates 12 original 320×180 RGBA frames at known 12 fps,

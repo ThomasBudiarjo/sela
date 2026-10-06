@@ -16,8 +16,19 @@ rmdir "$runtime"
 test "$status" -eq 0
 ```
 
-The explicit backend argument also accepts `dx12` and `metal`; neither was tested
-here. There is no silent GL fallback. Set a private XDG directory on Linux to
+The explicit backend argument also accepts `dx12` and `metal`. Metal is
+untested. There is no silent GL fallback. Adapter choice follows wgpu's
+standard `WGPU_POWER_PREF=low|high` (unset uses wgpu's default).
+
+Windows DX12, 2026-10-06, debug build, run from PowerShell:
+`$env:WGPU_POWER_PREF='low'; target\debug\examples\composition_spike.exe <out> dx12`
+passed every pixel, contain/cover and overflow check on **Intel UHD Graphics**,
+and again with `high` on the **RTX 4060 Laptop** (driver 32.0.15.9159).
+Single-run compose+readback ms (color/contain/cover): Intel 3.0/3.4/3.9, NVIDIA
+1.3/11.7/8.0, with preparation+raster around 40ms in both runs. These are noisy
+single samples taken while the owner was running a game, not performance
+evidence. The inspected `image-contain.png` showed readable accented Latin and
+connected Arabic and the correct sidebars. Set a private XDG directory on Linux to
 avoid driver runtime warnings; do not force `VK_DRIVER_FILES=/dev/null` for this
 Vulkan example. That workaround belongs only to the separate GPUI GL smoke.
 Missing CLI arguments or an unknown backend return nonzero without creating the
