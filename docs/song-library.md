@@ -105,7 +105,7 @@ finish. Original GPUI code; no EasyWorship code or assets.
 
 Not yet matched: EW's Ctrl+A selecting the whole Words document (Sela selects
 within one cell), drag selection across cells, typing-group undo (Sela undoes
-per native edit), the Slides tab thumbnails (M1-05f), canvas text-box editing
+per native edit), canvas text-box editing
 and its context menu (EW8-OBS-025), and the zoom slider.
 
 Checks: GPUI tests `words_cells_navigate_and_new_song_focuses_first_label`,
@@ -124,6 +124,39 @@ It types through SendInput (Unicode), asserts the foreground, checks the window
 title, preview ink, split/join, and decodes the saved SQLite payload. The X11
 `scripts/song-library.py` still uses the M1-05d form coordinates and is not
 ported to this layout.
+
+## M1-05f — Slides tab thumbnails
+
+Implemented-unqualified, following EW8-OBS-024 (installed EasyWorship 8.0.49
+capture `25-slides-tab`).
+
+- **Slides** narrows the left pane to a thumbnail column (264 px). Each slide
+  shows its number at the left, a rendered thumbnail and a caption bar below
+  it: the label on its label-kind tint (same palette as Words), or grey italic
+  "Slide N" on a neutral bar when unlabeled (as EW shows an unlabeled slide).
+  The selected slide has a blue rounded frame; clicking or Space/Enter on a
+  focused thumbnail selects it and the right preview follows.
+- Thumbnails are the 1280×720 preview raster box-filtered 4× down to 320×180,
+  so they keep the audience layout (fitting directly at thumbnail size would
+  change proportions because the text inset is fixed in pixels). An empty slide
+  is plain black; text the audience would reject shows "Cannot be shown".
+- Rendering runs on the background executor, one slide at a time in slide
+  order, and only while Slides is shown. The cache is keyed by slide text and
+  pruned to the current slides on every render (also after edits in Words), so
+  it holds at most one 225 KiB image per slide (≤128) plus one landing render,
+  under 30 MiB; pruned images are dropped from the GPU atlas.
+- In the Slides tab, actions that would put the caret in a slide (+, undo/redo)
+  focus that slide's thumbnail instead, so shortcuts keep working. Double-click
+  on the preview switches to Words with the caret in that slide's lyrics
+  (Sela substitute: EW enters canvas text editing, EW8-OBS-025).
+
+Not yet matched: EW's full-theme thumbnails (background, copyright strip;
+M1-05g/h), unobserved Slides keyboard navigation (Sela uses Tab order), drag
+reordering and auto-scrolling to the selected thumbnail.
+
+Checks: `thumbnail_is_the_preview_box_filtered`,
+`slides_tab_thumbnails_render_off_thread_and_prune_edits` and the native replay
+above (captures `05-slides`, `06-slide-1-selected`, `07-unlabeled-slide`).
 
 ## Ownership and reference patterns
 
@@ -268,8 +301,8 @@ dependencies copied.
 The blank editor has Title upper-left, selectable draft sections and Words/Slides
 on the left, a local draft preview on the right, Inspector top-right, bottom-left
 Add/Remove and bottom-right OK/Cancel. Words edits the selected label/lyrics;
-Slides shows original text-only section thumbnails (first four lines), not
-rendered audience slides. Native fields retain document history across view
+Slides showed original text-only section thumbnails (first four lines), not
+rendered audience slides (superseded by M1-05f rendered thumbnails). Native fields retain document history across view
 changes. The preview displays logical draft lines, with scrolling; **not WYSIWYG,
 font fitting, arrangement/pagination, theme or rendered-output matching**.
 Inspector replaces the right preview with the three existing metadata fields.

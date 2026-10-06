@@ -11,9 +11,11 @@ label, where "Chorus" is typed. The captured preview must show rendered text
 (near-white pixels on the black slide). Home, Ctrl+Enter then Backspace split
 slide 2 at its start and join it back. The title is typed, Ctrl+S saves and the
 stored revision is decoded from SQLite (labels and lyrics per slide); the
-window title follows the song title. Unchanged after saving, Ctrl+Q closes
-without a guard. Requires exclusive use of the keyboard and mouse while it
-runs.
+window title follows the song title. Clicking the Slides tab must show
+rendered thumbnails (black slides with white text in the narrowed left pane);
+clicking slide 1 selects it, the + appends an unlabeled "Slide 3" and Ctrl+Z
+removes it again. Unchanged after that, Ctrl+Q closes without a guard.
+Requires exclusive use of the keyboard and mouse while it runs.
 """
 
 from __future__ import annotations
@@ -59,6 +61,23 @@ def preview_ink(width: int, height: int, bgra: bytes) -> tuple[int, int]:
             if r < 12 and g < 12 and b < 12:
                 black += 1
             elif r > 235 and g > 235 and b > 235:
+                white += 1
+    return black, white
+
+
+def thumbnail_ink(
+    width: int, height: int, bgra: bytes, scale: float
+) -> tuple[int, int]:
+    """(black, white) samples in the Slides tab's thumbnail column. White is
+    strict because the pane itself is #fbfbfa."""
+    black = white = 0
+    for y in range(int(130 * scale), min(height, int(450 * scale)), 2):
+        row = y * width * 4
+        for x in range(int(40 * scale), int(240 * scale), 2):
+            b, g, r = bgra[row + 4 * x : row + 4 * x + 3]
+            if r < 12 and g < 12 and b < 12:
+                black += 1
+            elif r > 253 and g > 253 and b > 253:
                 white += 1
     return black, white
 
@@ -144,6 +163,20 @@ def main() -> int:
         assert saved == [expected], saved
         assert nw.title(hwnd) == "Song Editor - Native Hymn", nw.title(hwnd)
         capture("04-saved")
+
+        # Slides tab: rendered thumbnails in the narrowed left pane.
+        nw.click(hwnd, int(89 * scale), int(113 * scale))
+        time.sleep(1.0)
+        width, height, bgra = capture("05-slides")
+        black, white = thumbnail_ink(width, height, bgra, scale)
+        print(f"thumbnail samples: black={black} white={white}")
+        assert black > 500 and white > 10, "no rendered thumbnails"
+        nw.click(hwnd, int(140 * scale), int(210 * scale))
+        capture("06-slide-1-selected")
+        # + appends an unlabeled slide ("Slide 3" caption); undo restores.
+        nw.click(hwnd, int(20 * scale), height - int(63 * scale))
+        capture("07-unlabeled-slide")
+        keys(hwnd, "ctrl+z")
         keys(hwnd, "ctrl+q")
         code = app.wait_exit()
         assert code == 0, code

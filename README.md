@@ -14,8 +14,8 @@ works without a display. The preview opens a native GPUI window; Ctrl+Q or closi
 the window closes it, with an unsaved-song guard. It opens no network listeners.
 Choose **New → New Song** or **Songs → + New Song** to create original songs;
 the editor follows EasyWorship's Song Editor: Title in the toolbar, slides with
-inline labels in **Words** (Ctrl+Enter starts a new slide) and a rendered preview
-of the current slide. Use **Library** in the editor to reopen saved songs and
+inline labels in **Words** (Ctrl+Enter starts a new slide), rendered thumbnails
+in **Slides** and a rendered preview of the current slide. Use **Library** in the editor to reopen saved songs and
 **Inspector** for metadata.
 **OK** saves and closes only after the database acknowledges the commit. Or
 use `target/debug/sela --library /absolute/path/to/library.sqlite` for an explicit

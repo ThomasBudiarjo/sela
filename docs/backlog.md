@@ -518,7 +518,12 @@ IME/accessibility, and installed-reference confirmation of unverified details.
 Follow-ups:
 
 - M1-05f Slides tab: rendered thumbnails with label-colored caption bars and
-  "Slide N" for unlabeled slides (EW8-OBS-025). Planned.
+  "Slide N" for unlabeled slides (EW8-OBS-024). **Implemented-unqualified**:
+  preview raster box-filtered to 320×180 off the UI thread, text-keyed cache
+  pruned to the current slides (≤129 × 225 KiB), narrowed pane, selection
+  frame; native replay in `scripts/song-editor-windows.py`. Open: full-theme
+  thumbnails (M1-05g/h), Slides keyboard navigation, drag reorder,
+  installed-reference confirmation.
 - M1-05g Per-song text formatting (font, auto/fixed size, color, B/I/U,
   shadow, outline, alignment; EW8-OBS-026 provisional). Schema change with a
   verified backup. Planned.

@@ -6,6 +6,12 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Song Editor Slides tab (M1-05f, 2026-10-06):** Slides shows rendered
+  thumbnails (the preview raster box-filtered to 320×180 off the UI thread,
+  bounded text-keyed cache) with label-kind caption bars or grey italic
+  "Slide N", a narrowed pane and a blue selection frame (EW8-OBS-024). Windows
+  native check passes. Implemented-unqualified. Next: M1-05g per-song text
+  formatting (schema change with verified backup), then M1-05h background.
 - **EasyWorship-style Song Editor (M1-05e, 2026-10-06):** RUN-W06E observed the
   8.0.49 Song Editor (EW8-OBS-021–026). The editor now has the Title in the
   toolbar, EW's tool order (unbuilt tools disabled), Words as one list of
@@ -117,7 +123,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview (Windows native check). M1-05f–i (Slides thumbnails, formatting, background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check). M1-05g–i (formatting, background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2286,3 +2292,42 @@ PY
 - Next: M1-05f Slides tab with rendered thumbnails and label-colored caption
   bars (EW8-OBS-025), reusing `render_preview` at thumbnail size with a bounded
   cache.
+
+### M1-05f — Song Editor Slides tab thumbnails — 2026-10-06 (UTC+7)
+
+- State: **implemented-unqualified**. Phase 2 of the owner-approved Song Editor
+  plan. Source: EW8-OBS-024 and the installed 8.0.49 capture
+  `.amp/in/artifacts/reference/ew8-w06-editor/25-slides-tab.png` (an appended
+  unlabeled slide shows a neutral bar with grey italic "Slide 9", so Sela uses a
+  neutral bar for every unlabeled slide; unlabeled slides inside a labeled group
+  were not observed).
+- `src/song_library.rs`: `render_preview` split into `coverage` and
+  `image_from`; `render_thumbnail` box-filters the 1280x720 coverage 4x to
+  320x180 so thumbnails keep the audience layout. `ensure_thumbnails` renders
+  one missing slide at a time on the background executor, only in Slides, and
+  prunes the text-keyed cache to the current slides on every render (dropping
+  images from the atlas): at most 129 x 225 KiB. `thumbnail_row` draws number,
+  thumbnail and caption bar with the selection frame; the Slides pane is 264 px.
+- Bug found natively and fixed: in Slides, `+` and undo focused a Words cell
+  (or a removed thumbnail) that is not rendered, so Ctrl+Q stopped reaching
+  the editor. `focus_cell` now focuses the slide's thumbnail in Slides and
+  history moves a focused thumbnail to the restored slide. Preview double-click
+  switches to Words (Sela substitute for EW canvas editing).
+- Tests: unit `thumbnail_is_the_preview_box_filtered`; GPUI
+  `slides_tab_thumbnails_render_off_thread_and_prune_edits` (no rendering in
+  Words, order, pruning after a Words edit, rejected text, `+` then Ctrl+Z
+  keeps focus in the editor).
+- Checks (Windows 11): `cargo fmt --all -- --check`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` (lib 82, bin 61 + 2 ignored, other
+  suites pass), `cargo build --locked`, `python -m ruff check scripts`.
+- Native: `python scripts/song-editor-windows.py` PASS twice, now also
+  clicking Slides (thumbnail samples black 16816 / white 47), selecting slide 1
+  (preview follows), `+` (grey italic "Slide 3"), Ctrl+Z, Ctrl+Q exit 0.
+  Captures `05-slides`, `06-slide-1-selected`, `07-unlabeled-slide`
+  inspected. The driver clicks logical coordinates for this layout at 125%.
+- Not run: IME/UIA, Linux/macOS, EW confirmation of Slides keyboard navigation
+  and of captions for unlabeled slides inside a labeled group.
+- Next: M1-05g per-song text formatting (font, auto/fixed size, color, B/I/U,
+  shadow, outline, alignment), following the EW help as provisional
+  (EW8-OBS-026), with a schema change behind the verified-backup gate.

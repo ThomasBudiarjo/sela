@@ -8,7 +8,7 @@ use gpui::{prelude::*, *};
 use sela::arrangement::{Occurrence, OccurrenceId, SectionId};
 use sela::scene::{ContentVersion, Extent, PreparedBackground, RendererCapabilities};
 use sela::storage::{Command, Error, Id, Reply, Section, Song, Version, Worker};
-use std::{ops::Range, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Duration};
 
 actions!(song_library, [Save, SplitSection]);
 
@@ -91,6 +91,16 @@ const LYRICS: usize = 1;
 const PREVIEW: Extent = Extent {
     width: 1280,
     height: 720,
+};
+/// EW8-OBS-024: the Slides tab narrows the left pane to a thumbnail column.
+const SLIDES_PANE: f32 = 264.;
+const THUMBNAIL_WIDTH: f32 = 204.;
+const THUMBNAIL_SCALE: u32 = 4;
+/// Slides-tab thumbnail raster: 225 KiB each, at most one per slide (128)
+/// plus one landing render, so the cache stays under 30 MiB.
+const THUMBNAIL: Extent = Extent {
+    width: PREVIEW.width / THUMBNAIL_SCALE,
+    height: PREVIEW.height / THUMBNAIL_SCALE,
 };
 
 #[derive(Clone)]
@@ -232,6 +242,33 @@ fn groups<'a>(labels: impl IntoIterator<Item = &'a str>) -> Vec<Range<usize>> {
 /// thread: bundled font, fitted size, centered, white on the cue background.
 /// `None` when the audience would reject the text (overflow, missing glyph).
 fn render_preview(text: &str) -> Option<Arc<RenderImage>> {
+    let (alpha, color) = coverage(text)?;
+    image_from(&alpha, color, PREVIEW)
+}
+
+/// The preview raster box-filtered down by `THUMBNAIL_SCALE`, so thumbnails
+/// keep the audience proportions (the text inset is fixed in pixels, so
+/// fitting at thumbnail size directly would lay out differently).
+fn render_thumbnail(text: &str) -> Option<Arc<RenderImage>> {
+    let (alpha, color) = coverage(text)?;
+    let (scale, width) = (THUMBNAIL_SCALE as usize, PREVIEW.width as usize);
+    let mut small = Vec::with_capacity(alpha.len() / (scale * scale));
+    for y in 0..THUMBNAIL.height as usize {
+        for x in 0..THUMBNAIL.width as usize {
+            let sum: u32 = (0..scale)
+                .flat_map(|dy| {
+                    let row = (y * scale + dy) * width + x * scale;
+                    alpha[row..row + scale].iter().map(|a| u32::from(*a))
+                })
+                .sum();
+            let n = (scale * scale) as u32;
+            small.push(((sum + n / 2) / n) as u8);
+        }
+    }
+    image_from(&small, color, THUMBNAIL)
+}
+
+fn coverage(text: &str) -> Option<(Vec<u8>, [u8; 3])> {
     let slide = sela::slides::Slide {
         label: String::new(),
         text: text.into(),
@@ -250,13 +287,18 @@ fn render_preview(text: &str) -> Option<Arc<RenderImage>> {
     let PreparedBackground::Color([r, g, b, _]) = *cue.background() else {
         return None;
     };
+    Some((alpha, [r, g, b]))
+}
+
+/// White text over the cue background color, as BGRA.
+fn image_from(alpha: &[u8], [r, g, b]: [u8; 3], extent: Extent) -> Option<Arc<RenderImage>> {
     let mut bgra = Vec::with_capacity(alpha.len() * 4);
     for a in alpha {
-        let a = u32::from(a);
+        let a = u32::from(*a);
         let mix = |c: u8| ((u32::from(c) * (255 - a) + 255 * a + 127) / 255) as u8;
         bgra.extend([mix(b), mix(g), mix(r), 255]);
     }
-    let buffer = image::RgbaImage::from_raw(PREVIEW.width, PREVIEW.height, bgra)?;
+    let buffer = image::RgbaImage::from_raw(extent.width, extent.height, bgra)?;
     Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])))
 }
 
@@ -302,6 +344,11 @@ struct Library {
     preview: Option<(String, Option<Arc<RenderImage>>)>,
     /// At most one raster in flight; a newer text starts when it lands.
     preview_task: Option<Task<()>>,
+    /// Slides-tab thumbnails by slide text (`None` = rejected), pruned to the
+    /// current slides.
+    thumbnails: HashMap<String, Option<Arc<RenderImage>>>,
+    /// One thumbnail renders at a time, in slide order.
+    thumbnail_task: Option<Task<()>>,
     title: String,
 }
 
@@ -371,6 +418,8 @@ impl Library {
             words_scroll: ScrollHandle::new(),
             preview: None,
             preview_task: None,
+            thumbnails: HashMap::new(),
+            thumbnail_task: None,
             title: String::new(),
         };
         this.load_fields(cx);
@@ -500,13 +549,16 @@ impl Library {
             redo,
         ) {
             let focused = self.focused_cell(window, cx);
+            let thumbnail = self.section_focus.iter().position(|f| f.is_focused(window));
             self.draft = next.song;
             self.section = next.section;
             self.confirm_delete = false;
             self.load_fields(cx);
             // The caret follows the restored slide instead of staying in a
             // cell that now holds a different slide.
-            if focused.is_some_and(|(i, _)| i != self.section) {
+            if focused.is_some_and(|(i, _)| i != self.section)
+                || thumbnail.is_some_and(|i| i != self.section)
+            {
                 let index = self.section;
                 self.focus_cell(index, LYRICS, usize::MAX, window, cx);
             }
@@ -949,7 +1001,9 @@ impl Library {
         })
     }
 
-    /// Caret at `byte` (clamped) in one cell; that slide becomes current.
+    /// Caret at `byte` (clamped) in one cell; that slide becomes current. In
+    /// the Slides tab the cells are not rendered, so its thumbnail takes focus
+    /// instead and shortcuts keep reaching the editor.
     fn focus_cell(
         &mut self,
         index: usize,
@@ -962,6 +1016,12 @@ impl Library {
             return;
         };
         cell.update(cx, |c, cx| c.set_cursor(byte, cx));
+        if self.slides {
+            self.section_focus[index].focus(window, cx);
+            self.section = index;
+            cx.notify();
+            return;
+        }
         cell.read(cx).focus_handle(cx).focus(window, cx);
         self.section = index;
         let group = (1..=index)
@@ -1016,6 +1076,154 @@ impl Library {
                 cx.notify();
             });
         }));
+    }
+
+    /// Fills the Slides-tab thumbnail cache off the UI thread, one slide at a
+    /// time, and drops thumbnails whose text no longer appears in the draft.
+    fn ensure_thumbnails(&mut self, cx: &mut Context<Self>) {
+        if self.thumbnails.is_empty() && (!self.slides || self.locked()) {
+            return;
+        }
+        let texts: Vec<String> = self
+            .draft
+            .sections
+            .iter()
+            .map(|s| sela::slides::section_slide(s).text)
+            .collect();
+        let stale: Vec<String> = self
+            .thumbnails
+            .keys()
+            .filter(|k| !texts.contains(k))
+            .cloned()
+            .collect();
+        for key in stale {
+            if let Some(Some(old)) = self.thumbnails.remove(&key) {
+                cx.drop_image(old, None);
+            }
+        }
+        if !self.slides || self.locked() || self.thumbnail_task.is_some() {
+            return;
+        }
+        let Some(text) = texts.into_iter().find(|t| !self.thumbnails.contains_key(t)) else {
+            return;
+        };
+        let job = text.clone();
+        let raster = cx
+            .background_executor()
+            .spawn(async move { render_thumbnail(&job) });
+        self.thumbnail_task = Some(cx.spawn(async move |this, cx| {
+            let image = raster.await;
+            let _ = this.update(cx, |this, cx| {
+                this.thumbnail_task = None;
+                if let Some(Some(old)) = this.thumbnails.insert(text, image) {
+                    cx.drop_image(old, None);
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    fn thumbnail_row(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+        let section = &self.draft.sections[index];
+        let selected = index == self.section;
+        let labeled = !section.label.is_empty();
+        let kind = kind(&section.label);
+        let thumbnail = self
+            .thumbnails
+            .get(&sela::slides::section_slide(section).text);
+        div()
+            .id(("draft-section", index))
+            .track_focus(&self.section_focus[index])
+            .key_context("SelaControl")
+            .flex_shrink_0()
+            .flex()
+            .gap_1()
+            .p_1()
+            .border_2()
+            .rounded(px(6.))
+            .border_color(rgb(if selected { 0x536aca } else { 0xfbfbfa }))
+            .when(selected, |d| d.bg(rgb(0xdce3fa)))
+            .focus(|d| d.border_color(rgb(0x8fa1e0)))
+            .cursor_pointer()
+            .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
+                w.prevent_default();
+                s.select_section(index, w, cx);
+            }))
+            .on_click(cx.listener(move |s, event, w, cx| {
+                if matches!(event, ClickEvent::Keyboard(_)) {
+                    return;
+                }
+                s.section_focus[index].focus(w, cx);
+                s.select_section(index, w, cx);
+            }))
+            .child(
+                div()
+                    .w(px(20.))
+                    .flex_shrink_0()
+                    .flex()
+                    .justify_end()
+                    .text_size(px(12.))
+                    .text_color(rgb(if selected { 0x2f4f99 } else { 0x7a7f86 }))
+                    .child((index + 1).to_string()),
+            )
+            .child(
+                div()
+                    .w(px(THUMBNAIL_WIDTH))
+                    .flex_shrink_0()
+                    .rounded(px(4.))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(rgb(if labeled { kind.border } else { 0xdcdedc }))
+                    .child(
+                        div()
+                            .relative()
+                            .h(px(THUMBNAIL_WIDTH * 9. / 16.))
+                            .bg(rgb(0x000000))
+                            .children(
+                                thumbnail
+                                    .and_then(|t| t.clone())
+                                    .map(|t| img(t).size_full()),
+                            )
+                            .when(matches!(thumbnail, Some(None)), |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .p_2()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(0x9a9ea5))
+                                        .child("Cannot be shown"),
+                                )
+                            }),
+                    )
+                    // EW8-OBS-024 caption bar: label-kind fill, or grey
+                    // italic "Slide N" when unlabeled.
+                    .child(
+                        div()
+                            .h(px(24.))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .text_size(px(12.))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .map(|d| {
+                                if labeled {
+                                    d.bg(rgb(kind.bar))
+                                        .text_color(rgb(kind.ink))
+                                        .child(section.label.clone())
+                                } else {
+                                    d.bg(rgb(0xeeeeec))
+                                        .text_color(rgb(0x8a8f96))
+                                        .italic()
+                                        .child(format!("Slide {}", index + 1))
+                                }
+                            }),
+                    ),
+            )
     }
 
     fn control(
@@ -1204,12 +1412,17 @@ impl Render for Library {
             self.title = title;
         }
         self.ensure_preview(cx);
+        self.ensure_thumbnails(cx);
         let busy = self.pending.is_some();
         let dirty = self.dirty(cx);
         let viewport = window.viewport_size();
         let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
         let catalog_width = if self.show_catalog { 220. } else { 0. };
-        let words_width = ((width - catalog_width) * 0.34).max(330.);
+        let words_width = if self.slides {
+            SLIDES_PANE
+        } else {
+            ((width - catalog_width) * 0.34).max(330.)
+        };
         let pane = (width - catalog_width - words_width - 48.).max(160.);
         let slide_width = pane.min((height - 230.).max(90.) * 16. / 9.);
         let labels: Vec<String> = self
@@ -1454,63 +1667,13 @@ impl Render for Library {
                                     .min_h_0()
                                     .overflow_y_scroll()
                                     .p_2()
-                                    .child(div().text_size(px(11.)).text_color(rgb(0x646971)).child(
-                                        "Draft slides · first 4 lines · thumbnails are planned",
-                                    ))
-                                    .children(self.draft.sections.iter().enumerate().map(
-                                        |(i, section)| {
-                                            div()
-                                                .id(("draft-section", i))
-                                                .track_focus(&self.section_focus[i])
-                                                .key_context("SelaControl")
-                                                .flex_shrink_0()
-                                                .p_2()
-                                                .border_b_1()
-                                                .border_color(rgb(0xdcdedc))
-                                                .bg(rgb(if i == self.section {
-                                                    0xe3e7f3
-                                                } else {
-                                                    0xfafaf9
-                                                }))
-                                                .focus(|d| d.bg(rgb(0xdce3fa)))
-                                                .cursor_pointer()
-                                                .on_action(cx.listener(
-                                                    move |s, _: &ActivateControl, w, cx| {
-                                                        w.prevent_default();
-                                                        s.select_section(i, w, cx);
-                                                    },
-                                                ))
-                                                .on_click(cx.listener(move |s, event, w, cx| {
-                                                    if matches!(event, ClickEvent::Keyboard(_)) {
-                                                        return;
-                                                    }
-                                                    s.section_focus[i].focus(w, cx);
-                                                    s.select_section(i, w, cx);
-                                                }))
-                                                .child(if section.label.is_empty() {
-                                                    format!("{} · Slide {}", i + 1, i + 1)
-                                                } else {
-                                                    format!("{} · {}", i + 1, section.label)
-                                                })
-                                                .child(
-                                                    div()
-                                                        .mt_2()
-                                                        .p_2()
-                                                        .bg(rgb(0x202226))
-                                                        .text_color(rgb(0xfafaf9))
-                                                        .children(
-                                                            section.lyrics.split('\n').take(4).map(
-                                                                |line| {
-                                                                    div().child(
-                                                                        line.trim_end_matches('\r')
-                                                                            .to_owned(),
-                                                                    )
-                                                                },
-                                                            ),
-                                                        ),
-                                                )
-                                        },
-                                    ))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .children(
+                                        (0..self.draft.sections.len())
+                                            .map(|i| self.thumbnail_row(i, cx)),
+                                    )
                                     .into_any_element()
                             } else {
                                 div()
@@ -1588,6 +1751,8 @@ impl Render for Library {
                                                     .border_color(rgb(0xc9ccd0))
                                                     .on_click(cx.listener(|s, e: &ClickEvent, w, cx| {
                                                         if e.click_count() == 2 {
+                                                            // No canvas editing yet: edit in Words.
+                                                            s.slides = false;
                                                             let index = s.section;
                                                             s.focus_cell(index, LYRICS, usize::MAX, w, cx);
                                                         }
@@ -2114,6 +2279,85 @@ mod tests {
         cx.run_until_parked();
         assert!(view.read_with(&cx, |v, _| {
             v.preview.as_ref().is_some_and(|(_, i)| i.is_none())
+        }));
+    }
+
+    #[test]
+    fn thumbnail_is_the_preview_box_filtered() {
+        let text = "Amazing grace\nhow sweet the sound";
+        let (full, small) = (
+            render_preview(text).unwrap(),
+            render_thumbnail(text).unwrap(),
+        );
+        let size = small.size(0);
+        assert_eq!((size.width.0, size.height.0), (320, 180));
+        let sum = |image: &RenderImage| {
+            image
+                .as_bytes(0)
+                .unwrap()
+                .chunks(4)
+                .map(|p| u64::from(p[1]))
+                .sum::<u64>()
+        };
+        let (full, small) = (sum(&full), sum(&small) * 16);
+        assert!(small > 0);
+        assert!(full.abs_diff(small) * 200 < full, "{full} vs {small}");
+        assert!(render_thumbnail("\u{e000}").is_none());
+    }
+
+    #[gpui::test]
+    fn slides_tab_thumbnails_render_off_thread_and_prune_edits(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
+        type_cell(&mut cx, &view, 0, LYRICS, "First");
+        action(&mut cx, &view, 7);
+        type_cell(&mut cx, &view, 1, LYRICS, "Second");
+        let fill = |cx: &mut VisualTestContext| {
+            for _ in 0..4 {
+                cx.update(|_, cx| view.update(cx, |v, cx| v.ensure_thumbnails(cx)));
+                cx.run_until_parked();
+            }
+        };
+        let keys = |cx: &mut VisualTestContext| {
+            view.read_with(cx, |v, _| {
+                let mut keys: Vec<_> = v
+                    .thumbnails
+                    .iter()
+                    .map(|(k, i)| (k.clone(), i.is_some()))
+                    .collect();
+                keys.sort();
+                keys
+            })
+        };
+        fill(&mut cx);
+        assert!(keys(&mut cx).is_empty(), "Words tab renders no thumbnails");
+        action(&mut cx, &view, 17);
+        fill(&mut cx);
+        assert_eq!(
+            keys(&mut cx),
+            [("First".into(), true), ("Second".into(), true)]
+        );
+        cx.simulate_keystrokes("tab");
+        action(&mut cx, &view, 14);
+        type_cell(&mut cx, &view, 0, LYRICS, "\u{e000}");
+        fill(&mut cx);
+        assert_eq!(keys(&mut cx), [("Second".into(), true)]);
+        assert!(view.read_with(&cx, |v, _| v.thumbnail_task.is_none()));
+        action(&mut cx, &view, 17);
+        fill(&mut cx);
+        assert_eq!(
+            keys(&mut cx),
+            [("Second".into(), true), ("\u{e000}".into(), false)]
+        );
+        // + in the Slides tab focuses the new thumbnail, so Ctrl+Z still
+        // reaches the editor.
+        action(&mut cx, &view, 7);
+        assert!(cx.update(|w, cx| view.read(cx).section_focus[2].is_focused(w)));
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, _| v.draft.sections.len()), 2);
+        assert!(cx.update(|w, cx| {
+            let v = view.read(cx);
+            v.section == 0 && v.section_focus[0].is_focused(w)
         }));
     }
 
