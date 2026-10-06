@@ -1,5 +1,7 @@
 //! Explicit-font CPU diagnostic. Run only in preparation, never a UI/frame callback.
-use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache, Wrap};
+use cosmic_text::{
+    Align, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache, Wrap,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextError {
@@ -16,6 +18,19 @@ pub fn raster(
     width: u32,
     height: u32,
     font_size: f32,
+) -> Result<Vec<u8>, TextError> {
+    raster_aligned(font, text, width, height, font_size, false)
+}
+
+/// As `raster`; `centered` centers each line and the whole block vertically.
+/// Overflow rules are identical, so centering never hides oversized text.
+pub fn raster_aligned(
+    font: &[u8],
+    text: &str,
+    width: u32,
+    height: u32,
+    font_size: f32,
+    centered: bool,
 ) -> Result<Vec<u8>, TextError> {
     if font.len() > 2 * 1024 * 1024
         || text.len() > 4096
@@ -70,6 +85,11 @@ pub fn raster(
     if buffer.lines.len() > 32 {
         return Err(TextError::Bounds);
     }
+    if centered {
+        for line in &mut buffer.lines {
+            line.set_align(Some(Align::Center));
+        }
+    }
     buffer.shape_until_scroll(&mut fonts, false);
     // layout_runs is viewport-filtered; validate every logical line first.
     let mut top = 0.0;
@@ -95,6 +115,11 @@ pub fn raster(
             top += h;
         }
     }
+    let offset = if centered {
+        ((height as f32 - top) / 2.).floor().max(0.) as i32
+    } else {
+        0
+    };
     let mut alpha = vec![0; len];
     let mut overflow = false;
     buffer.draw(
@@ -106,6 +131,7 @@ pub fn raster(
             if a == 0 {
                 return;
             }
+            let y = y + offset;
             let right = i64::from(x) + i64::from(w);
             let bottom = i64::from(y) + i64::from(h);
             if x < 0 || y < 0 || right > i64::from(width) || bottom > i64::from(height) {
@@ -143,6 +169,38 @@ mod tests {
         assert!(plain[32 * 320..].iter().all(|a| *a == 0));
         assert!(lines[32 * 320..64 * 320].iter().any(|a| *a != 0));
         assert_eq!(lines.len(), 32000);
+    }
+
+    #[test]
+    fn centered_layout_moves_ink_without_relaxing_overflow() {
+        let (w, h) = (320usize, 100usize);
+        let ink = |alpha: &[u8]| {
+            let (mut left, mut right, mut top, mut bottom) = (w, 0, h, 0);
+            for (i, a) in alpha.iter().enumerate() {
+                if *a != 0 {
+                    let (x, y) = (i % w, i / w);
+                    (left, right, top, bottom) =
+                        (left.min(x), right.max(x), top.min(y), bottom.max(y));
+                }
+            }
+            (left, right, top, bottom)
+        };
+        let centered = raster_aligned(FONT, "Signal", 320, 100, 24.0, true).unwrap();
+        let (left, right, top, bottom) = ink(&centered);
+        assert!(left.abs_diff(w - 1 - right) <= 3, "{left} {right}");
+        assert!(top.abs_diff(h - 1 - bottom) <= 12, "{top} {bottom}");
+        assert!(top > 20);
+        assert_ne!(centered, raster(FONT, "Signal", 320, 100, 24.0).unwrap());
+        // Centering gives "j" room for its negative left bearing.
+        assert!(raster_aligned(FONT, "j", 320, 100, 48.0, true).is_ok());
+        assert_eq!(
+            raster_aligned(FONT, "Signal\nBeacon", 320, 40, 24.0, true),
+            Err(TextError::Overflow)
+        );
+        assert_eq!(
+            raster_aligned(FONT, "Signal", 10, 100, 24.0, true),
+            Err(TextError::Overflow)
+        );
     }
 
     #[test]

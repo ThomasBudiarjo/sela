@@ -1,7 +1,7 @@
 //! Static composition/readback diagnostic, not the native live renderer.
-#[path = "composition/gpu.rs"]
+#[path = "../src/audience/compositor.rs"]
 mod gpu;
-#[path = "composition/text.rs"]
+#[path = "../src/audience/text.rs"]
 mod text;
 
 use image::ImageEncoder;

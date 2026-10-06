@@ -17,16 +17,65 @@ fn bind_operator_keys(cx: &mut App) {
     ]);
 }
 
+mod audience;
 mod operator;
 mod song_library;
 mod text_input;
 use operator::Operator;
+
+/// Internal child mode: `sela --audience EPOCH_HEX MONITOR [BACKEND]`, where
+/// MONITOR is a winit index, `secondary` or `window`. Spawned by the operator.
+fn audience_main(args: &[std::ffi::OsString]) -> ! {
+    let parsed = (|| {
+        let (epoch, monitor, backend) = match args {
+            [epoch, monitor] => (epoch, monitor, audience::default_backend()),
+            [epoch, monitor, backend] => (epoch, monitor, backend.to_str()?),
+            _ => return None,
+        };
+        let epoch = u128::from_str_radix(epoch.to_str()?, 16).ok()?;
+        let placement = match monitor.to_str()? {
+            "secondary" => audience::Placement::Fullscreen(audience::Monitor::FirstSecondary),
+            "window" => audience::Placement::Window {
+                width: 960,
+                height: 540,
+            },
+            index => audience::Placement::Fullscreen(audience::Monitor::Index(index.parse().ok()?)),
+        };
+        Some((epoch, placement, audience::parse_backend(backend)?))
+    })();
+    let Some((epoch, placement, backend)) = parsed else {
+        eprintln!(
+            "usage: sela --audience EPOCH_HEX <INDEX|secondary|window> [dx12|vulkan|metal|gl]"
+        );
+        std::process::exit(2);
+    };
+    let result = audience::run(audience::Config {
+        epoch: sela::delivery::Epoch(epoch),
+        backend,
+        title: "Sela audience output",
+        placement,
+        lifetime: None,
+        report_surface: true,
+        centered_text: true,
+        retain_on_disconnect: true,
+    });
+    match result {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            eprintln!("audience: {error}");
+            std::process::exit(1);
+        }
+    }
+}
 
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() == 1 && args[0] == "--version" {
         println!("Sela {} (technical preview)", env!("CARGO_PKG_VERSION"));
         return;
+    }
+    if args.first().is_some_and(|a| a == "--audience") {
+        audience_main(&args[1..]);
     }
     let library = if args.len() == 2 && args[0] == "--library" {
         Some(std::path::PathBuf::from(&args[1]))

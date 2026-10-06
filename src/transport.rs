@@ -19,6 +19,7 @@ const HEADER: usize = 8;
 const COMMAND: u8 = 1;
 const ACK: u8 = 2;
 const READY: u8 = 3;
+const SURFACE: u8 = 4;
 const MAX_BODY: usize = 65;
 pub const MAX_RESOURCE_BODY: usize = crate::scene::MAX_SCENE_BYTES + 160;
 
@@ -30,6 +31,7 @@ fn length(kind: u8) -> io::Result<usize> {
         COMMAND => Ok(65),
         ACK => Ok(25),
         READY => Ok(20),
+        SURFACE => Ok(24),
         _ => Err(invalid()),
     }
 }
@@ -336,6 +338,42 @@ impl Frame {
             u32::from_le_bytes(b[16..20].try_into().unwrap()),
         ))
     }
+    /// Renderer's current surface extent, after Ready and on every change.
+    /// Cues must match it exactly; this is not a presented-scene receipt.
+    pub fn surface(epoch: Epoch, extent: Extent) -> Self {
+        let mut f = Self::new(SURFACE);
+        let b = &mut f.bytes[HEADER..];
+        b[..16].copy_from_slice(&epoch.0.to_le_bytes());
+        b[16..20].copy_from_slice(&extent.width.to_le_bytes());
+        b[20..24].copy_from_slice(&extent.height.to_le_bytes());
+        f
+    }
+    pub fn into_surface(self) -> io::Result<(Epoch, Extent)> {
+        if self.bytes[5] != SURFACE {
+            return Err(invalid());
+        }
+        let b = &self.bytes[HEADER..];
+        let extent = Extent {
+            width: u32::from_le_bytes(b[16..20].try_into().unwrap()),
+            height: u32::from_le_bytes(b[20..24].try_into().unwrap()),
+        };
+        if extent.width == 0 || extent.height == 0 {
+            return Err(invalid());
+        }
+        Ok((
+            Epoch(u128::from_le_bytes(b[..16].try_into().unwrap())),
+            extent,
+        ))
+    }
+    pub fn is_ready(&self) -> bool {
+        self.bytes[4] == 1 && self.bytes[5] == READY
+    }
+    pub fn is_surface(&self) -> bool {
+        self.bytes[4] == 1 && self.bytes[5] == SURFACE
+    }
+    pub fn is_acknowledgment(&self) -> bool {
+        self.bytes[4] == 1 && self.bytes[5] == ACK
+    }
 }
 fn put_version(bytes: &mut Vec<u8>, version: ContentVersion) {
     bytes.extend_from_slice(&version.id.to_le_bytes());
@@ -572,6 +610,39 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+    #[test]
+    fn surface_report_round_trip_and_rejection() {
+        let extent = Extent {
+            width: 2560,
+            height: 1600,
+        };
+        let mut wire = Vec::new();
+        Frame::surface(Epoch(7), extent).write(&mut wire).unwrap();
+        assert_eq!(wire.len(), HEADER + 24);
+        let frame = Frame::read(wire.as_slice()).unwrap();
+        assert!(frame.is_surface() && !frame.is_ready() && !frame.is_acknowledgment());
+        assert_eq!(frame.into_surface().unwrap(), (Epoch(7), extent));
+        for len in 0..wire.len() {
+            assert!(Frame::read(&wire[..len]).is_err());
+        }
+        let mut length = wire.clone();
+        length[6] = 20;
+        assert!(Frame::read(length.as_slice()).is_err());
+        let mut zero = wire.clone();
+        zero[HEADER + 16..HEADER + 20].fill(0);
+        assert!(
+            Frame::read(zero.as_slice())
+                .unwrap()
+                .into_surface()
+                .is_err()
+        );
+        // A surface report is never a receipt, Ready or command.
+        let frame = || Frame::read(wire.as_slice()).unwrap();
+        assert!(frame().into_ready().is_err());
+        assert!(frame().into_acknowledgment().is_err());
+        assert!(frame().command_stamp().is_err());
+        assert!(Frame::ready(Epoch(7), 2048).into_surface().is_err());
     }
     #[test]
     fn receipt_codes_round_trip() {

@@ -1,7 +1,9 @@
 # M0-07a explicit-font CPU text diagnostic
 
-This opt-in module is `examples/composition/text.rs`, not product typography or
-operator UI. The [composition example](composition-spike.md) includes it explicitly.
+This module was introduced as `examples/composition/text.rs` and moved to
+`src/audience/text.rs` in M1-10a, where the audience renderer also uses
+`raster_aligned` for centered lines. It is not product typography or operator UI.
+The [composition example](composition-spike.md) includes it explicitly.
 Call `raster(font, text, width, height, font_size)` on a preparation worker, never
 the UI thread or render frame path. It returns `Result<Vec<u8>, TextError>`:
 row-major `width * height` white-text alpha coverage (zero is transparent).

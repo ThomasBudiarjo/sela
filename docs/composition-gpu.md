@@ -3,7 +3,8 @@
 State: **implemented-unqualified** subticket; no production backend decision,
 transition/video implementation, physical display or EasyWorship parity claim.
 Depends on local M0-05/M0-06 contracts, not an assumption that origin has them.
-Only `examples/composition/gpu.rs` and documentation belong to this slice.
+Only `examples/composition/gpu.rs` and documentation belonged to this slice; M1-10a
+moved the module to `src/audience/compositor.rs` for the audience renderer.
 The permanent [composition example](composition-spike.md) now integrates the
 explicit-font mask; the temporary example used below was removed before commit.
 

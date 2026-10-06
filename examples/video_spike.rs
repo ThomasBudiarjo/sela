@@ -1,9 +1,9 @@
 //! Opt-in FFmpeg / offscreen Vulkan integration; no native playback claims.
 #[path = "video/decoder.rs"]
 mod decoder;
-#[path = "composition/gpu.rs"]
+#[path = "../src/audience/compositor.rs"]
 mod gpu;
-#[path = "composition/text.rs"]
+#[path = "../src/audience/text.rs"]
 mod text;
 use sela::scene::Extent;
 use std::{

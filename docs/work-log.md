@@ -85,6 +85,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
 | M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, documented-reference editor and receipt-gated OK; installed-reference/Windows/IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
+| M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b operator supervisor/Go Live/Live acknowledgment and all checklist items open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
 
 ## Session records
@@ -1904,3 +1905,44 @@ PY
 - Checks: `python -m ruff check scripts/reference_win.py` passed.
 - Not run: About dialog capture, W02–W06, masks, keyboard/focus, routing.
 - Next: owner-assisted fixture creation (or an import file), then W02.
+
+### M1-10a — Application audience renderer mode — 2026-10-06 (UTC+7)
+
+- State: **active** parent; no checklist box closed. Owner request to integrate
+  the UI with the engine is treated as approval to start M1-10 before M1-03,
+  M1-09 and M0-08 finish (2026-10-04 sequencing exception).
+- Moved `examples/composition/{gpu,text}.rs` to `src/audience/{compositor,text}.rs`
+  and the native cue renderer into `src/audience.rs`; `examples/native_cues.rs`
+  is now a thin wrapper, and the composition/video examples include the moved
+  files. cosmic-text, winit, wgpu and pollster became normal dependencies.
+- `text::raster_aligned` adds centered lines (horizontal and vertical).
+- Transport frame kind 4 SURFACE (epoch, width, height): the audience reports
+  its settled drawable extent after Ready and after each resize. Reports wait
+  for 250ms without resize, because Windows emits transient sizes on monitor
+  arrival and a cue built for one would fail.
+- `sela --audience EPOCH_HEX <INDEX|secondary|window> [backend]` opens a
+  borderless window covering the chosen monitor. It is created without
+  activation and is not winit fullscreen: winit's `set_fullscreen` (and
+  fullscreen-at-creation) force the window active on Windows and took keyboard
+  focus from the operator. The window is sized again after arrival because a
+  monitor with another scale factor rescaled it (3584x2240 on a 2560x1600 panel).
+  With `retain_on_disconnect` the applied scene stays on screen after the
+  controller pipes close, until the window is closed.
+- New `scripts/audience-smoke-windows.py`: Ready then one settled surface
+  report, client equals surface, window rect equals monitor rect, foreground
+  unchanged, centered text cue Accepted then Applied, no foreign pixels over the
+  output (composed-screen capture of the audience client only), retained after
+  stdin close, WM_CLOSE exit 0.
+- Checks: `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` and `cargo build --locked --all-targets` pass.
+  `python -m ruff check scripts/audience-smoke-windows.py` and `ruff format` pass.
+  `python scripts/native-cues.py --backend dx12 --out .amp\in\artifacts\native-cues-windows-m1-10a`
+  PASS. `python scripts/audience-smoke-windows.py --monitor secondary` (laptop
+  panel 2560x1600, 168 DPI) and `--monitor 0` (primary 2560x1440, 120 DPI) PASS,
+  0 foreign pixels; evidence in `.amp\in\artifacts\audience-smoke-windows-*`.
+- Not run: Linux re-execution of the moved renderer, Intel adapter, hotplug of
+  the audience monitor, physical scanout timing, taskbar behavior with other
+  taskbar settings.
+- Next: M1-10b operator supervisor that spawns `sela --audience` with a fresh
+  epoch, Go Live from preview slides, Live pane showing confirmed/unknown/
+  disconnected state, next/previous.
