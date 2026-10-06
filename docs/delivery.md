@@ -298,3 +298,16 @@ is required; visible retention during resize is **not qualified**. Surface loss
 and driver stalls still require supervision and physical qualification.
 
 See composition-spike.md for policy, provenance and actual native evidence.
+
+### Windows DX12 cue driver run — 2026-10-06 (UTC+7)
+
+`python scripts/native-cues.py --backend dx12 --out .amp\in\artifacts\native-cues-windows`
+**PASS** on Windows 11 with the RTX 4060 Laptop (driver 32.0.15.9159, DX12,
+default power preference). The cross-platform driver captured the child client
+area with Win32 BitBlt. Every receipt-correlated capture matched its expected
+RGB: applied red/green, invalid-alpha, render-failure and stale retention, the
+asymmetric text/image cue, and the invalid-font, missing-glyph, overflow,
+oversize-text and expired cues that all retained the text/image scene. Old-epoch
+commands were rejected, the restarted session stayed unconfirmed until its
+explicit fresh cue, and consecutive Cue/Safety lanes ended blue. This is native
+submission/capture evidence on a real GPU, not physical scanout timing.

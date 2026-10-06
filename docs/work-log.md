@@ -77,7 +77,7 @@ remain `planned`. Update the current state above when switching work.
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, synthetic preparation and operator exit/kill on Linux and Windows DX12 physical displays, incl. mixed-DPI moves, fullscreen, both GPUs, and an idle-machine rerun; hotplug, device loss, present pacing open. |
 | M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
-| M0-06 | implemented-unqualified | Ordered bounded native owned-resource IPC/receipts and failure/expiry retention; production safety coordination/supervision and reference mask semantics open. |
+| M0-06 | implemented-unqualified | Ordered bounded native owned-resource IPC/receipts and failure/expiry retention, passed on Linux GL and Windows DX12; production safety coordination/supervision and reference mask semantics open. |
 | M0-07 | implemented-unqualified | Explicit-font/image native worker preparation/submission plus static/FFV1 GPU readback; resized output, transitions, performance and physical qualification open. |
 | M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
@@ -1871,3 +1871,16 @@ PY
   DXGI frame statistics, multi-hour soak.
 - Next: hotplug with `SELA_SPIKE_SECONDS=120` while the owner unplugs and
   replugs monitor 2.
+
+### M0-06 / M0-07d — Windows DX12 native cue driver — 2026-10-06 (UTC+7)
+
+- State: both **implemented-unqualified**; no checklist box closed.
+- `cargo build --locked --example native_cues` then
+  `python scripts/native-cues.py --backend dx12 --out .amp\in\artifacts\native-cues-windows`
+  PASS on the RTX 4060 (DX12, driver 32.0.15.9159). First Windows execution of
+  the cross-platform driver. All 16 receipt-correlated captures matched their
+  expected sample colors, including failure retention of the text/image scene,
+  old-epoch rejection and the unconfirmed restarted session. Detail in
+  delivery.md.
+- Not run: Intel adapter for this driver, Linux re-execution of the refactored
+  driver, physical scanout timing.
