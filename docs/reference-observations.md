@@ -3,8 +3,10 @@
 ## Scope and status — 2026-10-04
 
 Update 2026-10-06: the first installed run (RUN-W01-2026-10-06 below) recorded
-EW8-OBS-010–012 against an unlicensed 8.0.49 install. The rest of this section
-describes the 2026-10-04 research checkpoint.
+EW8-OBS-010–012 against an unlicensed 8.0.49 install. RUN-W03-2026-10-06
+then executed the static single-item W02/W03 cases and recorded
+EW8-OBS-014–020. The rest of this section describes the 2026-10-04 research
+checkpoint.
 
 M0-02 partial research checkpoint; installed observation is **blocked**. No lawful
 installed EasyWorship reference or Windows runner is available for this slice.
@@ -39,6 +41,13 @@ installed result is added in a separately identified run.
 | SRC-02 | [Quick Start Guide](https://support.easyworship.com/support/solutions/articles/24000020385-quick-start-guide), modified Jan 5, 2023, 3:10 PM (page timezone unspecified) | Under Preview Area: preview displays current resource/schedule selection; double-click sends to output; forward/back in Preview “does not advance them in the live output.” Under Live Area: no editing; double-click a Live slide while Logo/Black/Clear is active turns that off and resumes output. Historical guide explicitly describes version 7 views, not 8.0.49 qualification. |
 | SRC-03 | [Shortcut Keys For EasyWorship 7](https://support.easyworship.com/support/solutions/articles/24000020383-shortcut-keys-for-easyworship-7), modified Nov 24, 2020, 3:43 PM (timezone unspecified) | Show Control: Page Down = Go Live; Ctrl+C toggles live text; Ctrl+B Black; Ctrl+L Logo; Home/End first/last slide; Up/Down previous/next. Editor section also assigns Ctrl+C to copy. Does not establish 8.0.49 bindings or focus dispatch/priority. |
 | SRC-04 | [Screen Setup](https://support.easyworship.com/support/solutions/articles/24000020382-screen-setup), modified Feb 12, 2026, 12:49 PM (timezone unspecified) | Extended desktop separates control and audience/foldback. Windows instructions: Edit → Options → Output Monitor; Foldback has its own monitor setting. Now includes Mac instructions, despite Support 7 navigation. No explicit 8.0.49 applicability or timing/crash independence proof. |
+| SRC-05 | [Toolbar](https://help.easyworship.com/Toolbar.html), help.easyworship.com, © 2026, fetched 2026-10-06; build not stated | Logo, Black and Clear are each "a toggle button"; clicking again toggles it off. Clear "clears all text and foreground elements from the live output". Live enables/disables output; when off "the audience will see the Windows wallpaper or another program". Silent on combinations. |
+| SRC-06 | [Live Area](https://help.easyworship.com/LiveArea.html), © 2026, fetched 2026-10-06 | Forward/back arrows or shortcut keys advance slides; no editing in Live; "if you are currently on a Logo, Black, or Clear screen, you can double-click a slide in the Live Area to turn that off and resume Live Output." |
+| SRC-07 | [Preview Area](https://help.easyworship.com/PreviewArea.html), © 2026, fetched 2026-10-06 | Preview shows the current resource or schedule selection; double-click sends to live immediately; Preview forward/back "does not advance them in the live output". Preview Area exists only in the "Preview and Live" view. |
+| SRC-08 | [Helpful Shortcut Keys](https://help.easyworship.com/HelpfulShortcutKeys.html), © 2026, fetched 2026-10-06 | Show Controls: Page Down Go Live; Ctrl+C toggles text and foreground; Ctrl+B Black; Ctrl+L Logo; Right/Left next/previous slide; Home/End first/last slide; Down/Up next/previous schedule item; Ctrl+O/Ctrl+S open/save schedule; V/C/#+Enter jumps. Editor Keys: Ctrl+Enter new or split slide; Ctrl+Del deletes the selected schedule item; Ctrl+C copy. Focus dispatch between the two groups is not described. |
+| SRC-09 | [Editing Images](https://help.easyworship.com/EditingImages.html), © 2026, fetched 2026-10-06 | Image right-click menu: Media Usage (background/foreground/Automatic), Aspect Ratio, Copy to Theme ▸ Song/Scripture/Presentation Theme, "Use as Logo Background" (Logo button outputs that image; clicking again turns it off), Delete, Update items in Schedule. |
+| SRC-10 | [Editing Videos](https://help.easyworship.com/EditingVideos.html), © 2026, fetched 2026-10-06 | Video right-click "Set as Logo Background"; Repeating On loops "until you stop it or until you go live to something else". Mask behavior during playback not described. |
+| SRC-11 | [Adding And Editing Songs](https://support.easyworship.com/support/solutions/articles/24000020402-adding-and-editing-songs), modified Sep 3, 2024, re-read 2026-10-06 (also D-UI-02) | Ctrl+Enter at a line start splits a slide; drag songs from Resources to Schedule; select a song and Go Live, or double-click it to send it directly to Live; Remove From Schedule asks for confirmation. |
 
 Source dates, titles and quotations above are durable textual evidence, not a
 mirror of proprietary manuals/assets. No community requests or marketing parity
@@ -60,7 +69,7 @@ action. A thumbnail is not proof of physical audience output.
 | EW8-OBS-002 | documented-only | SRC-02 distinguishes Preview selection/navigation from Live; exact 8.0.49 selection, double-click and edit-live behavior unknown. | W02; M0-05, M1-03, M1-09, M1-10; S02 |
 | EW8-OBS-003 | documented-only | SRC-02 describes double-click in Live clearing Logo/Black/Clear; 8.0.49 target slide, transition and restoration unknown. | W03; M0-08, M1-10; S02 |
 | EW8-OBS-004 | documented-only | SRC-03 names v7 shortcuts; Ctrl+C has editor/show meanings. 8.0.49 focus capture, propagation and precedence unknown. | W04; M1-03, M1-10; S02 |
-| EW8-OBS-005 | unverified | Black/Clear/Logo precedence, combinations, repeat toggles, initial state, restore and Go Live under any mask. | W03; M0-06, M0-08, M1-10; S02 |
+| EW8-OBS-005 | unverified | Black/Clear/Logo precedence, combinations, repeat toggles, initial state, restore and Go Live under any mask. Static single-item cases since observed as EW8-OBS-015–017; the rest is EW8-OBS-020. | W03; M0-06, M0-08, M1-10; S02 |
 | EW8-OBS-006 | unverified | Media/audio continue, pause, reset or restart under each mask and masked cue change; per-output scope unknown. | W03; M2-03, M2-04, M3-01, M3-04; S05/S06 |
 | EW8-OBS-007 | documented-only | SRC-04 describes extended desktop/control versus output routing; actual 8.0.49 topology, focus and hotplug behavior unknown. | W05; M0-04, M0-09, M0-10; S06 |
 | EW8-OBS-008 | unverified | Full menu/settings/dialog/pane/layout/editor/resource/context/drag-drop inventory and feature-family coverage. | W06; M0-02, M1-02, M5-06 and backlog family owners |
@@ -68,9 +77,16 @@ action. A thumbnail is not proof of physical audience output.
 | EW8-OBS-010 | observed (RUN-W01-2026-10-06) | Installed executable FileVersion 8.0.49.0, unlicensed edition; About dialog not captured. Empty Default profile main-window layout: menus, toolbar groups, Schedule/Preview/Live panes, Preview Output/Live Output strips, Resources tabs and Songs library. | W01; M0-02, M1-02, M1-10 |
 | EW8-OBS-011 | observed (RUN-W01-2026-10-06) | Unlicensed output at startup: output windows already cover the non-primary laptop panel and show the logo with "NOT LICENSED FOR LIVE PROJECTION"; the Live Output strip shows the logo thumbnail and "Slide 1 of 1". | W01/W05; M0-08, M0-09, M1-10 |
 | EW8-OBS-012 | observed (RUN-W01-2026-10-06) | Song editor structure and dirty-cancel prompt (Yes/No/Cancel). Slide splitting from typed text is unverified. | W01/W06; M1-05, M1-06 |
-| EW8-OBS-013 | unverified | W02 Preview/Live selection, Go Live and next/previous with original fixtures. Blocked: synthetic clicks did not move focus inside the song editor, so fixtures were not created; the unlicensed edition may also restrict live projection. | W02; M1-10, M1-03 |
+| EW8-OBS-013 | unverified | W02 Preview/Live selection, Go Live and next/previous with original fixtures. Blocked: synthetic clicks did not move focus inside the song editor, so fixtures were not created; the unlicensed edition may also restrict live projection. Single-item part since observed as EW8-OBS-014; multi-item, editing and schedule cases remain open. | W02; M1-10, M1-03 |
+| EW8-OBS-014 | observed (RUN-W03-2026-10-06) | One 4-slide song: single-click in Preview changes only the Preview selection; Go Live applies the selected Preview slide; double-click in Preview applies the clicked slide; single-click on a Live slide applies it immediately; Live Output ‹ › move one slide and › stops at the last slide (no wrap); with the main window focused after a Preview click, Page Down applies the selected Preview slide and Right/Left/End/Home move Live next/previous/last/first. | W02; M1-10, M1-03 |
+| EW8-OBS-015 | observed (RUN-W03-2026-10-06) | Mask truth table, button clicks from all-off: each mask toggles on/off on repeat. Black and Logo replace each other (the later press wins, the other indicator goes off); Clear stacks with either. Reachable: none, Black, Clear, Logo, Black+Clear, Logo+Clear; Black+Logo unreachable. Black shows full black, Logo shows the logo image over the whole output, Clear shows the slide background without text; Black/Logo cover a stacked Clear, and turning them off reveals the Clear state. | W03; M0-08, M1-10 |
+| EW8-OBS-016 | observed (RUN-W03-2026-10-06) | Under each single mask, Go Live, Preview double-click and Live ‹ › keep the mask and its indicator while the Live pane moves; turning the mask off shows the newly applied slide. Double-click on a Live slide turns the single mask off and applies that slide (confirms SRC-06 for single masks). | W03; M0-08, M1-10 |
+| EW8-OBS-017 | observed (RUN-W03-2026-10-06) | Live off with a mask on: Live indicator goes off, the mask indicator stays lit and the audience panel shows the Windows desktop; Live on returns the masked output. | W03; M0-08, M0-09, M1-10 |
+| EW8-OBS-018 | observed (RUN-W03-2026-10-06) | With the main window foreground and focus in the Preview list, Ctrl+B, Ctrl+L and Ctrl+C toggle Black, Logo and Clear exactly like the buttons, and Page Down is Go Live. Behavior with focus in search, editor or dialogs is not observed (W04 stays open). | W03/W04; M1-03, M1-10 |
+| EW8-OBS-019 | observed (RUN-W03-2026-10-06) | Logo source: Media → Images → + opens "Import Image Resource Item"; right-click → "Use As Logo Background" makes Logo show that image filling the output. The image menu matches SRC-09 (Media Usage Automatic ✓/Background/Foreground). Copy to Theme ▸ Song Theme creates a song theme; its "Set As Default Song Theme" re-renders the song preview with that background. With an image item (Automatic usage) live, Clear and Ctrl+C change nothing and the Clear indicator stays off. | W03/W06; M1-10, M2-03, M4-01 |
+| EW8-OBS-020 | unverified | Not run: Live double-click with Black+Clear or Logo+Clear; single-click on a Live slide under a mask; profile close/reopen with a mask; masks with motion/audio, multi-output, alerts, multi-item schedules; transition durations (only coarse settle times exist). | W03; M0-08, M2-03, M3-01 |
 
-## Windows observation runbook (not executed)
+## Windows observation runbook (W01 partial; W02/W03 single-item static cases executed)
 
 ### W01 — Access, environment and original fixtures
 
@@ -269,6 +285,65 @@ fixture songs were created and slide splitting stays unverified (D-UI-02
 documents Ctrl+Enter). W02–W06 did not run. Next: create fixtures A/B by hand
 with the owner (or via an import file), then run W02 with Go Live, Preview
 double-click and next/previous, noting what the unlicensed edition permits.
+
+## RUN-W03-2026-10-06 — Static W02/W03 cases on one song
+
+- Date/observer: 2026-10-06 13:26–13:40 +07:00, Droid agent on the owner's
+  machine with the owner's authorization; the owner created the song and left
+  the machine to the automation. Same install and host as RUN-W01. Output
+  window: the laptop panel, rect (-2560,-146)–(0,1453), 168 DPI; main window
+  maximized on the 120 DPI primary.
+- Fixtures: song "waeqwe", 4 slides of placeholder text typed by the owner
+  (no licensed lyrics). Original images generated for this run:
+  `explore/sela-w03-logo.png` (orange 1920x1080 with a blue square, SHA-256
+  prefix CD895BD8FDB3EAE4) as logo, and `explore/sela-w03-background.png`
+  (green stripes, AFC69C3FFFCFAE36) as the default song theme background, so
+  Clear (background only) differs from Black.
+- Method: `scripts/reference-w03-windows.py run`. Input goes only to the
+  EasyWorship PID's main window after a foreground check. Each step captures
+  the Live Output window's screen rectangle until three identical frames,
+  reads the toggle indicators (blue fill) from a PrintWindow toolbar crop and
+  writes one JSONL row. Rows hash the output above the taskbar strip, which
+  Windows keeps over the output's bottom edge. Per-case contact sheets show
+  toolbar, Live pane and audience per step. Artifacts (ignored, local) in
+  `.amp/in/artifacts/reference/ew8-w03/`: `RUN-W03-20261006-133553.jsonl`
+  (165 rows, C703BBA1F4F56736), 32 `RUN-W03-20261006-133553-*-sheet.png`
+  files and per-step `*-output.png` images.
+- First attempt `RUN-W03-20261006-132625.jsonl` (0A593B12BA15D948) is kept
+  but not used for mask rows: importing the logo left the Media tab active, so
+  Preview and Live held the image item rather than the song. It is the source
+  of the image-item Clear finding in EW8-OBS-019. Returning to the Songs tab
+  restores the song preview.
+- The unlicensed "EASYWORSHIP / NOT LICENSED FOR LIVE PROJECTION" watermark is
+  drawn over every state, including Black and Logo. It did not hide any
+  result: text, background, black and logo remain distinguishable.
+
+Output classes by hash: slides s1–s4 (green with text), BG (green, no
+text), BLACK, LOGO and DESKTOP. Indicators: B Black, C Clear, G Logo, V Live.
+Every case starts at s1 live with all masks off, read back from indicators.
+
+| Case | Inputs from reset → observed output [indicators] |
+| --- | --- |
+| Selection | Preview 2 → s1 [V]; Preview 3 → s1; Live slide 3 → s3; Live › → s4; › → s4; ‹ → s3; Preview 1 double-click → s1 |
+| Single | Black → BLACK [BV] → s1 [V] → BLACK; Clear → BG [CV] → s1 → BG; Logo → LOGO [GV] → s1 → LOGO |
+| Pairs | Black, Clear, Clear, Black → BLACK [BV], BLACK [BCV], BLACK [BV], s1. Black, Logo, Logo, Black → BLACK, LOGO [GV], s1, BLACK. Clear, Black, Black, Clear → BG, BLACK [BCV], BG [CV], s1. Clear, Logo, Logo, Clear → BG, LOGO [GCV], BG, s1. Logo, Black, Black, Logo → LOGO, BLACK [BV], s1, LOGO. Logo, Clear, Clear, Logo → LOGO, LOGO [GCV], LOGO [GV], s1 |
+| Triples | All six orders then reverse are consistent with the pair rule. Example Clear, Black, Logo, Logo, Black, Clear → BG, BLACK [BCV], LOGO [GCV], BG [CV], BLACK [BCV], BLACK [BV] |
+| Masked apply | Each mask on → Preview 2 + Go Live: mask unchanged → mask off: s2. Each mask on → Preview 3 double-click: mask unchanged → mask off: s3 |
+| Masked nav | Each mask on → Live › and ‹: mask unchanged → Live slide 2 double-click: s2 [V], mask indicator off |
+| Lifecycle | Each mask on → Live off: DESKTOP, mask indicator still lit, V off → Live on: mask output again → mask off: s1 |
+| Shortcuts | Ctrl+B, Ctrl+L, Ctrl+C twice each: same as the buttons. Preview 3, Page Down → s3; Right → s4; Left → s3; End → s4; Home → s1 |
+
+Coarse timing: inputs that changed the output settled 0.83–1.03 s after the
+input (this includes about 0.2 s of stability detection), and unchanged
+outputs 0.34–0.41 s. This is consistent with a default fade but does not
+measure a transition duration.
+
+Interpretation for Sela, provisional where marked: model masks as a cover
+(None, Black or Logo; a new cover replaces the old one) plus an independent
+Clear flag. Draw the cover if set, else the background-only slide if Clear is
+set, else the full slide. Go Live and navigation change the underlying slide
+and keep masks. Live double-click clears masks; clearing both cover and Clear
+in a combined state is provisional (EW8-OBS-020). Output off keeps mask state.
 
 ## D-UI-01 — Official toolbar image (documented-only, 2026-10-04)
 

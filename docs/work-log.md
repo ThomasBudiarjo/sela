@@ -6,6 +6,11 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **EasyWorship masks observed (M0-02, 2026-10-06):** RUN-W03 recorded the
+  single-song W02/W03 static cases (EW8-OBS-014–020): Black and Logo replace
+  each other, Clear stacks, masks survive Go Live/navigation/Live off, Live
+  double-click unmasks. Next: M0-08a mask state machine and M1-10c toggles
+  with a picture logo, per the approved 2026-10-06 spec.
 - **Operator live output (M1-10b, 2026-10-06):** Live on starts `sela --audience`
   on the secondary monitor; Songs → Preview slide → Go Live shows white text on
   the audience, and Live marks only renderer-acknowledged slides. Windows native
@@ -79,7 +84,7 @@ remain `planned`. Update the current state above when switching work.
 | --- | --- | --- |
 | PLAN-001 | done | 63 implementation tickets, 326 ticket checklist items, test/compatibility matrices and commit/resume rules. Documentation verified; delivered in this local planning commit. No application implementation. |
 | M0-01 | done | Pinned native GPUI window, lockfile, CI and instructions; Linux and Windows 11 build/test/native launch/resize/quit verified (2026-10-06). |
-| M0-02 | active | Public-source ledger and runbook; first installed run on unlicensed 8.0.49 (layout, unlicensed output, song editor). W02–W06 open: fixtures not yet created. |
+| M0-02 | active | Public-source ledger (SRC-01–11) and runbook; installed runs on unlicensed 8.0.49: W01 partial (layout, unlicensed output, song editor) and W02/W03 single-song static cases (selection, Go Live, masks, shortcuts, logo). Open: multi-item W02, combined-mask double-click, motion/audio, W04–W06. |
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, synthetic preparation and operator exit/kill on Linux and Windows DX12 physical displays, incl. mixed-DPI moves, fullscreen, both GPUs, and an idle-machine rerun; hotplug, device loss, present pacing open. |
 | M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
@@ -2002,3 +2007,39 @@ PY
   as Live sources; W02 observation (needs owner-assisted fixtures) for slide
   shortcuts, selection and double-click; move cue preparation to a worker if
   themes or images make it measurable.
+
+### M0-02 — W02/W03 single-song observation — 2026-10-06 (UTC+7)
+
+- State: **active**. Scope: the static W02/W03 cases reachable with one song,
+  as planned in the approved 2026-10-06 spec (Phase 1).
+- Sources: added SRC-05–SRC-11 (help.easyworship.com Toolbar, Live Area,
+  Preview Area, Helpful Shortcut Keys, Editing Images, Editing Videos; the
+  Adding And Editing Songs article). SRC-04 was already Screen Setup, so the
+  spec's "SRC-04 to SRC-10" became SRC-05–SRC-11.
+- New `scripts/reference-w03-windows.py` (probe/press/seq/run). Input only to
+  the EasyWorship main window after a foreground check; audience evidence is
+  the Live Output window's screen rectangle captured until stable; toggle
+  indicators read from a PrintWindow toolbar crop; JSONL row and contact
+  sheet per case.
+- Fixtures: owner's song "waeqwe" (4 slides, placeholder text). Generated
+  original logo and green-stripe background images; imported via Media →
+  Images → +, logo set with "Use As Logo Background", background applied with
+  Copy to Theme ▸ Song Theme and "Set As Default Song Theme".
+- First run RUN-W03-20261006-132625 was invalid for masks: the Media tab stayed
+  active, so the image item was previewed and live. Kept as evidence that Clear
+  does nothing on a live image item. Rerun RUN-W03-20261006-133553 (165 rows)
+  on the song is the source of EW8-OBS-014–019; EW8-OBS-020 lists what did
+  not run.
+- Findings: Black and Logo replace each other, Clear stacks with either; Go
+  Live, Preview double-click and Live ‹ › keep masks; Live double-click clears
+  a single mask and applies that slide; Live off keeps mask state; Ctrl+B/L/C
+  and Page Down match the buttons with Preview focus; Live slide single-click
+  applies immediately; › stops at the last slide.
+- Checks: `python -m ruff check scripts/reference-w03-windows.py` and
+  `python -m ruff format --check` pass. No Rust changes.
+- Not run: combined-mask Live double-click, masked Live single-click, profile
+  reopen, motion/audio, alerts, multiple outputs, multi-item schedule cases,
+  W04 focus contexts, transition timing. The EasyWorship profile now holds the
+  two images, a "sela-w03-background" default song theme and the logo setting.
+- Next: Phase 2, M0-08a `src/masks.rs` (cover None/Black/Logo plus Clear flag)
+  and M1-10c operator toggles with a picture logo.
