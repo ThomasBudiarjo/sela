@@ -252,8 +252,8 @@ engine is the sequencing approval; M1-03, M1-09 and M0-08 remain open.
 - Tab order: the ten existing controls, then Live output, Go Live, Previous,
   Next, song rows and preview slides. Sela accessibility policy, not observed.
 
-Not implemented: schedule items, Black/Clear/Logo, Alerts, themes, arrangements
-on output, slide-level keyboard shortcuts (Page Down, arrows), auto-follow,
+Not implemented: schedule items, Black/Clear/Logo and Page Down (added in
+M1-10c below), Alerts, themes, arrangements on output, slide-level arrow keys, auto-follow,
 combined/contiguous modes and multi-output targeting.
 
 Cue construction runs on the UI thread. Measured `slides::cue` for a two-line
@@ -278,3 +278,78 @@ added `audience::tests::operator_slide_cues_fit_the_audience_text_preparer`.
 
 Open: installed 8.0.49 observation (W02/W03), audience monitor hotplug, primary-
 monitor output, Linux/macOS native runs, mask states and measured Go Live latency.
+
+## M1-10c — Masks and picture logo
+
+Implemented-unqualified on local `main`, on top of M0-08a (mask layer and logo
+slot in [delivery](delivery.md#m0-08a--mask-layer-and-logo-slot)). Behavior
+follows EW8-OBS-014–019; cases listed in EW8-OBS-020 are marked provisional.
+
+- **Logo / Black / Clear** in the toolbar toggle the operator's mask intent
+  (`src/masks.rs`): Black and Logo replace each other, Clear stacks with either,
+  a second press turns a mask off. The button shows what the renderer
+  acknowledged, not the click: plain when off, amber outline while the change
+  is in flight (or armed with Live output off), pale red fill with red text once
+  the audience confirmed it. Logo is greyed out until a logo is set. Live output off keeps the intent and the lit-but-armed state;
+  Live output on sends it again in the new session (EW8-OBS-017).
+- **Keys**: Ctrl+B, Ctrl+L, Ctrl+C toggle Black, Logo, Clear and Page Down is
+  Go Live (EW8-OBS-018). They are GPUI actions bound in the
+  `SelaShow && !SelaTextInput` context, so they do nothing while a search or
+  editor text field has focus. That text-field rule is Sela policy; EasyWorship
+  focus contexts are still open (W04).
+- **Live pane**: under a mask it shows "Mask: Black" and "Under mask: Song ·
+  Section"; in flight "Sending mask: …"; with Live output off "Mask armed: … ·
+  shown when Live output is on"; a renderer refusal "Mask … not shown: …".
+  Masks persist across Go Live, Preview double-click and ‹ › (EW8-OBS-016).
+- **Live slides**: single-click applies the clicked slide (EW8-OBS-014).
+  Double-click also clears the mask once that slide's cue has left the slot
+  (EW8-OBS-016 for a single mask). Clearing Black+Clear or Logo+Clear with one
+  double-click, and keeping the mask on a single click, are provisional
+  (EW8-OBS-020).
+- **Media → Images** lists PNG/JPEG files in the profile's
+  `Resources/Images/` folder (next to the library). **Import image…** opens the
+  native file picker; the copy is written under a free name ("Logo (2).png").
+  Selecting an image and **Use As Logo Background**, or right-click → Use As
+  Logo Background, stores its name in `Resources/Images/logo.txt`. Listing,
+  copying, hashing and reading run on a bounded image worker, never on the UI
+  thread; images are capped at 8 MiB and 4096 files.
+- **Logo on output**: the operator prepares the logo for the current surface
+  extent with the existing off-thread `Preparer` (5 s budget) and hands it to
+  the supervisor, again after a new session or a resize. Until the logo for this
+  surface is with the renderer, a Logo intent is sent as Black so slide text
+  never shows in between; Live shows "Preparing logo · covering with Black".
+  Without a logo, Logo refuses with "No logo set · Media → select an image →
+  Use As Logo Background". A failed logo keeps the previous one.
+- Tab order adds Logo, Black, Clear after Next, and Import image… / Use As Logo
+  Background after them while Media is shown; image rows follow the slides.
+
+Known divergence: EW8-OBS-019 says the logo fills the output. Sela draws image
+backgrounds with Contain (letterboxed on a different aspect ratio). Which fit
+EasyWorship uses for a non-matching logo is not observed; kept provisional
+rather than guessed. Video logos are deferred to M2-03. Image items as live
+items (where Clear does nothing, EW8-OBS-019) are not implemented.
+
+### Windows native evidence — 2026-10-06 (UTC+7)
+
+`python scripts/live-output-windows.py` (extended for masks) PASS three times on
+the laptop panel (`secondary`, 2560x1600, DX12, RTX 4060 Laptop). After Go Live,
+Next and Previous, from the unmasked slide: Ctrl+B is black, Ctrl+C removes the
+text, Ctrl+L shows the seeded logo color at the center with no text, and each
+second press restores the identical slide frame; the matching toolbar button is
+lit only after the audience changed. Logo left on survives Live off/on and comes
+back lit in the new session without replaying a slide. Each change was observed
+171–188 ms after the key (16 ms capture polling; an upper bound, not scanout).
+Evidence: `.amp\in\artifacts\live-output-windows-masks{,-r1,-r2}\`.
+`scripts/native-cues.py` adds renderer-level mask frames, including Clear over an
+image background (see delivery).
+
+GPUI tests: `show_keys_toggle_masks_with_acknowledged_indicators`,
+`live_slide_clicks_apply_and_double_click_unmasks`,
+`show_keys_stay_out_of_text_fields`, `media_logo_is_imported_persisted_and_shown`
+and `images::tests`. The native file picker itself was not driven by the native
+script (the logo is seeded into the profile); it is covered by the GPUI test
+through the simulated path prompt.
+
+Open: installed observation of the cases in EW8-OBS-020, W04 focus contexts,
+logo fit, Linux/macOS native runs, UIA names for the mask buttons and the
+image context menu, and physical scanout timing.

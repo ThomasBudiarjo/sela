@@ -6,11 +6,16 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Masks and picture logo (M0-08a + M1-10c, 2026-10-06):** Logo/Black/Clear
+  toolbar buttons and Ctrl+L/B/C (Page Down = Go Live) drive the real audience;
+  indicators follow renderer acknowledgments; Media → Images imports a picture
+  and sets it as the logo. Windows DX12 native checks pass. Both
+  implemented-unqualified. Next: Phase 3 M1-06c (better slides), then Phase 4
+  M1-09a (basic schedule) per the approved 2026-10-06 spec.
 - **EasyWorship masks observed (M0-02, 2026-10-06):** RUN-W03 recorded the
   single-song W02/W03 static cases (EW8-OBS-014–020): Black and Logo replace
   each other, Clear stacks, masks survive Go Live/navigation/Live off, Live
-  double-click unmasks. Next: M0-08a mask state machine and M1-10c toggles
-  with a picture logo, per the approved 2026-10-06 spec.
+  double-click unmasks. Implemented in M0-08a and M1-10c.
 - **Operator live output (M1-10b, 2026-10-06):** Live on starts `sela --audience`
   on the secondary monitor; Songs → Preview slide → Go Live shows white text on
   the audience, and Live marks only renderer-acknowledged slides. Windows native
@@ -2068,3 +2073,46 @@ PY
 - Next: M1-10c operator toggles (acknowledged indicators, Live pane mask lines,
   Live double-click unmask, Ctrl+B/L/C and PageDown in a show-control key
   context), Media Images list and "Use as Logo Background", native checks.
+### M1-10c — Operator masks and picture logo — 2026-10-06 (UTC+7)
+
+- State: **implemented-unqualified**. Scope: Phase 2d–2f of the approved
+  2026-10-06 spec (operator toggles, picture logo, native checks).
+- Added `src/images.rs`: profile `Resources/Images/` beside the library,
+  PNG/JPEG copy-import with a free " (N)" name, 8 MiB / 4096-file caps,
+  SHA-256 `ResourceRef`, `logo.txt` for the chosen logo, and a bounded worker
+  (Scan/Import/UseAsLogo/LoadLogo) so no file work runs on the UI thread.
+- Operator: Logo/Black/Clear toolbar buttons with Off/Pending/On indicators from
+  supervisor acknowledgments; `ToggleBlack/ToggleLogo/ToggleClear/GoLive`
+  actions bound to Ctrl+B/L/C and Page Down in `SelaShow && !SelaTextInput`;
+  Live pane mask lines; Live single-click applies, double-click unmasks after
+  its cue leaves the slot; mask intent survives Live off/on (EW8-OBS-017).
+  The logo is prepared off-thread per surface extent and resent on new session
+  and resize; Logo intent goes out as Black until the logo is with the renderer.
+  Media tab lists images with Import image… and Use As Logo Background (button
+  and right-click menu).
+- Decisions: text-field exclusion for show keys is Sela policy (W04 open);
+  combined-mask Live double-click and single-click under a mask are provisional
+  (EW8-OBS-020); logo uses Contain, diverging from EW8-OBS-019 "fills the
+  output" until a non-matching aspect ratio is observed; video logo is M2-03.
+- Checks (Windows 11, RTX 4060 Laptop): `cargo fmt --all -- --check`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` (lib 73, bin 47 + 1 ignored fixture,
+  integration suites all pass), `cargo build --locked`,
+  `python -m ruff check scripts` pass. `ruff format --check` passes for
+  `live-output-windows.py`; `native_win.py` and `native-cues.py` were already
+  unformatted at HEAD and were left unformatted.
+- Native: `cargo build --locked --example seed_library` then
+  `python scripts/live-output-windows.py --out .amp\in\artifacts\live-output-windows-masks{,-r1,-r2}`
+  PASS three times (2560x1600 secondary, DX12): Black/Clear/Logo frames and
+  lit buttons agree, each second press restores the identical slide frame,
+  Logo returns after Live off/on, 171–188 ms per change (capture polling).
+  `cargo build --locked --example native_cues` then
+  `python scripts/native-cues.py --backend dx12 --out .amp\in\artifacts\native-cues-windows-masks`
+  PASS: Clear keeps the image background without text, Black, Logo without a
+  logo is RenderFailed and stays black, duplicate mask Applied without redraw,
+  unmask byte-identical to the retained text/image frame. Captures inspected.
+- Not run: native file picker (logo seeded into the profile; GPUI test covers
+  the prompt), Linux/macOS, UIA names, installed observation of EW8-OBS-020,
+  physical scanout timing.
+- Next: Phase 3 M1-06c — raise the text size limit, resize-to-fit/normalize,
+  Ctrl+Enter split with undo, arrangement order on output.

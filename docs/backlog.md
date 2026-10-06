@@ -357,16 +357,20 @@ Depends on: M0-02, M0-06, M0-07. Tests: U, I, R, N, H.
 
 Progress: M0-08a (mask layer on the Safety lane, logo slot, per-lane renderer
 ordering) is **implemented-unqualified**; see [delivery](delivery.md#m0-08a--mask-layer-and-logo-slot).
-Operator toggles and native agreement checks are M1-10c.
+Operator toggles, picture logo and native agreement checks are M1-10c
+(**implemented-unqualified**, see [operator shell](operator-shell.md#m1-10c--masks-and-picture-logo)).
 
 - [x] Translate observed mask behavior into explicit transitions and tests before UI.
-- [ ] Implement masks independently from editing/selection and apply via the
+- [x] Implement masks independently from editing/selection and apply via the
   ordered command boundary, including repeated toggles and Go Live under mask.
-  (Boundary and coalescing done in M0-08a; operator wiring pending in M1-10c.)
+  (Boundary and coalescing in M0-08a; operator wiring in M1-10c.)
 - [ ] Implement observed restoration, logo resolution, transition and output scope.
+  (Restoration and picture logo done for single static items; logo fit is
+  Contain vs. observed "fills the output", transitions and multi-output open.)
 - [x] Test all mask combinations, stale acknowledgments, failed logo preparation,
   and masks while a scene transition is pending (headless and fake audience).
-- [ ] Verify visible output and acknowledged operator indicators agree.
+- [x] Verify visible output and acknowledged operator indicators agree.
+  (Windows DX12 only: `live-output-windows.py` and `native-cues.py`, M1-10c.)
 - [ ] Record media/audio cases pending M2; do not invent their semantics now.
 
 Acceptance: observed static-scene safety semantics hold, with explicit pending
@@ -585,11 +589,19 @@ reopening resolves the intended revision, not today's library contents.
 
 Depends on: M1-03, M1-09, M0-08. Tests: U, I, N, H.
 
+Progress: M1-10b (Live output, Go Live, acknowledged Live) and M1-10c (Black/
+Clear/Logo toggles, Ctrl+B/L/C, Page Down, Live single/double-click, Media
+Images and picture logo) are **implemented-unqualified**; see
+[operator shell](operator-shell.md#m1-10c--masks-and-picture-logo).
+
 - [ ] Connect preview preparation, slide selection, Go Live, next/previous and
   safety buttons to domain commands rather than editing state directly.
+  (Done for single songs and masks; schedule items wait for M1-09.)
 - [ ] Show preparing/failed/disconnected/requested states separately from Live.
 - [ ] Implement observed double-click, boundary navigation, auto-follow and
   contiguous/combined mode behavior using reference observations.
+  (Preview/Live double-click and › stop at the end done; arrow keys,
+  auto-follow and layout modes open.)
 - [ ] Bound preview work and give audience rendering priority under overload.
 - [ ] Test delayed/rejected apply, repeated Go Live, rapid navigation, live item
   removal and masked Go Live; inspect audience and operator state together.
@@ -600,6 +612,10 @@ to audience and rapid input cannot apply an older scene last.
 ### M1-11 — Still-image assets and missing-resource preflight
 
 Depends on: M1-01, M1-04, M1-08. Tests: U, I, R, N.
+
+Note: M1-10c added only a minimal profile `Resources/Images/` folder (PNG/JPEG
+copy-import on a bounded worker, 8 MiB cap, SHA-256 identity) to source the
+logo. Nothing below is done by it; thumbnails, metadata and preflight remain.
 
 - [ ] Import supported still-image formats on bounded workers; document supported
   dimensions, byte limits, orientation, color handling and animated-file policy.

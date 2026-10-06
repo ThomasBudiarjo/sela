@@ -3,11 +3,32 @@ use gpui::{
     WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
-actions!(sela, [Quit, FocusNext, FocusPrevious, ActivateControl]);
+actions!(
+    sela,
+    [
+        Quit,
+        FocusNext,
+        FocusPrevious,
+        ActivateControl,
+        ToggleBlack,
+        ToggleLogo,
+        ToggleClear,
+        GoLive
+    ]
+);
+
+/// Show controls (EW8-OBS-018). `!SelaTextInput` is evaluated against the
+/// whole context stack, so a focused text field anywhere below keeps Ctrl+C
+/// and friends for editing.
+const SHOW: &str = "SelaShow && !SelaTextInput";
 
 fn bind_operator_keys(cx: &mut App) {
     text_input::bind_keys(cx);
     cx.bind_keys([
+        KeyBinding::new("ctrl-b", ToggleBlack, Some(SHOW)),
+        KeyBinding::new("ctrl-l", ToggleLogo, Some(SHOW)),
+        KeyBinding::new("ctrl-c", ToggleClear, Some(SHOW)),
+        KeyBinding::new("pagedown", GoLive, Some(SHOW)),
         KeyBinding::new("ctrl-q", Quit, Some("Sela")),
         KeyBinding::new("tab", FocusNext, Some("Sela")),
         KeyBinding::new("shift-tab", FocusPrevious, Some("Sela")),

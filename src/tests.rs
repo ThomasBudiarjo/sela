@@ -1,9 +1,10 @@
 use super::*;
-use crate::operator::{LIVE_OUTPUT, Launcher, NEXT};
+use crate::operator::{CLEAR, Indicator, LIVE_OUTPUT, LOGO, Launcher, NEXT};
 use gpui::{Entity, TestAppContext, VisualTestContext};
 use sela::{
     arrangement::SectionId,
-    delivery::{DeliveryError, Epoch, LiveState, Outcome, RendererSession},
+    delivery::{DeliveryError, Epoch, LiveState, Outcome, Payload, RendererSession},
+    masks::{Layer, Mask},
     output::{Launch, Status, Stream},
     scene::{Extent, RendererCapabilities},
     storage::{Repository, Section, Song},
@@ -49,13 +50,14 @@ fn fake_audience_child() {
         };
         Frame::acknowledgment(ack).write(out()).unwrap();
         if ack.outcome == Outcome::Accepted {
+            let has_logo = session.logo().is_some();
             let ack = session
-                .present(Instant::now(), |_| {
-                    if mode == "reject" {
-                        Err(DeliveryError::RenderFailed)
-                    } else {
-                        Ok(())
-                    }
+                .present(Instant::now(), |payload| match payload {
+                    // Mirrors the renderer: a Logo mask needs a logo to draw.
+                    Payload::Mask(Layer::Logo) if !has_logo => Err(DeliveryError::RenderFailed),
+                    Payload::Mask(_) | Payload::Logo(_) => Ok(()),
+                    Payload::Scene(_) if mode == "reject" => Err(DeliveryError::RenderFailed),
+                    Payload::Scene(_) => Ok(()),
                 })
                 .unwrap();
             Frame::acknowledgment(ack).write(out()).unwrap();
@@ -303,7 +305,10 @@ fn assert_control(cx: &mut VisualTestContext, operator: &Entity<Operator>, index
 fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
     let (mut cx, operator, seen) = fixture(cx);
     // Control 10 exists only while the New menu is open.
-    let order: Vec<usize> = (0..10).chain(LIVE_OUTPUT..=NEXT).collect();
+    let order: Vec<usize> = (0..10)
+        .chain(LIVE_OUTPUT..=NEXT)
+        .chain(LOGO..=CLEAR)
+        .collect();
     for index in order.iter().copied() {
         cx.simulate_keystrokes("tab");
         assert_control(&mut cx, &operator, index);
@@ -392,8 +397,8 @@ fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
     let b = cx.debug_bounds("collapse-resources").unwrap();
     cx.simulate_click(b.center(), Default::default());
     assert_control(&mut cx, &operator, 2);
-    // 2 → 9 → Live output, Go Live, Previous, Next → 0.
-    cx.simulate_keystrokes("tab tab tab tab tab tab enter");
+    // 2 → 9 → Live output, Go Live, Previous, Next → Logo, Black, Clear → 0.
+    cx.simulate_keystrokes("tab tab tab tab tab tab tab tab tab enter");
     assert_control(&mut cx, &operator, 0);
     assert!(!operator.read_with(&cx, |o, _| o.collapsed));
     assert!(operator.read_with(&cx, |o, _| o.output.is_none()));
@@ -405,16 +410,14 @@ fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
         original,
         operator.read_with(&cx, |o, _| (o.tab, o.ratios, o.collapsed))
     );
-    // Unavailable mask/alert labels have neither focus handles nor activation routes.
-    for label in ["Alerts", "Black", "Clear", "Logo"] {
-        let bounds = cx.debug_bounds(label).unwrap();
-        cx.simulate_click(bounds.center(), Default::default());
-        cx.update(|window, cx| {
-            assert!(operator.read(cx).focus.is_focused(window));
-            assert!(!window.is_action_available(&ActivateControl, cx));
-        });
-        cx.simulate_keystrokes("enter space");
-    }
+    // The unavailable Alerts label has neither a focus handle nor an activation route.
+    let bounds = cx.debug_bounds("Alerts").unwrap();
+    cx.simulate_click(bounds.center(), Default::default());
+    cx.update(|window, cx| {
+        assert!(operator.read(cx).focus.is_focused(window));
+        assert!(!window.is_action_available(&ActivateControl, cx));
+    });
+    cx.simulate_keystrokes("enter space");
     assert_eq!(
         original,
         operator.read_with(&cx, |o, _| (o.tab, o.ratios, o.collapsed))
@@ -627,4 +630,259 @@ fn rejected_or_lost_output_is_never_shown_as_live(cx: &mut TestAppContext) {
         Some("Output state unknown · turn Live off and on".into())
     );
     assert!(operator.read_with(&cx, |o, _| o.live.is_none()));
+}
+
+fn confirmed_mask(o: &Operator) -> Option<Layer> {
+    o.output.as_ref().and_then(|output| output.mask())
+}
+
+fn has_line(o: &Operator, text: &str) -> bool {
+    o.live_lines().iter().any(|(line, _)| line == text)
+}
+
+#[gpui::test]
+fn show_keys_toggle_masks_with_acknowledged_indicators(cx: &mut TestAppContext) {
+    let (mut cx, operator, _) = fixture(cx);
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    cx.simulate_keystrokes("ctrl-b");
+    operator.read_with(&cx, |o, _| {
+        assert!(o.masks.is_on(Mask::Black));
+        assert_eq!(
+            o.indicator(Mask::Black),
+            Indicator::Pending,
+            "sent is not shown"
+        );
+    });
+    settle(&mut cx, &operator, "Black acknowledged", |o| {
+        o.indicator(Mask::Black) == Indicator::On
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+        assert!(has_line(o, "Mask: Black"));
+        assert!(has_line(o, "Under mask: nothing confirmed"));
+    });
+    // Clear stacks under Black; both lit once the renderer has the layer.
+    cx.simulate_keystrokes("ctrl-c");
+    settle(&mut cx, &operator, "Clear under Black", |o| {
+        o.indicator(Mask::Clear) == Indicator::On && o.indicator(Mask::Black) == Indicator::On
+    });
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Clear revealed", |o| {
+        confirmed_mask(o) == Some(Layer::Clear) && o.indicator(Mask::Black) == Indicator::Off
+    });
+    assert!(operator.read_with(&cx, |o, _| has_line(o, "Mask: Clear")));
+    // No logo is set: Logo refuses and explains, leaving masks as they are.
+    cx.simulate_keystrokes("ctrl-l");
+    operator.read_with(&cx, |o, _| {
+        assert!(!o.masks.is_on(Mask::Logo));
+        assert!(o.masks.is_on(Mask::Clear));
+        assert!(
+            o.live_message
+                .as_deref()
+                .unwrap()
+                .starts_with("No logo set")
+        );
+    });
+    click(&mut cx, "mask-clear");
+    settle(&mut cx, &operator, "unmasked", |o| {
+        confirmed_mask(o) == Some(Layer::None) && o.indicator(Mask::Clear) == Indicator::Off
+    });
+    assert!(operator.read_with(&cx, |o, _| has_line(o, "On screen: nothing confirmed")));
+
+    // EW8-OBS-017: Live off keeps the mask armed; Live on shows it again.
+    click(&mut cx, "mask-black");
+    settle(&mut cx, &operator, "Black", |o| {
+        o.indicator(Mask::Black) == Indicator::On
+    });
+    click(&mut cx, "live-output");
+    operator.read_with(&cx, |o, _| {
+        assert!(o.output.is_none());
+        assert!(o.masks.is_on(Mask::Black));
+        assert_eq!(o.indicator(Mask::Black), Indicator::Pending);
+        assert!(has_line(
+            o,
+            "Mask armed: Black · shown when Live output is on"
+        ));
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "Black in the new session", |o| {
+        o.indicator(Mask::Black) == Indicator::On
+    });
+}
+
+/// Mouse double-click as the platform reports it: two presses, counts 1 and 2.
+fn double_click(cx: &mut VisualTestContext, selector: &'static str) {
+    use gpui::{MouseButton, MouseDownEvent, MouseUpEvent};
+    let position = cx.debug_bounds(selector).unwrap().center();
+    for click_count in [1, 2] {
+        cx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Default::default(),
+            click_count,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Default::default(),
+            click_count,
+        });
+    }
+}
+
+#[gpui::test]
+fn live_slide_clicks_apply_and_double_click_unmasks(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_song(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "preview", |o| o.preview.is_some());
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+    cx.simulate_keystrokes("pagedown");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+    // Go Live and Live slide clicks keep the mask (EW8-OBS-016).
+    click(&mut cx, "live-slide-1");
+    settle(&mut cx, &operator, "chorus under Black", |o| {
+        o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+        assert!(has_line(o, "Under mask: Signal Hymn · Chorus"));
+    });
+    double_click(&mut cx, "live-slide-2");
+    settle(&mut cx, &operator, "bridge unmasked", |o| {
+        o.on_screen() == Some("Signal Hymn · Bridge") && confirmed_mask(o) == Some(Layer::None)
+    });
+    operator.read_with(&cx, |o, _| {
+        assert!(!o.masks.any());
+        assert!(has_line(o, "On screen: Signal Hymn · Bridge"));
+    });
+}
+
+#[gpui::test]
+fn show_keys_stay_out_of_text_fields(cx: &mut TestAppContext) {
+    struct Probe {
+        root: FocusHandle,
+        field: FocusHandle,
+        seen: Rc<Cell<usize>>,
+    }
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let seen = self.seen.clone();
+            div()
+                .key_context("Sela SelaShow")
+                .track_focus(&self.root)
+                .on_action(move |_: &ToggleClear, _, _| seen.set(seen.get() + 1))
+                .size_full()
+                .child(
+                    div()
+                        .key_context("SelaTextInput")
+                        .track_focus(&self.field)
+                        .size_full(),
+                )
+        }
+    }
+    let seen = Rc::new(Cell::new(0));
+    let window = cx.update(|cx| {
+        bind_operator_keys(cx);
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Probe {
+                root: cx.focus_handle(),
+                field: cx.focus_handle(),
+                seen: seen.clone(),
+            })
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let probe = window.root(&mut cx).unwrap();
+    cx.update(|window, cx| probe.read(cx).field.clone().focus(window, cx));
+    cx.simulate_keystrokes("ctrl-c ctrl-b ctrl-l pagedown");
+    assert_eq!(seen.get(), 0, "text fields keep Ctrl+C");
+    cx.update(|window, cx| probe.read(cx).root.clone().focus(window, cx));
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(seen.get(), 1);
+}
+
+fn png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
+    use image::ImageEncoder;
+    let pixels: Vec<u8> = (0..width * height).flat_map(|_| rgba).collect();
+    let mut encoded = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut encoded)
+        .write_image(&pixels, width, height, image::ExtendedColorType::Rgba8)
+        .unwrap();
+    encoded
+}
+
+#[gpui::test]
+fn media_logo_is_imported_persisted_and_shown(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_song(&dir);
+    let images = sela::images::images_dir(dir.path());
+    std::fs::create_dir_all(&images).unwrap();
+    std::fs::write(images.join("logo.png"), png(4, 2, [200, 10, 10, 255])).unwrap();
+    let outside = dir.path().join("second.png");
+    std::fs::write(&outside, png(2, 2, [10, 200, 10, 255])).unwrap();
+
+    let (mut cx, operator, _) = with_library(cx, Some(library.clone()), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "image list", |o| {
+        o.images == ["logo.png"]
+    });
+    assert!(operator.read_with(&cx, |o, _| o.logo.is_none()));
+    click(&mut cx, "Media");
+    click(&mut cx, "image-0");
+    click(&mut cx, "use-as-logo");
+    settle(&mut cx, &operator, "logo chosen", |o| o.logo.is_some());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("logo.txt")).unwrap(),
+        "logo.png\n"
+    );
+
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+    cx.simulate_keystrokes("ctrl-l");
+    settle(&mut cx, &operator, "logo shown", |o| {
+        confirmed_mask(o) == Some(Layer::Logo) && o.indicator(Mask::Logo) == Indicator::On
+    });
+    operator.read_with(&cx, |o, _| {
+        let output = o.output.as_ref().unwrap();
+        let version =
+            sela::images::logo_version(o.logo.as_ref().unwrap().resource.version, FAKE_EXTENT);
+        assert_eq!(output.logo(), Some(version));
+        assert_eq!(
+            output.mask_rejected(),
+            None,
+            "Logo never sent before its logo"
+        );
+        assert!(has_line(o, "Mask: Logo"));
+    });
+
+    click(&mut cx, "import-image");
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(|_| Some(vec![outside.clone()]));
+    settle(&mut cx, &operator, "imported", |o| o.images.len() == 2);
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.selected_image.clone()),
+        Some("second.png".into())
+    );
+
+    // A fresh operator reads the stored choice.
+    let (mut cx, operator, _) = with_library(&mut cx.cx, Some(library), "apply");
+    settle(&mut cx, &operator, "stored logo", |o| {
+        o.logo.as_ref().is_some_and(|logo| logo.name == "logo.png")
+    });
 }

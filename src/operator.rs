@@ -1,15 +1,21 @@
 use super::*;
-use gpui::{CursorStyle, Empty, FontWeight, MouseButton, Point, SharedString, Subscription, Task};
+use gpui::{
+    CursorStyle, Empty, FontWeight, MouseButton, PathPromptOptions, Pixels, Point, SharedString,
+    Subscription, Task,
+};
 use sela::{
     delivery::{Epoch, LiveState},
+    images,
+    masks::{Layer, Mask, Masks},
     output::{Launch, Refusal, Status, Supervisor},
-    scene::{ContentVersion, Extent},
+    preparation::{PreparationEvent, Preparer},
+    scene::{ContentVersion, Extent, PrepareError, RendererCapabilities},
     slides::{self, Slide},
     storage::{self, Reply, Version, Worker},
 };
 use std::{
     collections::VecDeque,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -32,16 +38,45 @@ const ERROR: u32 = 0xb33232;
 const DARK_TEXT: u32 = 0xf2f2f2;
 const DARK_MUTED: u32 = 0x9ea3ab;
 const DARK_ERROR: u32 = 0xf08a80;
+const MASK_ON: u32 = 0xf6dfdc;
+const DISABLED: u32 = 0xb0b3b8;
 
 pub(super) const LIVE_OUTPUT: usize = 11;
 pub(super) const GO_LIVE: usize = 12;
 pub(super) const PREVIOUS: usize = 13;
 pub(super) const NEXT: usize = 14;
-const CONTROLS: usize = 15;
+pub(super) const LOGO: usize = 15;
+pub(super) const BLACK: usize = 16;
+pub(super) const CLEAR: usize = 17;
+pub(super) const IMPORT_IMAGE: usize = 18;
+pub(super) const USE_AS_LOGO: usize = 19;
+pub(super) const IMAGE_MENU_LOGO: usize = 20;
+const CONTROLS: usize = 21;
 const SONG_TAB_INDEX: isize = 100;
 const SLIDE_TAB_INDEX: isize = 1000;
+const IMAGE_TAB_INDEX: isize = 2000;
 const POLL: Duration = Duration::from_millis(16);
 const LABELS: usize = 8;
+const LOGO_TIMEOUT: Duration = Duration::from_secs(5);
+const NO_LOGO: &str = "No logo set · Media → select an image → Use As Logo Background";
+
+/// Show-control button state. Lit only once the renderer acknowledged it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Indicator {
+    Off,
+    /// Requested but not yet acknowledged, or acknowledged but being turned off.
+    Pending,
+    On,
+}
+
+fn layer_name(layer: Layer) -> &'static str {
+    match layer {
+        Layer::None => "None",
+        Layer::Clear => "Clear",
+        Layer::Black => "Black",
+        Layer::Logo => "Logo",
+    }
+}
 
 /// Builds the audience child command for a fresh session epoch.
 pub(super) type Launcher = Arc<dyn Fn(Epoch) -> Launch + Send + Sync>;
@@ -89,6 +124,25 @@ pub(super) struct Operator {
     output_extent: Option<Extent>,
     labels: VecDeque<(ContentVersion, String)>,
     pub(super) live_message: Option<String>,
+    /// Operator mask intent; survives Live output off/on (EW8-OBS-017).
+    pub(super) masks: Masks,
+    /// Layer handed to this session's supervisor.
+    sent_mask: Option<Layer>,
+    /// A Live double-click unmasks only after its slide left the cue slot,
+    /// so the previous slide is never revealed in between.
+    unmask_after_cue: bool,
+    pub(super) logo: Option<images::Logo>,
+    logo_preparer: Option<(RendererCapabilities, Preparer)>,
+    logo_requested: Option<ContentVersion>,
+    logo_sent: Option<ContentVersion>,
+    pub(super) logo_error: Option<String>,
+    profile: Option<PathBuf>,
+    image_worker: Option<images::Worker>,
+    pub(super) images: Vec<String>,
+    image_rows: Vec<FocusHandle>,
+    pub(super) selected_image: Option<String>,
+    image_menu: Option<Point<Pixels>>,
+    pub(super) media_message: Option<String>,
     _poller: Option<Task<()>>,
 }
 
@@ -103,6 +157,24 @@ impl Operator {
             Some(Err(error)) => (None, None, Some(storage_message(error))),
             None => (None, None, None),
         };
+        let profile = library
+            .as_deref()
+            .and_then(Path::parent)
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf);
+        let mut media_message = None;
+        let image_worker = profile.clone().and_then(|profile| {
+            let worker = images::Worker::start(profile).ok();
+            if worker.is_none() {
+                media_message = Some("Image worker could not start".into());
+            }
+            worker
+        });
+        if let Some(worker) = &image_worker {
+            // A fresh worker has room for both jobs.
+            let _ = worker.submit(images::Job::LoadLogo);
+            let _ = worker.submit(images::Job::Scan);
+        }
         let executor = cx.background_executor().clone();
         let poller = cx.spawn(async move |this, cx| {
             loop {
@@ -143,6 +215,21 @@ impl Operator {
             output_extent: None,
             labels: VecDeque::with_capacity(LABELS),
             live_message: None,
+            masks: Masks::default(),
+            sent_mask: None,
+            unmask_after_cue: false,
+            logo: None,
+            logo_preparer: None,
+            logo_requested: None,
+            logo_sent: None,
+            logo_error: None,
+            profile,
+            image_worker,
+            images: Vec::new(),
+            image_rows: Vec::new(),
+            selected_image: None,
+            image_menu: None,
+            media_message,
             _poller: Some(poller),
         }
     }
@@ -186,13 +273,23 @@ impl Operator {
             GO_LIVE => self.go_live(),
             PREVIOUS => self.step_live(false),
             NEXT => self.step_live(true),
+            LOGO => self.toggle_mask(Mask::Logo),
+            BLACK => self.toggle_mask(Mask::Black),
+            CLEAR => self.toggle_mask(Mask::Clear),
+            IMPORT_IMAGE => self.prompt_import(cx),
+            USE_AS_LOGO => self.use_as_logo(),
+            IMAGE_MENU_LOGO => {
+                self.image_menu = None;
+                self.controls[USE_AS_LOGO].focus(window, cx);
+                self.use_as_logo();
+            }
             _ => return,
         }
         cx.notify();
     }
 
     pub(super) fn poll(&mut self, cx: &mut Context<Self>) {
-        let mut changed = self.poll_library();
+        let mut changed = self.poll_library() | self.poll_images();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());
             if let Status::Connected { extent, .. } = output.status()
@@ -206,9 +303,250 @@ impl Operator {
                 changed = true;
             }
         }
+        changed |= self.sync_show(Instant::now());
         if changed {
             cx.notify();
         }
+    }
+
+    fn submit_image_job(&mut self, job: images::Job) {
+        let Some(worker) = &self.image_worker else {
+            self.media_message = Some("No profile folder; images are unavailable".into());
+            return;
+        };
+        if let Err(error) = worker.submit(job) {
+            self.media_message = Some(error.to_string());
+        }
+    }
+
+    fn poll_images(&mut self) -> bool {
+        let mut changed = false;
+        let mut rescan = false;
+        // Two replies are buffered at most; bound the loop anyway.
+        for _ in 0..4 {
+            let Some(reply) = self.image_worker.as_ref().and_then(images::Worker::poll) else {
+                break;
+            };
+            changed = true;
+            match reply {
+                Err(error) => {
+                    self.media_message = Some(error.to_string());
+                    self.image_worker = None;
+                }
+                Ok(images::Reply::Images(Ok(names))) => {
+                    if self
+                        .selected_image
+                        .as_ref()
+                        .is_some_and(|s| !names.contains(s))
+                    {
+                        self.selected_image = None;
+                    }
+                    self.images = names;
+                }
+                Ok(images::Reply::Images(Err(error))) => {
+                    self.media_message = Some(format!("Images unavailable: {error}"));
+                }
+                Ok(images::Reply::Imported(Ok(name))) => {
+                    self.media_message = Some(format!("Imported {name}"));
+                    self.selected_image = Some(name);
+                    rescan = true;
+                }
+                Ok(images::Reply::Imported(Err(error))) => {
+                    self.media_message = Some(format!("Import failed: {error}"));
+                }
+                Ok(images::Reply::Logo(Ok(logo))) => {
+                    self.logo = logo;
+                    self.logo_error = None;
+                    self.logo_requested = None;
+                    self.logo_sent = None;
+                }
+                // The previous logo, if any, stays in use.
+                Ok(images::Reply::Logo(Err(error))) => {
+                    self.logo_error = Some(format!("Logo unavailable: {error}"));
+                }
+            }
+        }
+        if rescan {
+            self.submit_image_job(images::Job::Scan);
+        }
+        changed
+    }
+
+    fn prompt_import(&mut self, cx: &mut Context<Self>) {
+        if self.image_worker.is_none() {
+            self.media_message = Some("No profile folder; images cannot be imported".into());
+            return;
+        }
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.submit_image_job(images::Job::Import(path));
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn use_as_logo(&mut self) {
+        match self.selected_image.clone() {
+            Some(name) => {
+                self.media_message = None;
+                self.submit_image_job(images::Job::UseAsLogo(name));
+            }
+            None => self.media_message = Some("Select an image first".into()),
+        }
+    }
+
+    pub(super) fn toggle_mask(&mut self, mask: Mask) {
+        if mask == Mask::Logo && !self.masks.is_on(Mask::Logo) && self.logo.is_none() {
+            self.live_message = Some(NO_LOGO.into());
+            return;
+        }
+        self.masks.toggle(mask);
+        self.unmask_after_cue = false;
+        self.live_message = None;
+        self.sync_show(Instant::now());
+    }
+
+    /// EW8-OBS-014: a single click on a Live slide applies it. EW8-OBS-016: a
+    /// double-click also turns a single mask off; clearing combined masks is
+    /// provisional (EW8-OBS-020), as is keeping a mask on a single click.
+    fn click_live(&mut self, index: usize, double: bool) {
+        if double && self.masks.any() {
+            self.masks.live_double_click();
+            self.unmask_after_cue = true;
+        }
+        // The first click of a double-click already sent this slide.
+        if !(double && self.live_slide == Some(index)) {
+            self.send(index);
+        }
+        self.sync_show(Instant::now());
+    }
+
+    fn logo_ready(&self) -> bool {
+        let (Some(output), Some(logo)) = (&self.output, &self.logo) else {
+            return false;
+        };
+        let Status::Connected { extent, .. } = output.status() else {
+            return false;
+        };
+        let version = images::logo_version(logo.resource.version, extent);
+        self.logo_sent == Some(version)
+            && (output.logo() == Some(version) || output.logo_pending() == Some(version))
+    }
+
+    /// The layer to send. A Logo intent covers with Black until the logo for
+    /// this surface is with the renderer, so text never shows in between.
+    fn wire_layer(&self) -> Layer {
+        match self.masks.layer() {
+            Layer::Logo if !self.logo_ready() => Layer::Black,
+            layer => layer,
+        }
+    }
+
+    pub(super) fn indicator(&self, mask: Mask) -> Indicator {
+        let output = self.output.as_ref();
+        let confirmed = output.and_then(Supervisor::mask);
+        let synced = confirmed == Some(self.masks.layer())
+            && output.is_some_and(|o| o.mask_pending().is_none());
+        let layer = match mask {
+            Mask::Black => Layer::Black,
+            Mask::Clear => Layer::Clear,
+            Mask::Logo => Layer::Logo,
+        };
+        match (self.masks.is_on(mask), synced) {
+            (true, true) => Indicator::On,
+            (true, false) => Indicator::Pending,
+            (false, false) if confirmed == Some(layer) && self.wire_layer() != layer => {
+                Indicator::Pending
+            }
+            _ => Indicator::Off,
+        }
+    }
+
+    /// Prepares the logo for the current surface off the UI thread and hands
+    /// it to the supervisor. Returns true when visible state changed.
+    fn sync_logo(&mut self, now: Instant) -> bool {
+        let (Some(output), Some(logo)) = (&mut self.output, &self.logo) else {
+            return false;
+        };
+        let Status::Connected { extent, caps } = output.status() else {
+            return false;
+        };
+        let version = images::logo_version(logo.resource.version, extent);
+        let mut changed = false;
+        if self.logo_requested != Some(version) {
+            if self.logo_preparer.as_ref().is_none_or(|(c, _)| *c != caps) {
+                match Preparer::new(caps) {
+                    Ok(preparer) => self.logo_preparer = Some((caps, preparer)),
+                    Err(_) => {
+                        self.logo_requested = Some(version);
+                        self.logo_error = Some("Logo preparation could not start".into());
+                        return true;
+                    }
+                }
+            }
+            let (_, preparer) = self.logo_preparer.as_mut().expect("created above");
+            match preparer.request(images::logo_spec(logo, extent), now, LOGO_TIMEOUT) {
+                Ok(_) => self.logo_requested = Some(version),
+                // Retried on the next poll.
+                Err(PrepareError::Busy) => {}
+                Err(error) => {
+                    self.logo_requested = Some(version);
+                    self.logo_error = Some(format!("Logo unavailable: {error}"));
+                    changed = true;
+                }
+            }
+        }
+        if let Some((_, preparer)) = &mut self.logo_preparer
+            && let Some(event) = preparer.poll(now)
+        {
+            changed = true;
+            match event {
+                PreparationEvent::Ready { cue, .. } if cue.version() == version => {
+                    // A refusal means the surface changed; the next poll re-requests.
+                    if output.set_logo(cue, now).is_ok() {
+                        self.logo_sent = Some(version);
+                        self.logo_error = None;
+                    }
+                }
+                PreparationEvent::Ready { .. } => {}
+                PreparationEvent::Failed { error, .. } => {
+                    self.logo_error = Some(format!("Logo unavailable: {error}"));
+                }
+            }
+        }
+        changed
+    }
+
+    fn sync_show(&mut self, now: Instant) -> bool {
+        let changed = self.sync_logo(now);
+        let layer = self.wire_layer();
+        let Some(output) = &mut self.output else {
+            return changed;
+        };
+        if self.unmask_after_cue {
+            if output.wanted().is_some() || output.in_flight().is_some() {
+                return changed;
+            }
+            self.unmask_after_cue = false;
+        }
+        if self.sent_mask != Some(layer) && output.set_mask(layer, now).is_ok() {
+            self.sent_mask = Some(layer);
+            return true;
+        }
+        changed
     }
 
     fn poll_library(&mut self) -> bool {
@@ -298,6 +636,12 @@ impl Operator {
         // A new session never replays earlier intent; Go Live must be repeated.
         self.output_extent = None;
         self.live_slide = None;
+        // Masks do carry over (EW8-OBS-017); a fresh renderer starts unmasked.
+        self.sent_mask = self.output.as_ref().map(|_| Layer::None);
+        self.unmask_after_cue = false;
+        self.logo_requested = None;
+        self.logo_sent = None;
+        self.sync_show(Instant::now());
     }
 
     fn go_live(&mut self) {
@@ -593,7 +937,75 @@ impl Operator {
         slide_pane("Preview", width, footer, None, tiles)
     }
 
-    fn live_pane(&self, width: f32) -> impl IntoElement {
+    /// Live pane status, top to bottom. Mask lines reflect acknowledged state.
+    pub(super) fn live_lines(&self) -> Vec<(String, u32)> {
+        let output = self.output.as_ref();
+        let connected = matches!(
+            output.map(Supervisor::status),
+            Some(Status::Connected { .. })
+        );
+        let sending = self.live_index(output.and_then(|o| o.wanted().or(o.in_flight())));
+        let mut lines = vec![(self.output_line(), DARK_MUTED)];
+        let slide = match self.on_screen() {
+            Some(label) => label.to_owned(),
+            None if connected => "nothing confirmed".into(),
+            None => "unknown".into(),
+        };
+        match output.and_then(Supervisor::mask) {
+            Some(layer) if layer != Layer::None => {
+                lines.push((format!("Mask: {}", layer_name(layer)), DARK_TEXT));
+                lines.push((format!("Under mask: {slide}"), DARK_MUTED));
+            }
+            _ => {
+                let color = if self.on_screen().is_some() {
+                    DARK_TEXT
+                } else {
+                    DARK_MUTED
+                };
+                lines.push((format!("On screen: {slide}"), color));
+            }
+        }
+        if let Some(layer) = output.and_then(Supervisor::mask_pending) {
+            lines.push((format!("Sending mask: {}…", layer_name(layer)), SENDING));
+        }
+        if self.masks.any() && output.is_none() {
+            lines.push((
+                format!(
+                    "Mask armed: {} · shown when Live output is on",
+                    layer_name(self.masks.layer())
+                ),
+                DARK_MUTED,
+            ));
+        }
+        if self.masks.is_on(Mask::Logo) {
+            if let Some(error) = &self.logo_error {
+                lines.push((error.clone(), DARK_ERROR));
+            } else if connected && !self.logo_ready() {
+                lines.push(("Preparing logo · covering with Black".into(), SENDING));
+            }
+        }
+        if sending.is_some() {
+            lines.push(("Sending…".into(), SENDING));
+        }
+        if let Some((_, error)) = output.and_then(|o| o.rejected()) {
+            lines.push((format!("Last cue not shown: {error}"), DARK_ERROR));
+        }
+        if let Some((layer, error)) = output.and_then(|o| o.mask_rejected()) {
+            lines.push((
+                format!("Mask {} not shown: {error}", layer_name(layer)),
+                DARK_ERROR,
+            ));
+        }
+        if let Some((_, error)) = output.and_then(|o| o.logo_rejected()) {
+            lines.push((format!("Logo not shown: {error}"), DARK_ERROR));
+        }
+        if let Some(message) = &self.live_message {
+            lines.push((message.clone(), DARK_ERROR));
+        }
+        lines
+    }
+
+    fn live_pane(&mut self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let output = self.output.as_ref();
         let confirmed = output.and_then(|o| match o.live() {
             LiveState::Confirmed(version) => Some(version),
@@ -601,28 +1013,7 @@ impl Operator {
         });
         let confirmed = self.live_index(confirmed);
         let sending = self.live_index(output.and_then(|o| o.wanted().or(o.in_flight())));
-        let rejected = output.and_then(|o| o.rejected());
-        let mut lines = vec![(self.output_line(), DARK_MUTED)];
-        lines.push(match self.on_screen() {
-            Some(label) => (format!("On screen: {label}"), DARK_TEXT),
-            None if matches!(
-                output.map(Supervisor::status),
-                Some(Status::Connected { .. })
-            ) =>
-            {
-                ("On screen: nothing confirmed".into(), DARK_MUTED)
-            }
-            None => ("On screen: unknown".into(), DARK_MUTED),
-        });
-        if sending.is_some() {
-            lines.push(("Sending…".into(), SENDING));
-        }
-        if let Some((_, error)) = rejected {
-            lines.push((format!("Last cue not shown: {error}"), DARK_ERROR));
-        }
-        if let Some(message) = &self.live_message {
-            lines.push((message.clone(), DARK_ERROR));
-        }
+        let lines = self.live_lines();
         let footer = match (&self.live, self.live_slide) {
             (Some(item), Some(index)) => format!(
                 "{} · Slide {} of {}",
@@ -648,6 +1039,16 @@ impl Operator {
                     tile(slide, index, border)
                         .id(("live-slide", index))
                         .debug_selector(move || format!("live-slide-{index}"))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                            if matches!(event, gpui::ClickEvent::Keyboard(_))
+                                || event.is_right_click()
+                            {
+                                return;
+                            }
+                            this.click_live(index, event.click_count() >= 2);
+                            cx.notify();
+                        }))
                 })
                 .collect::<Vec<_>>()
         });
@@ -722,6 +1123,116 @@ impl Operator {
                     }),
             )
             .into_any_element()
+    }
+
+    fn image_list(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        while self.image_rows.len() < self.images.len() {
+            let index = self.image_rows.len() as isize;
+            self.image_rows.push(
+                cx.focus_handle()
+                    .tab_index(IMAGE_TAB_INDEX + index)
+                    .tab_stop(true),
+            );
+        }
+        if self.profile.is_none() {
+            return empty_detail(
+                "Images · no profile",
+                "Launch Sela without arguments to use the default profile.",
+            );
+        }
+        if self.images.is_empty() {
+            return empty_detail(
+                "Images",
+                "No images yet. Use Import image… to add a PNG or JPEG.",
+            );
+        }
+        let logo = self.logo.as_ref().map(|logo| logo.name.as_str());
+        div()
+            .id("image-list")
+            .size_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .children(self.images.iter().enumerate().map(|(index, name)| {
+                let selected = self.selected_image.as_ref() == Some(name);
+                let label = if logo == Some(name.as_str()) {
+                    format!("{name} · Logo")
+                } else {
+                    name.clone()
+                };
+                let select = move |this: &mut Self| {
+                    this.selected_image = this.images.get(index).cloned();
+                };
+                div()
+                    .id(("image", index))
+                    .debug_selector(move || format!("image-{index}"))
+                    .track_focus(&self.image_rows[index])
+                    .key_context("SelaControl")
+                    .flex_shrink_0()
+                    .h(px(28.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .cursor_pointer()
+                    .bg(rgb(if selected { 0xe3e7f3 } else { SURFACE }))
+                    .hover(|d| d.bg(rgb(HOVER)))
+                    .focus(|d| d.bg(rgb(0xdce3fa)))
+                    .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
+                        window.prevent_default();
+                        select(this);
+                        cx.notify();
+                    }))
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            if matches!(event, gpui::ClickEvent::Keyboard(_))
+                                || event.is_right_click()
+                            {
+                                return;
+                            }
+                            this.image_rows[index].focus(window, cx);
+                            select(this);
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                            this.image_rows[index].focus(window, cx);
+                            select(this);
+                            this.image_menu = Some(event.position);
+                            cx.notify();
+                        }),
+                    )
+                    .child(div().truncate().child(label))
+            }))
+            .into_any_element()
+    }
+
+    fn mask_button(
+        &self,
+        index: usize,
+        id: &'static str,
+        label: &'static str,
+        mask: Mask,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let state = self.indicator(mask);
+        let disabled = mask == Mask::Logo && self.logo.is_none() && !self.masks.is_on(mask);
+        self.button(index, id, label, cx)
+            .border_1()
+            .border_color(rgb(if state == Indicator::Pending {
+                SENDING
+            } else {
+                CHROME
+            }))
+            .when(state == Indicator::On, |d| {
+                d.bg(rgb(MASK_ON))
+                    .text_color(rgb(ON_SCREEN))
+                    .font_weight(FontWeight::MEDIUM)
+            })
+            .when(disabled, |d| d.text_color(rgb(DISABLED)))
     }
 }
 
@@ -920,9 +1431,25 @@ impl Render for Operator {
             "Live ○ Off"
         };
         div()
-            .key_context("Sela")
+            .key_context("Sela SelaShow")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &Quit, window, _| window.remove_window()))
+            .on_action(cx.listener(|this, _: &ToggleBlack, _, cx| {
+                this.toggle_mask(Mask::Black);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleLogo, _, cx| {
+                this.toggle_mask(Mask::Logo);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleClear, _, cx| {
+                this.toggle_mask(Mask::Clear);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &GoLive, _, cx| {
+                this.go_live();
+                cx.notify();
+            }))
             .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
             .capture_any_mouse_up(cx.listener(|this, _, _, _| this.drag = None))
@@ -955,13 +1482,16 @@ impl Render for Operator {
                         self.button(GO_LIVE, "go-live", "Go Live", cx)
                             .text_color(rgb(TEXT)),
                     )
-                    .children(["Alerts", "Logo", "Black", "Clear"].map(|label| {
+                    .child(
                         div()
-                            .debug_selector(move || label.into())
+                            .debug_selector(|| "Alerts".into())
                             .px_1()
                             .text_color(rgb(0x92969c))
-                            .child(label)
-                    }))
+                            .child("Alerts"),
+                    )
+                    .child(self.mask_button(LOGO, "mask-logo", "Logo", Mask::Logo, cx))
+                    .child(self.mask_button(BLACK, "mask-black", "Black", Mask::Black, cx))
+                    .child(self.mask_button(CLEAR, "mask-clear", "Clear", Mask::Clear, cx))
                     .child(
                         self.button(LIVE_OUTPUT, "live-output", live_label, cx)
                             .when(self.output.is_some(), |d| d.text_color(rgb(ON_SCREEN))),
@@ -984,7 +1514,7 @@ impl Render for Operator {
                             .flex()
                             .flex_col()
                             .overflow_hidden()
-                            .child(div().flex_1().min_h_0().child(self.live_pane(right)))
+                            .child(div().flex_1().min_h_0().child(self.live_pane(right, cx)))
                             .child(
                                 div()
                                     .h(px(32.))
@@ -1032,6 +1562,8 @@ impl Render for Operator {
             .when(!self.collapsed, |d| {
                 let detail = if self.tab == 0 {
                     self.song_list(cx)
+                } else if self.tab == 2 {
+                    self.image_list(cx)
                 } else {
                     empty_detail(
                         format!("{} library is empty", TABS[self.tab]),
@@ -1120,7 +1652,73 @@ impl Render for Operator {
                             .child(self.button(8, "open-library", "+ New Song", cx)),
                     )
                 })
+                .when(self.tab == 2, |d| {
+                    d.child(
+                        div()
+                            .h(px(30.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .border_t_1()
+                            .border_color(rgb(BORDER))
+                            .child(self.button(IMPORT_IMAGE, "import-image", "Import image…", cx))
+                            .child(
+                                self.button(
+                                    USE_AS_LOGO,
+                                    "use-as-logo",
+                                    "Use As Logo Background",
+                                    cx,
+                                )
+                                .when(self.selected_image.is_none(), |d| {
+                                    d.text_color(rgb(DISABLED))
+                                }),
+                            )
+                            .children(self.media_message.clone().map(|message| {
+                                div()
+                                    .debug_selector(|| "media-message".into())
+                                    .px_2()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(MUTED))
+                                    .truncate()
+                                    .child(message)
+                            }))
+                            .children(self.logo_error.clone().map(|error| {
+                                div()
+                                    .px_2()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(ERROR))
+                                    .truncate()
+                                    .child(error)
+                            })),
+                    )
+                })
             })
+            .when_some(
+                self.image_menu.filter(|_| self.tab == 2 && !self.collapsed),
+                |d, position| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(position.x)
+                            .top(position.y)
+                            .bg(rgb(SURFACE))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .shadow_md()
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                this.image_menu = None;
+                                cx.notify();
+                            }))
+                            .child(self.button(
+                                IMAGE_MENU_LOGO,
+                                "image-menu-logo",
+                                "Use As Logo Background",
+                                cx,
+                            )),
+                    )
+                },
+            )
             .when(self.new_menu, |d| {
                 d.child(
                     div()

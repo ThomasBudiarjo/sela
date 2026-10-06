@@ -138,6 +138,12 @@ def run():
             assert struct.unpack("<Q", body[16:24])[0] == seq
             assert body[24] == outcome, (body[24], outcome)
 
+        def mask(child, session, seq, layer, lane=1):
+            # MASK kind 5: layer 0 None, 1 Clear, 2 Black, 3 Logo; Safety lane.
+            body = session.to_bytes(16, "little") + struct.pack("<QBIB", seq, lane, 2000, layer)
+            assert len(body) == 30
+            write_all(child, struct.pack("<4sBBH", b"SCUE", 1, 5, len(body)) + body)
+
         def resource(child, session, seq, text="Signal café\nBeacon", font=None, budget=2000):
             font = (root / "tests/fixtures/DejaVuSans.ttf").read_bytes() if font is None else font
             version = (71).to_bytes(16, "little") + struct.pack("<Q", 13)
@@ -192,7 +198,7 @@ def run():
             raw = subprocess.check_output(["convert", str(output), "-depth", "8", "rgb:-"], env=env, timeout=5)
             return int(geom["WIDTH"]), int(geom["HEIGHT"]), raw
 
-        def capture(child, label, expected, receipt_seq, text=False):
+        def capture(child, label, expected, receipt_seq, text=False, cleared=False):
             # Allow the compositor to sample the submitted frame; this is not
             # scanout timing, a GPU wait, or evidence of every frame's visibility.
             time.sleep(0.15)
@@ -203,17 +209,19 @@ def run():
             # Check multiple interior points; center-only could miss a stale scene.
             pixels = []
             points = [(32, 32), (320, 180), (608, 327)]
-            if text:
+            if text or cleared:
                 points = [(100, 160), (320, 160), (540, 160), (100, 280), (320, 280), (540, 280)]
             for index, (x, y) in enumerate(points):
                 offset = (y * width + x) * 3
                 pixel = raw[offset:offset + 3]
-                wanted = expected[index] if text else expected
+                wanted = expected[index] if text or cleared else expected
                 assert all(abs(a - b) <= 2 for a, b in zip(pixel, wanted)), (label, list(pixel), wanted)
                 pixels.append(list(pixel))
+            white = sum(min(raw[i:i + 3]) >= 245 for i in range(0, len(raw), 3))
             if text:
-                white = sum(min(raw[i:i + 3]) >= 245 for i in range(0, len(raw), 3))
                 assert white > 100, ("no actual text coverage", white)
+            if cleared:
+                assert white == 0, ("text visible under Clear", white)
             history.append({"pid": child.pid, "capture": output.name, "confirmed_receipt_sequence": receipt_seq,
                             "expected_rgb": expected, "observed_rgb": pixels, "captured_unix_ns": time.time_ns(),
                             "rgb_sha256": hashlib.sha256(raw).hexdigest()})
@@ -276,6 +284,26 @@ def run():
             resource(child, epoch, 10, budget=1)
             ack(child, epoch, 10, 4)  # Transfer/queued preparation consumed budget.
             assert capture(child, "expired-retains-text-image", asymmetric, 5, text=True) == retained
+            # M0-08a masks over the text/image slide; Safety lane order is its own.
+            mask(child, epoch, 11, 1)
+            ack(child, epoch, 11, 0)
+            ack(child, epoch, 11, 1)
+            capture(child, "clear-keeps-image-background", asymmetric, 11, cleared=True)
+            mask(child, epoch, 12, 2)
+            ack(child, epoch, 12, 0)
+            ack(child, epoch, 12, 1)
+            capture(child, "black-mask", (0, 0, 0), 12)
+            mask(child, epoch, 13, 3)  # No logo was ever sent.
+            ack(child, epoch, 13, 0)
+            ack(child, epoch, 13, 7)
+            capture(child, "logo-without-logo-keeps-black", (0, 0, 0), 12)
+            mask(child, epoch, 12, 0)
+            ack(child, epoch, 12, 1)  # Applied duplicate, not a new unmask.
+            capture(child, "duplicate-mask-keeps-black", (0, 0, 0), 12)
+            mask(child, epoch, 14, 0)
+            ack(child, epoch, 14, 0)
+            ack(child, epoch, 14, 1)
+            assert capture(child, "unmask-restores-text-image", asymmetric, 14, text=True) == retained
             retire(child)
             new_epoch = epoch ^ 1  # Distinct within run; old child fully retired.
             if new_epoch == 0:

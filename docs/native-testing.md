@@ -116,6 +116,10 @@ window that takes focus fails the run. It finds the audience as the operator's
 child process window, compares screen captures of its client area after Go
 Live / Next / Previous, and checks that Live off and Ctrl+Q end the child. The
 audience monitor (`--monitor`, default `secondary`) must be unobstructed.
+Since M1-10c it also seeds a solid-color logo into the private profile, toggles
+Ctrl+B / Ctrl+C / Ctrl+L on and off over the live slide (checking the audience
+frame, the restored slide and the lit toolbar button from operator captures) and
+checks that a Logo left on returns after Live off/on.
 
 ## Upstream and accessibility
 

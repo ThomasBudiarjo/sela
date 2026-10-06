@@ -362,6 +362,16 @@ ordered pairs, triples, unreachable Black+Logo, Live double-click),
 `audience::tests::mask_overtakes_a_cue_waiting_for_preparation`,
 `audience::tests::layers_never_show_text_under_a_mask_or_a_wrong_extent`, and
 `tests/output_process.rs` (mask overtakes a cue, Logo mask needs a logo, failed
-logo keeps the previous one, lost session forgets masks). Not yet run: native
-capture that Black/Clear/Logo frames and operator indicators agree, and video
-logo (deferred to M2-03).
+logo keeps the previous one, lost session forgets masks). Video logo is
+deferred to M2-03.
+
+### Windows DX12 mask run — 2026-10-06 (UTC+7)
+
+`python scripts/native-cues.py --backend dx12 --out .amp\in\artifacts\native-cues-windows-masks`
+**PASS** on the same RTX 4060 Laptop. After the expired-cue case, MASK frames on
+the Safety lane run over the text/image slide: Clear (seq 11) keeps all six
+image cells with no white pixels; Black (12) is black; Logo (13) with no logo
+sent is RenderFailed and stays black; a duplicate of seq 12 returns Applied
+without a redraw; None (14) restores a frame byte-identical to the retained
+text/image capture. The operator side is checked by
+`scripts/live-output-windows.py`; see [operator shell](operator-shell.md#m1-10c--masks-and-picture-logo).

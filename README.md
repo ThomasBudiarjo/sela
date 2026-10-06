@@ -66,8 +66,8 @@ by the service UI.
 The [native cue diagnostic](docs/delivery.md) now tests bounded cross-process
 owned text/font/image commands, worker preparation/upload and native presentation
 receipts, including stale/failed/expired cue retention and restart without replay.
-The operator's Go Live uses the same renderer through `sela --audience`; Black/Clear/Logo
-are not implemented.
+The operator's Go Live and Black/Clear/Logo masks use the same renderer through
+`sela --audience`.
 [Verified backup/restore](docs/storage.md) is available through
 the storage worker API, not yet through an operator recovery interface.
 
@@ -81,8 +81,10 @@ editor; other resource libraries are not implemented. **Live ○ Off** starts th
 audience output on the secondary monitor (`SELA_AUDIENCE_MONITOR` picks another
 monitor index or `window`). Pick a song in Songs, a slide in Preview, then
 **Go Live**; Live shows only what the renderer confirmed on screen, and
-**‹ Previous / Next ›** step through the live song. Plain white-on-black text,
-no themes, schedule items or masks yet. `sela --operator-library PATH` opens the
+**‹ Previous / Next ›** step through the live song. **Logo / Black / Clear**
+(Ctrl+L/B/C; Page Down is Go Live) light up once the audience confirms them;
+Media → Images imports a picture and sets it as the logo. Plain white-on-black
+text, no themes or schedule items yet. `sela --operator-library PATH` opens the
 operator on another library. The opt-in
 [video diagnostic](docs/video-spike.md) checks original FFV1 frames through FFmpeg
 and GPU composition; it is not a production video player.

@@ -3,14 +3,17 @@
 Usage: python scripts/live-output-windows.py [--binary sela.exe] [--seed seed_library.exe]
        [--monitor secondary] [--out DIR]
 
-Seeds a new library with original fixture songs, launches the operator with a
-private profile, and drives it only by keyboard while asserting the operator
-keeps the foreground (no re-activation between keys). Checks: no audience before
-Live is on; the audience child appears on the requested monitor without taking
-focus; a new session shows nothing until Go Live; Go Live, Next (stopping at the
-last slide) and Previous change the captured audience output; Live off ends the
-child; Ctrl+Q exits cleanly and ends the child. Requires exclusive use of the
-keyboard and an unobstructed audience monitor while it runs.
+Seeds a new library with original fixture songs and an original logo image,
+launches the operator with a private profile, and drives it only by keyboard
+while asserting the operator keeps the foreground (no re-activation between
+keys). Checks: no audience before Live is on; the audience child appears on the
+requested monitor without taking focus; a new session shows nothing until Go
+Live (Page Down); Go Live, Next (stopping at the last slide) and Previous change
+the captured audience output; Ctrl+B shows black, Ctrl+C hides the text, Ctrl+L
+shows the logo, each with its operator button lit, and a second press restores
+the slide; a Logo mask survives Live off/on; Live off ends the child; Ctrl+Q
+exits cleanly and ends the child. Requires exclusive use of the keyboard and an
+unobstructed audience monitor while it runs.
 """
 
 from __future__ import annotations
@@ -33,8 +36,13 @@ import native_win as nw
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 AUDIENCE_TITLE = "Sela audience output"
 OPERATOR_TITLE = "Sela — Technical preview"
-# Operator tab order: controls 0-9, Live output, Go Live, Previous, Next, songs, slides.
-TABS_TO_FIRST_SONG = 15
+# Operator tab order: controls 0-9, Live output, Go Live, Previous, Next,
+# Logo, Black, Clear, songs, slides.
+TABS_TO_FIRST_SONG = 18
+# Original fixture logo: one opaque color, neither black nor text white.
+LOGO_RGB = (30, 110, 210)
+# Operator `MASK_ON` fill of an acknowledged mask button, as BGR.
+MASK_ON_BGR = (0xDC, 0xDF, 0xF6)
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -133,6 +141,40 @@ def ink_box(width: int, height: int, bgra: bytes) -> tuple[int, int, int, int] |
     return None if right < 0 else (left, top, right, bottom)
 
 
+def brightest(bgra: bytes) -> int:
+    return max(max(bgra[i : i + 3]) for i in range(0, len(bgra), 4 * 7))
+
+
+def center(width: int, height: int, bgra: bytes) -> tuple[int, int, int]:
+    i = ((height // 2) * width + width // 2) * 4
+    return bgra[i + 2], bgra[i + 1], bgra[i]
+
+
+def near(a: tuple[int, ...], b: tuple[int, ...], tolerance: int = 12) -> bool:
+    return all(abs(x - y) <= tolerance for x, y in zip(a, b))
+
+
+def lit_pixels(hwnd: int) -> int:
+    """Count acknowledged-mask fill pixels in the operator's toolbar band."""
+    width, height, bgra = nw.capture_client(hwnd)
+    band = min(height, round(44 * nw.dpi(hwnd) / 96))
+    count = 0
+    for y in range(0, band, 2):
+        row = y * width * 4
+        for x in range(0, width, 2):
+            if near(tuple(bgra[row + x * 4 : row + x * 4 + 3]), MASK_ON_BGR, 3):
+                count += 1
+    return count
+
+
+def seed_logo(profile: pathlib.Path) -> None:
+    images = profile / "Resources" / "Images"
+    images.mkdir(parents=True, exist_ok=True)
+    r, g, b = LOGO_RGB
+    nw.write_png(images / "sela-logo.png", 64, 36, bytes([b, g, r, 255]) * 64 * 36)
+    (profile / "logo.txt").write_text("sela-logo.png\n", encoding="utf-8")
+
+
 class Run:
     def __init__(self, operator: int, out: pathlib.Path, summary: dict):
         self.operator, self.out, self.summary = operator, out, summary
@@ -168,6 +210,60 @@ class Run:
         self.summary[f"{name}_ink_box"] = box
         return digest(hwnd)
 
+    def wait_lit(self, name: str, lit: bool, timeout: float = 2.0) -> None:
+        deadline = time.monotonic() + timeout
+        while (lit_pixels(self.operator) >= 20) != lit:
+            if time.monotonic() > deadline:
+                state = "lit" if lit else "unlit"
+                raise nw.Failure(f"{name}: operator mask button not {state}")
+            time.sleep(0.05)
+
+    def mask(self, screen: int, before: str, keys: str, name: str, check) -> None:
+        """Toggle a mask on, check the audience frame, then that its button is lit."""
+        sent = time.monotonic()
+        self.keys(keys)
+        while digest(screen) == before:
+            if time.monotonic() - sent > 3.0:
+                raise nw.Failure(f"{name}: audience output did not change within 3s")
+            time.sleep(0.02)
+        self.summary[f"{name}_observed_ms"] = round((time.monotonic() - sent) * 1000)
+        time.sleep(0.3)
+        width, height, pixels = self.save(screen, name)
+        check(name, width, height, pixels)
+        self.wait_lit(name, True)
+        self.save(self.operator, f"operator-{name}")
+
+    def unmask(self, screen: int, slide: str, keys: str, name: str) -> None:
+        """Toggle the mask off: the same slide frame returns and no button is lit."""
+        sent = time.monotonic()
+        self.keys(keys)
+        while digest(screen) != slide:
+            if time.monotonic() - sent > 3.0:
+                raise nw.Failure(f"{name}: the slide did not return within 3s")
+            time.sleep(0.02)
+        self.summary[f"{name}_restored_ms"] = round((time.monotonic() - sent) * 1000)
+        self.wait_lit(name, False)
+
+
+def is_black(name: str, width: int, height: int, bgra: bytes) -> None:
+    if brightest(bgra) > 16:
+        raise nw.Failure(f"{name}: the audience output is not black")
+
+
+def is_cleared(name: str, width: int, height: int, bgra: bytes) -> None:
+    # The fixture slides have a black background, so Clear looks like Black
+    # here; Clear over an image background is checked by native-cues.py.
+    if ink_box(width, height, bgra) is not None:
+        raise nw.Failure(f"{name}: slide text is still visible")
+
+
+def is_logo(name: str, width: int, height: int, bgra: bytes) -> None:
+    seen = center(width, height, bgra)
+    if not near(seen, LOGO_RGB):
+        raise nw.Failure(f"{name}: audience center is {seen}, not the logo {LOGO_RGB}")
+    if ink_box(width, height, bgra) is not None:
+        raise nw.Failure(f"{name}: slide text is visible over the logo")
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -197,6 +293,7 @@ def main() -> int:
     data = pathlib.Path(tempfile.mkdtemp(prefix="sela-live-"))
     library = data / "library.sqlite"
     subprocess.run([str(args.seed), str(library)], check=True)
+    seed_logo(data)
     os.environ["SELA_AUDIENCE_MONITOR"] = args.monitor
     app = nw.App(args.binary, ["--operator-library", str(library)])
     spawned: set[int] = set()
@@ -217,8 +314,9 @@ def main() -> int:
         if audience(app.process.pid, 0.5):
             raise nw.Failure("an audience output exists before Live output is on")
 
-        # Slide 0 -> song 0 -> Next -> Previous -> Go Live -> Live output.
-        run.keys(*["shift+tab"] * 5, "enter")
+        # Slide 0 -> song 0 -> Clear, Black, Logo -> Next -> Previous -> Go Live
+        # -> Live output.
+        run.keys(*["shift+tab"] * 8, "enter")
         started = time.monotonic()
         found = audience(app.process.pid, 15)
         if not found:
@@ -238,10 +336,10 @@ def main() -> int:
         run.save(operator, "operator-live-on")
 
         blank = digest(screen)
-        run.keys("tab")  # Go Live
-        first = run.change(screen, blank, "enter", "go_live")
+        # Page Down is Go Live from any non-text control (EW8-OBS-018).
+        first = run.change(screen, blank, "pagedown", "go_live")
         run.save(operator, "operator-go-live")
-        run.keys("tab", "tab")  # Next
+        run.keys("tab", "tab", "tab")  # Next
         second = run.change(screen, first, "enter", "next_1")
         third = run.change(screen, second, "enter", "next_2")
         run.keys("enter")
@@ -255,6 +353,16 @@ def main() -> int:
             raise nw.Failure("Previous did not restore the second slide's output")
         run.save(operator, "operator-previous")
 
+        # Masks on the real renderer, each from the unmasked slide.
+        run.mask(screen, back, "ctrl+b", "black", is_black)
+        run.unmask(screen, back, "ctrl+b", "black_off")
+        run.mask(screen, back, "ctrl+c", "clear", is_cleared)
+        run.unmask(screen, back, "ctrl+c", "clear_off")
+        run.mask(screen, back, "ctrl+l", "logo", is_logo)
+        run.unmask(screen, back, "ctrl+l", "logo_off")
+        # Leave Logo on: it must come back in the next session (EW8-OBS-017).
+        run.mask(screen, back, "ctrl+l", "logo_again", is_logo)
+
         run.keys("shift+tab", "shift+tab", "enter")  # Live output off
         if not wait_dead(pid, 5):
             raise nw.Failure("Live output off did not end the audience child")
@@ -267,10 +375,17 @@ def main() -> int:
             raise nw.Failure("no audience window after turning Live output back on")
         pid, screen = found
         spawned.add(pid)
-        time.sleep(1.5)
+        deadline = time.monotonic() + 5
+        while not near(center(*nw.capture_client(screen)), LOGO_RGB):
+            if time.monotonic() > deadline:
+                raise nw.Failure("the Logo mask did not return in the new session")
+            time.sleep(0.05)
+        time.sleep(0.3)
         width, height, pixels = run.save(screen, "audience-second-session")
         if ink_box(width, height, pixels) is not None:
             raise nw.Failure("a new output session replayed an earlier slide")
+        run.wait_lit("second_session_logo", True)
+        summary["logo_survived_live_off"] = True
 
         run.keys("ctrl+q")
         summary["operator_exit"] = app.wait_exit()
@@ -282,7 +397,9 @@ def main() -> int:
         summary["status"] = "PASS"
         print(
             "PASS: Live on spawns a non-activating audience, Go Live/Next/Previous change it, "
-            "Next stops at the end, new sessions start empty, Live off and Ctrl+Q end it"
+            "Next stops at the end, Black/Clear/Logo show and restore with lit buttons, "
+            "Logo survives Live off/on, new sessions replay no slide, Live off and "
+            "Ctrl+Q end it"
         )
         return 0
     except (nw.Failure, AssertionError) as error:
