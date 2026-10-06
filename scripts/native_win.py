@@ -18,6 +18,7 @@ from pathlib import Path
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 # Physical-pixel coordinates for every call below.
 user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
@@ -34,6 +35,9 @@ user32.SetForegroundWindow.argtypes = [w.HWND]
 user32.GetWindow.argtypes = [w.HWND, w.UINT]
 user32.GetWindow.restype = w.HWND
 user32.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+user32.GetWindowThreadProcessId.restype = w.DWORD
+user32.AttachThreadInput.argtypes = [w.DWORD, w.DWORD, w.BOOL]
+user32.BringWindowToTop.argtypes = [w.HWND]
 user32.GetClientRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
 user32.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
 user32.ClientToScreen.argtypes = [w.HWND, ctypes.POINTER(w.POINT)]
@@ -120,7 +124,10 @@ def top_windows(pid: int) -> list[int]:
         owner = w.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
         if owner.value == pid and user32.IsWindowVisible(hwnd) and not user32.GetWindow(hwnd, 4):
-            found.append(int(hwnd))
+            # winit keeps a visible, unowned 0x0 helper window; it is never a target.
+            rect = w.RECT()
+            if user32.GetClientRect(hwnd, ctypes.byref(rect)) and rect.right > rect.left and rect.bottom > rect.top:
+                found.append(int(hwnd))
         return True
 
     user32.EnumWindows(WNDENUMPROC(visit), 0)
@@ -134,13 +141,26 @@ def title(hwnd: int) -> str:
 
 
 def activate(hwnd: int) -> None:
-    for _ in range(30):
+    for attempt in range(30):
         if user32.GetForegroundWindow() == hwnd:
             return
-        # A zero-motion injected event makes this process the last input source,
-        # which Windows requires before honoring SetForegroundWindow.
-        _send([INPUT(type=0)])
-        user32.SetForegroundWindow(hwnd)
+        if attempt < 10:
+            # A zero-motion injected event makes this process the last input source,
+            # which Windows requires before honoring SetForegroundWindow.
+            _send([INPUT(type=0)])
+            user32.SetForegroundWindow(hwnd)
+        else:
+            # Fallback: share the current foreground thread's input state briefly.
+            foreground = user32.GetForegroundWindow()
+            theirs = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
+            ours = kernel32.GetCurrentThreadId()
+            attached = bool(theirs) and theirs != ours and user32.AttachThreadInput(ours, theirs, True)
+            try:
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+            finally:
+                if attached:
+                    user32.AttachThreadInput(ours, theirs, False)
         time.sleep(0.1)
     raise Failure(f"window {hwnd:#x} never became foreground")
 
@@ -209,6 +229,12 @@ def capture_client(hwnd: int) -> tuple[int, int, bytes]:
         gdi32.DeleteObject(bitmap)
         gdi32.DeleteDC(memory)
         user32.ReleaseDC(None, screen)
+
+
+def bgra_to_rgb(bgra: bytes) -> bytes:
+    rgb = bytearray(len(bgra) // 4 * 3)
+    rgb[0::3], rgb[1::3], rgb[2::3] = bgra[2::4], bgra[1::4], bgra[0::4]
+    return bytes(rgb)
 
 
 def write_png(path: Path, width: int, height: int, bgra: bytes) -> None:

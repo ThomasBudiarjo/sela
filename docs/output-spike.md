@@ -152,13 +152,94 @@ success summary or temporary-runtime leaks. Whole-project build/test/clippy/fmt
 and native bootstrap smoke passed after both worktree merges. CI now includes
 example tests via `--all-targets`; remote CI itself has not been run.
 
+## Windows DX12 physical-display evidence — 2026-10-06 (UTC+7), debug build
+
+Host: Windows 11 Home, i7-14650HX, Intel UHD Graphics (32.0.101.6790) and RTX
+4060 Laptop (32.0.15.9159). winit reported three physical monitors:
+
+| Index | Physical size and origin | Scale | Refresh | Name |
+| --- | --- | --- | --- | --- |
+| 0 (primary) | 2560x1440 at 0,0 | 1.25 | 180 Hz | `\\.\DISPLAY5` |
+| 1 (laptop panel) | 2560x1600 at -2560,-146 | 1.75 | 165 Hz | `\\.\DISPLAY1` |
+| 2 | 1920x1080 at 2560,355 | 1.00 | 180 Hz | `\\.\DISPLAY6` |
+
+**Caveat:** the owner was playing a game during the run. GPU contention and
+any keyboard input are uncontrolled, so these are feasibility observations,
+not timing qualification.
+
+Opt-in audience environment (unset preserves the Linux behavior above):
+`SELA_SPIKE_MONITOR=<index>` places the window on a specific monitor, with no
+fallback; `SELA_SPIKE_FULLSCREEN=1` makes it borderless fullscreen there;
+`SELA_SPIKE_SECONDS` sets the self-deadline, 25s by default, clamped to
+1–600s; and wgpu's `WGPU_POWER_PREF=low|high` selects the adapter. The
+audience logs the monitor list, its current monitor whenever that changes,
+`scale_factor` events and the surface format, present mode and frame latency.
+
+```powershell
+cargo build --locked --example output_spike
+python scripts/output-spike-windows.py .amp\in\artifacts\output-spike-windows
+```
+
+The supervisor (`scripts/output-spike-windows.py`, Win32 helpers in
+`scripts/native_win.py`) first probes monitors. It places the DX12 audience on
+the first non-primary monitor (here monitor 1 at 175%) and the GPUI operator on
+the primary monitor, then repeats the Linux sequence with the same assertions.
+It also adds the phases below. Result: **PASS** for all three phases.
+
+- Main phase (RTX 4060, default preference): stalls of 100/100/500/2000/100ms
+  had 5/6/30/118/6 audience present calls inside them, with a maximum
+  boundary-inclusive gap of 17.97ms during the 2s stall. During the 2s worker
+  preparation, the maximum gap was 18.05ms; duplicate preparation was rejected,
+  and the operator's Ctrl+1 ran inside it. The queued action ran only after the
+  2s stall ended, so operator controls are still not responsive during a stall.
+  After a clean exit the audience made 224 more present calls, and 60 after
+  `TerminateProcess` of a second operator. 949 calls; interval p50/p95/p99/max
+  17.03/17.61/18.36/48.25ms.
+- Mixed-DPI move: the driver moved the audience to the primary monitor (125%)
+  and back (175%). winit emitted `scale_factor` 1.75→1.25→1.75, `monitor_current`
+  tracked DISPLAY1→DISPLAY5→DISPLAY1, and the client went 1120x630→800x450→1120x630
+  (640x360 logical at each scale). Maximum gap in the 1.5s after each move was
+  17.73 and 18.10ms. A Win32 resize to 600x320 physical settled correctly.
+- Borderless fullscreen on monitor 1: client exactly 2560x1600; during a 2s
+  operator stall the maximum gap was 17.89ms (117 calls); p50/p99/max
+  17.03/18.25/20.01ms over 365 calls; Alt+F4 exited 0.
+- Adapter preference by monitor (6s windowed runs, first second excluded):
+  `low` selected Intel UHD and `high` the RTX 4060 on all three monitors. Every
+  cell had p50 ≈17.03ms and max ≤18.11ms. This run predates the switch from a
+  Sela-specific variable to `WGPU_POWER_PREF`; re-run it with the current driver.
+
+Inspected captures: `stall-a`/`stall-b` show the yellow triangle in different
+positions during the 2s UI stall; `fullscreen-stall` fills the 2560x1600 panel;
+`after-kill` still shows the triangle animating. Captures are GDI screen BitBlts
+of the DWM-composed desktop, so they are not scanout evidence.
+
+Findings that constrain the production renderer:
+
+- wgpu's default surface config on DX12 picked **Mailbox** with frame latency 2.
+  Presentation is paced by the 16.667ms software timer, not display refresh,
+  so on 165/180Hz panels the cadence cannot match scanout and frames are
+  repeated unevenly. Production needs an explicit present mode (Fifo or a
+  measured alternative) and pacing derived from the target output's refresh.
+- Measured intervals are present-call timestamps. DXGI frame statistics, actual
+  scanout, presented-frame drops and photon latency were not measured.
+- winit creates a visible, unowned 0x0 helper window per process. Win32
+  automation must skip it; the first driver run targeted it by mistake.
+- Cross-adapter presentation (Intel rendering to NVIDIA-attached displays or
+  the reverse) worked without errors, but its copy cost is unmeasured.
+
+Not run: physical display hotplug/unplug, sleep/resume, surface or device loss
+(TDR), exclusive fullscreen, HDR, multi-hour soak, and the M0-02 reference
+comparison. Sela never changes Windows display topology automatically; a
+hotplug run needs the owner to physically unplug and replug a monitor while the
+audience runs with a long `SELA_SPIKE_SECONDS`.
+
 ## Gate / next action
 
-GO for continuing independent-process feasibility work; **NO-GO for production
-backend/full workspace qualification**. Windows physical dual-monitor mixed-DPI,
-fullscreen, display hotplug, device/surface recovery, actual scanout timing,
-text-over-video, real resource preparation and production command/lifecycle protocol are
-unrun. Run this example on authorized Windows DX12 hardware (set backend dx12,
-launch two modes under an owning supervisor), instrument stalls and exit with
-physical capture, then extend M0-04 evidence. Do not mark parent done or M0-10
-passed from Linux virtual GL evidence.
+GO for the separate-process winit/wgpu audience boundary: on real Windows DX12
+hardware, output continued through UI stalls, worker preparation, operator exit
+and kill, mixed-DPI moves and borderless fullscreen, on both GPUs.
+**NO-GO for production backend/full workspace qualification** until display
+hotplug, device/surface loss recovery, explicit present-mode and refresh pacing,
+scanout-level timing, and a soak on an idle machine are executed. Next: run the
+hotplug case with the owner, add a DXGI-loss/TDR injection plan, and choose the
+production present mode with measured evidence. M0-10 remains open.

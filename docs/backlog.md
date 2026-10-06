@@ -270,8 +270,11 @@ Acceptance: real Windows evidence for independence, or a documented failing spik
 and follow-up architecture work. A render thread alone is not crash isolation.
 
 Linux partial evidence: [output-spike.md](output-spike.md), implemented-unqualified.
-UI stalls, bounded delayed preparation, clean exit and SIGKILL measured;
-Windows physical gate remains open. Preparation is synthetic latency injection,
+UI stalls, bounded delayed preparation, clean exit and SIGKILL measured.
+Windows DX12 (2026-10-06) passed stalls, preparation, exit/kill, mixed-DPI moves
+across three physical monitors, resize, borderless fullscreen and Intel/NVIDIA
+selection. Hotplug, device loss, present-mode/refresh pacing and idle-machine
+timing remain open, so both remaining boxes stay unchecked. Preparation is synthetic latency injection,
 not production decoding or prepared-scene ownership.
 
 ### M0-05 — Framework-independent scene and preparation contracts
@@ -330,6 +333,8 @@ font/GPU readback. [Video diagnostic](video-spike.md) establishes a software
 FFV1/RGBA copy path. M0-07d now renders worker-prepared explicit-font text over
 asymmetric images on a native surface, with receipt-correlated retention checks.
 Resized-output preparation, transitions, production budgets and hardware remain open.
+Windows DX12 composition and video readback passed on Intel UHD and RTX 4060
+(2026-10-06); the native cue driver is ported to Win32 but not yet run there.
 
 - [x] Render text over solid color and still images with explicit logical/physical
   coordinates, aspect fit/crop, alpha and color-space assumptions.

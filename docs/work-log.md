@@ -9,8 +9,13 @@ include timezone for timed hardware/rehearsal evidence.
 - **Windows host available (2026-10-06):** Windows 11 Home, i7-14650HX, Intel UHD
   + RTX 4060 Laptop, three displays at mixed scale. M0-01 is **done**: locked
   Windows build/clippy/fmt/tests pass and the native operator window passes the
-  Win32 smoke. Windows exposed and fixed a backup durability bug (M1-01). Next:
-  M0-04 audience spike on DX12 with physical displays, then M0-07 GPU checks.
+  Win32 smoke. Windows exposed and fixed a backup durability bug (M1-01).
+  M0-04 DX12 audience spike passed on physical displays (stalls, preparation,
+  exit/kill, mixed-DPI moves, fullscreen, both GPUs) while the owner was gaming;
+  hotplug/device loss/present pacing remain open. M0-07 composition/video
+  readback passed on DX12 for Intel and NVIDIA. Next: run
+  `python scripts/native-cues.py --backend dx12` and the adapter matrix rerun
+  when the owner's machine is idle, then hotplug with the owner present.
   EasyWorship 8.0.49 is not installed, so M0-02 remains blocked.
 - All three Oracle findings fixed: M1-05 pending native-input ownership, M0-07d
   preparation backpressure ordering, and M0-06 disconnected receipt invalidation.
@@ -71,7 +76,7 @@ remain `planned`. Update the current state above when switching work.
 | M0-01 | done | Pinned native GPUI window, lockfile, CI and instructions; Linux and Windows 11 build/test/native launch/resize/quit verified (2026-10-06). |
 | M0-02 | blocked | Public-source ledger and executable observation runbook; lawful installed 8.0.49/Windows access missing, zero installed observations. |
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
-| M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, bounded synthetic slow preparation and clean/forced operator exit; Windows physical qualification open. |
+| M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, synthetic preparation and operator exit/kill on Linux and Windows DX12 physical displays, incl. mixed-DPI moves, fullscreen, both GPUs; hotplug, device loss, present pacing open. |
 | M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
 | M0-06 | implemented-unqualified | Ordered bounded native owned-resource IPC/receipts and failure/expiry retention; production safety coordination/supervision and reference mask semantics open. |
 | M0-07 | implemented-unqualified | Explicit-font/image native worker preparation/submission plus static/FFV1 GPU readback; resized output, transitions, performance and physical qualification open. |
@@ -1800,3 +1805,54 @@ PY
 - Next: M0-04 Windows run of `examples/output_spike.rs` on a second physical
   display with DX12; then M0-07 composition/video/native cue checks on DX12.
 - Delivery: local `fix(M1-01)` and `feat(M0-01)` commits; no push.
+
+### M0-04 / M0-07 — Windows DX12 physical-display and GPU readback — 2026-10-06 (UTC+7)
+
+- State: both **implemented-unqualified**; no checklist box closed.
+  Evidence detail and tables: output-spike.md (Windows section),
+  composition-spike.md and video-spike.md. Same host as the M0-01 record.
+- Owner was playing a game throughout. Timing is under uncontrolled GPU load
+  and possible concurrent input; treat it as feasibility, not qualification.
+- Changes: `examples/output_spike.rs` opt-in `SELA_SPIKE_MONITOR`,
+  `SELA_SPIKE_FULLSCREEN`, `SELA_SPIKE_SECONDS` (default 25s, clamp 1..600) and
+  wgpu `WGPU_POWER_PREF`, plus monitor/scale/surface telemetry; defaults keep
+  the Linux path unchanged. `composition/gpu.rs` and `native_cues.rs` also honor
+  `WGPU_POWER_PREF`; `video_spike` gained the optional backend argument.
+  New `scripts/output-spike-windows.py`; `native_win.py` skips winit's visible
+  0x0 helper window and falls back to AttachThreadInput for foreground.
+  `scripts/native-cues.py` is now cross-platform: reader/writer threads replace
+  select/nonblocking pipes, Win32 BitBlt capture on Windows, and a single
+  raw-RGB sampler for both platforms. Its Linux path was not re-executed.
+- Driver failures before the pass: (1) targeted winit's 0x0 helper window, so
+  moves/captures/Alt+F4 hit the wrong HWND (65-byte PNGs, no scale events);
+  fixed by skipping zero-area windows and matching the audience title within
+  the PID. (2) Twice the operator never became foreground; added the
+  AttachThreadInput fallback and a 1s settle before fullscreen-phase input.
+- `python scripts/output-spike-windows.py` PASS (main, fullscreen, adapter
+  matrix). Main: 949 presents, p50/p95/p99/max 17.03/17.61/18.36/48.25ms; 2s stall
+  118 presents with a 17.97ms maximum gap; preparation gap 18.05ms; 224/60
+  presents after exit/kill. Moves 175%→125%→175% emitted scale 1.75/1.25/1.75,
+  client 1120x630/800x450/1120x630, maximum gaps 17.73/18.10ms. Fullscreen
+  2560x1600 on the laptop panel, 2s stall gap 17.89ms. Matrix: low=Intel UHD,
+  high=RTX 4060 on all three monitors, p50≈17.03ms, max ≤18.11ms (run with the
+  earlier `SELA_SPIKE_POWER` name; rerun pending with `WGPU_POWER_PREF`).
+- Inspected stall-a/stall-b (triangle moved during the stall), fullscreen-stall,
+  after-kill under `.amp/in/artifacts/output-spike-windows/`.
+- M0-07: `composition_spike <out> dx12` PASS with WGPU_POWER_PREF low (Intel)
+  and high (NVIDIA); `video_spike <out> dx12` PASS on both, plus `vulkan` on NVIDIA,
+  with FFmpeg 7.1.1 gyan.dev full build. Inspected `image-contain.png`.
+- Findings: wgpu default DX12 present mode was Mailbox (latency 2) with
+  timer pacing. That cannot match 165/180Hz scanout, so production must choose
+  the present mode and pacing explicitly. Present-call timing is not scanout.
+- Checks after changes: ruff on all seven Python scripts, `cargo fmt --check`,
+  strict all-target clippy, `cargo test --locked --all-targets` 112 passed /
+  1 ignored. All passed.
+- Not run: `native-cues.py --backend dx12` and the matrix rerun (both open
+  windows that can take focus from the owner's game), display hotplug (needs the
+  owner to unplug a monitor), device loss/TDR, sleep/resume, DXGI frame
+  statistics, idle-machine soak, Linux re-execution of the refactored cue driver.
+- Next: when the machine is idle run
+  `python scripts/native-cues.py --backend dx12 --out .amp\in\artifacts\native-cues-windows`
+  and `python scripts/output-spike-windows.py`; then a hotplug run with
+  `SELA_SPIKE_SECONDS=120` while the owner unplugs/replugs monitor 2.
+- Delivery: local `feat(M0-04)` and `feat(M0-07)` commits; no push.

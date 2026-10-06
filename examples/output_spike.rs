@@ -89,7 +89,7 @@ impl Render for Operator {
                 else { "Prepare with 2s delay · Ctrl+P" }
             ))
             .child(div().id("exit").on_click(cx.listener(|_, _, _, cx| { stamp("operator_exit"); cx.quit(); })).child("Exit operator · Ctrl+Q"))
-            .child("Audience: close its titlebar to stop; automatic 25s deadline. Driver owns both processes.")
+            .child("Audience: close its titlebar to stop; automatic deadline (25s default). Driver owns both processes.")
     }
 }
 struct Gpu {
@@ -105,21 +105,69 @@ struct Audience {
     start: Instant,
     next: Instant,
     frames: u64,
+    deadline: Duration,
+    monitor: Option<String>,
+}
+fn describe(m: &winit::monitor::MonitorHandle) -> String {
+    let (p, s) = (m.position(), m.size());
+    // Name last: platform monitor names may contain spaces.
+    format!(
+        "{}x{}+{}+{} scale {} refresh_mhz {} {}",
+        s.width,
+        s.height,
+        p.x,
+        p.y,
+        m.scale_factor(),
+        m.refresh_rate_millihertz().unwrap_or(0),
+        m.name().unwrap_or_default()
+    )
+}
+impl Audience {
+    fn note_monitor(&mut self) {
+        let Some(g) = &self.gpu else { return };
+        let Some(m) = g.window.current_monitor() else {
+            return;
+        };
+        let name = m.name();
+        if name != self.monitor {
+            stamp(&format!("monitor_current {}", describe(&m)));
+            self.monitor = name;
+        }
+    }
 }
 impl ApplicationHandler for Audience {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gpu.is_some() {
             return;
         }
-        let window = Arc::new(
-            el.create_window(
-                NativeWindow::default_attributes()
-                    .with_title("Sela audience spike")
-                    .with_inner_size(winit::dpi::LogicalSize::new(640., 360.))
-                    .with_position(winit::dpi::LogicalPosition::new(800., 100.)),
-            )
-            .unwrap(),
-        );
+        let monitors: Vec<_> = el.available_monitors().collect();
+        for (i, m) in monitors.iter().enumerate() {
+            stamp(&format!("monitor {i} {}", describe(m)));
+        }
+        // Explicit opt-in placement; no silent fallback to another display.
+        let target = std::env::var("SELA_SPIKE_MONITOR").ok().map(|v| {
+            let index: usize = v.parse().expect("SELA_SPIKE_MONITOR must be an index");
+            monitors
+                .get(index)
+                .cloned()
+                .expect("SELA_SPIKE_MONITOR out of range")
+        });
+        let fullscreen = std::env::var_os("SELA_SPIKE_FULLSCREEN").is_some();
+        let attributes = NativeWindow::default_attributes()
+            .with_title("Sela audience spike")
+            .with_inner_size(winit::dpi::LogicalSize::new(640., 360.));
+        let attributes = match target {
+            Some(m) if fullscreen => {
+                attributes.with_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(m))))
+            }
+            Some(m) => attributes.with_position(winit::dpi::PhysicalPosition::new(
+                m.position().x + 100,
+                m.position().y + 100,
+            )),
+            None if fullscreen => panic!("SELA_SPIKE_FULLSCREEN requires SELA_SPIKE_MONITOR"),
+            None => attributes.with_position(winit::dpi::LogicalPosition::new(800., 100.)),
+        };
+        let window = Arc::new(el.create_window(attributes).unwrap());
         let backend = match std::env::var("SELA_SPIKE_BACKEND")
             .as_deref()
             .unwrap_or("gl")
@@ -133,8 +181,10 @@ impl ApplicationHandler for Audience {
             backends: backend,
             ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(el.owned_display_handle()))
         });
+        let power_preference = wgpu::PowerPreference::from_env().unwrap_or_default();
         let surface = instance.create_surface(window.clone()).unwrap();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference,
             compatible_surface: Some(&surface),
             ..Default::default()
         }))
@@ -147,6 +197,13 @@ impl ApplicationHandler for Audience {
             .get_default_config(&adapter, s.width.max(1), s.height.max(1))
             .unwrap();
         surface.configure(&device, &config);
+        stamp(&format!(
+            "surface {:?} {:?} {:?} latency {}",
+            config.format,
+            config.present_mode,
+            config.alpha_mode,
+            config.desired_maximum_frame_latency
+        ));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl("@vertex fn vs(@builtin(vertex_index) i:u32)->@builtin(position) vec4f { var p=array<vec2f,3>(vec2f(-1,-1),vec2f(1,-1),vec2f(0,1)); return vec4f(p[i],0,1); } @fragment fn fs()->@location(0) vec4f { return vec4f(1,0.7,0.1,1); }".into()) });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
@@ -177,8 +234,17 @@ impl ApplicationHandler for Audience {
             config,
             pipeline,
         });
+        self.note_monitor();
     }
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        match &event {
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                stamp(&format!("scale_factor {scale_factor}"));
+                self.note_monitor();
+            }
+            WindowEvent::Moved(_) => self.note_monitor(),
+            _ => {}
+        }
         let Some(g) = self.gpu.as_mut() else {
             return;
         };
@@ -268,7 +334,7 @@ impl ApplicationHandler for Audience {
         }
     }
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
-        if self.start.elapsed() >= Duration::from_secs(25) {
+        if self.start.elapsed() >= self.deadline {
             stamp("audience_deadline");
             el.exit();
             return;
@@ -298,6 +364,14 @@ fn main() {
         }
     });
     if std::env::args().any(|a| a == "--audience") {
+        // Longer soaks are opt-in and still self-terminate; 600s bounds a lost supervisor.
+        let seconds = std::env::var("SELA_SPIKE_SECONDS")
+            .map(|v| {
+                v.parse::<u64>()
+                    .expect("SELA_SPIKE_SECONDS must be an integer")
+            })
+            .unwrap_or(25)
+            .clamp(1, 600);
         let now = Instant::now();
         EventLoop::new()
             .unwrap()
@@ -306,6 +380,8 @@ fn main() {
                 start: now,
                 next: now,
                 frames: 0,
+                deadline: Duration::from_secs(seconds),
+                monitor: None,
             })
             .unwrap();
     } else {
