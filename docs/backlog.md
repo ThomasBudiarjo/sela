@@ -524,9 +524,12 @@ Follow-ups:
   frame; native replay in `scripts/song-editor-windows.py`. Open: full-theme
   thumbnails (M1-05g/h), Slides keyboard navigation, drag reorder,
   installed-reference confirmation.
-- M1-05g Per-song text formatting (font, auto/fixed size, color, B/I/U,
-  shadow, outline, alignment; EW8-OBS-026 provisional). Schema change with a
-  verified backup. Planned.
+- M1-05g Song text formatting (font, auto/fixed size, color, B/I/U,
+  shadow, outline, alignment). Observed in RUN-W06G (EW8-OBS-027–033): Format
+  inspector Text › Style/Layout controls, theme defaults, and **per-slide**
+  scope in 8.0.49 (an "apply to all slides" path was not observed). Schema
+  change with a verified backup. Planned; scope (per slide as observed, or per
+  song first) needs the owner's decision.
 - M1-05h Per-song background (color or Media image) saved with the revision.
   Planned.
 - M1-05i Library right-click New Song…/Edit Song…/Delete in the operator

@@ -6,6 +6,15 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **EasyWorship Format pane observed (RUN-W06G, 2026-10-06):** the owner's
+  restarted 8.0.49 accepted toolbar clicks, so the Format inspector was recorded
+  (EW8-OBS-027–033, superseding unverified EW8-OBS-026): Text › Style (font,
+  Auto/fixed size, color, B/I/U, super/subscript, indent, alignment, outline,
+  shadow, bullets), Text › Layout (margins, auto sizing with normalize, wrap,
+  capitalization), Style, Arrange and the Slide pane (background, for M1-05h).
+  Formatting applies **per slide** in EW. Owner chose to stay on EW8 rather
+  than switch the reference to EW7. Next: M1-05g after the owner picks the
+  formatting scope.
 - **Song Editor Slides tab (M1-05f, 2026-10-06):** Slides shows rendered
   thumbnails (the preview raster box-filtered to 320×180 off the UI thread,
   bounded text-keyed cache) with label-kind caption bars or grey italic
@@ -2331,3 +2340,28 @@ PY
 - Next: M1-05g per-song text formatting (font, auto/fixed size, color, B/I/U,
   shadow, outline, alignment), following the EW help as provisional
   (EW8-OBS-026), with a schema change behind the verified-backup gate.
+
+### M0-02 / RUN-W06G — EasyWorship Format pane observation — 2026-10-06 (UTC+7)
+
+- State: observation only, no code. Owner asked to retry observing the Format
+  panel before M1-05g. RUN-W06G recorded EW8-OBS-027–033 in
+  reference-observations.md; EW8-OBS-026 is superseded. Nothing was saved in
+  EasyWorship (every editor session closed with Cancel → No).
+- Retry findings: the editor opened by the driver ignored all toolbar input
+  again (`mouse_event`, held `SendInput`, `PostMessage`, touch injection;
+  `HTCLIENT` hit test, no overlay, UIA shows only the preview child). After the
+  owner restarted EW and reopened the editor, toolbar clicks worked. Remaining
+  synthetic-input quirks (toolbar hit area over the pane's tab row; B/I/U clicks
+  reopening the font list) are recorded as tooling caveats, not behavior.
+- Owner suggested switching the reference to EasyWorship 7; recommendation was
+  to keep the pinned 8.0.49 (all prior observations and the compatibility
+  target are EW8; EW7 would mix builds). The owner continued on EW8.
+- Key result for M1-05g: formatting is per slide in 8.0.49 (Shadow → None on
+  slide 1 left slide 3 unchanged and persisted across slide switches). The
+  Slide pane (EW8-OBS-032) covers the M1-05h background controls.
+- Not observed: applying formatting to all slides at once, Reset Styles,
+  Masters, what Apply/OK saves, schedule/live rendering of a formatted song,
+  click behavior of B/I/U and the font list (only read from captures).
+- Next: owner decides M1-05g scope (per slide as observed, or per song first
+  as a recorded deviation), then implement with the schema change behind the
+  verified-backup gate.

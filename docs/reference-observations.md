@@ -369,7 +369,42 @@ in a combined state is provisional (EW8-OBS-020). Output off keeps mask state.
 | EW8-OBS-023 | observed (RUN-W06E) | Editing: a new song focuses slide 1's label. Clicking text places the caret and selects that slide; the preview shows the caret's slide and updates per keystroke. Enter inserts a line in the same slide; a blank line does not split. Ctrl+Enter splits at the caret: the text after it becomes a new unlabeled slide right after (same group), the line break before the caret is dropped, the caret moves to the new slide, slides renumber. Down from a label moves into its lyrics, Up from the first lyric line into the label. Typing a label on an unlabeled slide starts a new group there. The Words + appends an empty slide as its own group and selects it; an empty slide previews as "Double click to edit song". Ctrl+Z undoes in typing groups. Cancel with changes asks Yes/No/Cancel (EW8-OBS-012). |
 | EW8-OBS-024 | observed (RUN-W06E) | Slides tab: narrower left pane, vertical list of rendered slide thumbnails with the number at the left and a caption bar below each one, filled with the label kind color and showing the label, or "Slide N" (grey italic) when unlabeled; the selected slide has a blue rounded frame. |
 | EW8-OBS-025 | observed (RUN-W06E) | Canvas: single-click on the song text selects its text box (covers the whole slide; eight handles and a rotate handle); double-click enters in-place text editing with a caret. Right-click on the box: Edit Points, Bring to Front, Send to Back, Align Elements ▸, Distribute Elements ▸, Cut, Copy, Paste, Paste Without Formatting, Duplicate, Lock, Reapply Layout to Element. |
-| EW8-OBS-026 | unverified | Toolbar buttons (Title field, Media ▾, Format) ignored synthetic `mouse_event` and absolute `SendInput` clicks, so Format/Animate/Presentation panels, font, size, color, style, alignment and background controls were not observed. Help "Edit a Song" (help.easyworship.com, © 2026, build not stated) documents font selector, auto sizing, font size, color, Bold/Italic/Underline/Shadow/Outline, horizontal and vertical alignment, indent, Reset Styles, Theme, Masters tab and Inspector background fill per song or slide. Needs the owner to click, or another input path. |
+| EW8-OBS-026 | superseded (RUN-W06G) | Toolbar buttons (Title field, Media ▾, Format) ignored synthetic `mouse_event` and absolute `SendInput` clicks, so Format/Animate/Presentation panels, font, size, color, style, alignment and background controls were not observed. Help "Edit a Song" (help.easyworship.com, © 2026, build not stated) documents font selector, auto sizing, font size, color, Bold/Italic/Underline/Shadow/Outline, horizontal and vertical alignment, indent, Reset Styles, Theme, Masters tab and Inspector background fill per song or slide. Needs the owner to click, or another input path. |
+
+## RUN-W06G-2026-10-06 — Song Editor Format pane (partial W06)
+
+- Date/observer: 2026-10-06 ~18:50–19:40 +07:00, Droid agent on the owner's
+  machine with the owner's authorization; same install and host as RUN-W06E.
+  The owner restarted EasyWorship and reopened the editor during the run; the
+  editor was used at 1292x750 and maximized (2578x1398 physical, 120 DPI).
+- Fixture: the owner's placeholder song "waeqwe". Every editor session was
+  closed with Cancel → No (Yes/No/Cancel "You have unsaved changes…"); nothing
+  was saved.
+- Method: the RUN-W06E local driver plus local probes (`.amp/in/explore/`,
+  not committed): `mouse_event` clicks, wheel, screen grabs, pixel samples.
+  Notes `.amp/in/explore/ew-format-notes.md`; captures (ignored, local)
+  `.amp/in/artifacts/reference/ew8-w06-editor/g11…g45` and
+  `.amp/in/artifacts/reference/ew8-w06g-format/`.
+- Input caveats (tooling, not EasyWorship semantics): the editor opened by the
+  driver before the restart ignored all toolbar input (`mouse_event`, held
+  `SendInput`, `PostMessage`, touch injection; `WM_NCHITTEST` was `HTCLIENT`,
+  no overlay window, UI Automation exposes only the `Editor_Output` child).
+  After the restart toolbar clicks worked. With the Format pane open, the
+  toolbar buttons' hover/click area reached about 100 px below the drawn
+  toolbar (over the pane's tab row and Style|Layout toggle), and clicks on
+  B/I/U reopened the font list about 100 px above them, also after
+  minimize/maximize and in a fresh editor. These controls were read from
+  captures; their click behavior is not recorded.
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-027 | observed (RUN-W06G) | Format is a toolbar toggle that docks an inspector pane at the right (canvas zoom 32% → 25% at 1292x750); a second click closes it. Its content follows the canvas selection: a selected element shows tabs Style \| Text \| Arrange; no canvas element selected shows the Slide pane (with a Text tab beside it after selecting a slide in Words). The pane reopens on the last tab and scroll position. Selecting the box while the pane is closed does not open it. Animate opens a Transition pane instead (Blend, Change, Preview ▸, Duration 00:500, Show More; Slide Timing: Advance ▾ On Click, Delay, Loop Slide, Always start slide from beginning [x]). Media opens a docked Videos panel. |
+| EW8-OBS-028 | observed (RUN-W06G) | Text › Style, FONT section: family dropdown (alphabetical installed fonts; each row shows the name in the UI font and a sample in that font); Size dropdown showing "Auto" with A▾/A▴ step buttons; Color swatch ▾; B, I, U, superscript, subscript; decrease/increase indent; horizontal align left/center/right; vertical align top/middle/bottom. The Size menu has header "Auto Sizing", radios "Do not auto size text" / "Resize text to fit element", then "Reset Size". Choosing "Do not auto size text" turns Size into an editable number showing the size the fit had produced (78 on this slide). Color popup: tabs Swatches \| Spectrum \| Values, a grey ramp row above a hue × lightness grid, and a Hex Value field (#FFFFFF). |
+| EW8-OBS-029 | observed (RUN-W06G) | Text › Style continues: OUTLINE type ▾ (None, Outer, Center, Inner), color, join ▾ (Round, Square, Bevel), Size slider + spin, Opacity slider + spin; SHADOW mode ▾ (None, Enabled), color, Angle dial + spin, Offset, Blur and Opacity slider + spin; BULLETS Indent Level, Bullet Style ▾ (None). The theme defaults on this install's song box: Tahoma, Auto (resize to fit), white, Bold on, centered both ways, Outline Outer black Round 7 / 100, Shadow Enabled black angle 315 offset 18 blur 9 opacity 90. |
+| EW8-OBS-030 | observed (RUN-W06G) | Text › Layout: MARGINS Left 23, Right 23, Top 14, Bottom 14; TEXT LAYOUT Vertical Align ▾ (Center), Rotate dial + spin + flip H/V; AUTO SIZING radios "Do not auto size text" / "Resize text to fit element" with the sub-option "Normalize text size across slides" [x]; TEXT FORMATTING Word Wrapping [x], Capitalize all words [ ], Capitalize first word of each line [ ]. |
+| EW8-OBS-031 | observed (RUN-W06G) | Style tab (element): FILL, BORDER, SHADOW, REFLECTION dropdowns (None) and ELEMENT OPACITY slider + spin (100). Arrange tab: Back \| Front, Backward \| Forward; align left/center/right and top/middle/bottom; distribute (disabled for one element); Dimensions Left 0, Top 0, Width 2304, Height 1440 (the song box covers the whole slide), Constrain Proportions; Rotate + flip; Lock \| Unlock. |
+| EW8-OBS-032 | observed (RUN-W06G) | Slide pane: Slide Layout thumbnail with "Master" ▾; Theme Elements (Show/Hide) checklist song [x], scripture [ ], copyright [x]; Background: Media Fill ▾ with thumbnail and name, Select Media…, Media Usage ▾ (Background), Aspect Ratio Auto + ▾ (Stretch), Repeating Auto (disabled), Rotate + flip H/V, Volume (disabled for an image), Opacity 100; Edit Slide Layouts at the bottom. |
+| EW8-OBS-033 | observed (RUN-W06G) | Formatting scope is per slide: Shadow → None on slide 1 removed the shadow on slide 1 only; slide 3 kept Shadow Enabled, and slide 1 kept None after switching away and back. Apply became enabled once the box was selected and the Format › Text pane shown, before any value changed. A reopened editor shows the saved/theme values again (unsaved changes are discarded with Cancel → No). Not observed: a way to apply formatting to all slides at once (multi-select, Masters, Reset Styles, Reapply Layout to Element), what is saved, schedule/live rendering of a formatted song. |
 
 ## D-UI-01 — Official toolbar image (documented-only, 2026-10-04)
 
