@@ -10,7 +10,7 @@ use sela::{
     output::{Launch, Refusal, Status, Supervisor},
     preparation::{PreparationEvent, Preparer},
     scene::{ContentVersion, Extent, PrepareError, RendererCapabilities},
-    slides::{self, Slide},
+    slides::{self, Sizing, Slide},
     storage::{self, Reply, Version, Worker},
 };
 use std::{
@@ -51,7 +51,8 @@ pub(super) const CLEAR: usize = 17;
 pub(super) const IMPORT_IMAGE: usize = 18;
 pub(super) const USE_AS_LOGO: usize = 19;
 pub(super) const IMAGE_MENU_LOGO: usize = 20;
-const CONTROLS: usize = 21;
+pub(super) const NORMALIZE: usize = 21;
+const CONTROLS: usize = 22;
 const SONG_TAB_INDEX: isize = 100;
 const SLIDE_TAB_INDEX: isize = 1000;
 const IMAGE_TAB_INDEX: isize = 2000;
@@ -143,6 +144,9 @@ pub(super) struct Operator {
     pub(super) selected_image: Option<String>,
     image_menu: Option<Point<Pixels>>,
     pub(super) media_message: Option<String>,
+    /// Not persisted; Sela has no settings store yet.
+    pub(super) sizing: Sizing,
+    pub(super) size_cap: Option<(Version, Extent, Sizing, Option<u16>)>,
     _poller: Option<Task<()>>,
 }
 
@@ -230,6 +234,8 @@ impl Operator {
             selected_image: None,
             image_menu: None,
             media_message,
+            sizing: Sizing::default(),
+            size_cap: None,
             _poller: Some(poller),
         }
     }
@@ -248,7 +254,11 @@ impl Operator {
                 self.drag = None;
                 if self.collapsed
                     && (self.controls[3..=10].iter().any(|f| f.is_focused(window))
-                        || self.song_rows.iter().any(|f| f.is_focused(window)))
+                        || self.controls[IMPORT_IMAGE..=NORMALIZE]
+                            .iter()
+                            .any(|f| f.is_focused(window))
+                        || self.song_rows.iter().any(|f| f.is_focused(window))
+                        || self.image_rows.iter().any(|f| f.is_focused(window)))
                 {
                     self.controls[2].focus(window, cx);
                 }
@@ -282,6 +292,22 @@ impl Operator {
                 self.image_menu = None;
                 self.controls[USE_AS_LOGO].focus(window, cx);
                 self.use_as_logo();
+            }
+            NORMALIZE if !self.collapsed && self.tab == 0 => {
+                self.sizing = match self.sizing {
+                    Sizing::PerSlide => Sizing::Normalized,
+                    Sizing::Normalized => Sizing::PerSlide,
+                };
+                // Applies to the live slide now, so its size never changes
+                // only on the next navigation.
+                if let Some(index) = self.live_slide
+                    && matches!(
+                        self.output.as_ref().map(Supervisor::status),
+                        Some(Status::Connected { .. })
+                    )
+                {
+                    self.send(index);
+                }
             }
             _ => return,
         }
@@ -707,7 +733,15 @@ impl Operator {
         else {
             return;
         };
-        let result = slides::cue(version, slide, extent, caps)
+        let cap = match self.size_cap {
+            Some((v, e, s, cap)) if (v, e, s) == (item.version, extent, self.sizing) => cap,
+            _ => {
+                let cap = slides::size_cap(&item.slides, extent, self.sizing);
+                self.size_cap = Some((item.version, extent, self.sizing, cap));
+                cap
+            }
+        };
+        let result = slides::cue(version, slide, extent, caps, cap)
             .map_err(|error| error.to_string())
             .and_then(|cue| {
                 output
@@ -1643,13 +1677,31 @@ impl Render for Operator {
                         ),
                 )
                 .when(self.tab == 0, |d| {
+                    let normalized = self.sizing == Sizing::Normalized;
                     d.child(
                         div()
                             .h(px(30.))
                             .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap_1()
                             .border_t_1()
                             .border_color(rgb(BORDER))
-                            .child(self.button(8, "open-library", "+ New Song", cx)),
+                            .child(self.button(8, "open-library", "+ New Song", cx))
+                            .child(div().flex_1())
+                            .child(
+                                self.button(
+                                    NORMALIZE,
+                                    "normalize-text",
+                                    if normalized {
+                                        "Normalize text size across slides: On"
+                                    } else {
+                                        "Normalize text size across slides: Off"
+                                    },
+                                    cx,
+                                )
+                                .when(normalized, |d| d.text_color(rgb(TEXT))),
+                            ),
                     )
                 })
                 .when(self.tab == 2, |d| {

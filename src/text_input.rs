@@ -299,6 +299,11 @@ impl TextInput {
     pub fn edit_count(&self) -> u64 {
         self.buffer.edits
     }
+    /// Selected byte range; empty at the cursor. Always on grapheme boundaries.
+    #[allow(dead_code)] // Standalone input_check has no section splitting.
+    pub fn selection(&self) -> Range<usize> {
+        self.buffer.selection()
+    }
     pub fn error(&self) -> Option<&InputError> {
         self.error.as_ref()
     }

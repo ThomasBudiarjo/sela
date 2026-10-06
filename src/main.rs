@@ -35,6 +35,11 @@ fn bind_operator_keys(cx: &mut App) {
         KeyBinding::new("enter", ActivateControl, Some("SelaControl")),
         KeyBinding::new("space", ActivateControl, Some("SelaControl")),
         KeyBinding::new("ctrl-s", song_library::Save, Some("SongLibrary")),
+        KeyBinding::new(
+            "ctrl-enter",
+            song_library::SplitSection,
+            Some("SongLibrary"),
+        ),
     ]);
 }
 

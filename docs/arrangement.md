@@ -80,6 +80,8 @@ editor integration preserves stored data without introducing arrangement control
 - [ ] Native arrangement-editing controls and explicit reference repair.
 - [ ] Reference-observed manual breaks, splitting, pagination/font fitting,
   overflow feedback, fonts/bidi/aspect changes and deterministic layout.
+  (M1-06c: documented Ctrl+Enter split, fit/normalize sizing and first-
+  arrangement output order; none of them observed on 8.0.49 yet.)
 - [ ] Renderer preparation/acknowledgment isolation and native/Windows/hardware
   reference qualification. Domain tests do not replace any of these gates.
 
@@ -123,3 +125,62 @@ No renderer, layout, new GPUI pattern or native focus replay in this slice.
 Parent owns merged serial :99 replay; Windows/reference/hardware/pagination and
 performance remain open. Next: native replay and arrangement-control design,
 explicit missing-reference repair/refresh, then deterministic pagination.
+
+## M1-06c — Better slide output
+
+Implemented-unqualified on local `main`. Scope: Phase 3 of the approved
+2026-10-06 spec. Nothing here is observed on EasyWorship 8.0.49 yet.
+
+- **Output order.** `slides::slides` follows the song's first arrangement,
+  one slide per occurrence (V1/C/V2/C/C gives five slides). With no
+  arrangement, an empty one, or one with an unresolved section, it falls back
+  to stored section order so no lyrics are hidden. Choosing among
+  arrangements stays with the M1-06 controls. Slide identity stays
+  `revision << 16 | position`, so repeated choruses are distinct cues.
+- **Text size.** The audience text preparer and `slides.rs` now allow 1–288px
+  (was 96). Each slide is still fitted to the 32px-inset area with a 5%
+  advance margin and at most a sixth of the text height, so a short line on a
+  2560x1600 output is 256px and on 3840x2160 is 288px.
+- **Resize text to fit / Normalize text size across slides.** EasyWorship's
+  global song settings offer "Do not auto size text" or "Resize text to fit
+  element", with "Normalize text size across slides" under the latter (SRC-12,
+  documented-only). Sela always resizes to fit; its fixed-size mode needs a
+  theme font size and waits for the theme ticket. **Normalize text size across
+  slides** (Songs footer toggle, off by default until the EasyWorship default
+  is observed) uses the smallest fitted size of the item's slides for every
+  slide. It is computed once per song revision, output size and setting, and
+  turning it on or off resends the live slide. The setting is not persisted
+  (no settings store yet).
+- **Ctrl+Enter split** (SRC-08, SRC-11). With the cursor in the song editor's
+  lyrics, the text from the cursor on becomes a new section right after the
+  current one, with a new section ID and the same label (copied label and
+  splitting mid-line are provisional; SRC-11 describes a line start). A line
+  break right before the cursor is dropped. Every arrangement gets the new
+  section after each occurrence of the split one, so the output keeps all
+  lyrics. One undo step restores the original; redo repeats it. Outside the
+  lyrics, or at the 128-section or arrangement limits, nothing changes and the
+  status line says why.
+
+Measured text preparation (`audience::tests::large_text_preparation_time`,
+`cargo test --locked --release --bin sela large_text_preparation_time -- --ignored --nocapture`,
+20 runs, i7-14650HX): 2560x1600 at 241–256px, 1/2/4 lines, p50 0.6/1.6/2.7 ms
+(max 3.3 ms); 3840x2160 at 288px, p50 0.7/2.0/3.5 ms (max 4.2 ms). The dev
+profile is 4–30 ms p50 (max 32.7 ms). This runs on the audience preparation
+worker, not the frame loop or the operator UI thread.
+
+Tests: `slides::tests::first_arrangement_orders_slides_and_falls_back_to_sections`,
+`slides::tests::normalized_sizing_uses_the_smallest_fitted_size`,
+`slides::tests::font_size_fits_lines_and_width` (256/288px),
+`audience::tests::operator_slide_cues_fit_the_audience_text_preparer` (every
+fitted size up to 4160x2160 rasterizes), `audience::text` bounds (289px is
+rejected), `tests::normalize_text_size_applies_to_the_live_slide` and
+`song_library::tests::ctrl_enter_splits_the_section_at_the_cursor_and_undo_restores`.
+
+Native: `python scripts/live-output-windows.py --out .amp\in\artifacts\live-output-windows-m1-06c`
+PASS on 2560x1600 DX12; the two-line verse now spans x 108–2454. Ctrl+Enter
+and the Normalize toggle were not driven natively (the song-editor native
+driver is X11-only); GPUI tests cover them.
+
+Open: observe EasyWorship's auto-size default, normalize scope (item or
+service) and Ctrl+Enter behavior mid-line on 8.0.49; arrangement choice;
+pagination of overflowing sections; persisted text settings.

@@ -4,11 +4,11 @@ use crate::{
     text_input::{Redo, TextInput, Undo},
 };
 use gpui::{prelude::*, *};
-use sela::arrangement::SectionId;
+use sela::arrangement::{Occurrence, OccurrenceId, SectionId};
 use sela::storage::{Command, Error, Id, Reply, Section, Song, Version, Worker};
 use std::{path::PathBuf, time::Duration};
 
-actions!(song_library, [Save]);
+actions!(song_library, [Save, SplitSection]);
 
 pub fn default_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
@@ -636,6 +636,76 @@ impl Library {
         cx.notify();
     }
 
+    /// Ctrl+Enter in the lyrics: the text from the cursor on becomes a new
+    /// section right after this one (SRC-08/SRC-11, documented-only). The
+    /// copied label and splitting mid-line are provisional. Arrangements get
+    /// the new section after every occurrence of the split one, so no lyrics
+    /// leave the output. One undo step restores the original.
+    fn split_section(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending.is_some() || self.committed_close {
+            return;
+        }
+        let lyrics = &self.fields[5];
+        if self.slides || !lyrics.read(cx).focus_handle(cx).is_focused(window) {
+            self.status = "Place the cursor in the lyrics to split the section.".into();
+            cx.notify();
+            return;
+        }
+        let at = lyrics.read(cx).selection().start;
+        let song = self.current(cx);
+        self.record(song.clone());
+        let Some(section) = song.sections.get(self.section) else {
+            return;
+        };
+        let (head, tail) = section.lyrics.split_at(at);
+        // Splitting at a line start leaves no blank line at the end.
+        let head = head
+            .strip_suffix('\n')
+            .map_or(head, |h| h.strip_suffix('\r').unwrap_or(h));
+        let new = Section {
+            id: SectionId::allocate(),
+            label: section.label.clone(),
+            lyrics: tail.into(),
+        };
+        let mut candidate = song.clone();
+        candidate.sections[self.section].lyrics = head.into();
+        candidate.sections.insert(self.section + 1, new.clone());
+        for variant in &mut candidate.variants {
+            let mut occurrences = Vec::with_capacity(variant.occurrences.len() + 1);
+            for occurrence in &variant.occurrences {
+                occurrences.push(*occurrence);
+                if occurrence.section == section.id {
+                    occurrences.push(Occurrence {
+                        id: OccurrenceId(SectionId::allocate().0),
+                        section: new.id,
+                    });
+                }
+            }
+            variant.occurrences = occurrences;
+        }
+        let mut bounded = candidate.clone();
+        if bounded.title.trim().is_empty() {
+            bounded.title = "Untitled".into();
+        }
+        if bounded.validate().is_err() {
+            self.status =
+                "Splitting would exceed the song's section limits. Original unchanged.".into();
+            cx.notify();
+            return;
+        }
+        self.history.record(Document {
+            song,
+            section: self.section,
+        });
+        self.confirm_delete = false;
+        self.draft = candidate;
+        self.section += 1;
+        self.load_fields(cx);
+        self.fields[5].read(cx).focus_handle(cx).focus(window, cx);
+        self.status = "Section split · Undo restores it".into();
+        cx.notify();
+    }
+
     fn select_section(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.pending.is_some() || self.committed_close || index >= self.draft.sections.len() {
             return;
@@ -740,6 +810,7 @@ impl Render for Library {
             .on_action(cx.listener(|_, _: &FocusNext, w, cx| w.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, w, cx| w.focus_prev(cx)))
             .on_action(cx.listener(|s, _: &Save, w, cx| s.action(1, w, cx)))
+            .on_action(cx.listener(|s, _: &SplitSection, w, cx| s.split_section(w, cx)))
             .on_action(cx.listener(|s, _: &Undo, _, cx| s.history(false, cx)))
             .on_action(cx.listener(|s, _: &Redo, _, cx| s.history(true, cx)))
             .size_full()
@@ -1213,6 +1284,126 @@ mod tests {
         let repo = Repository::open(&path).unwrap();
         assert_eq!(repo.song(duplicate).unwrap(), edited);
         assert_eq!(repo.song(first).unwrap(), original);
+    }
+
+    #[gpui::test]
+    fn ctrl_enter_splits_the_section_at_the_cursor_and_undo_restores(cx: &mut TestAppContext) {
+        use sela::arrangement::{Variant, VariantId};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let mut original = blank();
+        original.title = "Split hymn".into();
+        original.sections[0].lyrics = "Line one\r\nLine two\nLine three".into();
+        original.sections.push(Section {
+            id: SectionId::allocate(),
+            label: "Chorus".into(),
+            lyrics: "Refrain".into(),
+        });
+        let (verse, chorus) = (original.sections[0].id, original.sections[1].id);
+        original.variants = vec![Variant {
+            id: VariantId(Id([5; 16])),
+            name: "Sunday".into(),
+            occurrences: [verse, chorus, verse]
+                .into_iter()
+                .enumerate()
+                .map(|(i, section)| Occurrence {
+                    id: OccurrenceId(Id([i as u8 + 1; 16])),
+                    section,
+                })
+                .collect(),
+        }];
+        let first = Repository::open(&path)
+            .unwrap()
+            .save_song(None, original.clone())
+            .unwrap();
+        let (mut cx, view) = fixture(cx, path.clone());
+        cx.update(|_, cx| view.update(cx, |v, cx| v.select(first, cx)));
+        wait(&mut cx, &view);
+
+        // Outside the lyrics Ctrl+Enter changes nothing.
+        field(&mut cx, &view, 0, "Split hymn");
+        cx.simulate_keystrokes("ctrl-enter");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
+        assert!(view.read_with(&cx, |v, _| v.status.contains("cursor in the lyrics")));
+
+        // Cursor at the start of "Line two"; the text itself is unchanged.
+        let input = view.read_with(&cx, |v, _| v.fields[5].clone());
+        cx.update(|w, cx| {
+            input.update(cx, |f, cx| {
+                f.replace_text_in_range(Some(0..10), "Line one\r\n", w, cx);
+                f.focus_handle(cx).focus(w, cx);
+            })
+        });
+        cx.simulate_keystrokes("ctrl-enter");
+        let split = view.read_with(&cx, |v, cx| v.current(cx));
+        let labels: Vec<_> = split.sections.iter().map(|s| s.label.as_str()).collect();
+        let lyrics: Vec<_> = split.sections.iter().map(|s| s.lyrics.as_str()).collect();
+        assert_eq!(labels, ["Verse 1", "Verse 1", "Chorus"]);
+        assert_eq!(lyrics, ["Line one", "Line two\nLine three", "Refrain"]);
+        let new = split.sections[1].id;
+        assert!(![verse, chorus].contains(&new));
+        let order: Vec<_> = split.variants[0]
+            .occurrences
+            .iter()
+            .map(|o| o.section)
+            .collect();
+        assert_eq!(order, [verse, new, chorus, verse, new]);
+        assert_eq!(
+            sela::slides::slides(&split)
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Line one",
+                "Line two\nLine three",
+                "Refrain",
+                "Line one",
+                "Line two\nLine three"
+            ]
+        );
+        cx.update(|w, cx| {
+            let v = view.read(cx);
+            assert_eq!(v.section, 1);
+            assert!(v.fields[5].read(cx).focus_handle(cx).is_focused(w));
+            assert_eq!(v.fields[5].read(cx).text(), "Line two\nLine three");
+        });
+
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
+        assert_eq!(view.read_with(&cx, |v, _| v.section), 0);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), split);
+        action(&mut cx, &view, 1);
+        wait(&mut cx, &view);
+        let saved = view.read_with(&cx, |v, _| v.version.unwrap());
+        assert_eq!(Repository::open(&path).unwrap().song(saved).unwrap(), split);
+
+        // At the 128-section limit nothing is split and no undo step is added.
+        cx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                let mut full = v.current(cx);
+                full.variants.clear();
+                while full.sections.len() < 128 {
+                    full.sections.push(Section {
+                        id: SectionId::allocate(),
+                        label: "Filler".into(),
+                        lyrics: String::new(),
+                    });
+                }
+                v.begin(full, None, cx);
+            })
+        });
+        let full = view.read_with(&cx, |v, cx| v.current(cx));
+        cx.update(|w, cx| {
+            view.read(cx).fields[5]
+                .read(cx)
+                .focus_handle(cx)
+                .focus(w, cx)
+        });
+        cx.simulate_keystrokes("ctrl-enter");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), full);
+        assert!(view.read_with(&cx, |v, _| v.history.undo.is_empty()
+            && v.status.contains("limits")));
     }
 
     fn edit(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize, text: &str) {

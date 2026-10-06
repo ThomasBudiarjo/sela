@@ -233,7 +233,8 @@ engine is the sequencing approval; M1-03, M1-09 and M0-08 remain open.
 - **Songs** lists the library catalog, loaded by the storage worker and refreshed
   when the window is activated. Clicking or Enter/Space on a song previews it.
   `sela --operator-library PATH` opens the operator on a chosen library.
-- **Preview** shows one slide per song section (trimmed lyrics, label below).
+- **Preview** shows one slide per song section (trimmed lyrics, label below);
+  since M1-06c, per occurrence of the song's first arrangement if it has one.
   Selecting a slide never touches the audience. Double-click sends it to output,
   per the historical v7 Quick Start (SRC-02, documented-only for 8.0.49).
 - **Go Live** sends the selected Preview slide. **‹ Previous / Next ›** step the
@@ -247,7 +248,8 @@ engine is the sequencing approval; M1-03, M1-09 and M0-08 remain open.
   resends the current slide at the new extent.
 - Slide cues are white centered DejaVu Sans on black (provisional until a theme
   ticket). Size is fitted from the font's glyph advances, 5% margin, within the
-  renderer's text limits (96px, 32 lines, 4096 bytes, 4096px text area). Missing
+  renderer's text limits (96px, raised to 288px in M1-06c; 32 lines, 4096 bytes,
+  4096px text area). Missing
   glyphs or oversize text fail before delivery and leave Live unchanged.
 - Tab order: the ten existing controls, then Live output, Go Live, Previous,
   Next, song rows and preview slides. Sela accessibility policy, not observed.
@@ -322,6 +324,8 @@ follows EW8-OBS-014–019; cases listed in EW8-OBS-020 are marked provisional.
   Use As Logo Background". A failed logo keeps the previous one.
 - Tab order adds Logo, Black, Clear after Next, and Import image… / Use As Logo
   Background after them while Media is shown; image rows follow the slides.
+  M1-06c adds "Normalize text size across slides" after them while Songs is
+  shown (see [arrangement](arrangement.md#m1-06c--better-slide-output)).
 
 Known divergence: EW8-OBS-019 says the logo fills the output. Sela draws image
 backgrounds with Contain (letterboxed on a different aspect ratio). Which fit

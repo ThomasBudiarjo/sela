@@ -943,7 +943,7 @@ mod tests {
                     text: text.clone(),
                 };
                 let version = ContentVersion { id: 1, revision: 1 };
-                let cue = sela::slides::cue(version, &slide, extent, caps).unwrap();
+                let cue = sela::slides::cue(version, &slide, extent, caps, None).unwrap();
                 let t = cue.text().unwrap();
                 text::raster_aligned(
                     t.font(),
@@ -954,6 +954,56 @@ mod tests {
                     true,
                 )
                 .unwrap_or_else(|e| panic!("{width}x{height} {text:?}: {e:?}"));
+            }
+        }
+    }
+
+    /// Text preparation cost at the raised size limit. Run with
+    /// `cargo test --release --bin sela large_text_preparation_time -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing measurement, not a pass/fail check"]
+    fn large_text_preparation_time() {
+        let caps = RendererCapabilities {
+            max_texture_dimension: 8192,
+        };
+        let texts = [
+            "Amen",
+            "First original line\nSecond original line",
+            "One original line\ntwo original lines\nthree original lines\nfour original lines",
+        ];
+        for (width, height) in [(2560, 1600), (3840, 2160)] {
+            let extent = Extent { width, height };
+            for text in texts {
+                let slide = sela::slides::Slide {
+                    label: String::new(),
+                    text: text.into(),
+                };
+                let version = ContentVersion { id: 1, revision: 1 };
+                let cue = sela::slides::cue(version, &slide, extent, caps, None).unwrap();
+                let t = cue.text().unwrap();
+                let mut runs: Vec<Duration> = (0..20)
+                    .map(|_| {
+                        let start = Instant::now();
+                        text::raster_aligned(
+                            t.font(),
+                            t.content(),
+                            width - 64,
+                            height - 64,
+                            f32::from(t.font_size()),
+                            true,
+                        )
+                        .unwrap();
+                        start.elapsed()
+                    })
+                    .collect();
+                runs.sort();
+                println!(
+                    "{width}x{height} {} lines {}px: p50 {:.1} ms, max {:.1} ms",
+                    text.lines().count(),
+                    t.font_size(),
+                    runs[10].as_secs_f64() * 1e3,
+                    runs[19].as_secs_f64() * 1e3,
+                );
             }
         }
     }

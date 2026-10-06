@@ -3,6 +3,8 @@ use cosmic_text::{
     Align, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache, Wrap,
 };
 
+pub const MAX_FONT_SIZE: f32 = 288.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextError {
     InvalidFont,
@@ -36,7 +38,7 @@ pub fn raster_aligned(
         || text.len() > 4096
         || text.split('\n').count() > 32
         || !font_size.is_finite()
-        || !(1.0..=96.0).contains(&font_size)
+        || !(1.0..=MAX_FONT_SIZE).contains(&font_size)
         || width == 0
         || height == 0
         || width > 4096
@@ -227,7 +229,7 @@ mod tests {
             (0, 100, 24.0),
             (4097, 1, 24.0),
             (1, 1, f32::NAN),
-            (1, 1, 97.0),
+            (1, 1, 289.0),
         ] {
             assert_eq!(raster(FONT, "A", w, h, size), Err(TextError::Bounds));
         }

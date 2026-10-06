@@ -1,6 +1,7 @@
 //! Provisional song-to-slide projection and text cue construction. No GPUI types.
-//! One slide per stored section, in stored order. Arrangement selection,
-//! pagination, themes and reference-qualified fitting are not implemented.
+//! One slide per section occurrence of the song's first arrangement, else per
+//! stored section. Arrangement selection, pagination and themes are not
+//! implemented.
 use crate::{
     scene::{
         ContentVersion, Extent, PrepareError, PreparedBackground, PreparedCue, RendererCapabilities,
@@ -26,9 +27,30 @@ pub struct Slide {
     pub text: String,
 }
 
+/// Text sizing across one item's slides. Each slide is always resized to fit
+/// ("Resize text to fit element"); `Normalized` also uses the smallest fitted
+/// size for every slide. EasyWorship's default is unobserved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sizing {
+    #[default]
+    PerSlide,
+    Normalized,
+}
+
+/// The first arrangement's order if it has occurrences and all of them
+/// resolve; otherwise stored section order, so no lyrics are hidden.
 pub fn slides(song: &Song) -> Vec<Slide> {
-    song.sections
-        .iter()
+    let ordered = song.variants.first().and_then(|variant| {
+        variant
+            .occurrences
+            .iter()
+            .map(|o| song.sections.iter().find(|s| s.id == o.section))
+            .collect::<Option<Vec<_>>>()
+            .filter(|sections| !sections.is_empty())
+    });
+    let sections = ordered.unwrap_or_else(|| song.sections.iter().collect());
+    sections
+        .into_iter()
         .map(|section| Slide {
             label: section.label.clone(),
             text: section
@@ -41,6 +63,18 @@ pub fn slides(song: &Song) -> Vec<Slide> {
                 .to_owned(),
         })
         .collect()
+}
+
+/// The size cap `cue` should use for slides of this item, if any.
+pub fn size_cap(slides: &[Slide], extent: Extent, sizing: Sizing) -> Option<u16> {
+    match sizing {
+        Sizing::PerSlide => None,
+        Sizing::Normalized => slides
+            .iter()
+            .filter(|s| !s.text.is_empty())
+            .filter_map(|s| font_size(&s.text, extent))
+            .min(),
+    }
 }
 
 /// Identity of slide `index` of one immutable song revision.
@@ -59,17 +93,20 @@ pub fn slide_index(song: Version, version: ContentVersion) -> Option<usize> {
     (slide_version(song, index)? == version).then_some(index)
 }
 
-/// White centered text on black, sized so every line fits the inset area.
+/// White centered text on black, sized so every line fits the inset area and
+/// no larger than `cap` (see `size_cap`).
 pub fn cue(
     version: ContentVersion,
     slide: &Slide,
     extent: Extent,
     caps: RendererCapabilities,
+    cap: Option<u16>,
 ) -> Result<PreparedCue, PrepareError> {
     let text = if slide.text.is_empty() {
         None
     } else {
         let size = font_size(&slide.text, extent).ok_or(PrepareError::InvalidScene)?;
+        let size = cap.map_or(size, |cap| size.min(cap.max(1)));
         Some((slide.text.clone(), FONT_VERSION, FONT.into(), size))
     };
     PreparedCue::from_owned(
@@ -83,7 +120,7 @@ pub fn cue(
 
 // Audience text preparer bounds (`audience::text`); a cue outside them would
 // only be rejected after delivery.
-const MAX_FONT_SIZE: u16 = 96;
+const MAX_FONT_SIZE: u16 = 288;
 const MAX_LINES: usize = 32;
 const MAX_TEXT_BYTES: usize = 4096;
 const MAX_TEXT_AREA: u32 = 4096;
@@ -210,7 +247,7 @@ mod tests {
             text: "Original test line\nSecond line".into(),
         };
         let version = ContentVersion { id: 9, revision: 1 };
-        let cue = cue(version, &slide, EXTENT, CAPS).unwrap();
+        let cue = cue(version, &slide, EXTENT, CAPS, None).unwrap();
         assert_eq!(cue.extent(), EXTENT);
         assert_eq!(cue.version(), version);
         let text = cue.text().unwrap();
@@ -225,12 +262,17 @@ mod tests {
     #[test]
     fn font_size_fits_lines_and_width() {
         let small = font_size("one line", EXTENT).unwrap();
-        assert!(f32::from(small) <= (1080. - 64.) / 6.);
+        assert_eq!(small, ((1080. - 64.) / 6.) as u16);
         let large = Extent {
             width: 2560,
             height: 1600,
         };
-        assert_eq!(font_size("one line", large), Some(MAX_FONT_SIZE));
+        assert_eq!(font_size("one line", large), Some(256));
+        let uhd = Extent {
+            width: 3840,
+            height: 2160,
+        };
+        assert_eq!(font_size("one line", uhd), Some(MAX_FONT_SIZE));
         let narrow = font_size(&"i".repeat(60), EXTENT).unwrap();
         let wide = font_size(&"W".repeat(60), EXTENT).unwrap();
         assert!(wide < narrow, "{wide} {narrow}");
@@ -269,7 +311,12 @@ mod tests {
             text: String::new(),
         };
         let version = ContentVersion { id: 9, revision: 2 };
-        assert!(cue(version, &blank, EXTENT, CAPS).unwrap().text().is_none());
+        assert!(
+            cue(version, &blank, EXTENT, CAPS, Some(40))
+                .unwrap()
+                .text()
+                .is_none()
+        );
         let words = Slide {
             label: "Verse".into(),
             text: "words".into(),
@@ -279,8 +326,90 @@ mod tests {
             height: 60,
         };
         assert_eq!(
-            cue(version, &words, tiny, CAPS).err(),
+            cue(version, &words, tiny, CAPS, Some(40)).err(),
             Some(PrepareError::InvalidScene)
         );
+    }
+
+    #[test]
+    fn first_arrangement_orders_slides_and_falls_back_to_sections() {
+        use crate::arrangement::{Occurrence, OccurrenceId, Variant, VariantId};
+        let mut song = song(&[("Verse 1", "v1"), ("Chorus", "c"), ("Verse 2", "v2")]);
+        assert_eq!(texts(&slides(&song)), ["v1", "c", "v2"]);
+        let [v1, c, v2] = [0, 1, 2].map(|i| song.sections[i].id);
+        let occurrence = |section| Occurrence {
+            id: OccurrenceId(SectionId::allocate().0),
+            section,
+        };
+        let variant = |name: &str, order: &[SectionId]| Variant {
+            id: VariantId(SectionId::allocate().0),
+            name: name.into(),
+            occurrences: order.iter().copied().map(occurrence).collect(),
+        };
+        song.variants = vec![
+            variant("Sunday", &[v1, c, v2, c, c]),
+            variant("Short", &[v2]),
+        ];
+        let ordered = slides(&song);
+        assert_eq!(texts(&ordered), ["v1", "c", "v2", "c", "c"]);
+        assert_eq!(ordered[3].label, "Chorus");
+        song.variants[0].occurrences.clear();
+        assert_eq!(
+            texts(&slides(&song)),
+            ["v1", "c", "v2"],
+            "empty arrangement"
+        );
+        song.variants[0] = variant("Broken", &[v2, SectionId::allocate()]);
+        assert_eq!(
+            texts(&slides(&song)),
+            ["v1", "c", "v2"],
+            "unresolved section"
+        );
+    }
+
+    fn texts(slides: &[Slide]) -> Vec<&str> {
+        slides.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    #[test]
+    fn normalized_sizing_uses_the_smallest_fitted_size() {
+        let slides = slides(&song(&[
+            ("Verse 1", "Short"),
+            ("Blank", ""),
+            (
+                "Verse 2",
+                "A much longer line of original lyrics\nand a second one",
+            ),
+        ]));
+        assert_eq!(size_cap(&slides, EXTENT, Sizing::PerSlide), None);
+        let cap = size_cap(&slides, EXTENT, Sizing::Normalized).unwrap();
+        let sizes: Vec<u16> = slides
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.text.is_empty())
+            .map(|(i, s)| {
+                let version = ContentVersion {
+                    id: 9,
+                    revision: i as u64,
+                };
+                let per_slide = cue(version, s, EXTENT, CAPS, None).unwrap();
+                let normalized = cue(version, s, EXTENT, CAPS, Some(cap)).unwrap();
+                assert!(
+                    normalized.text().unwrap().font_size() <= per_slide.text().unwrap().font_size()
+                );
+                normalized.text().unwrap().font_size()
+            })
+            .collect();
+        assert_eq!(sizes, [cap, cap]);
+        assert_eq!(cap, font_size(&slides[2].text, EXTENT).unwrap());
+        assert!(font_size(&slides[0].text, EXTENT).unwrap() > cap);
+        // Slides the renderer would reject never shrink the others to nothing.
+        let mut with_bad = slides.clone();
+        with_bad.push(Slide {
+            label: "Bad".into(),
+            text: "\u{4e2d}".into(),
+        });
+        assert_eq!(size_cap(&with_bad, EXTENT, Sizing::Normalized), Some(cap));
+        assert_eq!(size_cap(&slides[1..2], EXTENT, Sizing::Normalized), None);
     }
 }

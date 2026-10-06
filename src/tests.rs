@@ -1,5 +1,5 @@
 use super::*;
-use crate::operator::{CLEAR, Indicator, LIVE_OUTPUT, LOGO, Launcher, NEXT};
+use crate::operator::{CLEAR, Indicator, LIVE_OUTPUT, LOGO, Launcher, NEXT, NORMALIZE};
 use gpui::{Entity, TestAppContext, VisualTestContext};
 use sela::{
     arrangement::SectionId,
@@ -308,6 +308,7 @@ fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
     let order: Vec<usize> = (0..10)
         .chain(LIVE_OUTPUT..=NEXT)
         .chain(LOGO..=CLEAR)
+        .chain([NORMALIZE])
         .collect();
     for index in order.iter().copied() {
         cx.simulate_keystrokes("tab");
@@ -769,6 +770,64 @@ fn live_slide_clicks_apply_and_double_click_unmasks(cx: &mut TestAppContext) {
         assert!(!o.masks.any());
         assert!(has_line(o, "On screen: Signal Hymn · Bridge"));
     });
+}
+
+#[gpui::test]
+fn normalize_text_size_applies_to_the_live_slide(cx: &mut TestAppContext) {
+    use sela::slides::{Sizing, size_cap};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_song(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "preview", |o| o.preview.is_some());
+    // Without a live slide the toggle only changes the setting.
+    click(&mut cx, "normalize-text");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| (o.sizing, submitted(o))),
+        (Sizing::Normalized, 0)
+    );
+    click(&mut cx, "normalize-text");
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    click(&mut cx, "preview-slide-1");
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "chorus on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+    let (version, slides, sent) = operator.read_with(&cx, |o, _| {
+        let item = o.live.as_ref().unwrap();
+        assert_eq!(
+            o.size_cap,
+            Some((item.version, FAKE_EXTENT, Sizing::PerSlide, None))
+        );
+        (item.version, item.slides.clone(), submitted(o))
+    });
+    let cap = size_cap(&slides, FAKE_EXTENT, Sizing::Normalized);
+    assert!(cap.is_some());
+
+    click(&mut cx, "normalize-text");
+    settle(&mut cx, &operator, "chorus resent", |o| {
+        submitted(o) == sent + 1 && o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.sizing, Sizing::Normalized);
+        assert_eq!(
+            o.size_cap,
+            Some((version, FAKE_EXTENT, Sizing::Normalized, cap))
+        );
+        assert_eq!(o.live_slide, Some(1));
+    });
+    // Collapsed Resources hide the toggle; its keyboard route is inert too.
+    click(&mut cx, "collapse-resources");
+    assert!(cx.debug_bounds("normalize-text").is_none());
+    cx.update(|window, cx| {
+        operator.read(cx).controls[NORMALIZE]
+            .clone()
+            .focus(window, cx)
+    });
+    cx.simulate_keystrokes("enter");
+    assert_eq!(operator.read_with(&cx, |o, _| o.sizing), Sizing::Normalized);
 }
 
 #[gpui::test]

@@ -72,8 +72,10 @@ The operator's Go Live and Black/Clear/Logo masks use the same renderer through
 the storage worker API, not yet through an operator recovery interface.
 
 Section IDs and named arrangements persist with immutable song revisions and
-survive editor save/load/duplicate/undo. Arrangement-editing controls and audience
-pagination are not yet available; see the [arrangement contract](docs/arrangement.md).
+survive editor save/load/duplicate/undo. Preview and Live follow a song's first
+arrangement; Ctrl+Enter in the lyrics splits a section (undoable). Arrangement-
+editing controls and audience pagination are not yet available; see the
+[arrangement contract](docs/arrangement.md).
 
 The [operator shell](docs/operator-shell.md) provides separate panes, resizable
 dividers, collapsible Resources and five resource tabs. Songs opens the working
@@ -84,7 +86,8 @@ monitor index or `window`). Pick a song in Songs, a slide in Preview, then
 **‹ Previous / Next ›** step through the live song. **Logo / Black / Clear**
 (Ctrl+L/B/C; Page Down is Go Live) light up once the audience confirms them;
 Media → Images imports a picture and sets it as the logo. Plain white-on-black
-text, no themes or schedule items yet. `sela --operator-library PATH` opens the
+text, resized to fit each slide (optionally the same size on every slide), no
+themes or schedule items yet. `sela --operator-library PATH` opens the
 operator on another library. The opt-in
 [video diagnostic](docs/video-spike.md) checks original FFV1 frames through FFmpeg
 and GPU composition; it is not a production video player.

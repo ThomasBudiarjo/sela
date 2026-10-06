@@ -10,8 +10,11 @@ include timezone for timed hardware/rehearsal evidence.
   toolbar buttons and Ctrl+L/B/C (Page Down = Go Live) drive the real audience;
   indicators follow renderer acknowledgments; Media → Images imports a picture
   and sets it as the logo. Windows DX12 native checks pass. Both
-  implemented-unqualified. Next: Phase 3 M1-06c (better slides), then Phase 4
-  M1-09a (basic schedule) per the approved 2026-10-06 spec.
+  implemented-unqualified.
+- **Better slide output (M1-06c, 2026-10-06):** first-arrangement order, text
+  up to 288px, "Normalize text size across slides" toggle, Ctrl+Enter section
+  split with undo. Implemented-unqualified. Next: Phase 4 M1-09a (basic
+  schedule) per the approved 2026-10-06 spec.
 - **EasyWorship masks observed (M0-02, 2026-10-06):** RUN-W03 recorded the
   single-song W02/W03 static cases (EW8-OBS-014–020): Black and Logo replace
   each other, Clear stacks, masks survive Go Live/navigation/Live off, Live
@@ -2116,3 +2119,39 @@ PY
   physical scanout timing.
 - Next: Phase 3 M1-06c — raise the text size limit, resize-to-fit/normalize,
   Ctrl+Enter split with undo, arrangement order on output.
+
+### M1-06c — Better slide output — 2026-10-06 (UTC+7)
+
+- State: **implemented-unqualified**. Scope: Phase 3 of the approved
+  2026-10-06 spec.
+- `slides::slides` follows the first arrangement (falls back to section order
+  when there is none, it is empty, or a section does not resolve).
+  Text limit 96 → 288px in `audience::text` and `slides.rs`.
+  `slides::Sizing{PerSlide,Normalized}` and `size_cap`; `cue` takes a cap.
+- Operator: "Normalize text size across slides: Off/On" in the Songs footer
+  (control 21, after Clear in tab order); cap cached per song revision, extent
+  and setting; toggling resends the live slide; not persisted.
+  `scripts/live-output-windows.py` tab counts updated (19 tabs to the first song,
+  9 back to Live output).
+- Song editor: Ctrl+Enter (`SplitSection`, `SongLibrary` context) splits the
+  section at the lyrics cursor; new section ID, copied label; arrangements get
+  the new section after each occurrence of the split one; one undo step.
+  `TextInput::selection()` added.
+- Decisions: always resize to fit (the fixed-size mode needs a theme font
+  size); normalize off by default; copied label and mid-line split are
+  provisional; SRC-12 added for EasyWorship's auto-size settings.
+- Checks (Windows 11): `cargo fmt --all -- --check`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` (lib 75, bin 49 + 2 ignored: fake
+  audience fixture and timing; all other suites pass), `cargo build --locked`,
+  `python -m ruff check scripts`, `ruff format --check scripts/live-output-windows.py`.
+- Measured: `cargo test --locked --release --bin sela large_text_preparation_time -- --ignored --nocapture`:
+  2560x1600 p50 0.6–2.7 ms (max 3.3), 3840x2160 at 288px p50 0.7–3.5 ms
+  (max 4.2); dev profile p50 3.7–29.9 ms (max 32.7).
+- Native: `python scripts/live-output-windows.py --out .amp\in\artifacts\live-output-windows-m1-06c`
+  PASS (2560x1600 DX12); captures inspected: the verse fills the width at the
+  new size; the operator footer shows the Normalize toggle.
+- Not run: native Ctrl+Enter and Normalize (no Windows song-editor driver),
+  EasyWorship 8.0.49 observation of auto-size and split, Linux/macOS.
+- Next: Phase 4 M1-09a — Schedule pane items pinned to song revisions, add/
+  remove/reorder, Save/Open with Ctrl+S/Ctrl+O, live item identity.

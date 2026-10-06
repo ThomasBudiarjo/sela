@@ -123,7 +123,7 @@ shaping, no-wrap, white coverage, 1.3× line-height, nearest image contain/black
 sidebars/straight-alpha-over-black and linear sRGB composition. A color uses cover
 on a 1×1 opaque image to fill the output. Native requires a supported sRGB surface.
 The text diagnostic retains its stricter bounds: 2MiB font, 4096 UTF-8 bytes,
-32 lines, 1–96px size, raster edge <=4096 and <=16MiB alpha. CPU transport's
+32 lines, 1–96px size (1–288px since M1-06c), raster edge <=4096 and <=16MiB alpha. CPU transport's
 broader valid input can therefore be rejected at native layout; no silent shrink,
 wrap, fallback or cropping. Images are already normalized RGBA, not decoded here.
 No EasyWorship layout/mask/transition behavior is invented by this diagnostic.

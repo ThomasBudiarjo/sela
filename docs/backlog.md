@@ -526,11 +526,16 @@ immutable exact-revision data, backed-up legacy migration and stable section/
 variant/occurrence IDs. Editor save/load/duplicate/undo round trips preserve them;
 native replay independently verifies section IDs in SQLite. Arrangement editing
 controls, explicit reference repair, pagination and fitting remain open.
+M1-06c (**implemented-unqualified**, [arrangement](arrangement.md#m1-06c--better-slide-output)):
+output follows the first arrangement, text up to 288px with optional
+normalized size, and Ctrl+Enter section split with undo.
 
 - [x] Model ordered section occurrences and arrangement variants without duplicating
   the underlying song or losing occurrence identity.
 - [ ] Implement reference-observed slide splitting, manual breaks, text fitting,
   section labels, slide ordering and overflow feedback.
+  (Documented split, fit/normalize and arrangement order done in M1-06c;
+  8.0.49 observation, manual breaks and overflow pagination open.)
 - [ ] Keep layout deterministic for a declared font set, theme and output size.
 - [ ] Test asymmetric arrangement V1/C/V2/C/C, deleted sections, very long verse,
   font fallback, right-to-left/combining text and output aspect changes.
