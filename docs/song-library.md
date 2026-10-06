@@ -23,17 +23,19 @@ automatic rotation or recovery workflow. Schema-1 open now has a worker-owned
 verified-backup migration gate (see storage.md). Never use valuable
 original files as test fixtures.
 
-- Enter title, authors, copyright, license identifier and labeled lyric sections.
-  New songs start with one empty Verse 1; empty or zero sections are retained.
-- **Save / Ctrl+S** commits a new immutable revision. **Duplicate** saves the
+- Enter the title in the toolbar and slides in **Words** (see M1-05e below);
+  authors, copyright and license identifier are in **Inspector**. New songs
+  start with one empty, unlabeled slide; empty or zero slides are retained.
+- **Apply / Save / Ctrl+S** commits a new immutable revision. **Duplicate** saves the
   current draft under a new identity, even if the title is unchanged.
 - **OK** saves and closes only after a successful commit receipt. Validation,
   conflicts and storage failures keep the draft open. **Cancel** uses the same
   pending-operation and unsaved-change guards as window close.
-- **Previous / Next / Add section / Remove** change the authored sections.
-  **Ctrl+Z / Ctrl+Shift+Z** (Cmd on macOS) undo/redo the complete document in
-  chronological order, including metadata, lyrics and Add/Remove, even after
-  switching sections. **Discard edits** restores the complete last-loaded/saved song.
+- **+ / −** below Words append a slide or remove the current one.
+  **Ctrl+Z / Ctrl+Shift+Z** (Cmd on macOS) or toolbar **Undo / Redo** undo/redo
+  the complete document in chronological order, including metadata, lyrics,
+  splits, joins and +/−, even after moving between slides. **Discard edits**
+  (Library pane) restores the complete last-loaded/saved song.
 - **Delete**, then **Confirm delete**, tombstones a clean saved song. Existing
   schedule snapshots retain their original immutable content.
 - Selecting another song or New refuses to replace unsaved edits. Ctrl+Q and
@@ -54,6 +56,74 @@ they scroll instead of soft-wrapping. Songs exceeding 4096 logical lyric rows pe
 section or containing multiline metadata cannot be loaded into this provisional
 editor; the original database content remains unchanged. Total encoded song
 limit is 256 KiB. Fields have the storage metadata limits.
+
+## M1-05e — EasyWorship Words layout
+
+Implemented-unqualified. Layout and behavior follow the installed EasyWorship
+8.0.49 observations EW8-OBS-021..026 (RUN-W06E in
+[reference-observations.md](reference-observations.md)), in Sela's light
+finish. Original GPUI code; no EasyWorship code or assets.
+
+- Window "Song Editor - <title>" ("Untitled" while empty). Toolbar: Title field
+  top-left with New/Undo/Redo below it, then Text, Scripture, Shape, Media and,
+  at the right, Format, Animate, Presentation. Those seven are shown disabled
+  until implemented (M1-05g/h and later). Sela's Library and Inspector follow.
+- Words is one list of slides. Each row has the slide number, a bold label cell
+  (placeholder "label") and a lyrics cell (placeholder "song"). A labeled slide
+  starts a bordered group; unlabeled slides join the group above. Group colors
+  by label kind: Verse and unknown labels blue, Chorus/Pre-Chorus rose,
+  Bridge/Tag purple, Ending dark red, Intro green (EW hues as accents with light
+  tints). The selected slide's number cell is highlighted.
+- A new song puts the caret in slide 1's label. Down (and, provisionally,
+  Enter) in a label moves to its lyrics; Up on the first lyric line moves to the label; Up/Down at a cell
+  edge cross to the neighbouring slide. Enter in lyrics is a line break and a
+  blank line does not split. **Ctrl+Enter** in lyrics splits at the caret: the
+  rest becomes a new **unlabeled** slide right after it (the newline before the
+  caret is dropped) and the caret moves to its start. Arrangements gain the new
+  slide after every occurrence of the split one.
+- Backspace at the start of an unlabeled slide joins it to the previous slide
+  (inverse of Ctrl+Enter; provisional, unobserved in EW). Its occurrences leave
+  arrangements; Undo restores them. On a labeled slide Backspace at the start
+  of the lyrics moves to the label and never joins.
+- **+** appends an empty unlabeled slide with the caret in its label. EW shows
+  it as its own group; Sela derives groups from labels, so it joins the group
+  above until labeled (recorded deviation). **−** (Sela only) removes the
+  current slide unless an arrangement uses it.
+- The right pane previews the caret's slide as the audience would show it: the
+  same bundled font, fitted size, 32 px inset and centered raster as the
+  audience preparer (`audience::text_coverage`), at 1280×720, white on black.
+  Rasterizing runs on the background executor, latest-wins with one job in
+  flight; replaced images are dropped from the GPU atlas. An empty slide shows
+  "Double click to edit song"; double-click focuses its lyrics. Text the
+  audience would reject (overflow, missing glyph) shows a message instead of an
+  image. No copyright strip, theme or background yet (M1-05g/h).
+- Footer: disabled "Apply changes to items in schedule" (schedule items pin
+  revisions; update-in-schedule is not implemented), **Apply** (enabled while
+  dirty; saves and stays open), **OK**, **Cancel**.
+- Library (Sela) keeps the saved-song list with Duplicate, Delete, Discard
+  edits and paging.
+
+Not yet matched: EW's Ctrl+A selecting the whole Words document (Sela selects
+within one cell), drag selection across cells, typing-group undo (Sela undoes
+per native edit), the Slides tab thumbnails (M1-05f), canvas text-box editing
+and its context menu (EW8-OBS-025), and the zoom slider.
+
+Checks: GPUI tests `words_cells_navigate_and_new_song_focuses_first_label`,
+`ctrl_enter_splits_without_label_and_backspace_joins`,
+`preview_follows_the_caret_slide_off_thread`,
+`preview_matches_audience_raster_and_rejects_unshowable_text`,
+`label_kinds_and_groups_follow_observed_palette` plus the updated history,
+pending-lock, save/duplicate/delete and limit tests. Windows native replay:
+
+```powershell
+cargo build --locked --bin sela
+python scripts/song-editor-windows.py   # captures in .amp/in/artifacts/song-editor-windows/
+```
+
+It types through SendInput (Unicode), asserts the foreground, checks the window
+title, preview ink, split/join, and decodes the saved SQLite payload. The X11
+`scripts/song-library.py` still uses the M1-05d form coordinates and is not
+ported to this layout.
 
 ## Ownership and reference patterns
 

@@ -252,10 +252,18 @@ impl Buffer {
 
 type ContentObserver = Box<dyn FnMut(&str, &mut App)>;
 
+/// Borderless cell of a larger document (the song editor's Words list).
+#[derive(Clone, Copy)]
+struct Flow {
+    bold: bool,
+}
+
 pub struct TextInput {
     focus: FocusHandle,
     buffer: Buffer,
     document_edit: Option<ContentObserver>,
+    flow: Option<Flow>,
+    placeholder: Option<&'static str>,
     multiline: bool,
     max: usize,
     tab_index: isize,
@@ -279,6 +287,8 @@ impl TextInput {
             focus: cx.focus_handle().tab_index(tab_index).tab_stop(true),
             buffer: Buffer::default(),
             document_edit: None,
+            flow: None,
+            placeholder: None,
             multiline,
             max: max_bytes.min(HARD_BYTES),
             tab_index,
@@ -322,6 +332,24 @@ impl TextInput {
         self.buffer.external_history = true;
         self.buffer.undo.clear();
         self.buffer.redo.clear();
+    }
+    /// Grey italic hint while the field is empty and nothing is composed.
+    #[allow(dead_code)] // Standalone input_check has no hints.
+    pub fn set_placeholder(&mut self, placeholder: &'static str) {
+        self.placeholder = Some(placeholder);
+    }
+    /// Document-cell mode: no border, height follows the rows, wheel scrolling
+    /// goes to the enclosing list. Up on the first row, Down on the last row,
+    /// Enter in a single-line cell and Backspace at the start are not
+    /// consumed, so the owner can move between cells.
+    #[allow(dead_code)] // Standalone input_check has no document cells.
+    pub fn set_flow(&mut self, bold: bool) {
+        self.flow = Some(Flow { bold });
+    }
+    /// Collapses the selection to `byte` (clamped, grapheme floor).
+    #[allow(dead_code)] // Standalone input_check never moves the cursor itself.
+    pub fn set_cursor(&mut self, byte: usize, cx: &mut Context<Self>) {
+        self.move_to(byte.min(self.text().len()), false, cx);
     }
     /// Validated atomic load; resets history and selection, increments edit count.
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) -> Result<(), InputError> {
@@ -395,6 +423,15 @@ impl TextInput {
     }
     fn vertical(&mut self, down: bool, select: bool, cx: &mut Context<Self>) {
         let row = self.row_index(self.buffer.head);
+        let edge = if down {
+            row + 1 >= self.layout.len()
+        } else {
+            row == 0
+        };
+        if self.flow.is_some() && edge && !select {
+            cx.propagate();
+            return;
+        }
         if let Some((r, line)) = self.layout.get(row) {
             let x = line.x_for_index(self.buffer.head.min(r.end) - r.start);
             let next = if down {
@@ -555,7 +592,15 @@ impl Element for FieldElement {
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = px(if self.0.read(cx).multiline { 220. } else { ROW }).into();
+        let input = self.0.read(cx);
+        style.size.height = px(if input.flow.is_some() {
+            rows(input.text()).len() as f32 * ROW
+        } else if input.multiline {
+            220.
+        } else {
+            ROW
+        })
+        .into();
         (window.request_layout(style, [], cx), ())
     }
     fn prepaint(
@@ -658,7 +703,7 @@ impl Element for FieldElement {
                     if origin.y + px(ROW) < bounds.top() || origin.y > bounds.bottom() {
                         continue;
                     }
-                    if selected.start <= r.end && selected.end > r.start {
+                    if !selected.is_empty() && selected.start <= r.end && selected.end > r.start {
                         let a = line.x_for_index(selected.start.max(r.start).min(r.end) - r.start);
                         let b = line.x_for_index(selected.end.min(r.end) - r.start);
                         window.paint_quad(fill(
@@ -685,23 +730,34 @@ impl Element for FieldElement {
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.focus.is_focused(window);
+        let flow = self.flow;
+        let placeholder = self
+            .placeholder
+            .filter(|_| self.buffer.text.is_empty() && self.buffer.marked.is_none());
         div()
             .id(("text-input", self.tab_index as usize))
             .key_context("SelaTextInput")
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
             .w_full()
-            .p(px(7.))
-            .border_1()
-            .rounded(px(3.))
-            .border_color(rgb(if self.error.is_some() {
-                0xc33b3b
-            } else if focus {
-                0x5485ba
-            } else {
-                0xcbd0d6
-            }))
-            .bg(rgb(0xffffff))
+            .relative()
+            .when(flow.is_none(), |d| {
+                d.p(px(7.))
+                    .border_1()
+                    .rounded(px(3.))
+                    .border_color(rgb(if self.error.is_some() {
+                        0xc33b3b
+                    } else if focus {
+                        0x5485ba
+                    } else {
+                        0xcbd0d6
+                    }))
+                    .bg(rgb(0xffffff))
+            })
+            .when(flow.is_some(), |d| d.px(px(2.)))
+            .when(flow.is_some_and(|f| f.bold), |d| {
+                d.font_weight(FontWeight::BOLD)
+            })
             .text_color(rgb(0x242a31))
             .text_size(px(13.))
             .line_height(px(ROW))
@@ -734,6 +790,10 @@ impl Render for TextInput {
                 s.move_to(s.text().len(), true, cx)
             }))
             .on_action(cx.listener(|s, _: &Backspace, _, cx| {
+                if s.flow.is_some() && s.buffer.head == 0 && s.buffer.anchor == 0 {
+                    cx.propagate();
+                    return;
+                }
                 let r = s.buffer.deletion_range(false);
                 s.edit(
                     Some(to16(s.text(), r.start)..to16(s.text(), r.end)),
@@ -772,6 +832,8 @@ impl Render for TextInput {
             .on_action(cx.listener(|s, _: &Enter, _, cx| {
                 if s.multiline {
                     s.edit(None, "\n", None, cx)
+                } else if s.flow.is_some() {
+                    cx.propagate();
                 }
             }))
             .on_action(cx.listener(|s, _: &Undo, _, cx| {
@@ -825,6 +887,9 @@ impl Render for TextInput {
                 cx.listener(|s, _, _, _| s.dragging = false),
             )
             .on_scroll_wheel(cx.listener(|s, e: &ScrollWheelEvent, _, cx| {
+                if s.flow.is_some() {
+                    return;
+                }
                 let d = e.delta.pixel_delta(px(ROW));
                 let h = px(s.layout.len() as f32 * ROW);
                 if let Some(b) = s.bounds {
@@ -844,6 +909,15 @@ impl Render for TextInput {
                 cx.notify()
             }))
             .child(FieldElement(cx.entity()))
+            .children(placeholder.map(|text| {
+                div()
+                    .absolute()
+                    .top(px(if flow.is_some() { 0. } else { 7. }))
+                    .left(px(if flow.is_some() { 2. } else { 8. }))
+                    .italic()
+                    .text_color(rgb(0x9ea3ab))
+                    .child(text)
+            }))
             .children(self.error.as_ref().map(|e| {
                 div()
                     .text_color(rgb(0xb33232))

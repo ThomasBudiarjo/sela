@@ -346,6 +346,31 @@ set, else the full slide. Go Live and navigation change the underlying slide
 and keep masks. Live double-click clears masks; clearing both cover and Clear
 in a combined state is provisional (EW8-OBS-020). Output off keeps mask state.
 
+## RUN-W06E-2026-10-06 — Song Editor Words/Slides (partial W06)
+
+- Date/observer: 2026-10-06 ~16:30 +07:00, Droid agent on the owner's machine
+  with the owner's authorization (owner chose agent-driven observation). Same
+  install and host as RUN-W01. Editor window "Song Editor - …", class
+  `FMTForm_PresentationEditor`, default 1292x750 physical at 120 DPI.
+- Fixtures: the owner's placeholder song "waeqwe" (edited, then Cancel → No;
+  not saved) and a new untitled song with original placeholder text ("Line
+  one", "Chorus words", …), also discarded with Cancel → No. Nothing was saved.
+- Method: local ad-hoc driver (`.amp/in/explore/ew.py`, not committed) using
+  `scripts/reference_win.py` PrintWindow captures, `mouse_event` clicks and
+  Unicode `SendInput` typing to the editor after a foreground check. Popup menus
+  render only after the cursor hovers them; they were captured from the screen.
+  Artifacts (ignored, local): `.amp/in/artifacts/reference/ew8-w06-editor/`
+  `07-editor-waeqwe.png` … `35-confirm2.png`.
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-021 | observed (RUN-W06E) | Editor layout: Title field (placeholder "Title") top-left inside the toolbar with Import ▾, Print, Spell check ▾, Undo ▾ icons under it; then Text, Scripture ▾, Shape ▾, Media ▾; right end Format, Animate, Presentation. Left pane tabs Words / Slides with + at its bottom-left; right pane the rendered slide (theme background, theme text, "copyright" strip) on a dark surround, with a text tool icon, contrast icon and zoom slider (32%) below it. Footer: "Apply changes to items in schedule" checkbox, Apply (disabled until a change), OK, Cancel. Library row right-click: New Song..., Edit Song..., Delete, Update items in Schedule, Sort by ▸, Refresh. |
+| EW8-OBS-022 | observed (RUN-W06E) | Words is one continuous document of slides. Each slide row: number, slide icon, a label line (bold; grey italic "label" placeholder when empty) and lyric lines ("song" placeholder). A labeled slide starts a bordered group; following unlabeled slides join it. Group color follows the label kind: Verse (and unrecognised text) blue, Chorus and Pre-Chorus rose, Bridge and Tag purple, Ending dark red, Intro green. The selected slide's number cell is highlighted. Ctrl+A selects the whole Words document. |
+| EW8-OBS-023 | observed (RUN-W06E) | Editing: a new song focuses slide 1's label. Clicking text places the caret and selects that slide; the preview shows the caret's slide and updates per keystroke. Enter inserts a line in the same slide; a blank line does not split. Ctrl+Enter splits at the caret: the text after it becomes a new unlabeled slide right after (same group), the line break before the caret is dropped, the caret moves to the new slide, slides renumber. Down from a label moves into its lyrics, Up from the first lyric line into the label. Typing a label on an unlabeled slide starts a new group there. The Words + appends an empty slide as its own group and selects it; an empty slide previews as "Double click to edit song". Ctrl+Z undoes in typing groups. Cancel with changes asks Yes/No/Cancel (EW8-OBS-012). |
+| EW8-OBS-024 | observed (RUN-W06E) | Slides tab: narrower left pane, vertical list of rendered slide thumbnails with the number at the left and a caption bar below each one, filled with the label kind color and showing the label, or "Slide N" (grey italic) when unlabeled; the selected slide has a blue rounded frame. |
+| EW8-OBS-025 | observed (RUN-W06E) | Canvas: single-click on the song text selects its text box (covers the whole slide; eight handles and a rotate handle); double-click enters in-place text editing with a caret. Right-click on the box: Edit Points, Bring to Front, Send to Back, Align Elements ▸, Distribute Elements ▸, Cut, Copy, Paste, Paste Without Formatting, Duplicate, Lock, Reapply Layout to Element. |
+| EW8-OBS-026 | unverified | Toolbar buttons (Title field, Media ▾, Format) ignored synthetic `mouse_event` and absolute `SendInput` clicks, so Format/Animate/Presentation panels, font, size, color, style, alignment and background controls were not observed. Help "Edit a Song" (help.easyworship.com, © 2026, build not stated) documents font selector, auto sizing, font size, color, Bold/Italic/Underline/Shadow/Outline, horizontal and vertical alignment, indent, Reset Styles, Theme, Masters tab and Inspector background fill per song or slide. Needs the owner to click, or another input path. |
+
 ## D-UI-01 — Official toolbar image (documented-only, 2026-10-04)
 
 - Source: <https://www.easyworship.com/software/features>; directly fetched and

@@ -6,6 +6,15 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **EasyWorship-style Song Editor (M1-05e, 2026-10-06):** RUN-W06E observed the
+  8.0.49 Song Editor (EW8-OBS-021–026). The editor now has the Title in the
+  toolbar, EW's tool order (unbuilt tools disabled), Words as one list of
+  slides with inline label/lyrics cells and label-kind group colors, Ctrl+Enter
+  splitting into an unlabeled slide, Backspace joining, `+`, Apply/OK/Cancel,
+  and a real audience-raster slide preview rendered off the UI thread. Windows
+  native check passes. Implemented-unqualified. Next, in the owner-approved
+  order: M1-05f Slides tab thumbnails, M1-05g per-song text formatting, M1-05h
+  song background.
 - **Basic schedule (M1-09a, 2026-10-06):** Schedule items pin song revisions;
   add by button or drag, remove (confirmed, or Ctrl+Delete), reorder by drag or
   Up/Down, Down/Up select, Ctrl+S/Ctrl+O save and open, unsaved guard on Open,
@@ -108,7 +117,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, documented-reference editor and receipt-gated OK; installed-reference/Windows/IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview (Windows native check). M1-05f–i (Slides thumbnails, formatting, background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2221,3 +2230,59 @@ PY
 - Next: the approved spec is complete. Choose the next dependency-ready ticket:
   remaining M1-09 items (duplicate, multi-move, autoscroll, explicit refresh),
   schedule-level Live navigation (M1-10), or W04 observation.
+
+### M1-05e — EasyWorship Song Editor Words layout — 2026-10-06 (UTC+7)
+
+- State: **implemented-unqualified**. Owner request: make Song New/Edit match
+  EasyWorship 8. Reverse engineering the EW binary was declined (EULA,
+  copyright, original-code rule); the installed 8.0.49 editor was observed as a
+  black box instead (RUN-W06E, EW8-OBS-021–026 in reference-observations.md,
+  captures in `.amp/in/artifacts/reference/ew8-w06-editor/`, nothing saved in
+  EW). Owner-approved plan: four phases, each its own commit: M1-05e Words and
+  layout, M1-05f Slides tab, M1-05g formatting (follow the official help,
+  provisional), M1-05h background; EW layout/behavior in Sela's light style.
+- `src/song_library.rs` rewritten around per-slide label/lyrics cells
+  (`TextInput` flow mode, index-parallel to `draft.sections`), keeping the
+  whole-document history, storage worker, guards and action indices (5/6 are
+  now toolbar Undo/Redo, 7/8 `+`/`−`, 1 is footer Apply). Ctrl+Enter no longer
+  copies the label; Backspace at the start of an unlabeled slide joins it to the
+  previous one and drops its occurrences (provisional). History steps move the
+  caret to the restored slide; reloading a cell keeps its caret. New songs start
+  unlabeled (EW) instead of "Verse 1". Window title "Song Editor - <title>".
+- `src/text_input.rs`: flow mode (borderless, height follows rows, wheel goes
+  to the list, Up/Down at the edges, single-line Enter and Backspace at 0
+  propagate), placeholders, `set_cursor`; the unfocused 3 px caret-selection
+  quad is no longer painted for empty selections.
+- Preview: `audience::text_coverage` (extracted from `prepare_frame`, same
+  inset/raster) plus `slides::section_slide`; the editor rasterizes 1280x720
+  BGRA on the background executor, one job in flight, latest wins, and drops
+  replaced images with `App::drop_image`. Upstream checked at the pinned
+  `a846890`: `crates/gpui/src/assets.rs` (`RenderImage`),
+  `elements/img.rs` (`ImageSource::Render`), `app.rs`/`window.rs`
+  (`drop_image`), `elements/div.rs` (`ScrollHandle::scroll_to_item`).
+- Tests: new GPUI `words_cells_navigate_and_new_song_focuses_first_label`,
+  `ctrl_enter_splits_without_label_and_backspace_joins`,
+  `preview_follows_the_caret_slide_off_thread`; unit
+  `preview_matches_audience_raster_and_rejects_unshowable_text`,
+  `label_kinds_and_groups_follow_observed_palette`; the existing editor tests
+  were moved from the old label/lyrics fields to cells without weakening their
+  failure assertions (one expectation changed: undo restores the slide where
+  the undone edit happened).
+- Checks (Windows 11): `cargo fmt --all -- --check`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` (lib 82, bin 59 + 2 ignored, integration
+  and example suites pass), `cargo build --locked`, `python -m ruff check scripts`.
+- Native: `python scripts/song-editor-windows.py` PASS (new; Unicode SendInput
+  and a click helper added to `native_win.py`): "Song Editor - Untitled", caret
+  in slide 1's label, Enter to lyrics, line breaks, Ctrl+Enter, Up to slide 2's
+  label, preview ink (black 38882 / white 910 samples), split and join, title
+  click + typing, Ctrl+S payload decoded from SQLite, window title follows,
+  Ctrl+Q exits 0. Captures in `.amp/in/artifacts/song-editor-windows/`
+  inspected; stray caret quads in unfocused cells were found and fixed.
+- Not run: X11 `scripts/song-library.py` (still targets the M1-05d form; not
+  ported), IME/UIA, Linux/macOS, EW confirmation of Enter-in-label, Backspace
+  join and the separate group for an appended unlabeled slide (recorded as
+  Sela deviations in song-library.md).
+- Next: M1-05f Slides tab with rendered thumbnails and label-colored caption
+  bars (EW8-OBS-025), reusing `render_preview` at thumbnail size with a bounded
+  cache.

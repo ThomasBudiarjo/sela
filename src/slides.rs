@@ -6,7 +6,7 @@ use crate::{
     scene::{
         ContentVersion, Extent, PrepareError, PreparedBackground, PreparedCue, RendererCapabilities,
     },
-    storage::{Song, Version},
+    storage::{Section, Song, Version},
 };
 
 /// Bundled DejaVu Sans (see `tests/fixtures/DejaVuSans.LICENSE`). Provisional
@@ -49,20 +49,22 @@ pub fn slides(song: &Song) -> Vec<Slide> {
             .filter(|sections| !sections.is_empty())
     });
     let sections = ordered.unwrap_or_else(|| song.sections.iter().collect());
-    sections
-        .into_iter()
-        .map(|section| Slide {
-            label: section.label.clone(),
-            text: section
-                .lyrics
-                .lines()
-                .map(str::trim_end)
-                .collect::<Vec<_>>()
-                .join("\n")
-                .trim_matches('\n')
-                .to_owned(),
-        })
-        .collect()
+    sections.into_iter().map(section_slide).collect()
+}
+
+/// One section's slide: trailing spaces and surrounding blank lines dropped.
+pub fn section_slide(section: &Section) -> Slide {
+    Slide {
+        label: section.label.clone(),
+        text: section
+            .lyrics
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_matches('\n')
+            .to_owned(),
+    }
 }
 
 /// The size cap `cue` should use for slides of this item, if any.

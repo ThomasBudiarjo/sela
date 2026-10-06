@@ -1,12 +1,14 @@
 //! Provisional native authoring window. All durable I/O belongs to storage::Worker.
+//! Layout and Words behavior follow EW8-OBS-021..026; see docs/song-library.md.
 use crate::{
     ActivateControl, FocusNext, FocusPrevious, Quit,
-    text_input::{Redo, TextInput, Undo},
+    text_input::{self, Redo, TextInput, Undo},
 };
 use gpui::{prelude::*, *};
 use sela::arrangement::{Occurrence, OccurrenceId, SectionId};
+use sela::scene::{ContentVersion, Extent, PreparedBackground, RendererCapabilities};
 use sela::storage::{Command, Error, Id, Reply, Section, Song, Version, Worker};
-use std::{path::PathBuf, time::Duration};
+use std::{ops::Range, path::PathBuf, sync::Arc, time::Duration};
 
 actions!(song_library, [Save, SplitSection]);
 
@@ -22,13 +24,13 @@ pub fn default_path() -> Option<PathBuf> {
 }
 
 pub fn open(path: PathBuf, cx: &mut App) -> Result<(), String> {
-    let bounds = Bounds::centered(None, size(px(980.), px(760.)), cx);
+    let bounds = Bounds::centered(None, size(px(1180.), px(740.)), cx);
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(720.), px(440.))),
+            window_min_size: Some(size(px(760.), px(460.))),
             titlebar: Some(TitlebarOptions {
-                title: Some("Sela — Song editor".into()),
+                title: Some(window_title("").into()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -40,15 +42,21 @@ pub fn open(path: PathBuf, cx: &mut App) -> Result<(), String> {
                 weak.update(cx, |view, cx| view.may_close(cx))
                     .unwrap_or(true)
             });
-            view.read(cx).fields[0]
-                .read(cx)
-                .focus_handle(cx)
-                .focus(window, cx);
+            // EW8-OBS-023: a new song starts with the caret in slide 1's label.
+            view.update(cx, |view, cx| view.focus_cell(0, 0, 0, window, cx));
             view
         },
     )
     .map_err(|_| "Cannot open song library window".to_string())?;
     Ok(())
+}
+
+fn window_title(title: &str) -> String {
+    let title = title.trim();
+    format!(
+        "Song Editor - {}",
+        if title.is_empty() { "Untitled" } else { title }
+    )
 }
 
 enum Pending {
@@ -68,7 +76,7 @@ fn blank() -> Song {
         variants: Vec::new(),
         sections: vec![Section {
             id: SectionId::allocate(),
-            label: "Verse 1".into(),
+            label: String::new(),
             lyrics: String::new(),
         }],
     }
@@ -76,6 +84,14 @@ fn blank() -> Song {
 
 const HISTORY_LIMIT: usize = 64;
 const HISTORY_BYTES: usize = 8 * 1024 * 1024;
+const LABEL: usize = 0;
+const LYRICS: usize = 1;
+/// Preview raster size. The audience fits text per extent, so this matches
+/// the live layout proportionally at a quarter of 1080p's pixels.
+const PREVIEW: Extent = Extent {
+    width: 1280,
+    height: 720,
+};
 
 #[derive(Clone)]
 struct Document {
@@ -153,10 +169,112 @@ impl History {
     }
 }
 
+/// Label-kind palette: EW8-OBS-024 hues as the ink, with light tints for
+/// Sela's light finish. Unknown labels use the Verse hue, as observed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Kind {
+    ink: u32,
+    bar: u32,
+    border: u32,
+}
+const VERSE: Kind = Kind {
+    ink: 0x314686,
+    bar: 0xe3e8f5,
+    border: 0xb7c2e3,
+};
+fn kind(label: &str) -> Kind {
+    let label = label.trim().to_lowercase();
+    let starts = |words: &[&str]| words.iter().any(|w| label.starts_with(w));
+    if starts(&["chorus", "pre-chorus", "pre chorus", "prechorus"]) {
+        Kind {
+            ink: 0x5b3146,
+            bar: 0xf3e5eb,
+            border: 0xdbbccb,
+        }
+    } else if starts(&["bridge", "tag"]) {
+        Kind {
+            ink: 0x511c51,
+            bar: 0xf0e2f0,
+            border: 0xd5b6d5,
+        }
+    } else if starts(&["ending", "end"]) {
+        Kind {
+            ink: 0x511c1c,
+            bar: 0xf4e2e2,
+            border: 0xdbb8b8,
+        }
+    } else if starts(&["intro"]) {
+        Kind {
+            ink: 0x315b46,
+            bar: 0xe1f1e8,
+            border: 0xb5d8c5,
+        }
+    } else {
+        VERSE
+    }
+}
+
+/// EW8-OBS-022: a labeled slide starts a group; unlabeled slides join the
+/// preceding one. Sela derives groups from labels only, so an unlabeled first
+/// slide still forms the first group.
+fn groups<'a>(labels: impl IntoIterator<Item = &'a str>) -> Vec<Range<usize>> {
+    let mut groups: Vec<Range<usize>> = Vec::new();
+    for (i, label) in labels.into_iter().enumerate() {
+        match groups.last_mut() {
+            Some(group) if label.is_empty() => group.end = i + 1,
+            _ => groups.push(i..i + 1),
+        }
+    }
+    groups
+}
+
+/// Renders one slide exactly as the audience preparer would, off the UI
+/// thread: bundled font, fitted size, centered, white on the cue background.
+/// `None` when the audience would reject the text (overflow, missing glyph).
+fn render_preview(text: &str) -> Option<Arc<RenderImage>> {
+    let slide = sela::slides::Slide {
+        label: String::new(),
+        text: text.into(),
+    };
+    let cue = sela::slides::cue(
+        ContentVersion { id: 0, revision: 0 },
+        &slide,
+        PREVIEW,
+        RendererCapabilities {
+            max_texture_dimension: 4096,
+        },
+        None,
+    )
+    .ok()?;
+    let alpha = crate::audience::text_coverage(&cue, true).ok()?;
+    let PreparedBackground::Color([r, g, b, _]) = *cue.background() else {
+        return None;
+    };
+    let mut bgra = Vec::with_capacity(alpha.len() * 4);
+    for a in alpha {
+        let a = u32::from(a);
+        let mix = |c: u8| ((u32::from(c) * (255 - a) + 255 * a + 127) / 255) as u8;
+        bgra.extend([mix(b), mix(g), mix(r), 255]);
+    }
+    let buffer = image::RgbaImage::from_raw(PREVIEW.width, PREVIEW.height, bgra)?;
+    Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])))
+}
+
+#[derive(Clone, Copy)]
+enum Nav {
+    Up,
+    Down,
+    Enter,
+    Back,
+}
+
 struct Library {
     focus: FocusHandle,
-    fields: [Entity<TextInput>; 6],
-    field_edits: [u64; 6],
+    /// Title, authors, copyright, license.
+    fields: [Entity<TextInput>; 4],
+    field_edits: [u64; 4],
+    /// Label and lyrics cell per section; always parallel to `draft.sections`.
+    cells: Vec<[Entity<TextInput>; 2]>,
     buttons: [FocusHandle; 18],
     subscriptions: Vec<Subscription>,
     task: Option<Task<()>>,
@@ -179,6 +297,12 @@ struct Library {
     close_after_save: bool,
     committed_close: bool,
     section_focus: [FocusHandle; 128],
+    words_scroll: ScrollHandle,
+    /// Latest finished preview: its slide text and image (`None` = rejected).
+    preview: Option<(String, Option<Arc<RenderImage>>)>,
+    /// At most one raster in flight; a newer text starts when it lands.
+    preview_task: Option<Task<()>>,
+    title: String,
 }
 
 impl Library {
@@ -193,14 +317,12 @@ impl Library {
         let fields = std::array::from_fn(|i| {
             let owner = cx.weak_entity();
             cx.new(|cx| {
-                let mut input = TextInput::new(
-                    "",
-                    i == 5,
-                    [1024, 4096, 4096, 4096, 256, 256 * 1024][i],
-                    20 + i as isize,
-                    cx,
-                )
-                .expect("empty text is valid");
+                let mut input =
+                    TextInput::new("", false, [1024, 4096, 4096, 4096][i], 20 + i as isize, cx)
+                        .expect("empty text is valid");
+                if i == 0 {
+                    input.set_placeholder("Title");
+                }
                 input.use_document_history(move |text, cx| {
                     let _ = owner.update(cx, |this, cx| {
                         this.field_edit(i, text);
@@ -218,7 +340,8 @@ impl Library {
         let mut this = Self {
             focus: cx.focus_handle(),
             fields,
-            field_edits: [0; 6],
+            field_edits: [0; 4],
+            cells: Vec::new(),
             buttons: std::array::from_fn(|i| {
                 cx.focus_handle().tab_stop(true).tab_index(i as isize + 1)
             }),
@@ -245,6 +368,10 @@ impl Library {
             section_focus: std::array::from_fn(|i| {
                 cx.focus_handle().tab_stop(true).tab_index(300 + i as isize)
             }),
+            words_scroll: ScrollHandle::new(),
+            preview: None,
+            preview_task: None,
+            title: String::new(),
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
@@ -270,46 +397,84 @@ impl Library {
         this
     }
 
+    fn cell(index: usize, locked: bool, cx: &mut Context<Self>) -> [Entity<TextInput>; 2] {
+        std::array::from_fn(|part| {
+            let owner = cx.weak_entity();
+            cx.new(|cx| {
+                let mut input = TextInput::new(
+                    "",
+                    part == LYRICS,
+                    [256, 256 * 1024][part],
+                    400 + (2 * index + part) as isize,
+                    cx,
+                )
+                .expect("empty text is valid");
+                input.set_flow(part == LABEL);
+                // EW8-OBS-022 placeholders.
+                input.set_placeholder(["label", "song"][part]);
+                input.set_read_only(locked);
+                input.use_document_history(move |text, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.cell_edit(index, part, text);
+                        cx.notify();
+                    });
+                });
+                input
+            })
+        })
+    }
+
     fn current(&self, cx: &App) -> Song {
         let mut song = self.draft.clone();
         song.title = self.fields[0].read(cx).text().into();
         song.authors = self.fields[1].read(cx).text().into();
         song.copyright = self.fields[2].read(cx).text().into();
         song.license = self.fields[3].read(cx).text().into();
-        if let Some(section) = song.sections.get_mut(self.section) {
-            section.label = self.fields[4].read(cx).text().into();
-            section.lyrics = self.fields[5].read(cx).text().into();
+        for (section, cell) in song.sections.iter_mut().zip(&self.cells) {
+            section.label = cell[LABEL].read(cx).text().into();
+            section.lyrics = cell[LYRICS].read(cx).text().into();
         }
         song
     }
     fn dirty(&self, cx: &App) -> bool {
         self.current(cx) != self.baseline
     }
+    fn locked(&self) -> bool {
+        self.pending.is_some() || self.committed_close
+    }
+    fn clear_rejection(&mut self) {
+        if self.status.starts_with("A title is required")
+            || self.status.starts_with("An input was rejected")
+            || self.status.starts_with("Song is invalid")
+        {
+            self.status = "Draft changed · validate with Apply or OK".into();
+        }
+    }
     // Called synchronously by the field. Never read the borrowed field here.
     fn field_edit(&mut self, index: usize, text: &str) {
         let mut song = self.draft.clone();
-        let value = match index {
-            0 => &mut song.title,
-            1 => &mut song.authors,
-            2 => &mut song.copyright,
-            3 => &mut song.license,
-            4 => match song.sections.get_mut(self.section) {
-                Some(s) => &mut s.label,
-                None => return,
-            },
-            _ => match song.sections.get_mut(self.section) {
-                Some(s) => &mut s.lyrics,
-                None => return,
-            },
+        *[
+            &mut song.title,
+            &mut song.authors,
+            &mut song.copyright,
+            &mut song.license,
+        ][index] = text.into();
+        self.clear_rejection();
+        self.record(song);
+    }
+    // Called synchronously by the cell. Never read the borrowed cell here.
+    fn cell_edit(&mut self, index: usize, part: usize, text: &str) {
+        let mut song = self.draft.clone();
+        let Some(section) = song.sections.get_mut(index) else {
+            return;
         };
-        *value = text.into();
-        if song != self.draft
-            && (self.status.starts_with("A title is required")
-                || self.status.starts_with("An input was rejected")
-                || self.status.starts_with("Song is invalid"))
-        {
-            self.status = "Draft changed · validate with Save or OK".into();
-        }
+        *if part == LABEL {
+            &mut section.label
+        } else {
+            &mut section.lyrics
+        } = text.into();
+        self.section = index;
+        self.clear_rejection();
         self.record(song);
     }
     fn record(&mut self, song: Song) {
@@ -322,8 +487,8 @@ impl Library {
             self.confirm_delete = false;
         }
     }
-    fn history(&mut self, redo: bool, cx: &mut Context<Self>) {
-        if self.pending.is_some() || self.committed_close {
+    fn history(&mut self, redo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.locked() {
             return;
         }
         self.record(self.current(cx));
@@ -334,10 +499,17 @@ impl Library {
             },
             redo,
         ) {
+            let focused = self.focused_cell(window, cx);
             self.draft = next.song;
             self.section = next.section;
             self.confirm_delete = false;
             self.load_fields(cx);
+            // The caret follows the restored slide instead of staying in a
+            // cell that now holds a different slide.
+            if focused.is_some_and(|(i, _)| i != self.section) {
+                let index = self.section;
+                self.focus_cell(index, LYRICS, usize::MAX, window, cx);
+            }
             self.status = if redo {
                 "Document redone"
             } else {
@@ -362,7 +534,7 @@ impl Library {
         true
     }
     fn may_replace(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.pending.is_some() || self.committed_close {
+        if self.locked() {
             return false;
         }
         if self.dirty(cx) {
@@ -372,25 +544,39 @@ impl Library {
         }
         true
     }
+    /// Brings every input in line with `draft`. Cells stay index-parallel to
+    /// sections; an unchanged input keeps its caret.
     fn load_fields(&mut self, cx: &mut Context<Self>) {
-        let empty = Section {
-            id: SectionId(Id([0; 16])),
-            label: String::new(),
-            lyrics: String::new(),
-        };
-        let section = self.draft.sections.get(self.section).unwrap_or(&empty);
+        fn load(input: &Entity<TextInput>, value: &str, cx: &mut App) {
+            if input.read(cx).text() != value || input.read(cx).error().is_some() {
+                let caret = input.read(cx).selection().end;
+                input.update(cx, |input, cx| {
+                    input.set_text(value, cx).expect("validated editable song");
+                    input.set_cursor(caret, cx);
+                });
+            }
+        }
         for (field, value) in self.fields.iter().zip([
             &self.draft.title,
             &self.draft.authors,
             &self.draft.copyright,
             &self.draft.license,
-            &section.label,
-            &section.lyrics,
         ]) {
-            field
-                .update(cx, |field, cx| field.set_text(value, cx))
-                .expect("validated editable song");
+            load(field, value, cx);
         }
+        let locked = self.locked();
+        self.cells.truncate(self.draft.sections.len());
+        while self.cells.len() < self.draft.sections.len() {
+            let cell = Self::cell(self.cells.len(), locked, cx);
+            self.cells.push(cell);
+        }
+        for (cell, section) in self.cells.iter().zip(&self.draft.sections) {
+            load(&cell[LABEL], &section.label, cx);
+            load(&cell[LYRICS], &section.lyrics, cx);
+        }
+        self.section = self
+            .section
+            .min(self.draft.sections.len().saturating_sub(1));
     }
     fn begin(&mut self, song: Song, version: Option<Version>, cx: &mut Context<Self>) {
         self.draft = song.clone();
@@ -404,8 +590,8 @@ impl Library {
         cx.notify();
     }
     fn sync_input_lock(&self, cx: &mut Context<Self>) {
-        let locked = self.pending.is_some() || self.committed_close;
-        for field in &self.fields {
+        let locked = self.locked();
+        for field in self.fields.iter().chain(self.cells.iter().flatten()) {
             field.update(cx, |f, _| f.set_read_only(locked));
         }
     }
@@ -493,7 +679,7 @@ impl Library {
         cx.notify();
     }
     fn action(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending.is_some() || self.committed_close {
+        if self.locked() {
             return;
         }
         self.record(self.current(cx));
@@ -517,12 +703,14 @@ impl Library {
             0 if self.may_replace(cx) => {
                 self.begin(blank(), None, cx);
                 self.status = "New song · not saved".into();
+                self.focus_cell(0, LABEL, 0, window, cx);
             }
             1 | 2 => {
                 let song = self.current(cx);
                 if self
                     .fields
                     .iter()
+                    .chain(self.cells.iter().flatten())
                     .any(|field| field.read(cx).error().is_some())
                 {
                     self.status =
@@ -556,67 +744,8 @@ impl Library {
                 self.begin(self.baseline.clone(), self.version, cx);
                 self.status = "Edits discarded".into();
             }
-            5..=8 => {
-                let song = self.current(cx);
-                // Preserve a blank title while authoring, but bound total section payload.
-                let mut bounded = song.clone();
-                if bounded.title.trim().is_empty() {
-                    bounded.title = "Untitled".into();
-                }
-                if bounded.validate().is_err() {
-                    self.status = "Song too large. Shorten this section before switching.".into();
-                } else {
-                    let before = Document {
-                        song: song.clone(),
-                        section: self.section,
-                    };
-                    let mut candidate = song;
-                    let mut section = self.section;
-                    match index {
-                        5 => section = section.saturating_sub(1),
-                        6 => {
-                            section = (section + 1).min(candidate.sections.len().saturating_sub(1))
-                        }
-                        7 if candidate.sections.len() < 128 => {
-                            candidate.sections.push(Section {
-                                id: SectionId::allocate(),
-                                label: format!("Section {}", candidate.sections.len() + 1),
-                                lyrics: String::new(),
-                            });
-                            section = candidate.sections.len() - 1;
-                        }
-                        8 if !candidate.sections.is_empty() => {
-                            candidate.sections.remove(section);
-                            section = section.min(candidate.sections.len().saturating_sub(1));
-                        }
-                        _ => (),
-                    }
-                    if candidate == before.song && section == before.section {
-                        if index == 7 {
-                            self.status = "At most 128 sections. Original unchanged.".into();
-                            cx.notify();
-                        }
-                        return;
-                    }
-                    let mut bounded = candidate.clone();
-                    if bounded.title.trim().is_empty() {
-                        bounded.title = "Untitled".into();
-                    }
-                    if bounded.validate().is_err() {
-                        self.status =
-                            "Section is referenced or exceeds limits. Original unchanged.".into();
-                        cx.notify();
-                        return;
-                    }
-                    if candidate != before.song {
-                        self.history.record(before);
-                        self.confirm_delete = false;
-                    }
-                    self.draft = candidate;
-                    self.section = section;
-                    self.load_fields(cx);
-                }
-            }
+            5 | 6 => self.history(index == 6, window, cx),
+            7 | 8 => self.restructure(index == 7, window, cx),
             9 if self.may_replace(cx) => {
                 self.cursor = if self.catalog.len() == 128 {
                     self.catalog.last().map(|(v, _)| v.id)
@@ -636,40 +765,85 @@ impl Library {
         cx.notify();
     }
 
-    /// Ctrl+Enter in the lyrics: the text from the cursor on becomes a new
-    /// section right after this one (SRC-08/SRC-11, documented-only). The
-    /// copied label and splitting mid-line are provisional. Arrangements get
-    /// the new section after every occurrence of the split one, so no lyrics
-    /// leave the output. One undo step restores the original.
-    fn split_section(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending.is_some() || self.committed_close {
+    /// `+` appends an empty unlabeled slide and puts the caret in its label
+    /// (EW8-OBS-023); `−` removes the current slide (Sela control, no EW
+    /// counterpart observed). Atomic and one undo step.
+    fn restructure(&mut self, add: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let song = self.current(cx);
+        let mut candidate = song.clone();
+        let mut section = self.section;
+        if add {
+            if candidate.sections.len() >= 128 {
+                self.status = "At most 128 slides. Original unchanged.".into();
+                return;
+            }
+            candidate.sections.push(Section {
+                id: SectionId::allocate(),
+                label: String::new(),
+                lyrics: String::new(),
+            });
+            section = candidate.sections.len() - 1;
+        } else {
+            if candidate.sections.is_empty() {
+                return;
+            }
+            candidate.sections.remove(section);
+            section = section.min(candidate.sections.len().saturating_sub(1));
+        }
+        if !valid_draft(&candidate) {
+            self.status =
+                "Slide is used by an arrangement or the song exceeds limits. Original unchanged."
+                    .into();
             return;
         }
-        let lyrics = &self.fields[5];
-        if self.slides || !lyrics.read(cx).focus_handle(cx).is_focused(window) {
-            self.status = "Place the cursor in the lyrics to split the section.".into();
+        self.history.record(Document {
+            song,
+            section: self.section,
+        });
+        self.confirm_delete = false;
+        self.draft = candidate;
+        self.section = section;
+        self.load_fields(cx);
+        if add {
+            self.focus_cell(section, LABEL, 0, window, cx);
+        }
+    }
+
+    /// Ctrl+Enter in the lyrics: the text from the caret on becomes a new
+    /// unlabeled slide right after this one, the newline just before the
+    /// caret is dropped and the caret moves to the new slide's start
+    /// (EW8-OBS-023). Arrangements get the new section after every
+    /// occurrence of the split one, so no lyrics leave the output. One undo
+    /// step restores the original.
+    fn split_section(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.locked() {
+            return;
+        }
+        let Some(index) = self
+            .focused_cell(window, cx)
+            .filter(|(_, part)| *part == LYRICS && !self.slides)
+            .map(|(i, _)| i)
+        else {
+            self.status = "Place the cursor in the lyrics to split the slide.".into();
             cx.notify();
             return;
-        }
-        let at = lyrics.read(cx).selection().start;
+        };
+        let at = self.cells[index][LYRICS].read(cx).selection().start;
         let song = self.current(cx);
         self.record(song.clone());
-        let Some(section) = song.sections.get(self.section) else {
-            return;
-        };
+        let section = &song.sections[index];
         let (head, tail) = section.lyrics.split_at(at);
-        // Splitting at a line start leaves no blank line at the end.
         let head = head
             .strip_suffix('\n')
             .map_or(head, |h| h.strip_suffix('\r').unwrap_or(h));
         let new = Section {
             id: SectionId::allocate(),
-            label: section.label.clone(),
+            label: String::new(),
             lyrics: tail.into(),
         };
         let mut candidate = song.clone();
-        candidate.sections[self.section].lyrics = head.into();
-        candidate.sections.insert(self.section + 1, new.clone());
+        candidate.sections[index].lyrics = head.into();
+        candidate.sections.insert(index + 1, new.clone());
         for variant in &mut candidate.variants {
             let mut occurrences = Vec::with_capacity(variant.occurrences.len() + 1);
             for occurrence in &variant.occurrences {
@@ -683,11 +857,7 @@ impl Library {
             }
             variant.occurrences = occurrences;
         }
-        let mut bounded = candidate.clone();
-        if bounded.title.trim().is_empty() {
-            bounded.title = "Untitled".into();
-        }
-        if bounded.validate().is_err() {
+        if !valid_draft(&candidate) {
             self.status =
                 "Splitting would exceed the song's section limits. Original unchanged.".into();
             cx.notify();
@@ -695,37 +865,169 @@ impl Library {
         }
         self.history.record(Document {
             song,
-            section: self.section,
+            section: index,
         });
         self.confirm_delete = false;
         self.draft = candidate;
-        self.section += 1;
+        self.section = index + 1;
         self.load_fields(cx);
-        self.fields[5].read(cx).focus_handle(cx).focus(window, cx);
-        self.status = "Section split · Undo restores it".into();
+        self.focus_cell(index + 1, LYRICS, 0, window, cx);
+        self.status = "Slide split · Undo restores it".into();
         cx.notify();
     }
 
-    fn select_section(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.pending.is_some() || self.committed_close || index >= self.draft.sections.len() {
+    /// Backspace at the start of an unlabeled slide joins it to the previous
+    /// slide, the inverse of Ctrl+Enter. Provisional: EW's merge is unobserved.
+    /// Its occurrences leave every arrangement; one undo step restores them.
+    fn merge(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let song = self.current(cx);
+        self.record(song.clone());
+        let mut candidate = song.clone();
+        let removed = candidate.sections.remove(index);
+        let previous = &mut candidate.sections[index - 1];
+        let caret = previous.lyrics.len();
+        if !removed.lyrics.is_empty() {
+            if !previous.lyrics.is_empty() {
+                previous.lyrics.push('\n');
+            }
+            previous.lyrics.push_str(&removed.lyrics);
+        }
+        for variant in &mut candidate.variants {
+            variant.occurrences.retain(|o| o.section != removed.id);
+        }
+        if !valid_draft(&candidate) || !editable(&candidate) {
+            self.status = "Joining would exceed the slide limits. Original unchanged.".into();
+            cx.notify();
             return;
         }
-        let song = self.current(cx);
-        let mut bounded = song.clone();
-        if bounded.title.trim().is_empty() {
-            bounded.title = "Untitled".into();
-        }
-        if bounded.validate().is_err() {
-            self.status = "Song too large. Shorten this section before switching.".into();
-        } else {
-            self.record(song.clone());
-            self.draft = song;
-            self.section = index;
-            self.load_fields(cx);
-        }
+        self.history.record(Document {
+            song,
+            section: index,
+        });
+        self.confirm_delete = false;
+        self.draft = candidate;
+        self.section = index - 1;
+        self.load_fields(cx);
+        self.focus_cell(index - 1, LYRICS, caret, window, cx);
+        self.status = "Slides joined · Undo restores them".into();
         cx.notify();
     }
-    fn button(&self, index: usize, label: &str, cx: &mut Context<Self>) -> impl IntoElement {
+
+    /// Cell-to-cell movement for keys the cell did not consume. Down/Up cross
+    /// label and lyrics (EW8-OBS-023); Enter in a label goes to its lyrics
+    /// (provisional, EW8-OBS-026).
+    fn navigate(
+        &mut self,
+        index: usize,
+        part: usize,
+        nav: Nav,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.locked() || index >= self.cells.len() {
+            return;
+        }
+        let unlabeled = self.cells[index][LABEL].read(cx).text().is_empty();
+        match (part, nav) {
+            (LABEL, Nav::Down | Nav::Enter) => self.focus_cell(index, LYRICS, 0, w, cx),
+            (LABEL, Nav::Up) if index > 0 => self.focus_cell(index - 1, LYRICS, usize::MAX, w, cx),
+            (LYRICS, Nav::Up) => self.focus_cell(index, LABEL, usize::MAX, w, cx),
+            (LYRICS, Nav::Down) if index + 1 < self.cells.len() => {
+                self.focus_cell(index + 1, LABEL, 0, w, cx)
+            }
+            (_, Nav::Back) if index > 0 && unlabeled => self.merge(index, w, cx),
+            (LYRICS, Nav::Back) => self.focus_cell(index, LABEL, usize::MAX, w, cx),
+            _ => {}
+        }
+    }
+
+    fn focused_cell(&self, window: &Window, cx: &App) -> Option<(usize, usize)> {
+        self.cells.iter().enumerate().find_map(|(i, cell)| {
+            cell.iter()
+                .position(|c| c.read(cx).focus_handle(cx).is_focused(window))
+                .map(|part| (i, part))
+        })
+    }
+
+    /// Caret at `byte` (clamped) in one cell; that slide becomes current.
+    fn focus_cell(
+        &mut self,
+        index: usize,
+        part: usize,
+        byte: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(cell) = self.cells.get(index).map(|c| c[part].clone()) else {
+            return;
+        };
+        cell.update(cx, |c, cx| c.set_cursor(byte, cx));
+        cell.read(cx).focus_handle(cx).focus(window, cx);
+        self.section = index;
+        let group = (1..=index)
+            .filter(|i| !self.cells[*i][LABEL].read(cx).text().is_empty())
+            .count();
+        self.words_scroll.scroll_to_item(group);
+        cx.notify();
+    }
+
+    fn select_section(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.locked() || index >= self.draft.sections.len() {
+            return;
+        }
+        if self.slides {
+            self.section = index;
+            cx.notify();
+        } else {
+            self.focus_cell(index, LYRICS, usize::MAX, window, cx);
+        }
+    }
+
+    /// The current slide's text as the audience would show it.
+    fn preview_text(&self, cx: &App) -> Option<String> {
+        let cell = self.cells.get(self.section)?;
+        let section = Section {
+            id: SectionId(Id([0; 16])),
+            label: String::new(),
+            lyrics: cell[LYRICS].read(cx).text().into(),
+        };
+        Some(sela::slides::section_slide(&section).text)
+    }
+
+    /// Latest-wins preview preparation off the UI thread.
+    fn ensure_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = self.preview_text(cx) else {
+            return;
+        };
+        if self.preview_task.is_some() || self.preview.as_ref().is_some_and(|(t, _)| *t == text) {
+            return;
+        }
+        let job = text.clone();
+        let raster = cx
+            .background_executor()
+            .spawn(async move { render_preview(&job) });
+        self.preview_task = Some(cx.spawn(async move |this, cx| {
+            let image = raster.await;
+            let _ = this.update(cx, |this, cx| {
+                this.preview_task = None;
+                if let Some((_, Some(old))) = this.preview.replace((text, image)) {
+                    cx.drop_image(old, None);
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    fn control(
+        &self,
+        index: usize,
+        label: &str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if !enabled {
+            return inert(label).into_any_element();
+        }
         div()
             .id(("library-button", index))
             .track_focus(&self.buttons[index])
@@ -750,7 +1052,103 @@ impl Library {
                 s.action(index, w, cx);
             }))
             .child(label.to_owned())
+            .into_any_element()
     }
+    fn button(&self, index: usize, label: &str, cx: &mut Context<Self>) -> AnyElement {
+        self.control(index, label, true, cx)
+    }
+    fn framed(&self, index: usize, label: &str, enabled: bool, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex_shrink_0()
+            .min_w(px(76.))
+            .border_1()
+            .rounded(px(4.))
+            .border_color(rgb(if enabled { 0xcbd0d6 } else { 0xe1e3e5 }))
+            .bg(rgb(0xffffff))
+            .flex()
+            .justify_center()
+            .child(self.control(index, label, enabled, cx))
+    }
+
+    fn slide_row(&self, index: usize, kind: Kind, cx: &mut Context<Self>) -> Div {
+        let selected = index == self.section;
+        let labeled = !self.cells[index][LABEL].read(cx).text().is_empty();
+        let nav = |part: usize, cx: &mut Context<Self>| {
+            div()
+                .on_action(cx.listener(move |s, _: &text_input::Up, w, cx| {
+                    s.navigate(index, part, Nav::Up, w, cx)
+                }))
+                .on_action(cx.listener(move |s, _: &text_input::Down, w, cx| {
+                    s.navigate(index, part, Nav::Down, w, cx)
+                }))
+                .on_action(cx.listener(move |s, _: &text_input::Enter, w, cx| {
+                    s.navigate(index, part, Nav::Enter, w, cx)
+                }))
+                .on_action(cx.listener(move |s, _: &text_input::Backspace, w, cx| {
+                    s.navigate(index, part, Nav::Back, w, cx)
+                }))
+        };
+        div()
+            .flex()
+            .when(index > 0, |d| d.mt(px(1.)))
+            .child(
+                div()
+                    .id(("slide-number", index))
+                    .w(px(30.))
+                    .flex_shrink_0()
+                    .pt(px(2.))
+                    .pr(px(6.))
+                    .flex()
+                    .justify_end()
+                    .text_size(px(12.))
+                    .text_color(rgb(if selected { 0x2f4f99 } else { 0x7a7f86 }))
+                    .bg(rgb(if selected { 0xdce3fa } else { 0xf1f1ef }))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |s, _, w, cx| s.select_section(index, w, cx)))
+                    .child((index + 1).to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        nav(LABEL, cx)
+                            .px_1()
+                            .when(labeled, |d| {
+                                d.bg(rgb(kind.bar)).border_l_2().border_color(rgb(kind.ink))
+                            })
+                            .child(self.cells[index][LABEL].clone()),
+                    )
+                    .child(
+                        nav(LYRICS, cx)
+                            .px_1()
+                            .pb_1()
+                            .child(self.cells[index][LYRICS].clone()),
+                    ),
+            )
+    }
+}
+
+/// Visible but unavailable control (EW8-OBS-021 layout, not yet implemented).
+fn inert(label: &str) -> Div {
+    div()
+        .flex_shrink_0()
+        .px_2()
+        .py_1()
+        .text_size(px(12.))
+        .text_color(rgb(0xa5a9af))
+        .child(label.to_owned())
+}
+
+/// Saved songs need a title; a draft only needs to fit while authoring.
+fn valid_draft(song: &Song) -> bool {
+    let mut bounded = song.clone();
+    if bounded.title.trim().is_empty() {
+        bounded.title = "Untitled".into();
+    }
+    bounded.validate().is_ok()
 }
 
 fn editable(song: &Song) -> bool {
@@ -797,8 +1195,35 @@ impl Render for Library {
         if self.committed_close {
             window.remove_window();
         }
+        if let Some((index, _)) = self.focused_cell(window, cx).filter(|_| !self.slides) {
+            self.section = index;
+        }
+        let title = self.fields[0].read(cx).text().to_owned();
+        if title != self.title {
+            window.set_window_title(&window_title(&title));
+            self.title = title;
+        }
+        self.ensure_preview(cx);
         let busy = self.pending.is_some();
         let dirty = self.dirty(cx);
+        let viewport = window.viewport_size();
+        let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
+        let catalog_width = if self.show_catalog { 220. } else { 0. };
+        let words_width = ((width - catalog_width) * 0.34).max(330.);
+        let pane = (width - catalog_width - words_width - 48.).max(160.);
+        let slide_width = pane.min((height - 230.).max(90.) * 16. / 9.);
+        let labels: Vec<String> = self
+            .cells
+            .iter()
+            .map(|c| c[LABEL].read(cx).text().to_owned())
+            .collect();
+        let groups = groups(labels.iter().map(String::as_str));
+        let empty = self.preview_text(cx).is_some_and(|t| t.is_empty());
+        let rejected = self
+            .preview
+            .as_ref()
+            .is_some_and(|(_, image)| image.is_none());
+        let image = self.preview.as_ref().and_then(|(_, image)| image.clone());
         div()
             .key_context("Sela SongLibrary")
             .track_focus(&self.focus)
@@ -811,8 +1236,8 @@ impl Render for Library {
             .on_action(cx.listener(|_, _: &FocusPrevious, w, cx| w.focus_prev(cx)))
             .on_action(cx.listener(|s, _: &Save, w, cx| s.action(1, w, cx)))
             .on_action(cx.listener(|s, _: &SplitSection, w, cx| s.split_section(w, cx)))
-            .on_action(cx.listener(|s, _: &Undo, _, cx| s.history(false, cx)))
-            .on_action(cx.listener(|s, _: &Redo, _, cx| s.history(true, cx)))
+            .on_action(cx.listener(|s, _: &Undo, w, cx| s.history(false, w, cx)))
+            .on_action(cx.listener(|s, _: &Redo, w, cx| s.history(true, w, cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -820,50 +1245,60 @@ impl Render for Library {
             .text_color(rgb(0x292c30))
             .font_family("DejaVu Sans")
             .text_size(px(13.))
+            // EW8-OBS-021 toolbar: Title and document tools at left, insert
+            // groups, then Format/Animate/Presentation at right.
             .child(
                 div()
                     .id("editor-toolbar")
                     .overflow_x_scroll()
-                    .h(px(44.))
+                    .h(px(68.))
                     .flex_shrink_0()
                     .px_3()
                     .flex()
                     .items_center()
-                    .gap_2()
+                    .gap_1()
                     .border_b_1()
                     .border_color(rgb(0xdcdedc))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Song editor"))
+                    .child(
+                        div()
+                            .w(px(250.))
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(self.fields[0].clone())
+                            .child(
+                                div()
+                                    .flex()
+                                    .when(!busy, |d| {
+                                        d.child(self.button(0, "New", cx))
+                                            .child(self.button(5, "Undo", cx))
+                                            .child(self.button(6, "Redo", cx))
+                                    }),
+                            ),
+                    )
+                    .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(0xdcdedc)))
+                    .children(["Text", "Scripture", "Shape", "Media"].map(inert))
+                    .child(div().flex_1())
+                    .children(["Format", "Animate", "Presentation"].map(inert))
+                    .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(0xdcdedc)))
                     .when(!busy, |d| {
                         d.child(self.button(13, "Library", cx))
-                            .child(self.button(0, "New", cx))
-                            .child(self.button(1, "Save", cx))
-                            .child(self.button(2, "Duplicate", cx))
-                            .child(self.button(
-                                3,
-                                if self.confirm_delete {
-                                    "Confirm delete"
-                                } else {
-                                    "Delete"
-                                },
-                                cx,
-                            ))
-                            .child(self.button(4, "Discard edits", cx))
-                    })
-                    .when(f32::from(window.viewport_size().width) >= 900., |d| {
-                        d.child(if dirty {
-                            "Unsaved"
-                        } else {
-                            "Saved / unchanged"
-                        })
-                    })
-                    .child(div().flex_1())
-                    .when(!busy, |d| d.child(self.button(12, "Inspector", cx))),
+                            .child(self.button(12, "Inspector", cx))
+                    }),
             )
-            .child(div().px_3().py_2().text_size(px(12.)).child(format!(
-                "{} · {}",
-                if dirty { "Unsaved" } else { "Unchanged" },
-                self.status
-            )))
+            .child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .text_size(px(12.))
+                    .text_color(rgb(0x646971))
+                    .child(format!(
+                        "{} · {}",
+                        if dirty { "Unsaved" } else { "Unchanged" },
+                        self.status
+                    )),
+            )
             .when(self.confirm_close && !busy, |d| {
                 d.child(
                     div()
@@ -871,6 +1306,7 @@ impl Render for Library {
                         .py_2()
                         .bg(rgb(0xfff1dc))
                         .flex()
+                        .items_center()
                         .gap_2()
                         .child("Close without saving?")
                         .child(self.button(10, "Discard and close", cx))
@@ -882,10 +1318,12 @@ impl Render for Library {
                     .flex_1()
                     .min_h_0()
                     .flex()
+                    .border_t_1()
+                    .border_color(rgb(0xdcdedc))
                     .when(self.show_catalog, |d| {
                         d.child(
                             div()
-                                .w(px(220.))
+                                .w(px(catalog_width))
                                 .flex_shrink_0()
                                 .border_r_1()
                                 .border_color(rgb(0xdcdedc))
@@ -897,6 +1335,25 @@ impl Render for Library {
                                         .text_color(rgb(0x646971))
                                         .child("Saved songs · ID order"),
                                 )
+                                .when(!busy, |d| {
+                                    d.child(
+                                        div()
+                                            .px_2()
+                                            .flex()
+                                            .flex_wrap()
+                                            .child(self.button(2, "Duplicate", cx))
+                                            .child(self.button(
+                                                3,
+                                                if self.confirm_delete {
+                                                    "Confirm delete"
+                                                } else {
+                                                    "Delete"
+                                                },
+                                                cx,
+                                            ))
+                                            .child(self.button(4, "Discard edits", cx)),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .id("library-list")
@@ -955,182 +1412,228 @@ impl Render for Library {
                                 }),
                         )
                     })
-                    .child(if busy {
+                    .child(
                         div()
-                            .flex_1()
-                            .p_6()
-                            .child("Loading or saving…")
-                            .into_any_element()
-                    } else {
-                        div()
-                            .id("song-form")
-                            .w(px(
-                                (f32::from(window.viewport_size().width) * 0.46).max(310.)
-                            ))
+                            .w(px(words_width))
                             .flex_shrink_0()
-                            .min_w_0()
-                            .p_4()
-                            .overflow_y_scroll()
+                            .min_h_0()
                             .flex()
                             .flex_col()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .child("Title")
-                                    .child(self.fields[0].clone()),
-                            )
+                            .bg(rgb(0xfbfbfa))
                             .child(
                                 div()
                                     .flex()
                                     .flex_shrink_0()
-                                    .child(
-                                        div()
-                                            .border_b_2()
-                                            .border_color(rgb(if !self.slides {
-                                                0x536aca
-                                            } else {
-                                                0xf4f4f3
-                                            }))
-                                            .child(self.button(14, "Words", cx)),
-                                    )
-                                    .child(
-                                        div()
-                                            .border_b_2()
-                                            .border_color(rgb(if self.slides {
-                                                0x536aca
-                                            } else {
-                                                0xf4f4f3
-                                            }))
-                                            .child(self.button(17, "Slides", cx)),
-                                    ),
-                            )
-                            .when(self.slides, |d| {
-                                d.child(
-                                    div().text_size(px(11.)).text_color(rgb(0x646971)).child(
-                                        "Draft sections · first 4 lines · not rendered slides",
-                                    ),
-                                )
-                            })
-                            .children(self.draft.sections.iter().enumerate().map(|(i, section)| {
-                                div()
-                                    .id(("draft-section", i))
-                                    .track_focus(&self.section_focus[i])
-                                    .key_context("SelaControl")
-                                    .flex_shrink_0()
-                                    .p_2()
+                                    .px_2()
+                                    .pt_1()
                                     .border_b_1()
                                     .border_color(rgb(0xdcdedc))
-                                    .bg(rgb(if i == self.section {
-                                        0xe3e7f3
-                                    } else {
-                                        0xfafaf9
-                                    }))
-                                    .focus(|d| d.bg(rgb(0xdce3fa)))
-                                    .cursor_pointer()
-                                    .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
-                                        w.prevent_default();
-                                        s.select_section(i, cx);
-                                    }))
-                                    .on_click(cx.listener(move |s, event, w, cx| {
-                                        if matches!(event, ClickEvent::Keyboard(_)) {
-                                            return;
-                                        }
-                                        s.section_focus[i].focus(w, cx);
-                                        s.select_section(i, cx);
-                                    }))
-                                    .child(format!("{} · {}", i + 1, section.label))
-                                    .when(self.slides, |d| {
-                                        d.child(
+                                    .children([(14, "Words", !self.slides), (17, "Slides", self.slides)].map(
+                                        |(index, label, active)| {
                                             div()
-                                                .mt_2()
-                                                .p_2()
-                                                .bg(rgb(0x202226))
-                                                .text_color(rgb(0xfafaf9))
-                                                .children(section.lyrics.split('\n').take(4).map(
-                                                    |line| {
-                                                        div().child(
-                                                            line.trim_end_matches('\r').to_owned(),
-                                                        )
-                                                    },
-                                                )),
-                                        )
-                                    })
-                            }))
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(format!(
-                                        "Section {} of {}",
-                                        if self.draft.sections.is_empty() {
-                                            0
-                                        } else {
-                                            self.section + 1
+                                                .border_b_2()
+                                                .border_color(rgb(if active {
+                                                    0x536aca
+                                                } else {
+                                                    0xfbfbfa
+                                                }))
+                                                .child(self.button(index, label, cx))
                                         },
-                                        self.draft.sections.len()
-                                    ))
-                                    .child(self.button(5, "Previous", cx))
-                                    .child(self.button(6, "Next", cx)),
+                                    )),
                             )
-                            .when(!self.draft.sections.is_empty(), |d| {
-                                d.child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .child("Section label")
-                                        .child(self.fields[4].clone()),
-                                )
-                                .when(!self.slides, |d| {
-                                    d.child(
+                            .child(if busy {
+                                div()
+                                    .flex_1()
+                                    .p_6()
+                                    .child("Loading or saving…")
+                                    .into_any_element()
+                            } else if self.slides {
+                                div()
+                                    .id("slide-list")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .p_2()
+                                    .child(div().text_size(px(11.)).text_color(rgb(0x646971)).child(
+                                        "Draft slides · first 4 lines · thumbnails are planned",
+                                    ))
+                                    .children(self.draft.sections.iter().enumerate().map(
+                                        |(i, section)| {
+                                            div()
+                                                .id(("draft-section", i))
+                                                .track_focus(&self.section_focus[i])
+                                                .key_context("SelaControl")
+                                                .flex_shrink_0()
+                                                .p_2()
+                                                .border_b_1()
+                                                .border_color(rgb(0xdcdedc))
+                                                .bg(rgb(if i == self.section {
+                                                    0xe3e7f3
+                                                } else {
+                                                    0xfafaf9
+                                                }))
+                                                .focus(|d| d.bg(rgb(0xdce3fa)))
+                                                .cursor_pointer()
+                                                .on_action(cx.listener(
+                                                    move |s, _: &ActivateControl, w, cx| {
+                                                        w.prevent_default();
+                                                        s.select_section(i, w, cx);
+                                                    },
+                                                ))
+                                                .on_click(cx.listener(move |s, event, w, cx| {
+                                                    if matches!(event, ClickEvent::Keyboard(_)) {
+                                                        return;
+                                                    }
+                                                    s.section_focus[i].focus(w, cx);
+                                                    s.select_section(i, w, cx);
+                                                }))
+                                                .child(if section.label.is_empty() {
+                                                    format!("{} · Slide {}", i + 1, i + 1)
+                                                } else {
+                                                    format!("{} · {}", i + 1, section.label)
+                                                })
+                                                .child(
+                                                    div()
+                                                        .mt_2()
+                                                        .p_2()
+                                                        .bg(rgb(0x202226))
+                                                        .text_color(rgb(0xfafaf9))
+                                                        .children(
+                                                            section.lyrics.split('\n').take(4).map(
+                                                                |line| {
+                                                                    div().child(
+                                                                        line.trim_end_matches('\r')
+                                                                            .to_owned(),
+                                                                    )
+                                                                },
+                                                            ),
+                                                        ),
+                                                )
+                                        },
+                                    ))
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .id("words")
+                                    .track_scroll(&self.words_scroll)
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .p_2()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.))
+                                    .children(groups.iter().map(|group| {
+                                        let label = &labels[group.start];
+                                        let kind = kind(label);
                                         div()
                                             .flex_shrink_0()
-                                            .child("Lyrics · line breaks are preserved")
-                                            .child(self.fields[5].clone()),
-                                    )
-                                })
+                                            .border_1()
+                                            .rounded(px(4.))
+                                            .overflow_hidden()
+                                            .bg(rgb(0xffffff))
+                                            .border_color(rgb(if label.is_empty() {
+                                                0xdcdedc
+                                            } else {
+                                                kind.border
+                                            }))
+                                            .children(
+                                                group.clone().map(|i| self.slide_row(i, kind, cx)),
+                                            )
+                                    }))
+                                    .into_any_element()
                             })
-                            .into_any_element()
-                    })
+                            .child(
+                                div()
+                                    .h(px(34.))
+                                    .flex_shrink_0()
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .border_t_1()
+                                    .border_color(rgb(0xdcdedc))
+                                    .when(!busy, |d| {
+                                        d.child(self.button(7, "+", cx))
+                                            .child(self.button(8, "−", cx))
+                                    }),
+                            ),
+                    )
                     .when(!busy && !self.show_catalog, |d| {
                         d.child(
                             div()
                                 .id("draft-preview")
                                 .flex_1()
                                 .min_w_0()
-                                .overflow_y_scroll()
-                                .p_4()
+                                .flex()
+                                .flex_col()
+                                .bg(rgb(0xebebe9))
                                 .border_l_1()
                                 .border_color(rgb(0xdcdedc))
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(rgb(0x646971))
-                                        .child("Local draft preview · not audience pagination"),
-                                )
                                 .when(!self.inspector, |d| {
                                     d.child(
                                         div()
-                                            .mt_4()
-                                            .p_4()
-                                            .bg(rgb(0x202226))
-                                            .text_color(rgb(0xfafaf9))
-                                            .child(self.fields[4].read(cx).text().to_string())
-                                            .child(div().mt_3().children(
-                                                self.fields[5].read(cx).text().split('\n').map(
-                                                    |line| {
-                                                        div().min_h(px(20.)).child(
-                                                            line.trim_end_matches('\r').to_owned(),
+                                            .flex_1()
+                                            .min_h_0()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                div()
+                                                    .id("slide-preview")
+                                                    .relative()
+                                                    .w(px(slide_width))
+                                                    .h(px(slide_width * 9. / 16.))
+                                                    .bg(rgb(0x000000))
+                                                    .border_1()
+                                                    .border_color(rgb(0xc9ccd0))
+                                                    .on_click(cx.listener(|s, e: &ClickEvent, w, cx| {
+                                                        if e.click_count() == 2 {
+                                                            let index = s.section;
+                                                            s.focus_cell(index, LYRICS, usize::MAX, w, cx);
+                                                        }
+                                                    }))
+                                                    .children(image.map(|image| {
+                                                        img(image).size_full()
+                                                    }))
+                                                    .when(empty || rejected, |d| {
+                                                        d.child(
+                                                            div()
+                                                                .absolute()
+                                                                .inset_0()
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .p_4()
+                                                                .text_color(rgb(0x9a9ea5))
+                                                                .child(if rejected {
+                                                                    "This slide cannot be shown: a line is too long or uses a character the bundled font lacks."
+                                                                } else {
+                                                                    // EW8-OBS-023 empty-slide hint.
+                                                                    "Double click to edit song"
+                                                                }),
                                                         )
-                                                    },
-                                                ),
+                                                    }),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .h(px(26.))
+                                            .flex_shrink_0()
+                                            .px_3()
+                                            .flex()
+                                            .items_center()
+                                            .text_size(px(11.))
+                                            .text_color(rgb(0x646971))
+                                            .child(format!(
+                                                "Slide {} of {} · audience layout preview",
+                                                (self.section + 1).min(self.cells.len()),
+                                                self.cells.len()
                                             )),
                                     )
                                 })
                                 .when(self.inspector, |d| {
                                     d.child(
-                                        div().child("Inspector · song information").children(
+                                        div().p_4().child("Inspector · song information").children(
                                             ["Authors", "Copyright", "License identifier"]
                                                 .iter()
                                                 .enumerate()
@@ -1146,21 +1649,38 @@ impl Render for Library {
                         )
                     }),
             )
+            // EW8-OBS-021 footer.
             .when(!busy, |d| {
                 d.child(
                     div()
-                        .h(px(40.))
+                        .h(px(46.))
                         .flex_shrink_0()
                         .flex()
                         .items_center()
-                        .justify_end()
                         .gap_2()
                         .px_3()
-                        .child(self.button(7, "+ Add section", cx))
-                        .child(self.button(8, "Remove", cx))
+                        .border_t_1()
+                        .border_color(rgb(0xdcdedc))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_size(px(12.))
+                                .text_color(rgb(0xa5a9af))
+                                .child(
+                                    div()
+                                        .size(px(13.))
+                                        .border_1()
+                                        .rounded(px(2.))
+                                        .border_color(rgb(0xcbd0d6)),
+                                )
+                                .child("Apply changes to items in schedule"),
+                        )
                         .child(div().flex_1())
-                        .child(self.button(15, "OK", cx))
-                        .child(self.button(16, "Cancel", cx)),
+                        .child(self.framed(1, "Apply", dirty, cx))
+                        .child(self.framed(15, "OK", true, cx))
+                        .child(self.framed(16, "Cancel", true, cx)),
                 )
             })
     }
@@ -1195,20 +1715,75 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
     }
-    fn field(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize, text: &str) {
-        cx.update(|w, cx| {
-            view.update(cx, |v, cx| {
-                if (1..=3).contains(&index) {
+    fn input(cx: &VisualTestContext, view: &Entity<Library>, index: usize) -> Entity<TextInput> {
+        view.read_with(cx, |v, _| v.fields[index].clone())
+    }
+    fn cell(
+        cx: &VisualTestContext,
+        view: &Entity<Library>,
+        index: usize,
+        part: usize,
+    ) -> Entity<TextInput> {
+        view.read_with(cx, |v, _| v.cells[index][part].clone())
+    }
+    fn show_inspector(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize) {
+        if (1..=3).contains(&index) {
+            cx.update(|_, cx| {
+                view.update(cx, |v, cx| {
                     v.inspector = true;
                     v.show_catalog = false;
                     cx.notify();
-                }
-                v.fields[index]
-                    .update(cx, |f, cx| f.set_text(text, cx))
-                    .unwrap();
-                v.fields[index].read(cx).focus_handle(cx).focus(w, cx);
+                })
+            });
+            cx.run_until_parked();
+        }
+    }
+    /// Programmatic load: bypasses the document callback, like a late reload.
+    fn field(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize, text: &str) {
+        show_inspector(cx, view, index);
+        let input = input(cx, view, index);
+        cx.update(|w, cx| {
+            input.update(cx, |f, cx| f.set_text(text, cx)).unwrap();
+            input.read(cx).focus_handle(cx).focus(w, cx);
+        });
+    }
+    /// Native replacement of the whole text, as typing would report it.
+    fn replace(cx: &mut VisualTestContext, input: Entity<TextInput>, text: &str) {
+        cx.update(|w, cx| {
+            input.update(cx, |f, cx| {
+                let end = f.text().encode_utf16().count();
+                f.replace_text_in_range(Some(0..end), text, w, cx);
+                f.focus_handle(cx).focus(w, cx);
             })
         });
+    }
+    fn edit(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize, text: &str) {
+        show_inspector(cx, view, index);
+        let input = input(cx, view, index);
+        replace(cx, input, text);
+    }
+    fn type_cell(
+        cx: &mut VisualTestContext,
+        view: &Entity<Library>,
+        index: usize,
+        part: usize,
+        text: &str,
+    ) {
+        let input = cell(cx, view, index, part);
+        replace(cx, input, text);
+    }
+    fn caret(
+        cx: &mut VisualTestContext,
+        view: &Entity<Library>,
+        index: usize,
+        part: usize,
+        byte: usize,
+    ) {
+        cx.update(|w, cx| view.update(cx, |v, cx| v.focus_cell(index, part, byte, w, cx)));
+        cx.run_until_parked();
+    }
+    fn focused(cx: &mut VisualTestContext, view: &Entity<Library>) -> Option<(usize, usize)> {
+        cx.update(|w, cx| view.read(cx).focused_cell(w, cx))
     }
     fn action(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize) {
         cx.update(|w, cx| view.update(cx, |v, cx| v.action(index, w, cx)));
@@ -1223,6 +1798,7 @@ mod tests {
         let path = dir.path().join("library.sqlite");
         let mut original = blank();
         original.title = "Duplicate labels".into();
+        original.sections[0].label = "Verse 1".into();
         original.sections[0].lyrics = "First original".into();
         original.sections.push(Section {
             id: SectionId::allocate(),
@@ -1249,7 +1825,7 @@ mod tests {
         cx.update(|_, cx| view.update(cx, |v, cx| v.select(first, cx)));
         wait(&mut cx, &view);
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
-        edit(&mut cx, &view, 5, "First edited");
+        type_cell(&mut cx, &view, 0, LYRICS, "First edited");
         let edited = view.read_with(&cx, |v, cx| v.current(cx));
         action(&mut cx, &view, 1);
         wait(&mut cx, &view);
@@ -1264,18 +1840,21 @@ mod tests {
         cx.simulate_keystrokes("ctrl-shift-z");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), edited);
         let count = view.read_with(&cx, |v, _| v.history.undo.len());
-        action(&mut cx, &view, 8); // referenced section cannot be removed
+        action(&mut cx, &view, 8); // referenced slide cannot be removed
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), edited);
         assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), count);
         action(&mut cx, &view, 7);
         let added = view.read_with(&cx, |v, cx| v.current(cx));
         assert!(!edited.sections.iter().any(|s| s.id == added.sections[2].id));
+        assert_eq!(added.sections[2].label, "", "EW appends an unlabeled slide");
+        assert_eq!(focused(&mut cx, &view), Some((2, LABEL)));
         cx.update(|w, cx| view.read(cx).buttons[8].clone().focus(w, cx));
         cx.simulate_keystrokes("ctrl-z");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), edited);
         cx.simulate_keystrokes("ctrl-shift-z");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), added);
-        action(&mut cx, &view, 8); // unreferenced new section can be removed
+        assert_eq!(view.read_with(&cx, |v, _| v.section), 2);
+        action(&mut cx, &view, 8); // unreferenced new slide can be removed
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), edited);
         action(&mut cx, &view, 2);
         wait(&mut cx, &view);
@@ -1287,12 +1866,13 @@ mod tests {
     }
 
     #[gpui::test]
-    fn ctrl_enter_splits_the_section_at_the_cursor_and_undo_restores(cx: &mut TestAppContext) {
+    fn ctrl_enter_splits_without_label_and_backspace_joins(cx: &mut TestAppContext) {
         use sela::arrangement::{Variant, VariantId};
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("library.sqlite");
         let mut original = blank();
         original.title = "Split hymn".into();
+        original.sections[0].label = "Verse 1".into();
         original.sections[0].lyrics = "Line one\r\nLine two\nLine three".into();
         original.sections.push(Section {
             id: SectionId::allocate(),
@@ -1320,25 +1900,21 @@ mod tests {
         cx.update(|_, cx| view.update(cx, |v, cx| v.select(first, cx)));
         wait(&mut cx, &view);
 
-        // Outside the lyrics Ctrl+Enter changes nothing.
+        // Outside the lyrics (title, a label) Ctrl+Enter changes nothing.
         field(&mut cx, &view, 0, "Split hymn");
+        cx.simulate_keystrokes("ctrl-enter");
+        caret(&mut cx, &view, 0, LABEL, 0);
         cx.simulate_keystrokes("ctrl-enter");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
         assert!(view.read_with(&cx, |v, _| v.status.contains("cursor in the lyrics")));
 
-        // Cursor at the start of "Line two"; the text itself is unchanged.
-        let input = view.read_with(&cx, |v, _| v.fields[5].clone());
-        cx.update(|w, cx| {
-            input.update(cx, |f, cx| {
-                f.replace_text_in_range(Some(0..10), "Line one\r\n", w, cx);
-                f.focus_handle(cx).focus(w, cx);
-            })
-        });
+        // Caret at the start of "Line two".
+        caret(&mut cx, &view, 0, LYRICS, 10);
         cx.simulate_keystrokes("ctrl-enter");
         let split = view.read_with(&cx, |v, cx| v.current(cx));
         let labels: Vec<_> = split.sections.iter().map(|s| s.label.as_str()).collect();
         let lyrics: Vec<_> = split.sections.iter().map(|s| s.lyrics.as_str()).collect();
-        assert_eq!(labels, ["Verse 1", "Verse 1", "Chorus"]);
+        assert_eq!(labels, ["Verse 1", "", "Chorus"]);
         assert_eq!(lyrics, ["Line one", "Line two\nLine three", "Refrain"]);
         let new = split.sections[1].id;
         assert!(![verse, chorus].contains(&new));
@@ -1361,12 +1937,14 @@ mod tests {
                 "Line two\nLine three"
             ]
         );
-        cx.update(|w, cx| {
-            let v = view.read(cx);
-            assert_eq!(v.section, 1);
-            assert!(v.fields[5].read(cx).focus_handle(cx).is_focused(w));
-            assert_eq!(v.fields[5].read(cx).text(), "Line two\nLine three");
-        });
+        assert_eq!(view.read_with(&cx, |v, _| v.section), 1);
+        assert_eq!(focused(&mut cx, &view), Some((1, LYRICS)));
+        assert_eq!(
+            cell(&cx, &view, 1, LYRICS).read_with(&cx, |c, _| c.selection()),
+            0..0
+        );
+        // The unlabeled slide joins Verse 1's group; Chorus starts its own.
+        assert_eq!(groups(labels.iter().copied()), [0..2, 2..3]);
 
         cx.simulate_keystrokes("ctrl-z");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
@@ -1377,6 +1955,27 @@ mod tests {
         wait(&mut cx, &view);
         let saved = view.read_with(&cx, |v, _| v.version.unwrap());
         assert_eq!(Repository::open(&path).unwrap().song(saved).unwrap(), split);
+
+        // Backspace at the start of the unlabeled slide joins it back.
+        caret(&mut cx, &view, 1, LYRICS, 0);
+        cx.simulate_keystrokes("backspace");
+        let joined = view.read_with(&cx, |v, cx| v.current(cx));
+        assert_eq!(joined.sections.len(), 2);
+        assert_eq!(joined.sections[0].lyrics, "Line one\nLine two\nLine three");
+        assert_eq!(joined.variants, original.variants);
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        assert_eq!(
+            cell(&cx, &view, 0, LYRICS).read_with(&cx, |c, _| c.selection()),
+            8..8
+        );
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), split);
+        // A labeled slide is never joined; Backspace only leaves its lyrics.
+        caret(&mut cx, &view, 2, LYRICS, 0);
+        cx.simulate_keystrokes("backspace");
+        assert_eq!(focused(&mut cx, &view), Some((2, LABEL)));
+        cx.simulate_keystrokes("home backspace");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), split);
 
         // At the 128-section limit nothing is split and no undo step is added.
         cx.update(|_, cx| {
@@ -1394,37 +1993,128 @@ mod tests {
             })
         });
         let full = view.read_with(&cx, |v, cx| v.current(cx));
-        cx.update(|w, cx| {
-            view.read(cx).fields[5]
-                .read(cx)
-                .focus_handle(cx)
-                .focus(w, cx)
-        });
+        caret(&mut cx, &view, 0, LYRICS, 0);
         cx.simulate_keystrokes("ctrl-enter");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), full);
         assert!(view.read_with(&cx, |v, _| v.history.undo.is_empty()
             && v.status.contains("limits")));
     }
 
-    fn edit(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize, text: &str) {
-        if (1..=3).contains(&index) {
-            cx.update(|_, cx| {
-                view.update(cx, |v, cx| {
-                    v.inspector = true;
-                    v.show_catalog = false;
-                    cx.notify();
-                })
-            });
-            cx.run_until_parked();
-        }
-        let input = view.read_with(cx, |v, _| v.fields[index].clone());
-        cx.update(|w, cx| {
-            input.update(cx, |f, cx| {
-                let end = f.text().encode_utf16().count();
-                f.replace_text_in_range(Some(0..end), text, w, cx);
-                f.focus_handle(cx).focus(w, cx);
-            })
-        });
+    #[gpui::test]
+    fn words_cells_navigate_and_new_song_focuses_first_label(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
+        action(&mut cx, &view, 0);
+        cx.run_until_parked();
+        assert_eq!(focused(&mut cx, &view), Some((0, LABEL)));
+        cx.simulate_input("Verse 1");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        cx.simulate_input("Line one");
+        cx.simulate_keystrokes("enter");
+        cx.simulate_input("Line two");
+        // Enter is a line break, not a split (EW8-OBS-023).
+        cx.simulate_keystrokes("enter enter");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx).sections.len()), 1);
+        cx.simulate_input("after blank");
+        cx.simulate_keystrokes("ctrl-enter");
+        cx.simulate_input("Second");
+        cx.simulate_keystrokes("up");
+        assert_eq!(focused(&mut cx, &view), Some((1, LABEL)));
+        cx.simulate_input("Chorus");
+        cx.simulate_keystrokes("up");
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        cx.simulate_keystrokes("down");
+        assert_eq!(focused(&mut cx, &view), Some((1, LABEL)));
+        cx.simulate_keystrokes("down");
+        assert_eq!(focused(&mut cx, &view), Some((1, LYRICS)));
+        let song = view.read_with(&cx, |v, cx| v.current(cx));
+        let parts: Vec<_> = song
+            .sections
+            .iter()
+            .map(|s| (s.label.as_str(), s.lyrics.as_str()))
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                ("Verse 1", "Line one\nLine two\n\nafter blank"),
+                ("Chorus", "Second")
+            ]
+        );
+        assert_eq!(view.read_with(&cx, |v, _| v.section), 1);
+        cx.simulate_keystrokes("ctrl-z");
+        let label = view.read_with(&cx, |v, cx| v.current(cx).sections[1].label.clone());
+        assert!(label.len() < 6 && "Chorus".starts_with(&label));
+        // Title lives in the toolbar and names the window.
+        edit(&mut cx, &view, 0, "Amazing");
+        cx.run_until_parked();
+        assert_eq!(view.read_with(&cx, |v, _| v.title.clone()), "Amazing");
+    }
+
+    #[test]
+    fn label_kinds_and_groups_follow_observed_palette() {
+        assert_eq!(kind("Verse 2"), VERSE);
+        assert_eq!(kind("etsaer"), VERSE);
+        assert_eq!(kind("Chorus"), kind("Pre-Chorus"));
+        assert_eq!(kind("Bridge"), kind("tag"));
+        assert_ne!(kind("Chorus"), VERSE);
+        assert_ne!(kind("Bridge"), kind("Chorus"));
+        assert_ne!(kind("Ending"), kind("Intro"));
+        assert_eq!(kind("Ending").ink, 0x511c1c);
+        assert_eq!(kind("Intro").ink, 0x315b46);
+        assert_eq!(groups(["", "", "Chorus", "", "Tag"]), [0..2, 2..4, 4..5]);
+        assert_eq!(groups(["Verse", "Chorus"]), [0..1, 1..2]);
+        assert!(groups([]).is_empty());
+    }
+
+    #[test]
+    fn preview_matches_audience_raster_and_rejects_unshowable_text() {
+        let ink = |image: &RenderImage| {
+            image
+                .as_bytes(0)
+                .unwrap()
+                .chunks(4)
+                .filter(|p| p[0] > 128)
+                .count()
+        };
+        let blank = render_preview("").unwrap();
+        assert_eq!(ink(&blank), 0);
+        let text = render_preview("Amazing grace\nhow sweet").unwrap();
+        let size = text.size(0);
+        assert_eq!((size.width.0, size.height.0), (1280, 720));
+        assert!(ink(&text) > 1000);
+        assert!(render_preview("\u{e000}").is_none(), "missing glyph");
+    }
+
+    #[gpui::test]
+    fn preview_follows_the_caret_slide_off_thread(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
+        type_cell(&mut cx, &view, 0, LYRICS, "First slide");
+        action(&mut cx, &view, 7);
+        type_cell(&mut cx, &view, 1, LYRICS, "");
+        cx.update(|_, cx| view.update(cx, |v, cx| v.ensure_preview(cx)));
+        cx.run_until_parked();
+        assert!(view.read_with(&cx, |v, _| {
+            v.preview
+                .as_ref()
+                .is_some_and(|(t, i)| t.is_empty() && i.is_some())
+        }));
+        caret(&mut cx, &view, 0, LYRICS, 0);
+        cx.update(|_, cx| view.update(cx, |v, cx| v.ensure_preview(cx)));
+        cx.run_until_parked();
+        assert!(view.read_with(&cx, |v, _| {
+            v.preview_task.is_none()
+                && v.preview
+                    .as_ref()
+                    .is_some_and(|(t, i)| t == "First slide" && i.is_some())
+        }));
+        type_cell(&mut cx, &view, 0, LYRICS, "\u{e000}");
+        cx.update(|_, cx| view.update(cx, |v, cx| v.ensure_preview(cx)));
+        cx.run_until_parked();
+        assert!(view.read_with(&cx, |v, _| {
+            v.preview.as_ref().is_some_and(|(_, i)| i.is_none())
+        }));
     }
 
     #[gpui::test]
@@ -1439,14 +2129,15 @@ mod tests {
             && !v.close_after_save
             && v.status.contains("title")));
         edit(&mut cx, &view, 0, "Original mode fixture");
-        edit(&mut cx, &view, 5, "Asymmetric first line");
+        type_cell(&mut cx, &view, 0, LYRICS, "Asymmetric first line");
         action(&mut cx, &view, 7);
-        edit(&mut cx, &view, 5, "Distinct second section");
+        type_cell(&mut cx, &view, 1, LYRICS, "Distinct second section");
         let count = view.read_with(&cx, |v, _| v.history.undo.len());
         action(&mut cx, &view, 17);
         action(&mut cx, &view, 12);
         action(&mut cx, &view, 13);
-        cx.update(|_, cx| view.update(cx, |v, cx| v.select_section(0, cx)));
+        cx.update(|w, cx| view.update(cx, |v, cx| v.select_section(0, w, cx)));
+        assert_eq!(view.read_with(&cx, |v, _| v.section), 0);
         assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), count);
         assert_eq!(
             view.read_with(&cx, |v, cx| v.current(cx).sections[0].lyrics.clone()),
@@ -1491,7 +2182,7 @@ mod tests {
             if operation == "failed-save" {
                 repo.save_song(Some(first), other.clone()).unwrap();
             }
-            let input = view.read_with(&cx, |v, _| v.fields[5].clone());
+            let input = cell(&cx, &view, 0, LYRICS);
             // One update: no redraw can detach the old input handler between
             // submission and the direct native replacement/preedit callbacks.
             cx.update(|w, cx| {
@@ -1527,12 +2218,13 @@ mod tests {
                 assert_eq!(view.read(cx).committed_close, operation == "ok");
                 // Completion-to-close also has no redraw yet. Other terminal
                 // replies, including storage errors, must re-enable editing.
+                let input = view.read(cx).cells[0][LYRICS].clone();
                 input.update(cx, |f, cx| {
                     f.replace_text_in_range(Some(0..0), "After", w, cx)
                 });
                 if operation == "ok" {
                     view.update(cx, |v, cx| {
-                        v.history(false, cx);
+                        v.history(false, w, cx);
                         v.action(7, w, cx);
                     });
                     assert_eq!(view.read(cx).current(cx), original);
@@ -1573,21 +2265,18 @@ mod tests {
     }
 
     #[gpui::test]
-    fn blank_title_section_navigation_preserves_draft_but_cannot_save(cx: &mut TestAppContext) {
+    fn blank_title_slide_selection_preserves_draft_but_cannot_save(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
         edit(&mut cx, &view, 0, "   ");
-        edit(&mut cx, &view, 5, "First section");
+        type_cell(&mut cx, &view, 0, LYRICS, "First section");
         action(&mut cx, &view, 7);
-        edit(&mut cx, &view, 5, "Second section");
+        type_cell(&mut cx, &view, 1, LYRICS, "Second section");
         let draft = view.read_with(&cx, |v, cx| v.current(cx));
         let count = view.read_with(&cx, |v, _| v.history.undo.len());
-        cx.update(|_, cx| view.update(cx, |v, cx| v.select_section(0, cx)));
+        cx.update(|w, cx| view.update(cx, |v, cx| v.select_section(0, w, cx)));
         assert_eq!(view.read_with(&cx, |v, _| v.section), 0);
-        assert_eq!(
-            view.read_with(&cx, |v, cx| v.fields[5].read(cx).text().to_owned()),
-            "First section"
-        );
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), draft);
         assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), count);
         action(&mut cx, &view, 15);
@@ -1598,48 +2287,48 @@ mod tests {
     }
 
     #[gpui::test]
-    fn chronological_document_history_across_navigation_and_structures(cx: &mut TestAppContext) {
+    fn chronological_document_history_across_cells_and_structures(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
         edit(&mut cx, &view, 0, "Café 😀");
-        edit(&mut cx, &view, 5, "First e\u{301}\r\n\n");
+        type_cell(&mut cx, &view, 0, LYRICS, "First e\u{301}\r\n\n");
         let first = view.read_with(&cx, |v, cx| v.current(cx));
         action(&mut cx, &view, 7);
-        edit(&mut cx, &view, 4, "Chorus B");
-        edit(&mut cx, &view, 5, "Second asymmetric 😀\nlast");
+        type_cell(&mut cx, &view, 1, LABEL, "Chorus B");
+        type_cell(&mut cx, &view, 1, LYRICS, "Second asymmetric 😀\nlast");
         let two = view.read_with(&cx, |v, cx| v.current(cx));
-        action(&mut cx, &view, 5);
         let count = view.read_with(&cx, |v, _| v.history.undo.len());
-        cx.simulate_keystrokes("left shift-right");
-        action(&mut cx, &view, 6);
-        action(&mut cx, &view, 5);
+        // Caret moves and slide selection are not document steps.
+        caret(&mut cx, &view, 0, LYRICS, 0);
+        cx.simulate_keystrokes("right shift-right");
+        cx.update(|w, cx| view.update(cx, |v, cx| v.select_section(1, w, cx)));
         assert_eq!(view.read_with(&cx, |v, _| v.history.undo.len()), count);
-        edit(&mut cx, &view, 5, "First changed");
+        type_cell(&mut cx, &view, 0, LYRICS, "First changed");
+        cx.update(|w, cx| view.update(cx, |v, cx| v.select_section(0, w, cx)));
         action(&mut cx, &view, 8);
         assert_eq!(
             view.read_with(&cx, |v, cx| v.current(cx).sections[0].clone()),
             two.sections[1]
         );
-        // Control-focus and field-focus both resolve the same semantic document action.
+        // Toolbar Undo/Redo and the shortcut resolve the same document history.
         cx.update(|w, cx| view.read(cx).buttons[8].clone().focus(w, cx));
         cx.simulate_keystrokes("ctrl-z");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx).sections.len()), 2);
-        cx.simulate_keystrokes("ctrl-z");
+        action(&mut cx, &view, 5);
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), two);
-        assert_eq!(view.read_with(&cx, |v, _| v.section), 0);
-        cx.simulate_keystrokes("ctrl-shift-z ctrl-shift-z");
-        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx).sections.len()), 1);
-        cx.simulate_keystrokes("ctrl-z ctrl-z");
-        action(&mut cx, &view, 6);
-        cx.simulate_keystrokes("ctrl-z");
         assert_eq!(
-            view.read_with(&cx, |v, cx| v.current(cx).sections[1].lyrics.clone()),
-            ""
+            view.read_with(&cx, |v, _| v.section),
+            0,
+            "slide of the undone edit"
         );
-        cx.simulate_keystrokes("ctrl-z ctrl-z");
+        action(&mut cx, &view, 6);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx).sections.len()), 1);
+        cx.simulate_keystrokes("ctrl-z ctrl-z ctrl-z ctrl-z ctrl-z");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), first);
         edit(&mut cx, &view, 1, "Branch author");
         assert!(view.read_with(&cx, |v, _| v.history.redo.is_empty()));
+        cx.simulate_keystrokes("ctrl-z");
         cx.simulate_keystrokes("ctrl-shift-z");
         assert_eq!(
             view.read_with(&cx, |v, cx| v.current(cx).authors),
@@ -1656,7 +2345,7 @@ mod tests {
         let path = dir.path().join("library.sqlite");
         let (mut cx, view) = fixture(cx, path.clone());
         edit(&mut cx, &view, 0, "Saved title");
-        edit(&mut cx, &view, 5, "Saved lyrics");
+        type_cell(&mut cx, &view, 0, LYRICS, "Saved lyrics");
         action(&mut cx, &view, 1);
         // Busy undo cannot modify an in-flight payload.
         cx.simulate_keystrokes("ctrl-z");
@@ -1689,7 +2378,7 @@ mod tests {
         let mut other = Repository::open(&path).unwrap();
         let baseline = other.song(duplicate).unwrap();
         other.save_song(Some(duplicate), baseline.clone()).unwrap();
-        edit(&mut cx, &view, 5, "Conflict draft");
+        type_cell(&mut cx, &view, 0, LYRICS, "Conflict draft");
         let before = view.read_with(&cx, |v, _| v.history.undo.len());
         action(&mut cx, &view, 1);
         wait(&mut cx, &view);
@@ -1775,7 +2464,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut cx, view) = fixture(cx, dir.path().to_path_buf()); // DB open fails, not a writable file.
         edit(&mut cx, &view, 0, "T");
-        edit(&mut cx, &view, 5, "Retain me 😀");
+        type_cell(&mut cx, &view, 0, LYRICS, "Retain me 😀");
         let original = view.read_with(&cx, |v, cx| v.current(cx));
         let count = view.read_with(&cx, |v, _| v.history.undo.len());
         action(&mut cx, &view, 1);
@@ -1784,10 +2473,13 @@ mod tests {
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
         cx.simulate_keystrokes("ctrl-z ctrl-shift-z");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
-        // Real Remove is invoked at control focus, not a soon-hidden lyric field.
         cx.update(|w, cx| view.read(cx).buttons[8].clone().focus(w, cx));
         action(&mut cx, &view, 8);
-        assert!(view.read_with(&cx, |v, cx| v.current(cx).sections.is_empty()));
+        assert!(
+            view.read_with(&cx, |v, cx| v.current(cx).sections.is_empty()
+                && v.cells.is_empty())
+        );
+        cx.run_until_parked();
         cx.simulate_keystrokes("ctrl-z");
         assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), original);
         cx.simulate_keystrokes("ctrl-shift-z");
@@ -1835,12 +2527,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested/library.sqlite");
         let (mut cx, view) = fixture(cx, path.clone());
-        field(&mut cx, &view, 0, "Original Café");
-        field(&mut cx, &view, 1, "Original author");
-        field(&mut cx, &view, 5, "First\r\nline e\u{301}\n");
+        edit(&mut cx, &view, 0, "Original Café");
+        edit(&mut cx, &view, 1, "Original author");
+        type_cell(&mut cx, &view, 0, LYRICS, "First\r\nline e\u{301}\n");
         action(&mut cx, &view, 7);
-        field(&mut cx, &view, 4, "Chorus");
-        field(&mut cx, &view, 5, "Different second section");
+        type_cell(&mut cx, &view, 1, LABEL, "Chorus");
+        type_cell(&mut cx, &view, 1, LYRICS, "Different second section");
         cx.simulate_keystrokes("ctrl-s");
         cx.update(|_, cx| {
             view.update(cx, |v, cx| {
@@ -1860,7 +2552,7 @@ mod tests {
             vec![
                 Section {
                     id: saved.sections[0].id,
-                    label: "Verse 1".into(),
+                    label: String::new(),
                     lyrics: "First\r\nline e\u{301}\n".into()
                 },
                 Section {
@@ -1870,7 +2562,7 @@ mod tests {
                 },
             ]
         );
-        field(&mut cx, &view, 0, "Unsaved");
+        edit(&mut cx, &view, 0, "Unsaved");
         cx.simulate_keystrokes("ctrl-q");
         assert!(view.read_with(&cx, |v, _| v.confirm_close));
         action(&mut cx, &view, 0);

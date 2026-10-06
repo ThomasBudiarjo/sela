@@ -10,7 +10,7 @@ pub mod text;
 use sela::{
     delivery::{Command, DeliveryError, Epoch, Lane, Outcome, Payload, RendererSession, Stamp},
     masks::Layer,
-    scene::{Extent, PreparedBackground, RendererCapabilities},
+    scene::{Extent, PreparedBackground, PreparedCue, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
 use std::{
@@ -222,6 +222,39 @@ fn draw<'a>(
         Shown::Keep => return None,
     })
 }
+/// White-text coverage over the cue's full extent. Same 32px inset, explicit
+/// font and no-wrap policy as composition_spike; the song editor preview
+/// shares it so authoring shows the audience layout. Preparation only.
+pub fn text_coverage(cue: &PreparedCue, centered: bool) -> Result<Vec<u8>, text::TextError> {
+    let size = cue.extent();
+    let mut alpha = vec![0; size.width as usize * size.height as usize];
+    if let Some(t) = cue.text() {
+        let width = size
+            .width
+            .checked_sub(64)
+            .filter(|w| *w > 0)
+            .ok_or(text::TextError::Bounds)?;
+        let height = size
+            .height
+            .checked_sub(64)
+            .filter(|h| *h > 0)
+            .ok_or(text::TextError::Bounds)?;
+        let raster = text::raster_aligned(
+            t.font(),
+            t.content(),
+            width,
+            height,
+            f32::from(t.font_size()),
+            centered,
+        )?;
+        for row in 0..height as usize {
+            let start = (row + 32) * size.width as usize + 32;
+            alpha[start..start + width as usize]
+                .copy_from_slice(&raster[row * width as usize..(row + 1) * width as usize]);
+        }
+    }
+    Ok(alpha)
+}
 fn prepare_frame(
     frame: Frame,
     caps: RendererCapabilities,
@@ -233,34 +266,7 @@ fn prepare_frame(
         .map_err(|_| PreparationFailure::Resource)?;
     let cue = command.cue().ok_or(PreparationFailure::Resource)?;
     let size = cue.extent();
-    // Same 32px inset, explicit font, no-wrap policy as composition_spike.
-    let mut alpha = vec![0; size.width as usize * size.height as usize];
-    if let Some(t) = cue.text() {
-        let width = size
-            .width
-            .checked_sub(64)
-            .filter(|w| *w > 0)
-            .ok_or(PreparationFailure::Resource)?;
-        let height = size
-            .height
-            .checked_sub(64)
-            .filter(|h| *h > 0)
-            .ok_or(PreparationFailure::Resource)?;
-        let raster = text::raster_aligned(
-            t.font(),
-            t.content(),
-            width,
-            height,
-            f32::from(t.font_size()),
-            centered,
-        )
-        .map_err(|_| PreparationFailure::Resource)?;
-        for row in 0..height as usize {
-            let start = (row + 32) * size.width as usize + 32;
-            alpha[start..start + width as usize]
-                .copy_from_slice(&raster[row * width as usize..(row + 1) * width as usize]);
-        }
-    }
+    let alpha = text_coverage(cue, centered).map_err(|_| PreparationFailure::Resource)?;
     let background = match cue.background() {
         PreparedBackground::Color(rgba) => compositor::Image {
             width: 1,

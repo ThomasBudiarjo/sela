@@ -505,6 +505,28 @@ commit/preedit before redraw and OK cannot close over a newer document snapshot.
 Installed-reference workflow/field confirmation, Windows/IME/accessibility
 and production qualification remain open.
 
+M1-05e (EW Song Editor Words layout, EW8-OBS-021..026) is
+**implemented-unqualified**: Title in the toolbar with EasyWorship's tool order
+(unimplemented tools shown disabled), Words as one list of slides with inline
+bold label and lyrics cells, label-kind group colors, Up/Down/Enter across
+cells, Ctrl+Enter splitting into an unlabeled slide, Backspace joining an
+unlabeled slide (provisional), `+` appending, the footer Apply/OK/Cancel, and a
+real slide preview rendered off the UI thread with the audience text raster.
+Native Windows replay: `scripts/song-editor-windows.py`. Open: cross-cell
+selection (EW Ctrl+A selects the whole document), the Apply-to-schedule option,
+IME/accessibility, and installed-reference confirmation of unverified details.
+Follow-ups:
+
+- M1-05f Slides tab: rendered thumbnails with label-colored caption bars and
+  "Slide N" for unlabeled slides (EW8-OBS-025). Planned.
+- M1-05g Per-song text formatting (font, auto/fixed size, color, B/I/U,
+  shadow, outline, alignment; EW8-OBS-026 provisional). Schema change with a
+  verified backup. Planned.
+- M1-05h Per-song background (color or Media image) saved with the revision.
+  Planned.
+- M1-05i Library right-click New Song…/Edit Song…/Delete in the operator
+  (EW8-OBS-021). Planned.
+
 - [ ] Implement title, authors, copyright/license identifiers, lyrics and labeled
   sections based on observed fields; keep identity separate from display title.
 - [x] Support create/edit/duplicate/delete, validation, undo/redo and unsaved-close

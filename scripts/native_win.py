@@ -43,6 +43,7 @@ user32.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
 user32.ClientToScreen.argtypes = [w.HWND, ctypes.POINTER(w.POINT)]
 user32.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.UINT]
 user32.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 user32.MonitorFromWindow.argtypes = [w.HWND, w.DWORD]
 user32.MonitorFromWindow.restype = w.HMONITOR
 gdi32.CreateCompatibleDC.argtypes = [w.HDC]
@@ -60,8 +61,10 @@ WNDENUMPROC = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
 user32.EnumWindows.argtypes = [WNDENUMPROC, w.LPARAM]
 
 VK = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "tab": 0x09, "enter": 0x0D, "space": 0x20, "f4": 0x73,
-      "pagedown": 0x22, "up": 0x26, "down": 0x28, "delete": 0x2E}
+      "pagedown": 0x22, "up": 0x26, "down": 0x28, "delete": 0x2E, "backspace": 0x08, "home": 0x24,
+      "end": 0x23, "left": 0x25, "right": 0x27}
 KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_UNICODE = 0x0004
 SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0002, 0x0004, 0x0010
 
 
@@ -181,6 +184,33 @@ def press(hwnd: int, keys: str) -> None:
         raise Failure(f"window {hwnd:#x} lost the foreground before {keys!r}")
     codes = [_vk(k) for k in keys.split("+")]
     _send([_key_input(c, False) for c in codes] + [_key_input(c, True) for c in reversed(codes)])
+
+
+def click(hwnd: int, x: int, y: int) -> None:
+    """Left click at physical client coordinates of the verified foreground window."""
+    if user32.GetForegroundWindow() != hwnd:
+        raise Failure(f"window {hwnd:#x} lost the foreground before a click")
+    point = w.POINT(x, y)
+    user32.ClientToScreen(hwnd, ctypes.byref(point))
+    user32.SetCursorPos(point.x, point.y)
+    time.sleep(0.05)
+    down, up = INPUT(type=0), INPUT(type=0)
+    down.u.mi = MOUSEINPUT(dwFlags=0x0002)
+    up.u.mi = MOUSEINPUT(dwFlags=0x0004)
+    _send([down, up])
+
+
+def type_text(hwnd: int, text: str) -> None:
+    """Unicode character input (no layout dependence); never re-activates."""
+    if user32.GetForegroundWindow() != hwnd:
+        raise Failure(f"window {hwnd:#x} lost the foreground before typing")
+    inputs = []
+    for unit in struct.unpack(f"<{len(text.encode('utf-16-le')) // 2}H", text.encode("utf-16-le")):
+        for up in (False, True):
+            item = INPUT(type=1)
+            item.u.ki = KEYBDINPUT(wScan=unit, dwFlags=KEYEVENTF_UNICODE | (KEYEVENTF_KEYUP if up else 0))
+            inputs.append(item)
+    _send(inputs)
 
 
 def dpi(hwnd: int) -> int:
