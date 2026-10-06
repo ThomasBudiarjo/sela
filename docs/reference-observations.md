@@ -2,6 +2,10 @@
 
 ## Scope and status — 2026-10-04
 
+Update 2026-10-06: the first installed run (RUN-W01-2026-10-06 below) recorded
+EW8-OBS-010–012 against an unlicensed 8.0.49 install. The rest of this section
+describes the 2026-10-04 research checkpoint.
+
 M0-02 partial research checkpoint; installed observation is **blocked**. No lawful
 installed EasyWorship reference or Windows runner is available for this slice.
 There are **zero installed observations** and no Sela compatibility or hardware
@@ -61,6 +65,10 @@ action. A thumbnail is not proof of physical audience output.
 | EW8-OBS-007 | documented-only | SRC-04 describes extended desktop/control versus output routing; actual 8.0.49 topology, focus and hotplug behavior unknown. | W05; M0-04, M0-09, M0-10; S06 |
 | EW8-OBS-008 | unverified | Full menu/settings/dialog/pane/layout/editor/resource/context/drag-drop inventory and feature-family coverage. | W06; M0-02, M1-02, M5-06 and backlog family owners |
 | EW8-OBS-009 | unverified | Sela Windows output continuity/control response under stalls, overload and failure. This is Sela acceptance, not inferred EasyWorship internals. | G01; M0-04, M0-06–M0-10; H/P |
+| EW8-OBS-010 | observed (RUN-W01-2026-10-06) | Installed executable FileVersion 8.0.49.0, unlicensed edition; About dialog not captured. Empty Default profile main-window layout: menus, toolbar groups, Schedule/Preview/Live panes, Preview Output/Live Output strips, Resources tabs and Songs library. | W01; M0-02, M1-02, M1-10 |
+| EW8-OBS-011 | observed (RUN-W01-2026-10-06) | Unlicensed output at startup: output windows already cover the non-primary laptop panel and show the logo with "NOT LICENSED FOR LIVE PROJECTION"; the Live Output strip shows the logo thumbnail and "Slide 1 of 1". | W01/W05; M0-08, M0-09, M1-10 |
+| EW8-OBS-012 | observed (RUN-W01-2026-10-06) | Song editor structure and dirty-cancel prompt (Yes/No/Cancel). Slide splitting from typed text is unverified. | W01/W06; M1-05, M1-06 |
+| EW8-OBS-013 | unverified | W02 Preview/Live selection, Go Live and next/previous with original fixtures. Blocked: synthetic clicks did not move focus inside the song editor, so fixtures were not created; the unlicensed edition may also restrict live projection. | W02; M1-10, M1-03 |
 
 ## Windows observation runbook (not executed)
 
@@ -200,6 +208,67 @@ append identified results/artifacts and map only those proven workflows to tests
 Follow with W04/W05 and exhaustive W06; qualify Sela independently with G01 when
 M0-03/M0-08/M0-09 are ready. No installed access, masks, focus, display timing,
 provider rights or parity is inferred from this documentation checkpoint.
+
+## RUN-W01-2026-10-06 — First installed observation (partial W01)
+
+- Date/observer: 2026-10-06 ~11:00 +07:00, Droid agent on the owner's machine,
+  owner present and authorizing. Lawful access: owner installed the free,
+  unlicensed EasyWorship 8 download; no account, key or license dialog was
+  touched. Registry display name "EasyWorship 8", version 8.0.49; executable
+  `D:\Program Files\EasyWorship 8\EasyWorship.exe` FileVersion 8.0.49.0,
+  ProductVersion 8.0. Help → About was not captured (menu popups do not render
+  through the window-scoped capture), so the About build remains unconfirmed.
+- Host: Windows 11 Home Single Language 25H2 build 26200.9457 (registry
+  ProductName still reads "Windows 10"), i7-14650HX, 48 GB, Intel UHD + RTX 4060
+  Laptop. Displays as in output-spike.md: DISPLAY5 2560x1440 at 125% primary,
+  laptop DISPLAY1 2560x1600 at 175% left of it, DISPLAY6 1920x1080 at 100%.
+  Extended desktop. EasyWorship windows are per-monitor DPI aware.
+- Method: `scripts/reference_win.py` lists the EasyWorship PID's windows and
+  captures one HWND at a time with PrintWindow, so no other application's
+  content enters the evidence. Artifacts (ignored, local):
+  `.amp/in/artifacts/reference/ew8-w01/`: `main-restored.png` (SHA-256 prefix
+  2202935A6758114F), `live-output-initial.png` (F597AEDD58984D14),
+  `song-editor-new.png` (529294CE345D831D), `editor-cancel-confirm.png`
+  (980C71F8D75CAD61). Profile "Default", 0 songs, nothing saved.
+
+Observed, EW8-OBS-010 (main window, empty profile, maximized on the primary):
+
+- Menu row: File, Edit, Live, Profiles, View, Help. Dark theme by default.
+- Toolbar left: New ▾, Open ▾, Save (disabled while empty), Web, Remote ▾
+  (disconnected icon). Toolbar right: Go Live, Alerts ▾, Logo, Black, Clear,
+  Live. Labels sit under icons. This matches D-UI-01 plus a separate menu row.
+- Upper area, left to right: Schedule (header has a view-mode toggle ▾ and a
+  gear ▾), Preview (view-mode ▾), Live (view-mode ▾). At this window size the
+  widths are about 25% / 53% / 22% of the window.
+- Preview and Live each end in an output strip: "Preview Output" with a black
+  thumbnail and ‹ › arrows; "Live Output" with the current output thumbnail,
+  "Slide 1 of 1" and ‹ › arrows.
+- Resources: tabs Songs, Scriptures, Media, Presentations, Themes; right end
+  has + and ▶. Songs tab: left tree SONGS → All Songs (selected), ONLINE →
+  SongSelect, COLLECTIONS, MY COLLECTIONS, with +▾ and gear▾ below it; the list
+  has columns Title, Author, Copyright; the footer has +, gear▾, a centered
+  "0 songs" count and a view-mode ▾ at the right.
+
+Observed, EW8-OBS-011 (unlicensed output): before any Go Live, three
+"Live Output" and three "LayeredWindow" windows cover the laptop panel at
+2560x1599 physical (one row short of the 1600 panel height). They show the
+EasyWorship logo with "NOT LICENSED FOR LIVE PROJECTION" on black. EasyWorship
+chose the non-primary laptop panel without being asked.
+
+Observed, EW8-OBS-012 (song editor via the Songs footer +): window "Song Editor
+- Untitled" with a Title field; Words/Slides tabs; slide row 1 with "label" and
+"song" placeholders; toolbar Text, Scripture ▾, Shape ▾, Media ▾, then Format,
+Animate, Presentation; WYSIWYG canvas reading "Double click to edit song" with a
+"copyright" strip, 32% zoom slider; footer Apply (disabled until a change), OK,
+Cancel. Cancel after edits asks "You have unsaved changes. Would you like to
+save changes before closing?" with Yes/No/Cancel; No discarded the draft.
+
+Not observed: synthetic mouse clicks on the editor's Title field did not move
+keyboard focus; typed text landed in the slide label/body unpredictably, so no
+fixture songs were created and slide splitting stays unverified (D-UI-02
+documents Ctrl+Enter). W02–W06 did not run. Next: create fixtures A/B by hand
+with the owner (or via an import file), then run W02 with Go Live, Preview
+double-click and next/previous, noting what the unlicensed edition permits.
 
 ## D-UI-01 — Official toolbar image (documented-only, 2026-10-04)
 

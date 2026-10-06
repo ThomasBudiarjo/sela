@@ -15,7 +15,8 @@ include timezone for timed hardware/rehearsal evidence.
   hotplug/device loss/present pacing remain open. M0-07 composition/video
   readback passed on DX12 for Intel and NVIDIA. The idle-machine rerun of the
   audience spike (with the `WGPU_POWER_PREF` adapter matrix) passed. Next:
-  hotplug with the owner present.
+  hotplug with the owner present. M0-02 is active: the first installed
+  observation of unlicensed EasyWorship 8.0.49 recorded the main layout.
 - All three Oracle findings fixed: M1-05 pending native-input ownership, M0-07d
   preparation backpressure ordering, and M0-06 disconnected receipt invalidation.
   Regression/native checks passed; separate local fix commits, no push authorized.
@@ -73,7 +74,7 @@ remain `planned`. Update the current state above when switching work.
 | --- | --- | --- |
 | PLAN-001 | done | 63 implementation tickets, 326 ticket checklist items, test/compatibility matrices and commit/resume rules. Documentation verified; delivered in this local planning commit. No application implementation. |
 | M0-01 | done | Pinned native GPUI window, lockfile, CI and instructions; Linux and Windows 11 build/test/native launch/resize/quit verified (2026-10-06). |
-| M0-02 | blocked | Public-source ledger and executable observation runbook; lawful installed 8.0.49/Windows access missing, zero installed observations. |
+| M0-02 | active | Public-source ledger and runbook; first installed run on unlicensed 8.0.49 (layout, unlicensed output, song editor). W02–W06 open: fixtures not yet created. |
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, synthetic preparation and operator exit/kill on Linux and Windows DX12 physical displays, incl. mixed-DPI moves, fullscreen, both GPUs, and an idle-machine rerun; hotplug, device loss, present pacing open. |
 | M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
@@ -1884,3 +1885,22 @@ PY
   delivery.md.
 - Not run: Intel adapter for this driver, Linux re-execution of the refactored
   driver, physical scanout timing.
+
+### M0-02 — First installed observation, partial W01 — 2026-10-06 (UTC+7)
+
+- State: **active** (was blocked). Owner installed the free, unlicensed
+  EasyWorship 8 (registry 8.0.49, executable FileVersion 8.0.49.0).
+- New `scripts/reference_win.py`: lists one image's windows and captures a
+  single HWND with PrintWindow, plus focused click/type helpers. Captures never
+  include other applications.
+- Recorded RUN-W01-2026-10-06 and EW8-OBS-010–013 in reference-observations.md:
+  main-window layout (menu row, toolbar groups, Schedule/Preview/Live with
+  Preview Output/Live Output strips and "Slide N of M", Songs library), the
+  unlicensed output windows on the laptop panel with a "NOT LICENSED FOR LIVE
+  PROJECTION" logo, and the song editor structure and dirty-cancel prompt.
+- Failed: synthetic clicks inside the song editor did not move focus, so no
+  fixture songs exist and W02 (Go Live, Preview/Live, next/previous) did not run.
+  Draft discarded with No; nothing saved in the EasyWorship profile.
+- Checks: `python -m ruff check scripts/reference_win.py` passed.
+- Not run: About dialog capture, W02–W06, masks, keyboard/focus, routing.
+- Next: owner-assisted fixture creation (or an import file), then W02.
