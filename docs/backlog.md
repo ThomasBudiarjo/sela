@@ -540,11 +540,20 @@ Follow-ups:
     coverage layers (underline via decorations) blended in linear light on
     the GPU with an exact CPU twin; editor preview and thumbnails on the
     same path with `(text, format)` cache keys. **Implemented-unqualified**:
-    native DX12 audience check pending (g2b); negative-bearing ink clips at
-    the area edge (EW parity unobserved, recorded in the work log).
-  - [ ] g2b operator/editor integration: installed-family resolution via
-    the catalog with a loading gate, seed formatted song, native Windows
-    DX2 check, timing, docs.
+    native DX12 audience check passed in g2b below; negative-bearing ink
+    clips at the area edge (EW parity unobserved, recorded in the work log).
+  - [x] g2b operator/editor integration (M1-05g2, 2026-10-06): one shared
+    font store (`fonts::shared()`), scanned off the UI thread by whichever
+    window opens first; the operator resolves each previewed song's formats
+    as one background job and gates Go Live/Next/Previous on it (the
+    current scene stays, `Resolving fonts…`, retry on landing; a late scan
+    re-resolves named-family items and refreshes the live cue); editor
+    preview/thumbnails resolve the same way and the caption warns on
+    bundled fallback; seed `--formatted-song`; native DX2 check extended and
+    **PASS** (gold right/bottom, italic centered underlined, installed
+    Arial; margins compared because auto-fit fills the area width, the
+    gold slide uses a fixed size). Rendering is qualified for this
+    machine; timing recorded in `docs/composition-text.md`.
   - [ ] g3 Song Editor Format pane (Text › Style subset), per-slide apply,
     Ctrl+A whole-song selection, undo, GPUI tests and native script.
   - Deferred (record as tickets when g3 lands): superscript/subscript, indent,

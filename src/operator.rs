@@ -147,6 +147,9 @@ pub(super) struct Item {
     pub(super) entry: Option<EntryId>,
     pub(super) title: String,
     pub(super) slides: Vec<Slide>,
+    /// Per-slide face resolution, `None` until the background resolver lands.
+    /// Until then the current live scene stays and a deferred cue waits.
+    pub(super) resolved: Option<Arc<[fonts::Resolved]>>,
 }
 
 /// What follows once unsaved schedule changes are discarded.
@@ -239,6 +242,14 @@ pub(super) struct Operator {
     item_menu: Option<(EntryId, Point<Pixels>)>,
     /// A library double-click waiting for its song to load.
     live_on_load: Option<Version>,
+    /// Song version whose face resolution is running on a background thread.
+    font_job: Option<Version>,
+    /// The in-flight resolution task; cleared when its result lands.
+    font_task: Option<Task<()>>,
+    /// A Go Live/Next/Previous cue deferred until the live item's fonts land.
+    deferred_send: Option<usize>,
+    /// One background catalog scan feeding the shared font store.
+    _font_scan: Option<Task<()>>,
     _poller: Option<Task<()>>,
 }
 
@@ -271,6 +282,21 @@ impl Operator {
             let _ = worker.submit(images::Job::LoadLogo);
             let _ = worker.submit(images::Job::Scan);
         }
+        // One background scan feeds the shared catalog that both this
+        // operator's face resolution and the song editor's preview renders
+        // use. Whoever opens first scans; a second window sees the catalog.
+        let font_scan = if fonts::shared().catalog().is_none() {
+            let scan = cx
+                .background_executor()
+                .spawn(async move { fonts::Catalog::scan_system() });
+            Some(cx.spawn(async move |this, cx| {
+                let catalog = scan.await;
+                fonts::shared().install_catalog(catalog);
+                let _ = this.update(cx, |this, cx| this.fonts_scanned(cx));
+            }))
+        } else {
+            None
+        };
         let executor = cx.background_executor().clone();
         let poller = cx.spawn(async move |this, cx| {
             loop {
@@ -341,6 +367,10 @@ impl Operator {
             title_input: None,
             item_menu: None,
             live_on_load: None,
+            font_job: None,
+            font_task: None,
+            deferred_send: None,
+            _font_scan: font_scan,
             _poller: Some(poller),
         }
     }
@@ -683,7 +713,7 @@ impl Operator {
     }
 
     pub(super) fn poll(&mut self, cx: &mut Context<Self>) {
-        let mut changed = self.poll_library() | self.poll_images();
+        let mut changed = self.poll_library(cx) | self.poll_images();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());
             if let Status::Connected { extent, .. } = output.status()
@@ -943,12 +973,13 @@ impl Operator {
         changed
     }
 
-    fn poll_library(&mut self) -> bool {
+    fn poll_library(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(worker) = &mut self.worker else {
             return false;
         };
         let mut changed = false;
         let mut live_now = false;
+        let mut resolve_now = false;
         if let Some(reply) = worker.poll() {
             changed = true;
             match (self.request.take(), reply) {
@@ -965,12 +996,16 @@ impl Operator {
                         entry: self.selected_entry,
                         title: song.title.clone(),
                         slides: slides::slides(&song),
+                        resolved: None,
                     });
                     self.preview_slide = 0;
                     if self.live_on_load == Some(version) && self.selected_entry.is_none() {
                         self.live_on_load = None;
                         live_now = true;
                     }
+                    // The item's faces resolve off the UI thread before any
+                    // of its slides can go live (M1-05g2b).
+                    resolve_now = true;
                 }
                 (Some(Request::SaveSchedule(snapshot)), Ok(Reply::Saved(version))) => {
                     self.schedule_message = Some(format!("Saved “{}”", snapshot.title));
@@ -1052,7 +1087,116 @@ impl Operator {
         if live_now {
             self.go_live();
         }
+        if resolve_now {
+            self.resolve_fonts(cx);
+        }
         changed
+    }
+
+    /// The next item wanting face resolution: the live item first, then the
+    /// preview item. Items are resolved whole, one job at a time.
+    fn unresolved(&self) -> Option<Version> {
+        let wants = |item: &Item| item.resolved.is_none().then_some(item.version);
+        self.live
+            .as_ref()
+            .and_then(wants)
+            .or(self.preview.as_ref().and_then(wants))
+    }
+
+    /// Resolve the unresolved item's formats off the UI thread. The landing
+    /// callback re-derives the next want, so a busy job is simply skipped.
+    fn resolve_fonts(&mut self, cx: &mut Context<Self>) {
+        let Some(version) = self.unresolved() else {
+            return;
+        };
+        if self.font_job.is_some() {
+            return;
+        }
+        let formats: Vec<_> = self
+            .preview
+            .iter()
+            .chain(self.live.iter())
+            .find(|item| item.version == version)
+            .map(|item| {
+                item.slides
+                    .iter()
+                    .map(|slide| slide.format.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if formats.is_empty() {
+            return;
+        }
+        self.font_job = Some(version);
+        let executor = cx.background_executor().clone();
+        self.font_task = Some(cx.spawn(async move |this, cx| {
+            let resolved = executor
+                .spawn(async move {
+                    let fonts = fonts::shared();
+                    formats
+                        .iter()
+                        .map(|format| fonts.resolve(format))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |operator, cx| {
+                operator.fonts_resolved(version, resolved, cx)
+            });
+        }));
+    }
+
+    /// A background resolution landed: attach by version, retry the deferred
+    /// cue, then derive the next wanting item. `pub(super)` for the
+    /// late-landing transition test in `tests`.
+    pub(super) fn fonts_resolved(
+        &mut self,
+        version: Version,
+        resolved: Vec<fonts::Resolved>,
+        cx: &mut Context<Self>,
+    ) {
+        self.font_job = None;
+        self.font_task = None;
+        let resolved: Arc<[fonts::Resolved]> = resolved.into();
+        let mut replaced = false;
+        for item in [&mut self.live, &mut self.preview].into_iter().flatten() {
+            if item.version == version {
+                replaced = item.resolved.is_some();
+                item.resolved = Some(resolved.clone());
+            }
+        }
+        if replaced {
+            // Improved resolution (the catalog landed after a bundled
+            // fallback): sizes re-fit, so drop the cap and refresh the cue.
+            self.size_cap = None;
+            if let Some(index) = self.live_slide {
+                self.send(index);
+            }
+        } else if let Some(index) = self.deferred_send.take() {
+            self.send(index);
+        }
+        self.resolve_fonts(cx);
+        cx.notify();
+    }
+
+    /// The background catalog scan landed: formats that named a family fell
+    /// back to bundled before the catalog existed, so resolve them again.
+    fn fonts_scanned(&mut self, cx: &mut Context<Self>) {
+        let named = |item: &Item| {
+            item.slides.iter().any(|slide| {
+                slide
+                    .format
+                    .font
+                    .as_deref()
+                    .is_some_and(|name| !name.trim().is_empty())
+            })
+        };
+        for item in [&mut self.live, &mut self.preview].into_iter().flatten() {
+            if named(item) {
+                item.resolved = None;
+            }
+        }
+        self.resolve_fonts(cx);
+        cx.notify();
     }
 
     fn select_song(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1163,13 +1307,14 @@ impl Operator {
         else {
             return;
         };
-        // Bundled-face resolution is pure; installed-family catalog resolution
-        // and its loading gate are a separate slice.
-        let resolved: Vec<_> = item
-            .slides
-            .iter()
-            .map(|slide| fonts::Resolved::bundled(&slide.format))
-            .collect();
+        // Installed faces resolve off the UI thread. Until they land, the
+        // current live scene stays; the deferred cue is retried by
+        // `fonts_resolved` (M1-05g2b).
+        let Some(resolved) = item.resolved.clone() else {
+            self.deferred_send = Some(index);
+            self.live_message = Some("Resolving fonts…".into());
+            return;
+        };
         let cap = match self.size_cap {
             Some((v, e, s, cap)) if (v, e, s) == (item.version, extent, self.sizing) => cap,
             _ => {

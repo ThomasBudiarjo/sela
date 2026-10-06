@@ -467,7 +467,12 @@ impl Fonts {
 
     /// Publish a scan result; it replaces any previous catalog.
     pub fn install_catalog(&self, catalog: Catalog) {
-        *self.catalog.lock().unwrap() = Some(Arc::new(catalog));
+        self.install(Arc::new(catalog));
+    }
+
+    /// Publish an already-shared catalog snapshot.
+    pub fn install(&self, catalog: Arc<Catalog>) {
+        *self.catalog.lock().unwrap() = Some(catalog);
     }
 
     /// The installed catalog, once a scan has been published.
@@ -528,6 +533,19 @@ impl Fonts {
             None => Resolved::bundled(format),
         }
     }
+}
+
+/// Process-wide store: one catalog and face cache for the whole app, so the
+/// operator's resolution and the song editor's off-thread preview renders
+/// agree on faces. The catalog is installed by whichever window scans first;
+/// until then `resolve` keeps the bundled fallback.
+static SHARED: OnceLock<Fonts> = OnceLock::new();
+
+/// The shared font store. Resolution through it can still read files, so
+/// call `resolve` from background threads only; `Resolved::bundled` stays the
+/// pure path for UI threads.
+pub fn shared() -> &'static Fonts {
+    SHARED.get_or_init(Fonts::new)
 }
 
 #[cfg(test)]

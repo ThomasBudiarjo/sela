@@ -6,6 +6,7 @@ use gpui::{Entity, Focusable, TestAppContext, VisualTestContext};
 use sela::{
     arrangement::SectionId,
     delivery::{DeliveryError, Epoch, LiveState, Outcome, Payload, RendererSession},
+    fonts,
     masks::{Layer, Mask},
     output::{Launch, Status, Stream},
     scene::{Extent, RendererCapabilities},
@@ -589,6 +590,61 @@ fn go_live_shows_renderer_acknowledged_slide(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn go_live_defers_until_fonts_resolve_then_retries(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_formatted_song(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "faces resolved", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.slides.len() == 2 && p.resolved.is_some())
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    // A send racing the background resolver: strip the attached faces, then
+    // Go Live. No cue may be submitted, nothing replaces the current scene
+    // and the send waits (in production the landing callback re-attaches).
+    cx.update(|_, cx| {
+        operator.update(cx, |o, _| {
+            o.live = o.preview.clone();
+            o.live.as_mut().unwrap().resolved = None;
+            o.preview.as_mut().unwrap().resolved = None;
+        })
+    });
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+    click(&mut cx, "go-live");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(submitted(o), sent, "no cue is submitted before faces land");
+        assert_eq!(o.live_message.as_deref(), Some("Resolving fonts…"));
+        assert_eq!(o.on_screen(), None, "no scene replaces anything");
+    });
+    // The resolution lands: the deferred cue retries and is acknowledged.
+    let (version, formats) = operator.read_with(&cx, |o, _| {
+        let item = o.live.as_ref().unwrap();
+        (
+            item.version,
+            item.slides
+                .iter()
+                .map(|slide| slide.format.clone())
+                .collect::<Vec<_>>(),
+        )
+    });
+    cx.update(|_, cx| {
+        operator.update(cx, |o, cx| {
+            let resolved = formats.iter().map(fonts::Resolved::bundled).collect();
+            o.fonts_resolved(version, resolved, cx);
+        })
+    });
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Fallback Hymn · Verse 1")
+    });
+    assert!(operator.read_with(&cx, |o, _| submitted(o)) > sent);
+    assert_eq!(operator.read_with(&cx, |o, _| o.live_message.clone()), None);
+}
+
+#[gpui::test]
 fn rejected_or_lost_output_is_never_shown_as_live(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = library_with_song(&dir);
@@ -958,6 +1014,42 @@ fn media_logo_is_imported_persisted_and_shown(cx: &mut TestAppContext) {
 }
 
 const SECOND_SONG: &str = "Quiet Canticle";
+/// One section names a family nothing installs, so every resolution path
+/// (with or without a catalog) exercises the bundled fallback.
+fn library_with_formatted_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("library.sqlite");
+    let mut repository = Repository::open(&path).unwrap();
+    repository
+        .save_song(
+            None,
+            Song {
+                title: "Fallback Hymn".into(),
+                authors: String::new(),
+                copyright: String::new(),
+                license: String::new(),
+                variants: Vec::new(),
+                sections: vec![
+                    Section {
+                        id: SectionId::allocate(),
+                        label: "Verse 1".into(),
+                        lyrics: "Falling back line".into(),
+                        format: sela::format::SlideFormat {
+                            font: Some("Sela Missing Family".into()),
+                            ..Default::default()
+                        },
+                    },
+                    Section {
+                        id: SectionId::allocate(),
+                        label: "Chorus".into(),
+                        lyrics: "Second falling line".into(),
+                        format: Default::default(),
+                    },
+                ],
+            },
+        )
+        .unwrap();
+    path
+}
 
 fn library_with_songs(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let path = library_with_song(dir);

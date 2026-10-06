@@ -2462,3 +2462,56 @@ PY
   live-output native scripts, run the Windows DX12 audience check, measure
   layer preparation timing, update docs/composition-text.md, backlog and
   work log, commit.
+
+### M1-05g2b — Installed-font gate, native DX2 qualification — 2026-10-06 (UTC+7)
+
+- State: M1-05g **g2 done** (g2a core + g2b integration); g3 (Format pane)
+  stays open, so the ticket stays active.
+- One shared font store: onts::shared() (catalog + bounded face cache).
+  Whichever window opens first (operator or song editor) scans the system
+  font directories off the UI thread and installs the catalog; resolution
+  can read files and stays on background threads.
+- Operator gate: a previewed song's formats resolve as one background job
+  (Item.resolved, live item first). A Go Live/Next/Previous that races the
+  resolver keeps the current live scene, shows Resolving fonts… and
+  retries when the faces land; a late catalog scan resets items that named
+  a family (their earlier resolution was the bundled fallback), re-resolves
+  and refreshes the live cue, and drops the stale size cap. send never
+  resolves on the UI thread.
+- Song editor: pixels resolves through the shared store (off the UI
+  thread), preview and thumbnails agree with the audience, and the preview
+  caption shows the fallback warning (Font "X" unavailable · showing
+  DejaVu Sans, amber) while still rendering the bundled fallback.
+- Seed: seed_library --formatted-song now seeds a single-song library
+  with three styled slides (bold gold right/bottom + Outer outline +
+  shadow at a fixed size, synth italic + underline centered, installed
+  Arial bold italic) for the native check.
+- Native scripts: live-output-windows.py gains a second operator phase
+  on the formatted library — color-aware checks (gold pixels, margin-based
+  right/bottom assertion, centered ink box), Next-stops-at-end, clean
+  exit. song-editor-windows.py unchanged and re-run (regression with the
+  editor scan).
+- Checks (Windows 11, secondary monitor 2560x1600):
+  cargo fmt --all -- --check, cargo clippy --locked --all-targets --
+  -D warnings, cargo test --locked --all-targets (lib 99, bin 67 + 2
+  ignored, other suites pass), cargo build --locked, uff check
+  scripts; scripts/live-output-windows.py **PASS** (both phases, gold
+  box 590,1378-2512,1514, margins 48/86 vs 590/1378; italic centered;
+  Arial visible; both operators exit 0 and end their children);
+  scripts/song-editor-windows.py **PASS** (preview black=38854/white=931,
+  thumbnails black=16784/white=74).
+- Two native iterations before PASS, both check-bound, not render bugs:
+  auto-fit fills the area width, so Right alignment is invisible with a
+  fitted line — the gold slide uses Fixed(120) — and the "pushed right"
+  assertion became a margin comparison (right/bottom margins smaller than
+  left/top) instead of assuming a narrow block.
+- Measured (large_text_preparation_time, ignored): 2560x1600 1/2/4
+  lines p50 5.5/14.7/26.4 ms (max 6.8/15.7/28.4); 3840x2160 p50
+  7.7/20.5/34.5 ms (max 8.4/21.7/36.2). Recorded in
+  docs/composition-text.md.
+- Not run: Linux/macOS, physical-projector/output-device checks beyond the
+  secondary monitor, a real owner profile with installed-family formats.
+- Next: g3. Enable the toolbar Format toggle as a right pane (Text › Style
+  subset), apply to the caret/selected slide, Ctrl+A whole-song selection
+  with replace-typing, whole-document history, GPUI tests, extend the
+  native script.

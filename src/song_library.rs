@@ -245,18 +245,25 @@ fn groups<'a>(labels: impl IntoIterator<Item = &'a str>) -> Vec<Range<usize>> {
 }
 
 /// Renders one slide exactly as the audience preparer would, off the UI
-/// thread: bundled faces, fitted size, styled layers over the cue
-/// background. `None` when the audience would reject the text (overflow,
-/// missing glyph, unfittable fixed size).
-fn render_preview(slide: &sela::slides::Slide) -> Option<Arc<RenderImage>> {
-    image_from(&pixels(slide)?, PREVIEW)
+/// thread: resolved faces (installed, or the bundled fallback), fitted size,
+/// styled layers over the cue background. The image is `None` when the
+/// audience would reject the text (overflow, missing glyph, unfittable fixed
+/// size); the warning is set when a named family fell back to the bundled
+/// face.
+fn render_preview(slide: &sela::slides::Slide) -> (Option<Arc<RenderImage>>, Option<String>) {
+    let resolved = sela::fonts::shared().resolve(&slide.format);
+    (
+        pixels(slide, &resolved).and_then(|bgra| image_from(&bgra, PREVIEW)),
+        resolved.warning().map(str::to_owned),
+    )
 }
 
 /// The preview raster box-filtered down by `THUMBNAIL_SCALE`, so thumbnails
 /// keep the audience proportions (the text inset is fixed in pixels, so
 /// fitting at thumbnail size directly would lay out differently).
 fn render_thumbnail(slide: &sela::slides::Slide) -> Option<Arc<RenderImage>> {
-    let bgra = pixels(slide)?;
+    let resolved = sela::fonts::shared().resolve(&slide.format);
+    let bgra = pixels(slide, &resolved)?;
     let (scale, width) = (THUMBNAIL_SCALE as usize, PREVIEW.width as usize);
     let n = (scale * scale) as u32;
     let mut small = Vec::with_capacity(bgra.len() / (scale * scale));
@@ -280,11 +287,11 @@ fn render_thumbnail(slide: &sela::slides::Slide) -> Option<Arc<RenderImage>> {
 /// One slide's preview pixels, as BGRA: the cue's fill, outline and shadow
 /// coverage layers blended in linear light over the background color, the
 /// CPU twin of the audience compositor's shader.
-fn pixels(slide: &sela::slides::Slide) -> Option<Vec<u8>> {
+fn pixels(slide: &sela::slides::Slide, resolved: &sela::fonts::Resolved) -> Option<Vec<u8>> {
     let cue = sela::slides::cue(
         ContentVersion { id: 0, revision: 0 },
         slide,
-        &sela::fonts::Resolved::bundled(&slide.format),
+        resolved,
         PREVIEW,
         RendererCapabilities {
             max_texture_dimension: 4096,
@@ -326,11 +333,13 @@ enum Nav {
     Back,
 }
 
-/// One finished preview: the slide it rendered (text + format key) and its
-/// raster, `None` when the audience would reject the slide.
+/// One finished preview: the slide it rendered (text + format key), its
+/// raster (`None` when the audience would reject the slide) and the fallback
+/// warning from face resolution, if any.
 struct Preview {
     key: (String, sela::format::SlideFormat),
     image: Option<Arc<RenderImage>>,
+    warning: Option<String>,
 }
 
 struct Library {
@@ -466,6 +475,20 @@ impl Library {
                 }
             }
         }));
+        // One background scan feeds the shared catalog that this editor's
+        // preview renders resolve against; the operator scans too, and
+        // whichever window opens first wins.
+        if sela::fonts::shared().catalog().is_none() {
+            let scan = cx
+                .background_executor()
+                .spawn(async move { sela::fonts::Catalog::scan_system() });
+            cx.spawn(async move |this, cx| {
+                let catalog = scan.await;
+                sela::fonts::shared().install_catalog(catalog);
+                let _ = this.update(cx, |this, cx| this.fonts_scanned(cx));
+            })
+            .detach();
+        }
         this
     }
 
@@ -1099,13 +1122,16 @@ impl Library {
             .background_executor()
             .spawn(async move { render_preview(&slide) });
         self.preview_task = Some(cx.spawn(async move |this, cx| {
-            let image = raster.await;
+            let (image, warning) = raster.await;
             let _ = this.update(cx, |this, cx| {
                 this.preview_task = None;
                 if let Some(Preview {
                     image: Some(old), ..
-                }) = this.preview.replace(Preview { key, image })
-                {
+                }) = this.preview.replace(Preview {
+                    key,
+                    image,
+                    warning,
+                }) {
                     cx.drop_image(old, None);
                 }
                 cx.notify();
@@ -1113,6 +1139,28 @@ impl Library {
         }));
     }
 
+    /// The shared catalog landed: previews rendered with the bundled fallback
+    /// are stale, so drop them and render again with resolved faces.
+    fn fonts_scanned(&mut self, cx: &mut Context<Self>) {
+        if let Some(Preview {
+            image: Some(old), ..
+        }) = self.preview.take()
+        {
+            cx.drop_image(old, None);
+        }
+        self.preview = None;
+        self.thumbnails.retain(|_, image| {
+            if let Some(old) = image.take() {
+                cx.drop_image(old, None);
+            }
+            false
+        });
+        if !self.locked() {
+            self.ensure_preview(cx);
+            self.ensure_thumbnails(cx);
+        }
+        cx.notify();
+    }
     /// Fills the Slides-tab thumbnail cache off the UI thread, one slide at a
     /// time, and drops thumbnails whose key no longer appears in the draft.
     fn ensure_thumbnails(&mut self, cx: &mut Context<Self>) {
@@ -1827,11 +1875,24 @@ impl Render for Library {
                                             .items_center()
                                             .text_size(px(11.))
                                             .text_color(rgb(0x646971))
+                                            .gap_1()
                                             .child(format!(
                                                 "Slide {} of {} · audience layout preview",
                                                 (self.section + 1).min(self.cells.len()),
                                                 self.cells.len()
-                                            )),
+                                            ))
+                                            // A named family that fell back to
+                                            // the bundled face (M1-05g2b).
+                                            .children(
+                                                self.preview
+                                                    .as_ref()
+                                                    .and_then(|p| p.warning.clone())
+                                                    .map(|warning| {
+                                                        div()
+                                                            .text_color(rgb(0xb36b00))
+                                                            .child(warning)
+                                                    }),
+                                            ),
                                     )
                                 })
                                 .when(self.inspector, |d| {
@@ -2291,9 +2352,11 @@ mod tests {
                 .filter(|p| p[channel] > 128)
                 .count()
         };
-        let blank = render_preview(&slide("")).unwrap();
+        let blank = render_preview(&slide("")).0.unwrap();
         assert_eq!(ink(&blank, 0), 0);
-        let text = render_preview(&slide("Amazing grace\nhow sweet")).unwrap();
+        let text = render_preview(&slide("Amazing grace\nhow sweet"))
+            .0
+            .unwrap();
         let size = text.size(0);
         assert_eq!((size.width.0, size.height.0), (1280, 720));
         assert!(ink(&text, 0) > 1000);
@@ -2307,11 +2370,11 @@ mod tests {
             },
             ..slide("Amazing grace\nhow sweet")
         };
-        let yellow = render_preview(&styled).unwrap();
+        let yellow = render_preview(&styled).0.unwrap();
         assert_eq!(ink(&yellow, 0), 0, "yellow fill has no blue");
         assert!(ink(&yellow, 1) > 1000, "yellow fill has green");
         assert!(
-            render_preview(&slide("\u{e000}")).is_none(),
+            render_preview(&slide("\u{e000}")).0.is_none(),
             "missing glyph"
         );
     }
@@ -2347,11 +2410,55 @@ mod tests {
         }));
     }
 
+    #[gpui::test]
+    fn preview_warns_when_the_named_family_falls_back(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let mut repository = Repository::open(&path).unwrap();
+        repository
+            .save_song(
+                None,
+                Song {
+                    title: "Fallback Hymn".into(),
+                    authors: String::new(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    variants: Vec::new(),
+                    sections: vec![Section {
+                        id: SectionId::allocate(),
+                        label: "Verse 1".into(),
+                        lyrics: "Falling back line".into(),
+                        format: sela::format::SlideFormat {
+                            font: Some("Sela Missing Family".into()),
+                            ..Default::default()
+                        },
+                    }],
+                },
+            )
+            .unwrap();
+        let (mut cx, view) = fixture(cx, path);
+        let version = view.read_with(&cx, |v, _| v.catalog[0].0);
+        cx.update(|_, cx| view.update(cx, |v, cx| v.select(version, cx)));
+        wait(&mut cx, &view);
+        cx.update(|_, cx| view.update(cx, |v, cx| v.ensure_preview(cx)));
+        cx.run_until_parked();
+        // The bundled fallback still renders, and the warning names the
+        // family and the fallback (M1-05g2b).
+        assert!(view.read_with(&cx, |v, _| {
+            v.preview.as_ref().is_some_and(|p| {
+                p.image.is_some()
+                    && p.warning.as_deref().is_some_and(|w| {
+                        w.contains("Sela Missing Family") && w.contains("DejaVu Sans")
+                    })
+            })
+        }));
+    }
+
     #[test]
     fn thumbnail_is_the_preview_box_filtered() {
         let text = slide("Amazing grace\nhow sweet the sound");
         let (full, small) = (
-            render_preview(&text).unwrap(),
+            render_preview(&text).0.unwrap(),
             render_thumbnail(&text).unwrap(),
         );
         let size = small.size(0);

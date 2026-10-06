@@ -12,8 +12,11 @@ Live (Page Down); Go Live, Next (stopping at the last slide) and Previous change
 the captured audience output; Ctrl+B shows black, Ctrl+C hides the text, Ctrl+L
 shows the logo, each with its operator button lit, and a second press restores
 the slide; a Logo mask survives Live off/on; Live off ends the child; Ctrl+Q
-exits cleanly and ends the child. Requires exclusive use of the keyboard and an
-unobstructed audience monitor while it runs.
+exits cleanly and ends the child. Then a second operator on a formatted-song
+library (M1-05g2): Go Live shows the bold gold right/bottom-aligned slide,
+Next shows the italic underlined centered slide and the installed-Arial slide,
+Next stops at the last slide, and Ctrl+Q exits cleanly. Requires exclusive use
+of the keyboard and an unobstructed audience monitor while it runs.
 """
 
 from __future__ import annotations
@@ -42,6 +45,8 @@ OPERATOR_TITLE = "Sela — Technical preview"
 TABS_TO_FIRST_SONG = 25
 # Original fixture logo: one opaque color, neither black nor text white.
 LOGO_RGB = (30, 110, 210)
+# Formatted song slide 1: bold gold fill, right/bottom aligned.
+GOLD_RGB = (255, 210, 0)
 # Operator `MASK_ON` fill of an acknowledged mask button, as BGR.
 MASK_ON_BGR = (0xDC, 0xDF, 0xF6)
 
@@ -137,6 +142,45 @@ def ink_box(width: int, height: int, bgra: bytes) -> tuple[int, int, int, int] |
         for x in range(0, width, 2):
             i = row + x * 4
             if bgra[i] > 128 and bgra[i + 1] > 128 and bgra[i + 2] > 128:
+                left, top = min(left, x), min(top, y)
+                right, bottom = max(right, x), max(bottom, y)
+    return None if right < 0 else (left, top, right, bottom)
+
+
+def hits(
+    width: int, height: int, bgra: bytes, rgb: tuple[int, int, int], tolerance: int = 30
+) -> int:
+    """Sampled pixels near `rgb`, for a formatted slide's fill color."""
+    r, g, b = rgb
+    count = 0
+    for y in range(0, height, 2):
+        row = y * width * 4
+        for x in range(0, width, 2):
+            i = row + x * 4
+            if (
+                abs(bgra[i] - b) <= tolerance
+                and abs(bgra[i + 1] - g) <= tolerance
+                and abs(bgra[i + 2] - r) <= tolerance
+            ):
+                count += 1
+    return count
+
+
+def color_box(
+    width: int, height: int, bgra: bytes, rgb: tuple[int, int, int], tolerance: int = 30
+) -> tuple[int, int, int, int] | None:
+    """The bounding box of the pixels `hits` counts."""
+    r, g, b = rgb
+    left, top, right, bottom = width, height, -1, -1
+    for y in range(0, height, 2):
+        row = y * width * 4
+        for x in range(0, width, 2):
+            i = row + x * 4
+            if (
+                abs(bgra[i] - b) <= tolerance
+                and abs(bgra[i + 1] - g) <= tolerance
+                and abs(bgra[i + 2] - r) <= tolerance
+            ):
                 left, top = min(left, x), min(top, y)
                 right, bottom = max(right, x), max(bottom, y)
     return None if right < 0 else (left, top, right, bottom)
@@ -395,12 +439,108 @@ def main() -> int:
         summary["quit_ended_child"] = wait_dead(pid, 5)
         if not summary["quit_ended_child"]:
             raise nw.Failure("Ctrl+Q left the audience output running")
+
+        # Second operator on a formatted-song library: the styled slides go
+        # live through the same path (M1-05g2). The gold slide's fill is not
+        # near-white, so its checks are color-aware instead of ink_box.
+        formatted_library = data / "formatted.sqlite"
+        subprocess.run(
+            [str(args.seed), str(formatted_library), "--formatted-song"], check=True
+        )
+        second = nw.App(args.binary, ["--operator-library", str(formatted_library)])
+        spawned_second: set[int] = set()
+        try:
+            operator2 = second.window()
+            nw.activate(operator2)
+            time.sleep(1.0)  # the catalog scan and song load run off the UI thread
+            run2 = Run(operator2, args.out, summary)
+            run2.keys(*["tab"] * TABS_TO_FIRST_SONG, "enter", "tab", "enter")
+            time.sleep(0.3)
+            run2.save(operator2, "formatted-preview")
+            run2.keys(*["shift+tab"] * 15, "enter")
+            found = audience(second.process.pid, 15)
+            if not found:
+                raise nw.Failure(f"no formatted audience window: {second.log()}")
+            pid2, screen2 = found
+            spawned_second.add(pid2)
+            time.sleep(1.0)
+            if nw.user32.GetForegroundWindow() != operator2:
+                raise nw.Failure("the formatted audience took the foreground")
+
+            # Go Live: bold bundled face, gold fill, right/bottom aligned,
+            # with Outer outline and shadow (invisible on the black
+            # background; their blending is unit-checked).
+            sent = time.monotonic()
+            blank2 = digest(screen2)
+            run2.keys("pagedown")
+            while digest(screen2) == blank2:
+                if time.monotonic() - sent > 5.0:
+                    raise nw.Failure("go_live: the styled slide did not appear")
+                time.sleep(0.02)
+            summary["formatted_go_live_observed_ms"] = round(
+                (time.monotonic() - sent) * 1000
+            )
+            time.sleep(0.3)
+            width, height, pixels = run2.save(screen2, "formatted-gold")
+            gold = hits(width, height, pixels, GOLD_RGB)
+            if gold < 400:
+                raise nw.Failure(f"formatted-gold: only {gold} gold pixels")
+            # Right/bottom aligned: the block hugs the lower-right inset, so
+            # its right/bottom margins are smaller than its left/top ones.
+            # The margins are compared instead of the block width, which the
+            # text length sets.
+            box = color_box(width, height, pixels, GOLD_RGB)
+            if box is None:
+                raise nw.Failure("formatted-gold: no gold box")
+            if (
+                width - box[2] > box[0]
+                or height - box[3] > box[1]
+                or width - box[2] > width * 0.15
+                or height - box[3] > height * 0.15
+            ):
+                raise nw.Failure(f"formatted-gold: not right/bottom aligned: {box}")
+            summary["formatted_gold_box"] = box
+            gold_frame = digest(screen2)
+
+            # Next: synth italic + underline, centered white fill.
+            run2.keys("tab", "tab", "tab")  # Next
+            italic = run2.change(screen2, gold_frame, "enter", "formatted-italic")
+            box = summary["formatted-italic_ink_box"]
+            midpoint = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+            if not (
+                width * 0.33 < midpoint[0] < width * 0.67
+                and height * 0.25 < midpoint[1] < height * 0.75
+            ):
+                raise nw.Failure(f"formatted-italic: not centered: {box}")
+
+            # Next: Arial bold italic resolved from the installed catalog.
+            arial = run2.change(screen2, italic, "enter", "formatted-arial")
+            run2.keys("enter")
+            time.sleep(1.0)
+            if digest(screen2) != arial:
+                raise nw.Failure("Next past the last formatted slide changed the output")
+
+            run2.keys("ctrl+q")
+            summary["formatted_operator_exit"] = second.wait_exit()
+            if summary["formatted_operator_exit"] != 0:
+                raise nw.Failure(
+                    f"formatted operator exit status {summary['formatted_operator_exit']}"
+                )
+            if not wait_dead(pid2, 5):
+                raise nw.Failure("the formatted operator left its audience running")
+        finally:
+            second.close()
+            for pid in spawned_second:
+                if alive(pid):
+                    kill(pid)
+
         summary["status"] = "PASS"
         print(
             "PASS: Live on spawns a non-activating audience, Go Live/Next/Previous change it, "
             "Next stops at the end, Black/Clear/Logo show and restore with lit buttons, "
             "Logo survives Live off/on, new sessions replay no slide, Live off and "
-            "Ctrl+Q end it"
+            "Ctrl+Q end it; the formatted song shows gold right/bottom, italic centered "
+            "underlined and installed Arial slides"
         )
         return 0
     except (nw.Failure, AssertionError) as error:
