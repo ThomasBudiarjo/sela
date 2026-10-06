@@ -4,6 +4,7 @@ use crate::{
     delivery::{
         Acknowledgment, Counters, Delivery, DeliveryError, Epoch, Lane, LiveState, Outcome, Stamp,
     },
+    masks::Layer,
     scene::{ContentVersion, Extent, PreparedCue, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
@@ -78,7 +79,8 @@ type Spawned = io::Result<(Child, PipeWorkers)>;
 
 /// One renderer session. Holds at most one cue awaiting acknowledgment and
 /// one newer wanted cue; a later request replaces the unsent one, so rapid
-/// input cannot apply an older scene after a newer one.
+/// input cannot apply an older scene after a newer one. Masks and the logo
+/// image have their own slots with the same rule; masks use the safety lane.
 pub struct Supervisor {
     epoch: Epoch,
     status: Status,
@@ -91,6 +93,12 @@ pub struct Supervisor {
     wanted: Option<Arc<PreparedCue>>,
     in_flight: Option<(Stamp, ContentVersion)>,
     rejected: Option<(ContentVersion, DeliveryError)>,
+    wanted_mask: Option<Layer>,
+    mask_in_flight: Option<(Stamp, Layer)>,
+    mask_rejected: Option<(Layer, DeliveryError)>,
+    wanted_logo: Option<Arc<PreparedCue>>,
+    logo_in_flight: Option<(Stamp, ContentVersion)>,
+    logo_rejected: Option<(ContentVersion, DeliveryError)>,
 }
 
 impl Supervisor {
@@ -120,6 +128,12 @@ impl Supervisor {
             wanted: None,
             in_flight: None,
             rejected: None,
+            wanted_mask: None,
+            mask_in_flight: None,
+            mask_rejected: None,
+            wanted_logo: None,
+            logo_in_flight: None,
+            logo_rejected: None,
         };
         if spawned.is_err() {
             this.lose(Loss::Spawn);
@@ -157,6 +171,65 @@ impl Supervisor {
         self.rejected
     }
 
+    /// Renderer-acknowledged mask layer. None whenever the session is not intact.
+    pub fn mask(&self) -> Option<Layer> {
+        if matches!(self.status, Status::Connected { .. }) {
+            self.delivery.mask()
+        } else {
+            None
+        }
+    }
+    /// Requested layer not yet acknowledged (wanted or in flight).
+    pub fn mask_pending(&self) -> Option<Layer> {
+        self.wanted_mask
+            .or(self.mask_in_flight.map(|(_, layer)| layer))
+    }
+    pub fn mask_rejected(&self) -> Option<(Layer, DeliveryError)> {
+        self.mask_rejected
+    }
+    /// Renderer-acknowledged logo image.
+    pub fn logo(&self) -> Option<ContentVersion> {
+        if matches!(self.status, Status::Connected { .. }) {
+            self.delivery.logo()
+        } else {
+            None
+        }
+    }
+    pub fn logo_pending(&self) -> Option<ContentVersion> {
+        self.wanted_logo
+            .as_ref()
+            .map(|cue| cue.version())
+            .or(self.logo_in_flight.map(|(_, version)| version))
+    }
+    /// Most recent logo rejection; the prior logo image remains in use.
+    pub fn logo_rejected(&self) -> Option<(ContentVersion, DeliveryError)> {
+        self.logo_rejected
+    }
+
+    /// Accepted while starting, so the operator's masks carry into a new
+    /// session; sent once the renderer reports its surface.
+    pub fn set_mask(&mut self, layer: Layer, now: Instant) -> Result<(), Refusal> {
+        if matches!(self.status, Status::Lost(_)) {
+            return Err(Refusal::NotConnected);
+        }
+        self.wanted_mask = Some(layer);
+        self.pump(now);
+        Ok(())
+    }
+
+    /// Logo extent must equal the reported surface extent, like a cue.
+    pub fn set_logo(&mut self, cue: Arc<PreparedCue>, now: Instant) -> Result<(), Refusal> {
+        let Status::Connected { extent, .. } = self.status else {
+            return Err(Refusal::NotConnected);
+        };
+        if cue.extent() != extent {
+            return Err(Refusal::WrongExtent);
+        }
+        self.wanted_logo = Some(cue);
+        self.pump(now);
+        Ok(())
+    }
+
     /// Cue extent must equal the reported surface extent.
     pub fn present(&mut self, cue: Arc<PreparedCue>, now: Instant) -> Result<(), Refusal> {
         let Status::Connected { extent, .. } = self.status else {
@@ -184,6 +257,8 @@ impl Supervisor {
             self.in_flight(),
             self.wanted(),
             self.rejected,
+            (self.mask(), self.mask_pending(), self.mask_rejected),
+            (self.logo(), self.logo_pending(), self.logo_rejected),
         )
     }
 
@@ -251,6 +326,13 @@ impl Supervisor {
             if self.wanted.as_ref().is_some_and(|w| w.extent() != extent) {
                 self.wanted = None;
             }
+            if self
+                .wanted_logo
+                .as_ref()
+                .is_some_and(|w| w.extent() != extent)
+            {
+                self.wanted_logo = None;
+            }
         } else if frame.is_acknowledgment() {
             let ack = frame.into_acknowledgment().map_err(|_| Loss::Protocol)?;
             self.acknowledge(ack, now)?;
@@ -270,50 +352,83 @@ impl Supervisor {
             };
             return Err(Loss::Delivery(error));
         }
+        if ack.outcome == Outcome::Accepted {
+            return Ok(());
+        }
         if let Some((stamp, version)) = self.in_flight
             && stamp == ack.stamp
-            && ack.outcome != Outcome::Accepted
         {
             self.in_flight = None;
-            if let Outcome::Rejected(error) = ack.outcome {
-                self.rejected = Some((version, error));
-            } else if self.rejected.is_some_and(|(v, _)| v == version) {
-                self.rejected = None;
-            }
+            settle(&mut self.rejected, version, ack.outcome);
+        } else if let Some((stamp, layer)) = self.mask_in_flight
+            && stamp == ack.stamp
+        {
+            self.mask_in_flight = None;
+            settle(&mut self.mask_rejected, layer, ack.outcome);
+        } else if let Some((stamp, version)) = self.logo_in_flight
+            && stamp == ack.stamp
+        {
+            self.logo_in_flight = None;
+            settle(&mut self.logo_rejected, version, ack.outcome);
         }
         Ok(())
     }
 
     fn pump(&mut self, now: Instant) {
-        if self.in_flight.is_some() || !matches!(self.status, Status::Connected { .. }) {
+        if !matches!(self.status, Status::Connected { .. }) {
             return;
         }
-        let Some(cue) = self.wanted.take() else {
-            return;
-        };
-        let version = cue.version();
-        let stamp = match self
-            .delivery
-            .submit(cue, Lane::Cue, now, now + ACKNOWLEDGMENT)
+        let deadline = now + ACKNOWLEDGMENT;
+        let logo_busy = self.wanted_logo.is_some() || self.logo_in_flight.is_some();
+        // A Logo mask waits for the logo image so the renderer can draw it.
+        if self.mask_in_flight.is_none()
+            && !(self.wanted_mask == Some(Layer::Logo) && logo_busy)
+            && let Some(layer) = self.wanted_mask.take()
         {
-            Ok(stamp) => stamp,
-            Err(error) => return self.lose(Loss::Delivery(error)),
-        };
+            match self.delivery.submit_mask(layer, now, deadline) {
+                Ok(stamp) if self.send(now) => self.mask_in_flight = Some((stamp, layer)),
+                Ok(_) => return,
+                Err(error) => return self.lose(Loss::Delivery(error)),
+            }
+        }
+        if self.in_flight.is_some() || self.logo_in_flight.is_some() {
+            return;
+        }
+        if let Some(cue) = self.wanted_logo.take() {
+            let version = cue.version();
+            match self.delivery.submit_logo(cue, now, deadline) {
+                Ok(stamp) if self.send(now) => self.logo_in_flight = Some((stamp, version)),
+                Ok(_) => {}
+                Err(error) => self.lose(Loss::Delivery(error)),
+            }
+        } else if let Some(cue) = self.wanted.take() {
+            let version = cue.version();
+            match self.delivery.submit(cue, Lane::Cue, now, deadline) {
+                Ok(stamp) if self.send(now) => self.in_flight = Some((stamp, version)),
+                Ok(_) => {}
+                Err(error) => self.lose(Loss::Delivery(error)),
+            }
+        }
+    }
+
+    /// Sends the command just submitted; false (and the session lost) on failure.
+    fn send(&mut self, now: Instant) -> bool {
         let command = self
             .delivery
             .take_next()
-            .expect("submitted cue is next in an otherwise idle session");
+            .expect("submitted command is the only unsent one");
         let sent = Frame::command(&command, now).and_then(|frame| {
             self.pipes
                 .as_ref()
                 .ok_or_else(|| io::ErrorKind::NotConnected.into())
                 .and_then(|pipes| pipes.try_send(frame))
         });
-        match sent {
-            Ok(()) => self.in_flight = Some((stamp, version)),
-            // A full outbound queue with nothing in flight means a stuck writer.
-            Err(_) => self.lose(Loss::Exited),
+        // The outbound queue holds more than every lane's capacity, so a full
+        // queue means a stuck writer.
+        if sent.is_err() {
+            self.lose(Loss::Exited);
         }
+        sent.is_ok()
     }
 
     fn lose(&mut self, loss: Loss) {
@@ -321,6 +436,10 @@ impl Supervisor {
         self.delivery.disconnect();
         self.wanted = None;
         self.in_flight = None;
+        self.wanted_mask = None;
+        self.mask_in_flight = None;
+        self.wanted_logo = None;
+        self.logo_in_flight = None;
         self.spawning = None;
         self.pipes = None;
         if let Some(child) = self.child.take() {
@@ -363,6 +482,20 @@ fn spawn(launch: Launch) -> Spawned {
             reap(child);
             Err(error)
         }
+    }
+}
+
+/// Terminal receipt for one slot: remember a rejection, forget it once that
+/// same request later applies.
+fn settle<T: PartialEq + Copy>(
+    rejected: &mut Option<(T, DeliveryError)>,
+    sent: T,
+    outcome: Outcome,
+) {
+    if let Outcome::Rejected(error) = outcome {
+        *rejected = Some((sent, error));
+    } else if rejected.is_some_and(|(r, _)| r == sent) {
+        *rejected = None;
     }
 }
 

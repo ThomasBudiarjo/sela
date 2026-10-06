@@ -1,5 +1,8 @@
 //! Bounded, single-owner command/acknowledgment model; not an IPC transport.
-use crate::scene::{ContentVersion, PreparedCue};
+use crate::{
+    masks::Layer,
+    scene::{ContentVersion, PreparedCue},
+};
 use std::{collections::VecDeque, sync::Arc, time::Instant};
 
 /// Supervisor supplies a fresh, never-reused epoch for each renderer session.
@@ -12,31 +15,54 @@ pub struct Stamp {
     pub sequence: u64,
 }
 
-/// Reserved capacity only; this does not define operator mask semantics.
+/// Reserved capacity: one outstanding command per lane. Masks use Safety so a
+/// slide still being prepared never delays them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lane {
     Cue,
     Safety,
 }
 
+impl Lane {
+    fn index(self) -> usize {
+        match self {
+            Self::Cue => 0,
+            Self::Safety => 1,
+        }
+    }
+}
+
+/// Renderer state a command replaces. Each is ordered independently.
+pub enum Payload {
+    /// The applied slide.
+    Scene(Arc<PreparedCue>),
+    /// The image drawn for `Layer::Logo`; never shown by itself.
+    Logo(Arc<PreparedCue>),
+    Mask(Layer),
+}
+
+impl Payload {
+    pub fn cue(&self) -> Option<&Arc<PreparedCue>> {
+        match self {
+            Self::Scene(cue) | Self::Logo(cue) => Some(cue),
+            Self::Mask(_) => None,
+        }
+    }
+}
+
 pub struct Command {
     stamp: Stamp,
     lane: Lane,
-    cue: Arc<PreparedCue>,
+    payload: Payload,
     deadline: Instant,
 }
 
 impl Command {
-    pub(crate) fn from_wire(
-        stamp: Stamp,
-        lane: Lane,
-        cue: Arc<PreparedCue>,
-        deadline: Instant,
-    ) -> Self {
+    pub(crate) fn from_wire(stamp: Stamp, lane: Lane, payload: Payload, deadline: Instant) -> Self {
         Self {
             stamp,
             lane,
-            cue,
+            payload,
             deadline,
         }
     }
@@ -50,8 +76,12 @@ impl Command {
     pub fn stamp(&self) -> Stamp {
         self.stamp
     }
-    pub fn cue(&self) -> &Arc<PreparedCue> {
-        &self.cue
+    pub fn payload(&self) -> &Payload {
+        &self.payload
+    }
+    /// Scene or logo image; None for a mask.
+    pub fn cue(&self) -> Option<&Arc<PreparedCue>> {
+        self.payload.cue()
     }
 }
 
@@ -112,10 +142,17 @@ pub struct Counters {
     pub timed_out: u64,
 }
 
+#[derive(Clone, Copy)]
+enum Sent {
+    Scene(ContentVersion),
+    Logo(ContentVersion),
+    Mask(Layer),
+}
+
 struct Pending {
     stamp: Stamp,
     lane: Lane,
-    version: ContentVersion,
+    sent: Sent,
     deadline: Instant,
     command: Option<Command>,
     accepted: bool,
@@ -129,6 +166,9 @@ pub struct Delivery {
     connected: bool,
     pending: VecDeque<Pending>,
     last_confirmed: Option<(Stamp, ContentVersion)>,
+    confirmed_logo: Option<(Stamp, ContentVersion)>,
+    /// A fresh renderer session starts unmasked by protocol.
+    confirmed_mask: (u64, Layer),
     counters: Counters,
 }
 
@@ -140,6 +180,8 @@ impl Delivery {
             connected: true,
             pending: VecDeque::with_capacity(2),
             last_confirmed: None,
+            confirmed_logo: None,
+            confirmed_mask: (0, Layer::None),
             counters: Counters::default(),
         }
     }
@@ -147,6 +189,36 @@ impl Delivery {
     pub fn submit(
         &mut self,
         cue: Arc<PreparedCue>,
+        lane: Lane,
+        now: Instant,
+        deadline: Instant,
+    ) -> Result<Stamp, DeliveryError> {
+        self.submit_payload(Payload::Scene(cue), lane, now, deadline)
+    }
+
+    /// Replaces the renderer's logo image. Uses the cue lane: it needs the
+    /// same preparation as a slide and must not occupy mask capacity.
+    pub fn submit_logo(
+        &mut self,
+        cue: Arc<PreparedCue>,
+        now: Instant,
+        deadline: Instant,
+    ) -> Result<Stamp, DeliveryError> {
+        self.submit_payload(Payload::Logo(cue), Lane::Cue, now, deadline)
+    }
+
+    pub fn submit_mask(
+        &mut self,
+        layer: Layer,
+        now: Instant,
+        deadline: Instant,
+    ) -> Result<Stamp, DeliveryError> {
+        self.submit_payload(Payload::Mask(layer), Lane::Safety, now, deadline)
+    }
+
+    fn submit_payload(
+        &mut self,
+        payload: Payload,
         lane: Lane,
         now: Instant,
         deadline: Instant,
@@ -169,15 +241,20 @@ impl Delivery {
             epoch: self.epoch,
             sequence,
         };
+        let sent = match &payload {
+            Payload::Scene(cue) => Sent::Scene(cue.version()),
+            Payload::Logo(cue) => Sent::Logo(cue.version()),
+            Payload::Mask(layer) => Sent::Mask(*layer),
+        };
         self.pending.push_back(Pending {
             stamp,
             lane,
-            version: cue.version(),
+            sent,
             deadline,
             command: Some(Command {
                 stamp,
                 lane,
-                cue,
+                payload,
                 deadline,
             }),
             accepted: false,
@@ -208,6 +285,18 @@ impl Delivery {
 
     pub fn is_connected(&self) -> bool {
         self.connected
+    }
+
+    /// Renderer-acknowledged mask layer; None once the session is not intact.
+    pub fn mask(&self) -> Option<Layer> {
+        self.connected.then_some(self.confirmed_mask.1)
+    }
+
+    /// Renderer-acknowledged logo image; None once the session is not intact.
+    pub fn logo(&self) -> Option<ContentVersion> {
+        self.confirmed_logo
+            .filter(|_| self.connected)
+            .map(|(_, version)| version)
     }
 
     /// Diagnostic history only, never a claim about a disconnected output.
@@ -249,13 +338,26 @@ impl Delivery {
             return true;
         }
         let pending = self.pending.remove(index).unwrap();
+        let newer =
+            |current: Option<Stamp>| current.is_none_or(|s| s.sequence < ack.stamp.sequence);
         match ack.outcome {
             Outcome::Applied => {
-                if self
-                    .last_confirmed
-                    .is_none_or(|(stamp, _)| stamp.sequence < ack.stamp.sequence)
-                {
-                    self.last_confirmed = Some((ack.stamp, pending.version));
+                match pending.sent {
+                    Sent::Scene(version) => {
+                        if newer(self.last_confirmed.map(|(s, _)| s)) {
+                            self.last_confirmed = Some((ack.stamp, version));
+                        }
+                    }
+                    Sent::Logo(version) => {
+                        if newer(self.confirmed_logo.map(|(s, _)| s)) {
+                            self.confirmed_logo = Some((ack.stamp, version));
+                        }
+                    }
+                    Sent::Mask(layer) => {
+                        if self.confirmed_mask.0 < ack.stamp.sequence {
+                            self.confirmed_mask = (ack.stamp.sequence, layer);
+                        }
+                    }
                 }
                 self.counters.applied = self.counters.applied.saturating_add(1);
             }
@@ -285,43 +387,56 @@ impl Delivery {
 /// Renderer-side ordering and apply boundary. The compositor must finish resource
 /// preparation before `present`; its callback must submit without blocking I/O
 /// and must not replace the live scene on failure. This model does no rendering.
+///
+/// Sequences are ordered per lane, so a mask accepted while an earlier slide is
+/// still being prepared does not make that slide stale.
 pub struct RendererSession {
     epoch: Epoch,
-    consumed: u64,
+    consumed: [u64; 2],
     pending: VecDeque<Command>,
     applied: Option<Arc<PreparedCue>>,
-    applied_stamp: Option<Stamp>,
+    logo: Option<Arc<PreparedCue>>,
+    layer: Layer,
+    applied_stamps: [Option<Stamp>; 2],
 }
 
 impl RendererSession {
     pub fn new(epoch: Epoch) -> Self {
         Self {
             epoch,
-            consumed: 0,
+            consumed: [0; 2],
             pending: VecDeque::with_capacity(2),
             applied: None,
-            applied_stamp: None,
+            logo: None,
+            layer: Layer::None,
+            applied_stamps: [None; 2],
         }
     }
 
     /// A structurally framed command failed renderer-owned resource validation.
     /// Consume its ordering identity without touching pending/applied resources.
-    pub fn reject_preparation(&mut self, stamp: Stamp) -> Acknowledgment {
-        self.reject_before_admission(stamp, DeliveryError::RenderFailed)
+    pub fn reject_preparation(&mut self, stamp: Stamp, lane: Lane) -> Acknowledgment {
+        self.reject_before_admission(stamp, lane, DeliveryError::RenderFailed)
     }
 
     /// Bounded preparation queue was saturated. No eviction or retry queue.
-    pub fn reject_overload(&mut self, stamp: Stamp) -> Acknowledgment {
-        self.reject_before_admission(stamp, DeliveryError::Busy)
+    pub fn reject_overload(&mut self, stamp: Stamp, lane: Lane) -> Acknowledgment {
+        self.reject_before_admission(stamp, lane, DeliveryError::Busy)
     }
 
-    fn reject_before_admission(&mut self, stamp: Stamp, reason: DeliveryError) -> Acknowledgment {
+    fn reject_before_admission(
+        &mut self,
+        stamp: Stamp,
+        lane: Lane,
+        reason: DeliveryError,
+    ) -> Acknowledgment {
+        let consumed = &mut self.consumed[lane.index()];
         let error = if stamp.epoch != self.epoch {
             DeliveryError::WrongEpoch
-        } else if stamp.sequence <= self.consumed {
+        } else if stamp.sequence <= *consumed {
             DeliveryError::Stale
         } else {
-            self.consumed = stamp.sequence;
+            *consumed = stamp.sequence;
             reason
         };
         Acknowledgment {
@@ -332,7 +447,8 @@ impl RendererSession {
 
     pub fn accept(&mut self, command: Command, now: Instant) -> Acknowledgment {
         let stamp = command.stamp;
-        if self.applied_stamp == Some(stamp) {
+        let lane = command.lane.index();
+        if self.applied_stamps[lane] == Some(stamp) {
             return Acknowledgment {
                 stamp,
                 outcome: Outcome::Applied,
@@ -346,10 +462,10 @@ impl RendererSession {
         }
         let error = if stamp.epoch != self.epoch {
             Some(DeliveryError::WrongEpoch)
-        } else if stamp.sequence <= self.consumed {
+        } else if stamp.sequence <= self.consumed[lane] {
             Some(DeliveryError::Stale)
         } else {
-            self.consumed = stamp.sequence;
+            self.consumed[lane] = stamp.sequence;
             if now >= command.deadline {
                 Some(DeliveryError::TimedOut)
             } else if self.pending.iter().any(|p| p.lane == command.lane) {
@@ -373,22 +489,32 @@ impl RendererSession {
     pub fn applied(&self) -> Option<&Arc<PreparedCue>> {
         self.applied.as_ref()
     }
+    pub fn logo(&self) -> Option<&Arc<PreparedCue>> {
+        self.logo.as_ref()
+    }
+    pub fn layer(&self) -> Layer {
+        self.layer
+    }
 
     /// Check expiry BEFORE touching output. A successful callback means frame
     /// submission, not measured scanout. `now` is the start of this commit attempt.
     pub fn present(
         &mut self,
         now: Instant,
-        submit: impl FnOnce(&PreparedCue) -> Result<(), DeliveryError>,
+        submit: impl FnOnce(&Payload) -> Result<(), DeliveryError>,
     ) -> Option<Acknowledgment> {
         let command = self.pending.pop_front()?;
         let outcome = if now >= command.deadline {
             Outcome::Rejected(DeliveryError::TimedOut)
-        } else if submit(&command.cue).is_err() {
+        } else if submit(&command.payload).is_err() {
             Outcome::Rejected(DeliveryError::RenderFailed)
         } else {
-            self.applied = Some(command.cue);
-            self.applied_stamp = Some(command.stamp);
+            self.applied_stamps[command.lane.index()] = Some(command.stamp);
+            match command.payload {
+                Payload::Scene(cue) => self.applied = Some(cue),
+                Payload::Logo(cue) => self.logo = Some(cue),
+                Payload::Mask(layer) => self.layer = layer,
+            }
             Outcome::Applied
         };
         Some(Acknowledgment {

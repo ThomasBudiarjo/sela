@@ -24,9 +24,21 @@ pub struct Compositor {
 }
 
 /// Renderer-owned bindings uploaded on the preparation worker, not read back.
+/// `background_only` shares the textures with text coverage off.
 #[allow(dead_code)] // Used by native_cues; offscreen examples share this module.
 pub struct ReadyComposition {
     bindings: wgpu::BindGroup,
+    background_only: wgpu::BindGroup,
+}
+
+/// What one presented frame shows: the full scene (no mask), its background
+/// without text (Clear, or the logo), or plain black.
+#[allow(dead_code)] // Used by native_cues; offscreen examples share this module.
+#[derive(Clone, Copy)]
+pub enum Draw<'a> {
+    Scene(&'a ReadyComposition),
+    Background(&'a ReadyComposition),
+    Black,
 }
 
 fn byte_len(size: Extent, cap: u32) -> Result<usize> {
@@ -80,13 +92,16 @@ fn rectangle(size: Extent, image: Extent, fit: Fit) -> [f32; 4] {
 const SHADER: &str = r#"
 @group(0) @binding(0) var background: texture_2d<f32>;
 @group(0) @binding(1) var mask: texture_2d<f32>;
-@group(0) @binding(2) var<uniform> rect: vec4f;
+struct Placement { rect: vec4f, text: vec4f }
+@group(0) @binding(2) var<uniform> placement: Placement;
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     var p = array<vec2f, 3>(vec2f(-1,-1), vec2f(3,-1), vec2f(-1,3));
     return vec4f(p[i], 0, 1);
 }
 @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let rect = placement.rect;
     let uv = (p.xy - rect.xy) / rect.zw;
+
     var rgb = vec3f(0);
     if all(uv >= vec2f(0)) && all(uv < vec2f(1)) {
         let dims = textureDimensions(background);
@@ -94,7 +109,8 @@ const SHADER: &str = r#"
         let color = textureLoad(background, vec2i(at), 0);
         rgb = color.rgb * color.a;
     }
-    let coverage = textureLoad(mask, vec2i(p.xy), 0).r;
+    let coverage = textureLoad(mask, vec2i(p.xy), 0).r * placement.text.x;
+
     return vec4f(mix(rgb, vec3f(1), coverage), 1);
 }
 "#;
@@ -229,40 +245,12 @@ impl Compositor {
         );
         self.upload(&image, background.rgba, background.width * 4);
         self.upload(&mask, alpha, size.width);
-        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM,
-            mapped_at_creation: true,
-        });
-        {
-            let mut data = uniform.get_mapped_range_mut(..);
-            for (i, value) in rectangle(size, image_size, fit).into_iter().enumerate() {
-                data.slice(i * 4..i * 4 + 4)
-                    .copy_from_slice(&value.to_ne_bytes());
-            }
-        }
-        uniform.unmap();
         let image_view = image.create_view(&Default::default());
         let mask_view = mask.create_view(&Default::default());
-        let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&image_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&mask_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: uniform.as_entire_binding(),
-                },
-            ],
-        });
+        let rect = rectangle(size, image_size, fit);
+
+        let bindings = self.bind(&image_view, &mask_view, rect, 1.0);
+
         // write_texture stages until submit. Flush and bound this worker's
         // in-flight upload staging before exposing readiness; NEVER in redraw.
         let upload = self.queue.submit([]);
@@ -270,12 +258,62 @@ impl Compositor {
             submission_index: Some(upload),
             timeout: Some(Duration::from_secs(2)),
         })?;
-        Ok(ReadyComposition { bindings })
+        let background_only = self.bind(&image_view, &mask_view, rect, 0.0);
+        Ok(ReadyComposition {
+            bindings,
+            background_only,
+        })
+    }
+
+    fn bind(
+        &self,
+        image: &wgpu::TextureView,
+        mask: &wgpu::TextureView,
+        rect: [f32; 4],
+        text: f32,
+    ) -> wgpu::BindGroup {
+        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: true,
+        });
+        {
+            let mut data = uniform.get_mapped_range_mut(..);
+            for (i, value) in rect.into_iter().chain([text, 0., 0., 0.]).enumerate() {
+                data.slice(i * 4..i * 4 + 4)
+                    .copy_from_slice(&value.to_ne_bytes());
+            }
+        }
+        uniform.unmap();
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(image),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(mask),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform.as_entire_binding(),
+                },
+            ],
+        })
     }
 
     /// Nonblocking encode/submit boundary. No upload, wait, map or readback.
     #[allow(dead_code)] // Native entry point, unused by offscreen examples.
-    pub fn submit_native(&self, view: &wgpu::TextureView, ready: &ReadyComposition) {
+    pub fn submit_native(&self, view: &wgpu::TextureView, draw: Draw<'_>) {
+        let bindings = match draw {
+            Draw::Scene(ready) => Some(&ready.bindings),
+            Draw::Background(ready) => Some(&ready.background_only),
+            Draw::Black => None,
+        };
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -290,9 +328,11 @@ impl Compositor {
                 })],
                 ..Default::default()
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &ready.bindings, &[]);
-            pass.draw(0..3, 0..1);
+            if let Some(bindings) = bindings {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, bindings, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
         self.queue.submit([encoder.finish()]);
     }
@@ -339,41 +379,13 @@ impl Compositor {
         );
         self.upload(&image, background.rgba, background.width * 4);
         self.upload(&mask, text_alpha, size.width);
-        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM,
-            mapped_at_creation: true,
-        });
-        {
-            let mut data = uniform.get_mapped_range_mut(..);
-            for (i, value) in rectangle(size, image_size, fit).into_iter().enumerate() {
-                data.slice(i * 4..i * 4 + 4)
-                    .copy_from_slice(&value.to_ne_bytes());
-            }
-        }
-        uniform.unmap();
         let image_view = image.create_view(&Default::default());
         let mask_view = mask.create_view(&Default::default());
+        let rect = rectangle(size, image_size, fit);
+
         let target_view = target.create_view(&Default::default());
-        let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&image_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&mask_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: uniform.as_entire_binding(),
-                },
-            ],
-        });
+        let bindings = self.bind(&image_view, &mask_view, rect, 1.0);
+
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: read_size,

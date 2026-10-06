@@ -47,8 +47,9 @@ lanes: a safety command has at most one normal command ahead of it. The renderer
 can therefore reach it on the next commit attempt after that command; this is a
 count bound, not a measured wall-clock safety-latency guarantee.
 
-The lane currently carries a prepared replacement snapshot. It establishes
-capacity/ordering, **not Black/Clear/Logo semantics**. M0-02/M0-08 must determine
+Since M0-08a the Safety lane carries mask changes and the renderer orders each
+lane independently (see the M0-08a section below). Before that the lane carried
+a prepared replacement snapshot and established capacity/ordering only. M0-02/M0-08 must determine
 mask precedence, restoration, media continuation and Go Live under mask. Safety
 resources must be pre-resolved outside the media worker. The future operator
 coordinator must cancel/reject superseded preparation before submission; blindly
@@ -311,3 +312,56 @@ oversize-text and expired cues that all retained the text/image scene. Old-epoch
 commands were rejected, the restarted session stayed unconfirmed until its
 explicit fresh cue, and consecutive Cue/Safety lanes ended blue. This is native
 submission/capture evidence on a real GPU, not physical scanout timing.
+
+## M0-08a — Mask layer and logo slot
+
+State: **implemented-unqualified** (headless and fake-audience tests only; the
+operator UI and native capture checks belong to M1-10c). Semantics come from
+EW8-OBS-014..020 and live in `src/masks.rs`, which has no GPUI or rendering
+types: a cover (None/Black/Logo, last press wins, repeated press turns it off)
+plus an independent Clear flag. Black with Logo is unreachable. The renderer
+receives only the resulting `Layer` (None, Clear, Black, Logo).
+
+The renderer keeps three independent pieces of state: the applied slide, the
+mask layer and a logo prepared in advance. A command's `Payload` is a `Scene`,
+a `Logo` or a `Mask(Layer)`.
+
+- Masks travel on the Safety lane. Slides and the logo share the Cue lane, so a
+  logo occupies the normal slot like a slide and never takes mask capacity.
+- `Delivery` still issues one sequence across both lanes, but `RendererSession`
+  orders each lane independently (`consumed` and the applied duplicate stamp
+  are per lane). A mask accepted while an earlier slide is still being prepared
+  does not make that slide stale. Within a lane, older sequences stay Stale and
+  duplicates of pending/applied commands return their original receipt.
+- Masks bypass the audience preparation worker: there is nothing to prepare,
+  so a mask never waits behind slide upload. Applied for a mask means a frame
+  with that layer was submitted. A Logo mask without a logo at the surface
+  extent is rejected RenderFailed and the previous layer stays.
+- Each prepared slide has a full and a background-only bind group. Black is a
+  plain clear pass, Clear samples the background-only group, Logo samples the
+  retained logo. A wrong-extent slide under None/Clear keeps the last frame
+  rather than sampling an incompatible extent; Black always wins.
+- A failed logo keeps the previous logo. The controller re-sends the logo after
+  session start and resize; the audience never opens files.
+- The supervisor keeps one wanted/in-flight/rejected slot each for mask and
+  logo, coalescing rapid toggles to the latest unsent value. It pumps mask
+  first, then logo, then cue, and a Logo mask waits while a logo is in flight.
+  Masks may be set while the session is still starting. Losing the session
+  clears all slots: a fresh session starts unmasked and without a logo.
+
+Wire additions (both receipt and Ready kinds are unchanged):
+
+| Kind | Version | Body bytes | Fields, in order |
+| --- | --- | --- | --- |
+| 5 MASK | 1 | 30 | epoch u128, sequence u64, lane u8, remaining budget ms u32, layer u8 (0 None, 1 Clear, 2 Black, 3 Logo) |
+| 6 LOGO | 2 | as v2 command | the M0-06c owned-resource body, applied to the logo slot |
+
+Unknown layer bytes fail framing. Tests: `masks::tests` (repeated presses,
+ordered pairs, triples, unreachable Black+Logo, Live double-click),
+`delivery::tests::lanes_are_ordered_independently`,
+`audience::tests::mask_overtakes_a_cue_waiting_for_preparation`,
+`audience::tests::layers_never_show_text_under_a_mask_or_a_wrong_extent`, and
+`tests/output_process.rs` (mask overtakes a cue, Logo mask needs a logo, failed
+logo keeps the previous one, lost session forgets masks). Not yet run: native
+capture that Black/Clear/Logo frames and operator indicators agree, and video
+logo (deferred to M2-03).

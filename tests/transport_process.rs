@@ -30,11 +30,12 @@ fn pipe_child() {
     let mut session = RendererSession::new(Epoch(42));
     while let Ok(frame) = Frame::read(std::io::stdin()) {
         let stamp = frame.command_stamp().unwrap();
+        let frame_lane = frame.command_lane().unwrap();
         let now = Instant::now();
         let ack = match frame.into_command(now, CAPS) {
             Ok(command) => {
                 if mode == "resources" {
-                    let cue = command.cue();
+                    let cue = command.cue().unwrap();
                     let text = cue.text().unwrap();
                     assert_eq!(text.content(), "Signal café\nBeacon");
                     assert_eq!(
@@ -59,7 +60,7 @@ fn pipe_child() {
                 }
                 session.accept(command, now)
             }
-            Err(_) => session.reject_preparation(stamp),
+            Err(_) => session.reject_preparation(stamp, frame_lane),
         };
         Frame::acknowledgment(ack).write(std::io::stderr()).unwrap();
         if mode != "queue" || stamp.sequence == 3 {

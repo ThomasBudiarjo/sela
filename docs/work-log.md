@@ -2043,3 +2043,28 @@ PY
   two images, a "sela-w03-background" default song theme and the logo setting.
 - Next: Phase 2, M0-08a `src/masks.rs` (cover None/Black/Logo plus Clear flag)
   and M1-10c operator toggles with a picture logo.
+
+### M0-08a — Mask layer and logo slot — 2026-10-06 (UTC+7)
+
+- State: **implemented-unqualified**. Scope: Phase 2a–2c of the approved
+  2026-10-06 spec; operator UI, logo source and native checks are M1-10c.
+- Added `src/masks.rs` (cover None/Black/Logo plus independent Clear, from
+  EW8-OBS-015–017; combined-mask Live double-click is provisional per
+  EW8-OBS-020). `Payload{Scene,Logo,Mask}` in `delivery`; masks on the Safety
+  lane, logo on the Cue lane. Wire kinds 5 MASK (v1, 30 bytes) and 6 LOGO
+  (v2 owned resource). Supervisor mask/logo slots with coalescing and pump
+  order mask, logo, cue. Audience: masks bypass the preparation worker,
+  background-only bind group for Clear, Black clear pass, retained logo
+  bindings, wrong-extent slides keep the last frame.
+- Decision: `RendererSession` orders sequences per lane. Otherwise a mask sent
+  while a slide is still in preparation would make that slide Stale. Updated
+  `reordered_commands_and_duplicates_never_reapply_old_content` to assert
+  same-lane reordering and added `lanes_are_ordered_independently`.
+- Checks: `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` (159 passed, 3 ignored fixtures) and
+  `cargo build --locked` pass on Windows 11.
+- Not run: native capture of Black/Clear/Logo frames, operator indicator
+  agreement, Linux/macOS, video logo (deferred to M2-03).
+- Next: M1-10c operator toggles (acknowledged indicators, Live pane mask lines,
+  Live double-click unmask, Ctrl+B/L/C and PageDown in a show-control key
+  context), Media Images list and "Use as Logo Background", native checks.

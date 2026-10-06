@@ -31,7 +31,7 @@ fn command(sequence: u64, revision: u64, lane: Lane, now: Instant) -> Command {
             sequence,
         },
         lane,
-        cue: cue(revision),
+        payload: Payload::Scene(cue(revision)),
         deadline: now + Duration::from_secs(3),
     }
 }
@@ -63,7 +63,7 @@ fn accepted_is_not_live_and_failed_candidate_preserves_applied_snapshot() {
     assert!(renderer.applied().is_none());
     let ack = renderer
         .present(now, |candidate| {
-            assert_eq!(candidate.version().revision, 3);
+            assert_eq!(candidate.cue().unwrap().version().revision, 3);
             Ok(())
         })
         .unwrap();
@@ -117,7 +117,7 @@ fn reserved_slot_survives_normal_flood_and_cross_lane_order_is_fifo() {
         for revision in [7, 29] {
             let ack = renderer
                 .present(now, |candidate| {
-                    assert_eq!(candidate.version().revision, revision);
+                    assert_eq!(candidate.cue().unwrap().version().revision, revision);
                     Ok(())
                 })
                 .unwrap();
@@ -143,14 +143,17 @@ fn reordered_commands_and_duplicates_never_reapply_old_content() {
         Outcome::Accepted
     );
     assert_eq!(
-        renderer.accept(command(1, 3, Lane::Cue, now), now).outcome,
+        renderer
+            .accept(command(1, 3, Lane::Safety, now), now)
+            .outcome,
         Outcome::Rejected(DeliveryError::Stale)
     );
     assert_eq!(
         renderer
             .accept(command(2, 19, Lane::Safety, now), now)
             .outcome,
-        Outcome::Accepted
+        Outcome::Accepted,
+        "a duplicate of a pending command is not queued twice"
     );
     let ack = renderer.present(now, |_| Ok(())).unwrap();
     assert_eq!(ack.outcome, Outcome::Applied);
@@ -166,6 +169,42 @@ fn reordered_commands_and_duplicates_never_reapply_old_content() {
             .is_none()
     );
     assert_eq!(renderer.applied().unwrap().version().revision, 19);
+}
+
+#[test]
+fn lanes_are_ordered_independently() {
+    let now = Instant::now();
+    let mut renderer = RendererSession::new(EPOCH);
+    let mask = Command {
+        payload: Payload::Mask(Layer::Black),
+        ..command(2, 0, Lane::Safety, now)
+    };
+    assert_eq!(renderer.accept(mask, now).outcome, Outcome::Accepted);
+    // An earlier slide on the Cue lane is not superseded by a later mask.
+    assert_eq!(
+        renderer.accept(command(1, 3, Lane::Cue, now), now).outcome,
+        Outcome::Accepted
+    );
+    let first = renderer.present(now, |_| Ok(())).unwrap();
+    let second = renderer.present(now, |_| Ok(())).unwrap();
+    assert_eq!((first.stamp.sequence, first.outcome), (2, Outcome::Applied));
+    assert_eq!(
+        (second.stamp.sequence, second.outcome),
+        (1, Outcome::Applied)
+    );
+    assert_eq!(renderer.layer(), Layer::Black);
+    assert_eq!(renderer.applied().unwrap().version().revision, 3);
+    assert_eq!(
+        renderer.accept(command(1, 4, Lane::Cue, now), now).outcome,
+        Outcome::Applied,
+        "same stamp on the same lane is a duplicate, not new content"
+    );
+    assert_eq!(
+        renderer
+            .accept(command(1, 5, Lane::Safety, now), now)
+            .outcome,
+        Outcome::Rejected(DeliveryError::Stale)
+    );
 }
 
 #[test]

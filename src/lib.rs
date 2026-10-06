@@ -1,6 +1,7 @@
 //! Framework-independent preparation and presentation contracts.
 pub mod arrangement;
 pub mod delivery;
+pub mod masks;
 pub mod output;
 pub mod preparation;
 pub mod scene;

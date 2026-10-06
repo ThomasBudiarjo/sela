@@ -1,7 +1,8 @@
 //! Supervisor against an actual child process speaking the renderer protocol.
 //! The child is this test binary in an ignored mode; no GPU or window is used.
 use sela::{
-    delivery::{DeliveryError, Epoch, LiveState, Outcome, RendererSession},
+    delivery::{DeliveryError, Epoch, LiveState, Outcome, Payload, RendererSession},
+    masks::Layer,
     output::{ACKNOWLEDGMENT, Launch, Loss, Refusal, STARTUP, Status, Stream, Supervisor},
     scene::{ContentVersion, Extent, PreparedCue, RendererCapabilities},
     transport::Frame,
@@ -44,13 +45,14 @@ fn fake_audience() {
         std::process::exit(0);
     }
     let mut session = RendererSession::new(epoch);
-    let (mut applied, mut presented) = (0, 0);
+    let (mut applied, mut presented, mut logos) = (0, 0, 0);
     while let Ok(frame) = Frame::read(std::io::stdin()) {
         let now = Instant::now();
         let stamp = frame.command_stamp().unwrap();
+        let lane = frame.command_lane().unwrap();
         let ack = match frame.into_command(now, CAPS) {
             Ok(command) => session.accept(command, now),
-            Err(_) => session.reject_preparation(stamp),
+            Err(_) => session.reject_preparation(stamp, lane),
         };
         Frame::acknowledgment(ack).write(out()).unwrap();
         if ack.outcome != Outcome::Accepted || mode == "hang" {
@@ -58,10 +60,21 @@ fn fake_audience() {
         }
         // Slow presentation lets the controller queue newer intent meanwhile.
         std::thread::sleep(Duration::from_millis(150));
-        presented += 1;
-        let reject = mode == "reject" && presented == 2;
+        let has_logo = session.logo().is_some();
         let ack = session
-            .present(Instant::now(), |_| {
+            .present(Instant::now(), |payload| {
+                let reject = match payload {
+                    Payload::Scene(_) => {
+                        presented += 1;
+                        mode == "reject" && presented == 2
+                    }
+                    Payload::Logo(_) => {
+                        logos += 1;
+                        mode == "logo-once" && logos == 2
+                    }
+                    // Mirrors the renderer: nothing to draw for a Logo mask.
+                    Payload::Mask(layer) => *layer == Layer::Logo && !has_logo,
+                };
                 if reject {
                     Err(DeliveryError::RenderFailed)
                 } else {
@@ -226,6 +239,106 @@ fn startup_and_acknowledgment_deadlines_make_output_unknown() {
         Status::Lost(Loss::Delivery(DeliveryError::TimedOut))
     );
     assert_eq!(output.live(), LiveState::Unknown);
+}
+
+fn logo(revision: u64) -> Arc<PreparedCue> {
+    Arc::new(
+        PreparedCue::diagnostic_color(
+            ContentVersion { id: 9, revision },
+            EXTENT,
+            [200, 10, 10, 255],
+            CAPS,
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn mask_is_sent_while_a_cue_awaits_acknowledgment() {
+    let mut output = connected("apply");
+    assert_eq!(
+        output.mask(),
+        Some(Layer::None),
+        "fresh session is unmasked"
+    );
+    output.present(cue(1, EXTENT), Instant::now()).unwrap();
+    output.set_mask(Layer::Black, Instant::now()).unwrap();
+    assert_eq!(output.counters().submitted, 2, "safety lane is not blocked");
+    assert_eq!(output.mask(), Some(Layer::None), "sent is not acknowledged");
+    assert_eq!(output.mask_pending(), Some(Layer::Black));
+    until(&mut output, "mask and cue applied", |o| {
+        o.mask() == Some(Layer::Black) && o.live() == confirmed(1)
+    });
+    assert_eq!(output.mask_pending(), None);
+    // Rapid toggles coalesce like cues: only the latest unsent layer is sent.
+    output.set_mask(Layer::Clear, Instant::now()).unwrap();
+    output.set_mask(Layer::Logo, Instant::now()).unwrap();
+    output.set_mask(Layer::None, Instant::now()).unwrap();
+    until(&mut output, "unmasked", |o| {
+        o.mask() == Some(Layer::None) && o.mask_pending().is_none()
+    });
+    assert_eq!(output.counters().submitted, 4);
+    assert_eq!(output.mask_rejected(), None);
+}
+
+#[test]
+fn logo_mask_needs_a_logo_and_a_failed_logo_keeps_the_previous_one() {
+    let mut output = connected("logo-once");
+    output.set_mask(Layer::Logo, Instant::now()).unwrap();
+    until(&mut output, "logo mask rejection", |o| {
+        o.mask_rejected().is_some()
+    });
+    assert_eq!(
+        output.mask_rejected(),
+        Some((Layer::Logo, DeliveryError::RenderFailed))
+    );
+    assert_eq!(output.mask(), Some(Layer::None));
+
+    output.set_logo(logo(1), Instant::now()).unwrap();
+    output.set_mask(Layer::Logo, Instant::now()).unwrap();
+    assert_eq!(
+        output.counters().submitted,
+        2,
+        "Logo mask waits for the logo"
+    );
+    until(&mut output, "logo shown", |o| o.mask() == Some(Layer::Logo));
+    assert_eq!(output.logo(), Some(logo(1).version()));
+    assert_eq!(
+        output.mask_rejected(),
+        None,
+        "applied mask clears rejection"
+    );
+
+    output.set_logo(logo(2), Instant::now()).unwrap();
+    assert_eq!(output.logo_pending(), Some(logo(2).version()));
+    until(&mut output, "logo rejection", |o| {
+        o.logo_rejected().is_some()
+    });
+    assert_eq!(
+        output.logo_rejected(),
+        Some((logo(2).version(), DeliveryError::RenderFailed))
+    );
+    assert_eq!(output.logo(), Some(logo(1).version()));
+    assert_eq!(output.mask(), Some(Layer::Logo));
+    assert_eq!(
+        output.set_logo(cue(3, RESIZED), Instant::now()),
+        Err(Refusal::WrongExtent)
+    );
+}
+
+#[test]
+fn lost_session_forgets_masks() {
+    let mut output = start("exit");
+    output.set_mask(Layer::Black, Instant::now()).unwrap();
+    until(&mut output, "exit", |o| {
+        matches!(o.status(), Status::Lost(_))
+    });
+    assert_eq!(output.mask(), None);
+    assert_eq!(output.mask_pending(), None);
+    assert_eq!(
+        output.set_mask(Layer::Black, Instant::now()),
+        Err(Refusal::NotConnected)
+    );
 }
 
 #[test]

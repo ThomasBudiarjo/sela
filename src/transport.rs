@@ -1,7 +1,8 @@
 //! Bounded local pipe diagnostic. Version 1 colors and version 2 owned resources.
 //! Blocking reads/writes belong to two workers, not the native frame thread.
 use crate::{
-    delivery::{Acknowledgment, Command, DeliveryError, Epoch, Lane, Outcome, Stamp},
+    delivery::{Acknowledgment, Command, DeliveryError, Epoch, Lane, Outcome, Payload, Stamp},
+    masks::Layer,
     scene::{ContentVersion, Extent, PreparedBackground, PreparedCue, RendererCapabilities},
 };
 use std::{
@@ -20,6 +21,10 @@ const COMMAND: u8 = 1;
 const ACK: u8 = 2;
 const READY: u8 = 3;
 const SURFACE: u8 = 4;
+/// Version 1 only: stamp, lane, budget, layer. Never waits for preparation.
+const MASK: u8 = 5;
+/// Version 2 only: same body as an owned-resource COMMAND, aimed at the logo.
+const LOGO: u8 = 6;
 const MAX_BODY: usize = 65;
 pub const MAX_RESOURCE_BODY: usize = crate::scene::MAX_SCENE_BYTES + 160;
 
@@ -32,6 +37,7 @@ fn length(kind: u8) -> io::Result<usize> {
         ACK => Ok(25),
         READY => Ok(20),
         SURFACE => Ok(24),
+        MASK => Ok(30),
         _ => Err(invalid()),
     }
 }
@@ -66,7 +72,7 @@ impl Frame {
             return Err(invalid());
         }
         if bytes[4] == 2 {
-            if bytes[5] != COMMAND || bytes[6..8] != [0, 0] {
+            if !matches!(bytes[5], COMMAND | LOGO) || bytes[6..8] != [0, 0] {
                 return Err(invalid());
             }
             let received_at = Instant::now();
@@ -108,69 +114,78 @@ impl Frame {
         writer.flush()
     }
     pub fn command(command: &Command, now: Instant) -> io::Result<Self> {
-        if command.cue().text().is_some()
-            || matches!(command.cue().background(), PreparedBackground::Image { .. })
-        {
-            return Self::resource_command(command, now);
+        let cue = match command.payload() {
+            Payload::Mask(layer) => return Self::mask(command, *layer, now),
+            Payload::Logo(cue) => return Self::resource_command(command, cue, LOGO, now),
+            Payload::Scene(cue) => cue,
+        };
+        if cue.text().is_some() || matches!(cue.background(), PreparedBackground::Image { .. }) {
+            return Self::resource_command(command, cue, COMMAND, now);
         }
-        let PreparedBackground::Color(color) = command.cue().background() else {
+        let PreparedBackground::Color(color) = cue.background() else {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "Image transport not implemented",
             ));
         };
-        if command.cue().text().is_some() || color[3] != 255 {
+        if color[3] != 255 {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "Text/alpha transport not implemented",
+                "Alpha transport not implemented",
             ));
         }
-        let budget = command
-            .deadline()
-            .saturating_duration_since(now)
-            .as_millis();
-        if budget == 0 || budget > u128::from(MAX_BUDGET_MS) {
-            return Err(invalid());
-        }
+        let budget = budget(command, now)?;
         let mut f = Self::new(COMMAND);
         let b = &mut f.bytes[HEADER..];
         put_stamp(b, command.stamp());
-        b[24] = match command.lane() {
-            Lane::Cue => 0,
-            Lane::Safety => 1,
-        };
-        b[25..29].copy_from_slice(&(budget as u32).to_le_bytes());
-        let v = command.cue().version();
+        b[24] = lane_byte(command.lane());
+        b[25..29].copy_from_slice(&budget.to_le_bytes());
+        let v = cue.version();
         b[29..45].copy_from_slice(&v.id.to_le_bytes());
         b[45..53].copy_from_slice(&v.revision.to_le_bytes());
-        let extent = command.cue().extent();
+        let extent = cue.extent();
         b[53..57].copy_from_slice(&extent.width.to_le_bytes());
         b[57..61].copy_from_slice(&extent.height.to_le_bytes());
         b[61..65].copy_from_slice(color);
         Ok(f)
     }
-    fn resource_command(command: &Command, now: Instant) -> io::Result<Self> {
-        let budget = command
-            .deadline()
-            .saturating_duration_since(now)
-            .as_millis();
-        if budget == 0 || budget > u128::from(MAX_BUDGET_MS) {
-            return Err(invalid());
-        }
+    fn mask(command: &Command, layer: Layer, now: Instant) -> io::Result<Self> {
+        let budget = budget(command, now)?;
+        let mut f = Self::new(MASK);
+        let b = &mut f.bytes[HEADER..];
+        put_stamp(b, command.stamp());
+        b[24] = lane_byte(command.lane());
+        b[25..29].copy_from_slice(&budget.to_le_bytes());
+        b[29] = match layer {
+            Layer::None => 0,
+            Layer::Clear => 1,
+            Layer::Black => 2,
+            Layer::Logo => 3,
+        };
+        Ok(f)
+    }
+    fn resource_command(
+        command: &Command,
+        cue: &PreparedCue,
+        kind: u8,
+        now: Instant,
+    ) -> io::Result<Self> {
+        let budget = budget(command, now)?;
         let mut f = Self::new(COMMAND);
-        f.bytes.reserve_exact(command.cue().resource_bytes() + 160);
+        f.bytes.reserve_exact(cue.resource_bytes() + 160);
         f.bytes[4] = 2;
+        f.bytes[5] = kind;
         f.bytes[6..8].fill(0);
         f.bytes.truncate(HEADER + 61);
         let b = &mut f.bytes[HEADER..];
         put_stamp(b, command.stamp());
-        b[24] = if command.lane() == Lane::Cue { 0 } else { 1 };
-        b[25..29].copy_from_slice(&(budget as u32).to_le_bytes());
-        b[29..45].copy_from_slice(&command.cue().version().id.to_le_bytes());
-        b[45..53].copy_from_slice(&command.cue().version().revision.to_le_bytes());
-        b[53..57].copy_from_slice(&command.cue().extent().width.to_le_bytes());
-        b[57..61].copy_from_slice(&command.cue().extent().height.to_le_bytes());
-        match command.cue().background() {
+        b[24] = lane_byte(command.lane());
+        b[25..29].copy_from_slice(&budget.to_le_bytes());
+        b[29..45].copy_from_slice(&cue.version().id.to_le_bytes());
+        b[45..53].copy_from_slice(&cue.version().revision.to_le_bytes());
+        b[53..57].copy_from_slice(&cue.extent().width.to_le_bytes());
+        b[57..61].copy_from_slice(&cue.extent().height.to_le_bytes());
+        match cue.background() {
             PreparedBackground::Color(color) => {
                 f.bytes.push(0);
                 f.bytes.extend_from_slice(color);
@@ -187,7 +202,7 @@ impl Frame {
                 put_blob(&mut f.bytes, rgba);
             }
         }
-        if let Some(text) = command.cue().text() {
+        if let Some(text) = cue.text() {
             f.bytes.push(1);
             put_version(&mut f.bytes, text.font_version());
             f.bytes.extend_from_slice(&text.font_size().to_le_bytes());
@@ -202,8 +217,11 @@ impl Frame {
         }
         Ok(f)
     }
+    fn is_command_kind(&self) -> bool {
+        matches!(self.bytes[5], COMMAND | MASK | LOGO)
+    }
     pub fn command_stamp(&self) -> io::Result<Stamp> {
-        if self.bytes[5] != COMMAND {
+        if !self.is_command_kind() {
             return Err(invalid());
         }
         let stamp = get_stamp(&self.bytes[HEADER..]);
@@ -212,11 +230,25 @@ impl Frame {
         }
         Ok(stamp)
     }
+    pub fn command_lane(&self) -> io::Result<Lane> {
+        if !self.is_command_kind() {
+            return Err(invalid());
+        }
+        match self.bytes[HEADER + 24] {
+            0 => Ok(Lane::Cue),
+            1 => Ok(Lane::Safety),
+            _ => Err(invalid()),
+        }
+    }
+    /// Masks carry no resources and bypass the renderer's preparation worker.
+    pub fn is_mask(&self) -> bool {
+        self.bytes[4] == 1 && self.bytes[5] == MASK
+    }
     /// Relative budget starts after v1 read, or before v2 length/body transfer.
     /// Queue/preparation delay never restarts it; pre-header transit is excluded.
     /// Controller's original acknowledgment deadline bounds end-to-end uncertainty.
     pub fn into_command(self, now: Instant, caps: RendererCapabilities) -> io::Result<Command> {
-        if self.bytes[5] != COMMAND {
+        if !self.is_command_kind() {
             return Err(invalid());
         }
         let b = &self.bytes[HEADER..];
@@ -233,6 +265,22 @@ impl Frame {
         if budget == 0 || budget > MAX_BUDGET_MS {
             return Err(invalid());
         }
+        let deadline = self.received_at.unwrap_or(now) + Duration::from_millis(u64::from(budget));
+        if self.bytes[5] == MASK {
+            let layer = match b[29] {
+                0 => Layer::None,
+                1 => Layer::Clear,
+                2 => Layer::Black,
+                3 => Layer::Logo,
+                _ => return Err(invalid()),
+            };
+            return Ok(Command::from_wire(
+                stamp,
+                lane,
+                Payload::Mask(layer),
+                deadline,
+            ));
+        }
         let version = ContentVersion {
             id: u128::from_le_bytes(b[29..45].try_into().unwrap()),
             revision: u64::from_le_bytes(b[45..53].try_into().unwrap()),
@@ -242,7 +290,7 @@ impl Frame {
             height: u32::from_le_bytes(b[57..61].try_into().unwrap()),
         };
         let cue = if self.bytes[4] == 2 {
-            let mut payload = Payload(&b[61..self.len - HEADER]);
+            let mut payload = Reader(&b[61..self.len - HEADER]);
             let background = match payload.byte()? {
                 0 => PreparedBackground::Color(payload.take(4)?.try_into().unwrap()),
                 1 => PreparedBackground::Image {
@@ -276,12 +324,13 @@ impl Frame {
             PreparedCue::diagnostic_color(version, extent, b[61..65].try_into().unwrap(), caps)
         }
         .map_err(|_| invalid())?;
-        Ok(Command::from_wire(
-            stamp,
-            lane,
-            Arc::new(cue),
-            self.received_at.unwrap_or(now) + Duration::from_millis(u64::from(budget)),
-        ))
+        let cue = Arc::new(cue);
+        let payload = if self.bytes[5] == LOGO {
+            Payload::Logo(cue)
+        } else {
+            Payload::Scene(cue)
+        };
+        Ok(Command::from_wire(stamp, lane, payload, deadline))
     }
     pub fn acknowledgment(ack: Acknowledgment) -> Self {
         let mut f = Self::new(ACK);
@@ -375,6 +424,22 @@ impl Frame {
         self.bytes[4] == 1 && self.bytes[5] == ACK
     }
 }
+fn budget(command: &Command, now: Instant) -> io::Result<u32> {
+    let budget = command
+        .deadline()
+        .saturating_duration_since(now)
+        .as_millis();
+    if budget == 0 || budget > u128::from(MAX_BUDGET_MS) {
+        return Err(invalid());
+    }
+    Ok(budget as u32)
+}
+fn lane_byte(lane: Lane) -> u8 {
+    match lane {
+        Lane::Cue => 0,
+        Lane::Safety => 1,
+    }
+}
 fn put_version(bytes: &mut Vec<u8>, version: ContentVersion) {
     bytes.extend_from_slice(&version.id.to_le_bytes());
     bytes.extend_from_slice(&version.revision.to_le_bytes());
@@ -383,8 +448,8 @@ fn put_blob(bytes: &mut Vec<u8>, blob: &[u8]) {
     bytes.extend_from_slice(&(blob.len() as u32).to_le_bytes());
     bytes.extend_from_slice(blob);
 }
-struct Payload<'a>(&'a [u8]);
-impl<'a> Payload<'a> {
+struct Reader<'a>(&'a [u8]);
+impl<'a> Reader<'a> {
     fn take(&mut self, count: usize) -> io::Result<&'a [u8]> {
         if count > self.0.len() {
             return Err(invalid());
@@ -818,7 +883,7 @@ mod tests {
                     sequence: 1,
                 },
                 Lane::Cue,
-                Arc::new(cue),
+                Payload::Scene(Arc::new(cue)),
                 now + Duration::from_secs(2),
             );
             let mut wire = Vec::new();
@@ -830,11 +895,9 @@ mod tests {
                 .unwrap()
                 .into_command(now, caps)
                 .unwrap();
-            assert_eq!(decoded.cue().version(), version);
-            assert_eq!(
-                decoded.cue().resource_bytes(),
-                command.cue().resource_bytes()
-            );
+            let (decoded_cue, command_cue) = (decoded.cue().unwrap(), command.cue().unwrap());
+            assert_eq!(decoded_cue.version(), version);
+            assert_eq!(decoded_cue.resource_bytes(), command_cue.resource_bytes());
             let queued = Frame::read(wire.as_slice()).unwrap();
             let later = queued.received_at.unwrap() + Duration::from_secs(6);
             let mut renderer = RendererSession::new(Epoch(42));
@@ -844,11 +907,11 @@ mod tests {
                     .outcome,
                 Outcome::Rejected(DeliveryError::TimedOut)
             );
-            if let Some(text) = decoded.cue().text() {
+            if let Some(text) = decoded_cue.text() {
                 assert_eq!(text.content(), "Original diagnostic text");
-                assert_eq!(text.font(), command.cue().text().unwrap().font());
+                assert_eq!(text.font(), command_cue.text().unwrap().font());
             } else {
-                let PreparedBackground::Image { rgba, .. } = decoded.cue().background() else {
+                let PreparedBackground::Image { rgba, .. } = decoded_cue.background() else {
                     panic!("lost image")
                 };
                 assert_eq!(rgba.as_ref(), &[17, 53, 99, 255]);
@@ -959,7 +1022,7 @@ mod tests {
                 sequence,
             };
             assert_eq!(
-                renderer.reject_overload(stamp).outcome,
+                renderer.reject_overload(stamp, Lane::Cue).outcome,
                 Outcome::Rejected(DeliveryError::Busy)
             );
             assert_eq!(renderer.applied().unwrap().version().revision, 23);
@@ -967,19 +1030,25 @@ mod tests {
         }
         assert_eq!(
             renderer
-                .reject_overload(Stamp {
-                    epoch: Epoch(42),
-                    sequence: 1001
-                })
+                .reject_overload(
+                    Stamp {
+                        epoch: Epoch(42),
+                        sequence: 1001
+                    },
+                    Lane::Cue
+                )
                 .outcome,
             Outcome::Rejected(DeliveryError::Stale)
         );
         assert_eq!(
             renderer
-                .reject_overload(Stamp {
-                    epoch: Epoch(99),
-                    sequence: 1002
-                })
+                .reject_overload(
+                    Stamp {
+                        epoch: Epoch(99),
+                        sequence: 1002
+                    },
+                    Lane::Cue
+                )
                 .outcome,
             Outcome::Rejected(DeliveryError::WrongEpoch)
         );

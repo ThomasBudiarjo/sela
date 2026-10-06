@@ -42,9 +42,10 @@ fn fake_audience_child() {
     while let Ok(frame) = Frame::read(std::io::stdin()) {
         let now = Instant::now();
         let stamp = frame.command_stamp().unwrap();
+        let lane = frame.command_lane().unwrap();
         let ack = match frame.into_command(now, caps) {
             Ok(command) => session.accept(command, now),
-            Err(_) => session.reject_preparation(stamp),
+            Err(_) => session.reject_preparation(stamp, lane),
         };
         Frame::acknowledgment(ack).write(out()).unwrap();
         if ack.outcome == Outcome::Accepted {

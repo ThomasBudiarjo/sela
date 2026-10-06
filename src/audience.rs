@@ -8,7 +8,8 @@ pub mod compositor;
 #[path = "audience/text.rs"]
 pub mod text;
 use sela::{
-    delivery::{Command, DeliveryError, Epoch, Outcome, RendererSession, Stamp},
+    delivery::{Command, DeliveryError, Epoch, Lane, Outcome, Payload, RendererSession, Stamp},
+    masks::Layer,
     scene::{Extent, PreparedBackground, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
@@ -125,8 +126,11 @@ struct Audience {
     preparation: Option<SyncSender<Frame>>,
     waiting: Option<Frame>,
     completions: Option<Receiver<Completion>>,
-    ready: VecDeque<(Stamp, compositor::ReadyComposition)>,
-    applied_ready: Option<compositor::ReadyComposition>,
+    caps: RendererCapabilities,
+    /// Accepted commands in session order; masks carry no composition.
+    ready: VecDeque<(Stamp, Option<compositor::ReadyComposition>)>,
+    applied_ready: Option<(Extent, compositor::ReadyComposition)>,
+    logo_ready: Option<(Extent, compositor::ReadyComposition)>,
     detached: bool,
     reported: Option<Extent>,
     resized_at: Instant,
@@ -135,35 +139,88 @@ struct Audience {
 const SURFACE_SETTLE: Duration = Duration::from_millis(250);
 struct Completion {
     stamp: Stamp,
+    lane: Lane,
     result: Result<(Command, compositor::ReadyComposition), PreparationFailure>,
 }
 enum PreparationFailure {
     Resource,
     Upload,
 }
+enum Forward {
+    Idle,
+    Queued,
+    /// Masks have nothing to prepare; the caller admits them directly.
+    Mask(Frame),
+}
 // One bounded backpressure slot; never admit/reject a later stamp ahead of
 // already queued preparation. Retaining Frame also retains its original deadline.
+// A mask can overtake the worker only on the Safety lane, which a well-behaved
+// controller never shares with a scene in flight; a misbehaving one gets Stale.
 fn forward_preparation(
     jobs: &SyncSender<Frame>,
     waiting: &mut Option<Frame>,
     mut poll: impl FnMut() -> io::Result<Option<Frame>>,
-) -> io::Result<bool> {
+) -> io::Result<Forward> {
     let frame = match waiting.take() {
         Some(frame) => frame,
         None => match poll()? {
             Some(frame) => frame,
-            None => return Ok(false),
+            None => return Ok(Forward::Idle),
         },
     };
     frame.command_stamp()?;
+    if frame.is_mask() {
+        return Ok(Forward::Mask(frame));
+    }
     match jobs.try_send(frame) {
-        Ok(()) => Ok(true),
+        Ok(()) => Ok(Forward::Queued),
         Err(mpsc::TrySendError::Full(frame)) => {
             *waiting = Some(frame);
-            Ok(false)
+            Ok(Forward::Idle)
         }
         Err(mpsc::TrySendError::Disconnected(_)) => Err(io::ErrorKind::BrokenPipe.into()),
     }
+}
+
+/// What the audience sees for a mask layer. `Some(fits)` is a prepared
+/// composition and whether it matches the surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shown {
+    Scene,
+    SceneBackground,
+    Logo,
+    Black,
+    /// Leave the last presented frame: never sample a wrong-extent text mask.
+    Keep,
+}
+fn shown(layer: Layer, scene: Option<bool>, logo: Option<bool>) -> Shown {
+    match (layer, scene) {
+        (Layer::Black, _) => Shown::Black,
+        // A Logo mask is only admitted with a logo; a later resize shows black
+        // until the controller supplies one at the new extent.
+        (Layer::Logo, _) if logo == Some(true) => Shown::Logo,
+        (Layer::Logo, _) => Shown::Black,
+        (_, None) => Shown::Black,
+        (_, Some(false)) => Shown::Keep,
+        (Layer::None, Some(true)) => Shown::Scene,
+        (Layer::Clear, Some(true)) => Shown::SceneBackground,
+    }
+}
+fn fits(ready: &Option<(Extent, compositor::ReadyComposition)>, surface: Extent) -> Option<bool> {
+    ready.as_ref().map(|(extent, _)| *extent == surface)
+}
+fn draw<'a>(
+    shown: Shown,
+    scene: Option<&'a compositor::ReadyComposition>,
+    logo: Option<&'a compositor::ReadyComposition>,
+) -> Option<compositor::Draw<'a>> {
+    Some(match shown {
+        Shown::Scene => compositor::Draw::Scene(scene?),
+        Shown::SceneBackground => compositor::Draw::Background(scene?),
+        Shown::Logo => compositor::Draw::Background(logo?),
+        Shown::Black => compositor::Draw::Black,
+        Shown::Keep => return None,
+    })
 }
 fn prepare_frame(
     frame: Frame,
@@ -174,7 +231,7 @@ fn prepare_frame(
     let command = frame
         .into_command(Instant::now(), caps)
         .map_err(|_| PreparationFailure::Resource)?;
-    let cue = command.cue();
+    let cue = command.cue().ok_or(PreparationFailure::Resource)?;
     let size = cue.extent();
     // Same 32px inset, explicit font, no-wrap policy as composition_spike.
     let mut alpha = vec![0; size.width as usize * size.height as usize];
@@ -400,7 +457,8 @@ impl ApplicationHandler for Audience {
             .name("audience-prepare".into())
             .spawn(move || {
                 while let Ok(frame) = work.recv() {
-                    let Ok(stamp) = frame.command_stamp() else {
+                    let (Ok(stamp), Ok(lane)) = (frame.command_stamp(), frame.command_lane())
+                    else {
                         break;
                     };
                     let result = prepare_frame(
@@ -412,7 +470,14 @@ impl ApplicationHandler for Audience {
                         centered,
                     );
                     let fatal = matches!(result, Err(PreparationFailure::Upload));
-                    if results.send(Completion { stamp, result }).is_err() {
+                    if results
+                        .send(Completion {
+                            stamp,
+                            lane,
+                            result,
+                        })
+                        .is_err()
+                    {
                         break;
                     }
                     if fatal {
@@ -424,6 +489,9 @@ impl ApplicationHandler for Audience {
             return self.fail(el, "cannot start preparation worker".into());
         }
         self.compositor = Some(compositor);
+        self.caps = RendererCapabilities {
+            max_texture_dimension: max,
+        };
         self.preparation = Some(jobs);
         self.completions = Some(completions);
         self.gpu = Some(Gpu {
@@ -477,21 +545,70 @@ impl ApplicationHandler for Audience {
                         el.exit();
                         return;
                     }
+                    let is_logo =
+                        matches!(self.session.pending().unwrap().payload(), Payload::Logo(_));
                     let compositor = self.compositor.as_ref().unwrap();
-                    if let Some(ack) = self.session.present(Instant::now(), |cue| {
-                        if cue.extent().width != g.config.width
-                            || cue.extent().height != g.config.height
-                        {
-                            return Err(DeliveryError::RenderFailed);
+                    let surface = g.extent();
+                    let layer = self.session.layer();
+                    let (applied_ready, logo_ready) = (&self.applied_ready, &self.logo_ready);
+                    let scene = applied_ready.as_ref().map(|(_, r)| r);
+                    let logo = logo_ready.as_ref().map(|(_, r)| r);
+                    let mut extent = None;
+                    if let Some(ack) = self.session.present(Instant::now(), |payload| {
+                        let choice = match payload {
+                            Payload::Scene(cue) | Payload::Logo(cue) => {
+                                if cue.extent() != surface {
+                                    return Err(DeliveryError::RenderFailed);
+                                }
+                                extent = Some(cue.extent());
+                                let new = ready.as_ref().ok_or(DeliveryError::RenderFailed)?;
+                                if matches!(payload, Payload::Scene(_)) {
+                                    draw(
+                                        shown(layer, Some(true), fits(logo_ready, surface)),
+                                        Some(new),
+                                        logo,
+                                    )
+                                } else {
+                                    draw(
+                                        shown(layer, fits(applied_ready, surface), Some(true)),
+                                        scene,
+                                        Some(new),
+                                    )
+                                }
+                            }
+                            Payload::Mask(next) => {
+                                if *next == Layer::Logo && fits(logo_ready, surface) != Some(true) {
+                                    return Err(DeliveryError::RenderFailed);
+                                }
+                                draw(
+                                    shown(
+                                        *next,
+                                        fits(applied_ready, surface),
+                                        fits(logo_ready, surface),
+                                    ),
+                                    scene,
+                                    logo,
+                                )
+                            }
+                        };
+                        if let Some(choice) = choice {
+                            compositor.submit_native(
+                                &frame.texture.create_view(&Default::default()),
+                                choice,
+                            );
+                            g.window.pre_present_notify();
+                            frame.present();
                         }
-                        compositor
-                            .submit_native(&frame.texture.create_view(&Default::default()), &ready);
-                        g.window.pre_present_notify();
-                        frame.present();
                         Ok(())
                     }) {
-                        if ack.outcome == Outcome::Applied {
-                            self.applied_ready = Some(ready);
+                        if ack.outcome == Outcome::Applied
+                            && let (Some(extent), Some(ready)) = (extent, ready)
+                        {
+                            if is_logo {
+                                self.logo_ready = Some((extent, ready));
+                            } else {
+                                self.applied_ready = Some((extent, ready));
+                            }
                         }
                         let reconfigure_after = reconfigure;
                         self.send(el, Frame::acknowledgment(ack));
@@ -500,21 +617,25 @@ impl ApplicationHandler for Audience {
                         }
                         return;
                     }
-                } else if let Some(ready) = &self.applied_ready {
-                    // Do not sample an old fixed-extent mask after resize.
-                    let cue = self.session.applied().unwrap();
-                    if cue.extent().width == g.config.width
-                        && cue.extent().height == g.config.height
-                    {
+                } else {
+                    let surface = g.extent();
+                    let scene = self.applied_ready.as_ref().map(|(_, r)| r);
+                    let logo = self.logo_ready.as_ref().map(|(_, r)| r);
+                    let choice = shown(
+                        self.session.layer(),
+                        fits(&self.applied_ready, surface),
+                        fits(&self.logo_ready, surface),
+                    );
+                    if self.applied_ready.is_none() && self.session.layer() == Layer::None {
+                        g.clear(frame);
+                    } else if let Some(choice) = draw(choice, scene, logo) {
                         self.compositor
                             .as_ref()
                             .unwrap()
-                            .submit_native(&frame.texture.create_view(&Default::default()), ready);
+                            .submit_native(&frame.texture.create_view(&Default::default()), choice);
                         g.window.pre_present_notify();
                         frame.present();
                     }
-                } else {
-                    g.clear(frame);
                 }
                 if reconfigure {
                     g.surface.configure(&g.device, &g.config);
@@ -548,6 +669,25 @@ impl ApplicationHandler for Audience {
     }
 }
 impl Audience {
+    fn accept_mask(&mut self, frame: Frame) -> sela::delivery::Acknowledgment {
+        // forward_preparation already validated the stamp.
+        let stamp = frame.command_stamp().unwrap();
+        let Ok(lane) = frame.command_lane() else {
+            return self.session.reject_preparation(stamp, Lane::Safety);
+        };
+        match frame.into_command(Instant::now(), self.caps) {
+            Ok(command) => {
+                let ack = self.session.accept(command, Instant::now());
+                if ack.outcome == Outcome::Accepted
+                    && !self.ready.iter().any(|(s, _)| *s == ack.stamp)
+                {
+                    self.ready.push_back((ack.stamp, None));
+                }
+                ack
+            }
+            Err(_) => self.session.reject_preparation(stamp, lane),
+        }
+    }
     /// Err means the event loop is exiting.
     fn poll_session(&mut self, el: &ActiveEventLoop) -> Result<(), ()> {
         // Only completed uploads cross into the native session; failures never
@@ -561,13 +701,13 @@ impl Audience {
                             if ack.outcome == Outcome::Accepted
                                 && !self.ready.iter().any(|(s, _)| *s == ack.stamp)
                             {
-                                self.ready.push_back((ack.stamp, ready));
+                                self.ready.push_back((ack.stamp, Some(ready)));
                             }
                             ack
                         }
-                        Err(PreparationFailure::Resource) => {
-                            self.session.reject_preparation(completion.stamp)
-                        }
+                        Err(PreparationFailure::Resource) => self
+                            .session
+                            .reject_preparation(completion.stamp, completion.lane),
                         Err(PreparationFailure::Upload) => {
                             el.exit();
                             return Err(()); // GPU uncertainty retires session, no inferred Applied.
@@ -592,8 +732,15 @@ impl Audience {
                 &mut self.waiting,
                 || self.pipes.poll(),
             ) {
-                Ok(true) => {}
-                Ok(false) => break,
+                Ok(Forward::Queued) => {}
+                Ok(Forward::Idle) => break,
+                Ok(Forward::Mask(frame)) => {
+                    let ack = self.accept_mask(frame);
+                    self.send(el, Frame::acknowledgment(ack));
+                    if self.detached {
+                        return Ok(());
+                    }
+                }
                 Err(_) => {
                     self.lose_controller(el);
                     return if self.detached { Ok(()) } else { Err(()) };
@@ -632,8 +779,12 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         preparation: None,
         waiting: None,
         completions: None,
+        caps: RendererCapabilities {
+            max_texture_dimension: 0,
+        },
         ready: VecDeque::with_capacity(2),
         applied_ready: None,
+        logo_ready: None,
         detached: false,
         reported: None,
         resized_at: start,
@@ -677,6 +828,93 @@ mod tests {
             .write(&mut wire)
             .unwrap();
         Frame::read(wire.as_slice()).unwrap()
+    }
+
+    fn mask_frame(delivery: &mut Delivery, layer: Layer) -> Frame {
+        let now = Instant::now();
+        delivery
+            .submit_mask(layer, now, now + Duration::from_secs(3))
+            .unwrap();
+        let mut wire = Vec::new();
+        Frame::command(&delivery.take_next().unwrap(), now)
+            .unwrap()
+            .write(&mut wire)
+            .unwrap();
+        Frame::read(wire.as_slice()).unwrap()
+    }
+
+    fn queued(result: io::Result<Forward>) -> bool {
+        matches!(result.unwrap(), Forward::Queued)
+    }
+
+    #[test]
+    fn mask_overtakes_a_cue_waiting_for_preparation() {
+        let mut delivery = Delivery::new(Epoch(83));
+        let mut source = VecDeque::from([
+            frame(&mut delivery, Lane::Cue, 7),
+            mask_frame(&mut delivery, Layer::Black),
+        ]);
+        let (jobs, worker) = mpsc::sync_channel(1);
+        let mut waiting = None;
+        assert!(queued(forward_preparation(&jobs, &mut waiting, || Ok(
+            source.pop_front()
+        ))));
+        let Forward::Mask(mask) =
+            forward_preparation(&jobs, &mut waiting, || Ok(source.pop_front())).unwrap()
+        else {
+            panic!("mask must not enter the preparation queue");
+        };
+        assert!(waiting.is_none());
+        let caps = RendererCapabilities {
+            max_texture_dimension: 4096,
+        };
+        let mut renderer = RendererSession::new(Epoch(83));
+        let mask = renderer.accept(
+            mask.into_command(Instant::now(), caps).unwrap(),
+            Instant::now(),
+        );
+        assert_eq!(mask.outcome, Outcome::Accepted);
+        let applied = renderer
+            .present(Instant::now(), |payload| {
+                assert!(matches!(payload, Payload::Mask(Layer::Black)));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(applied.outcome, Outcome::Applied);
+        assert_eq!(renderer.layer(), Layer::Black);
+        // The earlier cue is not stale: lanes are ordered independently.
+        let cue = worker
+            .try_recv()
+            .unwrap()
+            .into_command(Instant::now(), caps)
+            .unwrap();
+        assert_eq!(
+            renderer.accept(cue, Instant::now()).outcome,
+            Outcome::Accepted
+        );
+    }
+
+    #[test]
+    fn layers_never_show_text_under_a_mask_or_a_wrong_extent() {
+        use Shown::*;
+        let all = [Layer::None, Layer::Clear, Layer::Black, Layer::Logo];
+        for scene in [None, Some(false), Some(true)] {
+            for logo in [None, Some(false), Some(true)] {
+                for layer in all {
+                    let got = shown(layer, scene, logo);
+                    assert!(got != Scene || (layer == Layer::None && scene == Some(true)));
+                    assert!(got != Logo || (layer == Layer::Logo && logo == Some(true)));
+                    assert!(got != Keep || matches!(layer, Layer::None | Layer::Clear));
+                    if layer == Layer::Black {
+                        assert_eq!(got, Black);
+                    }
+                }
+            }
+        }
+        assert_eq!(shown(Layer::Clear, Some(true), None), SceneBackground);
+        assert_eq!(shown(Layer::Clear, None, None), Black);
+        assert_eq!(shown(Layer::Clear, Some(false), Some(true)), Keep);
+        assert_eq!(shown(Layer::Logo, Some(true), Some(false)), Black);
     }
 
     #[test]
@@ -741,19 +979,20 @@ mod tests {
             let mut waiting = None;
             // Deliberately withhold the worker receive: second legal lane must
             // backpressure, not advance consumed past the queued first stamp.
-            assert!(forward_preparation(&jobs, &mut waiting, || Ok(source.pop_front())).unwrap());
-            assert!(!forward_preparation(&jobs, &mut waiting, || Ok(source.pop_front())).unwrap());
+            assert!(queued(forward_preparation(&jobs, &mut waiting, || Ok(
+                source.pop_front()
+            ))));
+            assert!(!queued(forward_preparation(&jobs, &mut waiting, || Ok(
+                source.pop_front()
+            ))));
             assert_eq!(
                 waiting.as_ref().unwrap().command_stamp().unwrap().sequence,
                 2
             );
             for _ in 0..10 {
-                assert!(
-                    !forward_preparation(&jobs, &mut waiting, || panic!(
-                        "must not drain pipe while full"
-                    ))
-                    .unwrap()
-                );
+                assert!(!queued(forward_preparation(&jobs, &mut waiting, || {
+                    panic!("must not drain pipe while full")
+                })));
             }
             for revision in [7, 29] {
                 let command = worker
@@ -770,19 +1009,16 @@ mod tests {
                 assert_eq!(accepted.outcome, Outcome::Accepted);
                 assert!(delivery.acknowledge(accepted, Instant::now()));
                 let applied = renderer
-                    .present(Instant::now(), |cue| {
-                        assert_eq!(cue.version().revision, revision);
+                    .present(Instant::now(), |payload| {
+                        assert_eq!(payload.cue().unwrap().version().revision, revision);
                         Ok(())
                     })
                     .unwrap();
                 assert!(delivery.acknowledge(applied, Instant::now()));
                 if revision == 7 {
-                    assert!(
-                        forward_preparation(&jobs, &mut waiting, || panic!(
-                            "retained frame comes first"
-                        ))
-                        .unwrap()
-                    );
+                    assert!(queued(forward_preparation(&jobs, &mut waiting, || {
+                        panic!("retained frame comes first")
+                    })));
                 }
             }
             assert!(waiting.is_none());
@@ -805,9 +1041,13 @@ mod tests {
         let (jobs, worker) = mpsc::sync_channel(1);
         jobs.try_send(first).ok().unwrap();
         let mut waiting = Some(second);
-        assert!(!forward_preparation(&jobs, &mut waiting, || panic!("no new input")).unwrap());
+        assert!(!queued(forward_preparation(&jobs, &mut waiting, || {
+            panic!("no new input")
+        })));
         worker.try_recv().unwrap();
-        assert!(forward_preparation(&jobs, &mut waiting, || panic!("no new input")).unwrap());
+        assert!(queued(forward_preparation(&jobs, &mut waiting, || {
+            panic!("no new input")
+        })));
         let later = Instant::now() + Duration::from_secs(6);
         let command = worker
             .try_recv()
@@ -830,7 +1070,8 @@ mod tests {
         waiting = Some(frame(&mut other, Lane::Cue, 41));
         assert_eq!(
             forward_preparation(&jobs, &mut waiting, || panic!("no new input"))
-                .unwrap_err()
+                .err()
+                .unwrap()
                 .kind(),
             io::ErrorKind::BrokenPipe
         );

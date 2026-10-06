@@ -355,12 +355,17 @@ than claiming production codecs/audio support.
 
 Depends on: M0-02, M0-06, M0-07. Tests: U, I, R, N, H.
 
-- [ ] Translate observed mask behavior into explicit transitions and tests before UI.
+Progress: M0-08a (mask layer on the Safety lane, logo slot, per-lane renderer
+ordering) is **implemented-unqualified**; see [delivery](delivery.md#m0-08a--mask-layer-and-logo-slot).
+Operator toggles and native agreement checks are M1-10c.
+
+- [x] Translate observed mask behavior into explicit transitions and tests before UI.
 - [ ] Implement masks independently from editing/selection and apply via the
   ordered command boundary, including repeated toggles and Go Live under mask.
+  (Boundary and coalescing done in M0-08a; operator wiring pending in M1-10c.)
 - [ ] Implement observed restoration, logo resolution, transition and output scope.
-- [ ] Test all mask combinations, stale acknowledgments, failed logo preparation,
-  and masks while a scene transition is pending.
+- [x] Test all mask combinations, stale acknowledgments, failed logo preparation,
+  and masks while a scene transition is pending (headless and fake audience).
 - [ ] Verify visible output and acknowledged operator indicators agree.
 - [ ] Record media/audio cases pending M2; do not invent their semantics now.
 
