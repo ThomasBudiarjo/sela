@@ -206,7 +206,16 @@ It also adds the phases below. Result: **PASS** for all three phases.
 - Adapter preference by monitor (6s windowed runs, first second excluded):
   `low` selected Intel UHD and `high` the RTX 4060 on all three monitors. Every
   cell had p50 ≈17.03ms and max ≤18.11ms. This run predates the switch from a
-  Sela-specific variable to `WGPU_POWER_PREF`; re-run it with the current driver.
+  Sela-specific variable to `WGPU_POWER_PREF`; the idle rerun below repeats it.
+- **Idle rerun** (owner not gaming, same build, `WGPU_POWER_PREF` driver;
+  `python scripts/output-spike-windows.py .amp\in\artifacts\output-spike-windows-idle`):
+  PASS. Main phase 944 calls, p50/p95/p99/max 17.04/17.73/18.24/23.39ms; the
+  five stalls had 6/6/29/117/5 calls inside, max gap 18.20ms (2s stall); worker
+  preparation max gap 18.64ms; 218 calls after exit, 60 after kill. Moves gave
+  scale 1.75→1.25→1.75 with max gaps 18.27/18.31ms. Fullscreen 2560x1600:
+  357 calls, p50/p99/max 17.02/18.33/18.84ms, 2s stall max gap 18.83ms.
+  Matrix: `low`=Intel UHD and `high`=RTX 4060 on all three monitors, p50
+  17.02–17.03ms. The present mode was again Mailbox latency 2.
 
 Inspected captures: `stall-a`/`stall-b` show the yellow triangle in different
 positions during the 2s UI stall; `fullscreen-stall` fills the 2560x1600 panel;
@@ -240,6 +249,6 @@ hardware, output continued through UI stalls, worker preparation, operator exit
 and kill, mixed-DPI moves and borderless fullscreen, on both GPUs.
 **NO-GO for production backend/full workspace qualification** until display
 hotplug, device/surface loss recovery, explicit present-mode and refresh pacing,
-scanout-level timing, and a soak on an idle machine are executed. Next: run the
+scanout-level timing, and a long idle-machine soak are executed. Next: run the
 hotplug case with the owner, add a DXGI-loss/TDR injection plan, and choose the
 production present mode with measured evidence. M0-10 remains open.

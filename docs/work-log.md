@@ -13,10 +13,9 @@ include timezone for timed hardware/rehearsal evidence.
   M0-04 DX12 audience spike passed on physical displays (stalls, preparation,
   exit/kill, mixed-DPI moves, fullscreen, both GPUs) while the owner was gaming;
   hotplug/device loss/present pacing remain open. M0-07 composition/video
-  readback passed on DX12 for Intel and NVIDIA. Next: run
-  `python scripts/native-cues.py --backend dx12` and the adapter matrix rerun
-  when the owner's machine is idle, then hotplug with the owner present.
-  EasyWorship 8.0.49 is not installed, so M0-02 remains blocked.
+  readback passed on DX12 for Intel and NVIDIA. The idle-machine rerun of the
+  audience spike (with the `WGPU_POWER_PREF` adapter matrix) passed. Next:
+  hotplug with the owner present.
 - All three Oracle findings fixed: M1-05 pending native-input ownership, M0-07d
   preparation backpressure ordering, and M0-06 disconnected receipt invalidation.
   Regression/native checks passed; separate local fix commits, no push authorized.
@@ -76,7 +75,7 @@ remain `planned`. Update the current state above when switching work.
 | M0-01 | done | Pinned native GPUI window, lockfile, CI and instructions; Linux and Windows 11 build/test/native launch/resize/quit verified (2026-10-06). |
 | M0-02 | blocked | Public-source ledger and executable observation runbook; lawful installed 8.0.49/Windows access missing, zero installed observations. |
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
-| M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, synthetic preparation and operator exit/kill on Linux and Windows DX12 physical displays, incl. mixed-DPI moves, fullscreen, both GPUs; hotplug, device loss, present pacing open. |
+| M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, synthetic preparation and operator exit/kill on Linux and Windows DX12 physical displays, incl. mixed-DPI moves, fullscreen, both GPUs, and an idle-machine rerun; hotplug, device loss, present pacing open. |
 | M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
 | M0-06 | implemented-unqualified | Ordered bounded native owned-resource IPC/receipts and failure/expiry retention; production safety coordination/supervision and reference mask semantics open. |
 | M0-07 | implemented-unqualified | Explicit-font/image native worker preparation/submission plus static/FFV1 GPU readback; resized output, transitions, performance and physical qualification open. |
@@ -1856,3 +1855,19 @@ PY
   and `python scripts/output-spike-windows.py`; then a hotplug run with
   `SELA_SPIKE_SECONDS=120` while the owner unplugs/replugs monitor 2.
 - Delivery: local `feat(M0-04)` and `feat(M0-07)` commits; no push.
+
+### M0-04 — Idle-machine Windows rerun — 2026-10-06 (UTC+7)
+
+- State: **implemented-unqualified**; no checklist box closed.
+- Owner stopped gaming. Same host and debug build as above.
+- `python scripts/output-spike-windows.py .amp\in\artifacts\output-spike-windows-idle`
+  PASS (main, fullscreen, `WGPU_POWER_PREF` matrix). Main 944 calls, p50/p95/
+  p99/max 17.04/17.73/18.24/23.39ms; 2s stall max gap 18.20ms; preparation
+  18.64ms; 218 calls after exit, 60 after kill; scale 1.75→1.25→1.75.
+  Fullscreen 2560x1600 p50/p99/max 17.02/18.33/18.84ms. Matrix low=Intel UHD,
+  high=RTX 4060 on all three monitors. Present mode again Mailbox latency 2.
+  Detail in output-spike.md.
+- Not run: hotplug (owner must unplug a monitor), device loss/TDR, sleep/resume,
+  DXGI frame statistics, multi-hour soak.
+- Next: hotplug with `SELA_SPIKE_SECONDS=120` while the owner unplugs and
+  replugs monitor 2.
