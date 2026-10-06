@@ -79,6 +79,34 @@ Vulkan previously rendered black. `VK_DRIVER_FILES=/dev/null` is a per-command
 software-GL workaround, not a global preference or Vulkan qualification. The
 script creates its own runtime directory rather than changing `/tmp/sela-runtime`.
 
+## Windows native smoke
+
+`scripts/native-smoke-windows.py` is the Win32 counterpart (Python standard
+library, `ctypes`; shared helpers in `scripts/native_win.py`). From the repository
+root in PowerShell:
+
+```powershell
+python scripts/native-smoke-windows.py target\debug\sela.exe .amp\in\artifacts\windows
+python -m ruff check scripts\native_win.py scripts\native-smoke-windows.py
+```
+
+It launches the real binary twice with private `LOCALAPPDATA`/`APPDATA`/`TEMP`
+directories, finds only the PID's visible unowned top-level window, and verifies
+it is the foreground window before each `SendInput` chord. A zero-motion injected
+mouse event precedes `SetForegroundWindow` because Windows only honors foreground
+requests from the last input source. Checks: survives Ctrl+J, settles at a
+DPI-scaled 720x440 logical client, refuses a smaller request, captures the
+client by screen BitBlt (requires at least three sampled colors), then Ctrl+Q and
+Alt+F4 each exit 0 and remove the window. The process runs per-monitor-v2 DPI
+aware so all sizes are physical pixels. Polling is bounded (15s startup, 10s
+exit, 5s per resize); failures return nonzero and the profile is always deleted.
+
+The user's keyboard must stay idle while it runs; foreground stealing by another
+application fails the run rather than sending keys elsewhere. Only the cropped
+client capture, the first launch log and a JSON summary are kept, and only when
+an artifact directory is supplied. The X11 scripts (`song-library.py`,
+`operator-shell.py`) have not been ported; their Windows coverage is open.
+
 ## Upstream and accessibility
 
 Inspected pinned checkout `a84689073d296dfd39987bc7dd478e43ef76d83a`:
@@ -95,7 +123,8 @@ AccessKit/UIA plumbing exists upstream; this does not prove the bootstrap Quit
 div exposes a usable button role/name/action or tab order. GPUI element ID `quit`
 is a local test/layout identifier, not a demonstrated native automation selector.
 Window PID and semantic key bindings suffice for this bounded X11 smoke, not
-stable targeting of a future full operator UI. No Windows session is available.
+stable targeting of a future full operator UI. Windows UIA/Narrator semantics
+have not been inspected yet, even though a Windows session is now available.
 
 Manual Windows/native fallback: build per bootstrap note; record OS/GPU/DPI,
 open Sela, activate it, Ctrl+J (must stay open), resize 960x600 → 720x440 and

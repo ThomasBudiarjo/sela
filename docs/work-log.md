@@ -6,6 +6,12 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Windows host available (2026-10-06):** Windows 11 Home, i7-14650HX, Intel UHD
+  + RTX 4060 Laptop, three displays at mixed scale. M0-01 is **done**: locked
+  Windows build/clippy/fmt/tests pass and the native operator window passes the
+  Win32 smoke. Windows exposed and fixed a backup durability bug (M1-01). Next:
+  M0-04 audience spike on DX12 with physical displays, then M0-07 GPU checks.
+  EasyWorship 8.0.49 is not installed, so M0-02 remains blocked.
 - All three Oracle findings fixed: M1-05 pending native-input ownership, M0-07d
   preparation backpressure ordering, and M0-06 disconnected receipt invalidation.
   Regression/native checks passed; separate local fix commits, no push authorized.
@@ -19,7 +25,6 @@ include timezone for timed hardware/rehearsal evidence.
   lyric presentation yet. The Linux preview is reinstalled and native-tested.
   Opt-in winit/wgpu diagnostics cover independent animation, owned text/image
   native cue delivery/receipts and separate explicit-font/image GPU readback.
-- M0-01 bootstrap is **implemented-unqualified** pending Windows build/launch.
 - Latest parallel wave is merged into local `main`, retaining each subticket:
   **M1-05c** document undo, **M1-01b** verified backup/restore and process-abort
   tests, **M1-06a** immutable arrangement domain, **M0-06b** bounded static-color
@@ -63,7 +68,7 @@ remain `planned`. Update the current state above when switching work.
 | Ticket | State | Completed slice / remaining work |
 | --- | --- | --- |
 | PLAN-001 | done | 63 implementation tickets, 326 ticket checklist items, test/compatibility matrices and commit/resume rules. Documentation verified; delivered in this local planning commit. No application implementation. |
-| M0-01 | implemented-unqualified | Pinned native GPUI window, lockfile, CI and instructions; Linux build/render/quit verified. Windows build and native launch open. |
+| M0-01 | done | Pinned native GPUI window, lockfile, CI and instructions; Linux and Windows 11 build/test/native launch/resize/quit verified (2026-10-06). |
 | M0-02 | blocked | Public-source ledger and executable observation runbook; lawful installed 8.0.49/Windows access missing, zero installed observations. |
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, bounded synthetic slow preparation and clean/forced operator exit; Windows physical qualification open. |
@@ -1748,3 +1753,50 @@ PY
   checks remain open. Next implementation slices remain arrangement controls/
   missing-reference repair or renderer resize/safety coordination. Local commits
   only; no push, publication or deployment.
+
+### M0-01 — Windows build and native launch — 2026-10-06 (Asia/Jakarta, UTC+7)
+
+- State: **done**. Closes the last M0-01 checklist item. Base `b553d9a` local main.
+- Environment: Windows 11 Home Single Language, i7-14650HX, Intel UHD Graphics
+  (driver 32.0.101.6790) + NVIDIA RTX 4060 Laptop (32.0.15.9159); displays
+  DISPLAY5 primary 2048x1152 logical, DISPLAY1 1463x914, DISPLAY6 1920x1080.
+  Installed via winget: rustup 1.29.1 (toolchain 1.98.1 from rust-toolchain.toml),
+  VS 2022 Build Tools 17.14 VCTools + Windows 11 SDK 10.0.26100 + CMake, Python
+  3.12.10 (user scope) and Ruff (pip --user). Exact commands in gpui-bootstrap.md.
+- Windows-only defect found and fixed (M1-01 storage): `copy_new` flushed the
+  staged backup through `File::open(..).sync_all()`. Windows `FlushFileBuffers`
+  needs a write handle, so every verified backup and schema-1 migration returned
+  `Error::Io` (six storage tests failed). Now opens with write access before
+  `sync_all`. Also silenced the Windows-only `unused_mut` warning on the
+  backup-directory builder. Windows staging directories inherit the parent ACL
+  (no 0o700 equivalent); recorded as an open Windows hardening item, not fixed.
+- Verification in plain PowerShell 7 from this checkout (fresh Windows target dir):
+  `cargo build --locked --all-targets -j 16` passed (4m57s cold);
+  `cargo fmt --all -- --check` and
+  `cargo clippy --locked --all-targets -j 16 -- -D warnings` passed;
+  `cargo test --locked --all-targets -j 16` **112 passed, 1 ignored subprocess
+  fixture**, 0 failed (lib 52, bin 28, transport_process 4, composition 5,
+  input_check 9, native_cues 7, output_spike 1, video_spike 6). Linux runs 117:
+  five video decoder child-process tests are `cfg(unix)`. Before the fix: 46/52
+  lib tests passed, six storage backup/migration tests failed with `Io`.
+  `target\debug\sela.exe --version` printed `Sela 0.1.0 (technical preview)`;
+  SHA-256 `221a734621f3c6c7ddf2cecd4f67bbb592062bb3e60021ddfea75e03b6b22c45`.
+- Native N: new `scripts/native-smoke-windows.py` (+ `scripts/native_win.py`)
+  `python scripts/native-smoke-windows.py target\debug\sela.exe .amp\in\artifacts\windows`
+  PASS: PID-scoped window, verified foreground before every SendInput, survived
+  Ctrl+J, DPI 120 (125%) client settled at 900x550 = 720x440 logical, smaller
+  request refused (minimum held), 180 sampled colors, Ctrl+Q exit 0 after 2.1s,
+  relaunch Alt+F4 exit 0, both windows removed. Ruff check passed after removing
+  one unused noqa. Window was on the primary 2048x1152 display only.
+- UI evidence: inspected `.amp/in/artifacts/windows/m0-01-windows-small.png`
+  (900x550): readable Segoe UI toolbar, Schedule/Preview/Live, Resources tabs and
+  "+ New Song", no clipping at the minimum size. Log shows GPUI DirectWrite with
+  Segoe UI, RTX 4060 Direct3D 11.1 device; `0x887A002D` DXGI debug interface
+  missing (optional Graphics Tools, debug-only) and a benign shutdown
+  `window not found`. `.amp/in/` is now gitignored (it was only locally excluded).
+- Not run: Windows CI (not pushed), Narrator/UIA semantics, IME, cross-monitor
+  DPI moves, Intel-GPU operator rendering, song-library/operator-shell native
+  drivers (X11-only, not yet ported), EasyWorship reference (not installed).
+- Next: M0-04 Windows run of `examples/output_spike.rs` on a second physical
+  display with DX12; then M0-07 composition/video/native cue checks on DX12.
+- Delivery: local `fix(M1-01)` and `feat(M0-01)` commits; no push.

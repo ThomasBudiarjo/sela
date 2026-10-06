@@ -1,3 +1,5 @@
 /target/
 /.amp/portals/*
 /.amp/install/
+/.amp/in/
+__pycache__/

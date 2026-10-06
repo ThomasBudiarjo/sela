@@ -203,7 +203,7 @@ Depends on: none. Tests: U, N; Windows build required.
 - [x] Add application entry point and a minimal operator window with clean exit.
 - [x] Document Linux development and Windows build prerequisites and commands.
 - [x] Add formatting, lint, unit-test and Windows build CI; keep GPU tests separate.
-- [ ] Document run/test commands from a clean checkout; smoke-open on Windows.
+- [x] Document run/test commands from a clean checkout; smoke-open on Windows.
 
 Acceptance: reproducible build and native window; no renderer-independence claim.
 Orb setup can be a partial slice; a cross-compile alone does not satisfy Windows

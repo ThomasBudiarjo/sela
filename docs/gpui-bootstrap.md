@@ -40,8 +40,25 @@ PowerShell. Run `rustup toolchain install`, `cargo build --locked`,
 DirectX adapter/driver. Verify window opening, resizing, Ctrl+Q and titlebar close.
 Windows CI is only build/headless coverage; it cannot qualify actual displays.
 
-No native Windows machine or EasyWorship reference is connected to this orb.
-Windows prerequisites and launch remain unqualified until executed there.
+Verified 2026-10-06 on Windows 11 Home (i7-14650HX, Intel UHD + RTX 4060 Laptop,
+three displays at mixed scale). Prerequisites installed without an admin shell:
+
+```powershell
+winget install --id Rustlang.Rustup -e
+winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.26100 --add Microsoft.VisualStudio.Component.VC.CMake.Project --includeRecommended"
+winget install --id Python.Python.3.12 -e --scope user   # native drivers only
+```
+
+An ordinary PowerShell (not a developer prompt) suffices: rustup's MSVC target
+locates the Build Tools. The repository's `rust-toolchain.toml` installs 1.98.1
+on first `cargo` use. A clean debug `cargo build --locked --all-targets` took
+about five minutes. Run `python scripts/native-smoke-windows.py` for the native
+launch/resize/quit check described in [native testing](native-testing.md).
+
+GPUI's Windows backend selected the RTX 4060 with a Direct3D 11.1 device for the
+operator window. In debug builds it logs `0x887A002D` when the optional Windows
+"Graphics Tools" feature is absent; that only disables the DXGI debug layer.
+This is operator-window evidence, not audience-renderer or DX12 qualification.
 
 ### Orb native rendering caveat
 
