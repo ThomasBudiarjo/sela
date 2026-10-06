@@ -3,19 +3,19 @@
 //! stored section. Arrangement selection, pagination and themes are not
 //! implemented.
 use crate::{
+    fonts::Resolved,
+    format::{Align, Size, SlideFormat, VAlign},
     scene::{
-        ContentVersion, Extent, PrepareError, PreparedBackground, PreparedCue, RendererCapabilities,
+        ContentVersion, Extent, OutlineStyle, OwnedText, PrepareError, PreparedBackground,
+        PreparedCue, RendererCapabilities, ShadowStyle, TextStyle,
     },
     storage::{Section, Song, Version},
 };
 
-/// Bundled DejaVu Sans (see `tests/fixtures/DejaVuSans.LICENSE`). Provisional
-/// until a theme/font ticket chooses product typography.
-pub const FONT: &[u8] = include_bytes!("../tests/fixtures/DejaVuSans.ttf");
-const FONT_VERSION: ContentVersion = ContentVersion {
-    id: 0x53454c41_44656a61_56755361_6e730001,
-    revision: 1,
-};
+/// Reference canvas for point-valued formats (fixed size, outline size, shadow
+/// offset and blur): values are defined at 1080 lines and scale with the
+/// output height (Sela's rule, not observed EasyWorship behavior).
+pub const REFERENCE_HEIGHT: u32 = 1080;
 /// Renderer text inset on each side, matching the audience preparer.
 const INSET: u32 = 32;
 const BACKGROUND: [u8; 4] = [0, 0, 0, 255];
@@ -25,11 +25,13 @@ const SLIDE_BITS: u32 = 16;
 pub struct Slide {
     pub label: String,
     pub text: String,
+    pub format: SlideFormat,
 }
 
-/// Text sizing across one item's slides. Each slide is always resized to fit
+/// Text sizing across one item's slides. Auto slides are always resized to fit
 /// ("Resize text to fit element"); `Normalized` also uses the smallest fitted
-/// size for every slide. EasyWorship's default is unobserved.
+/// size for every Auto slide. Fixed-size slides keep their size and never
+/// shrink the others. EasyWorship's default is unobserved.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Sizing {
     #[default]
@@ -64,17 +66,26 @@ pub fn section_slide(section: &Section) -> Slide {
             .join("\n")
             .trim_matches('\n')
             .to_owned(),
+        format: section.format.clone(),
     }
 }
 
-/// The size cap `cue` should use for slides of this item, if any.
-pub fn size_cap(slides: &[Slide], extent: Extent, sizing: Sizing) -> Option<u16> {
+/// The size cap `cue` should use for Auto slides of this item, if any.
+/// `resolved` must be parallel to `slides`; Fixed-size slides are excluded
+/// because their size does not come from the fit.
+pub fn size_cap(
+    slides: &[Slide],
+    resolved: &[Resolved],
+    extent: Extent,
+    sizing: Sizing,
+) -> Option<u16> {
     match sizing {
         Sizing::PerSlide => None,
         Sizing::Normalized => slides
             .iter()
-            .filter(|s| !s.text.is_empty())
-            .filter_map(|s| font_size(&s.text, extent))
+            .zip(resolved)
+            .filter(|(s, _)| !s.text.is_empty() && !matches!(s.format.size, Some(Size::Fixed(_))))
+            .filter_map(|(s, r)| fit_size(&s.text, r, extent))
             .min(),
     }
 }
@@ -95,11 +106,14 @@ pub fn slide_index(song: Version, version: ContentVersion) -> Option<usize> {
     (slide_version(song, index)? == version).then_some(index)
 }
 
-/// White centered text on black, sized so every line fits the inset area and
-/// no larger than `cap` (see `size_cap`).
+/// Black background with the slide's formatted text: the resolved face, a
+/// fitted or fixed size, and the style `fit_size` keeps inside the inset.
+/// `resolved` must come from the same `SlideFormat` (bundled resolution for
+/// the default look, `fonts::Fonts` for an installed family).
 pub fn cue(
     version: ContentVersion,
     slide: &Slide,
+    resolved: &Resolved,
     extent: Extent,
     caps: RendererCapabilities,
     cap: Option<u16>,
@@ -107,9 +121,33 @@ pub fn cue(
     let text = if slide.text.is_empty() {
         None
     } else {
-        let size = font_size(&slide.text, extent).ok_or(PrepareError::InvalidScene)?;
-        let size = cap.map_or(size, |cap| size.min(cap.max(1)));
-        Some((slide.text.clone(), FONT_VERSION, FONT.into(), size))
+        // A Fixed size that would not fit is refused like other unshowable
+        // text; the raster still checks the shaped glyphs exactly.
+        let size = match slide.format.size {
+            Some(Size::Fixed(fixed)) => {
+                let fits =
+                    fit_size(&slide.text, resolved, extent).ok_or(PrepareError::InvalidScene)?;
+                let scaled = (f32::from(fixed) * extent.height as f32 / REFERENCE_HEIGHT as f32)
+                    .round()
+                    .max(1.) as u16;
+                (scaled <= fits)
+                    .then_some(scaled)
+                    .ok_or(PrepareError::InvalidScene)?
+            }
+            _ => {
+                let size =
+                    fit_size(&slide.text, resolved, extent).ok_or(PrepareError::InvalidScene)?;
+                cap.map_or(size, |cap| size.min(cap.max(1)))
+            }
+        };
+        Some(OwnedText {
+            content: slide.text.clone(),
+            font_version: resolved.face().version(),
+            font: resolved.face().bytes_arc(),
+            face_index: resolved.face().index(),
+            font_size: size,
+            style: style_of(&slide.format, resolved),
+        })
     };
     PreparedCue::from_owned(
         version,
@@ -120,6 +158,32 @@ pub fn cue(
     )
 }
 
+/// Format plus resolution folded into the cue's style. `None` format fields
+/// keep today's look: white, centered both ways, no underline or effects.
+fn style_of(format: &SlideFormat, resolved: &Resolved) -> TextStyle {
+    TextStyle {
+        color: format.color.unwrap_or([255, 255, 255]),
+        align: format.align.unwrap_or(Align::Center),
+        valign: format.valign.unwrap_or(VAlign::Middle),
+        underline: format.underline == Some(true),
+        italic: format.italic == Some(true),
+        synth_bold: resolved.synth_bold(),
+        synth_italic: resolved.synth_italic(),
+        outline: format.outline.filter(|o| o.enabled).map(|o| OutlineStyle {
+            color: o.color,
+            size: o.size,
+            opacity: o.opacity,
+        }),
+        shadow: format.shadow.filter(|s| s.enabled).map(|s| ShadowStyle {
+            color: s.color,
+            angle: s.angle,
+            offset: s.offset,
+            blur: s.blur,
+            opacity: s.opacity,
+        }),
+    }
+}
+
 // Audience text preparer bounds (`audience::text`); a cue outside them would
 // only be rejected after delivery.
 const MAX_FONT_SIZE: u16 = 288;
@@ -127,11 +191,15 @@ const MAX_LINES: usize = 32;
 const MAX_TEXT_BYTES: usize = 4096;
 const MAX_TEXT_AREA: u32 = 4096;
 const LINE_HEIGHT: f32 = 1.3;
+/// Margins for effects the advances do not cover: synthetic bold dilation
+/// (size/48 per side) and the fake-italic shear (tan 14 degrees of ascent).
+const SYNTH_BOLD_EM: f32 = 1. / 48. * 2.;
+const SYNTH_ITALIC_EM: f32 = 0.25;
 
-/// Fits from the bundled font's unshaped advances with a 5% margin for
-/// shaping differences; `None` when the renderer would reject the text,
-/// including a glyph the font lacks.
-fn font_size(text: &str, extent: Extent) -> Option<u16> {
+/// Fits from the resolved face's unshaped advances with a 5% margin for
+/// shaping differences plus synthetic-style margins; `None` when the renderer
+/// would reject the text, including a glyph the font lacks.
+fn fit_size(text: &str, resolved: &Resolved, extent: Extent) -> Option<u16> {
     if text.len() > MAX_TEXT_BYTES || text.split('\n').count() > MAX_LINES {
         return None;
     }
@@ -141,7 +209,7 @@ fn font_size(text: &str, extent: Extent) -> Option<u16> {
     };
     let width = area(extent.width)? as f32;
     let height = area(extent.height)? as f32;
-    let face = ttf_parser::Face::parse(FONT, 0).ok()?;
+    let face = ttf_parser::Face::parse(resolved.face().bytes(), resolved.face().index()).ok()?;
     let em = f32::from(face.units_per_em());
     let mut widest: f32 = 0.;
     for line in text.lines() {
@@ -152,9 +220,19 @@ fn font_size(text: &str, extent: Extent) -> Option<u16> {
         }
         widest = widest.max(advance as f32 / em);
     }
+    let synth = if resolved.synth_bold() {
+        SYNTH_BOLD_EM
+    } else {
+        0.
+    } + if resolved.synth_italic() {
+        SYNTH_ITALIC_EM
+    } else {
+        0.
+    };
+    let width_em = widest * 1.05 + synth;
     let lines = text.lines().count().max(1) as f32;
     let size = (height / (lines * LINE_HEIGHT))
-        .min(width / (widest * 1.05).max(f32::EPSILON))
+        .min(width / width_em.max(f32::EPSILON))
         .min(height / 6.)
         .min(f32::from(MAX_FONT_SIZE))
         .floor();
@@ -166,6 +244,8 @@ mod tests {
     use super::*;
     use crate::{
         arrangement::SectionId,
+        fonts,
+        format::{Shadow, Size},
         storage::{Id, Section},
     };
 
@@ -187,6 +267,12 @@ mod tests {
                 .collect(),
         }
     }
+    fn resolved(slides: &[Slide]) -> Vec<Resolved> {
+        slides
+            .iter()
+            .map(|s| Resolved::bundled(&s.format))
+            .collect()
+    }
     const CAPS: RendererCapabilities = RendererCapabilities {
         max_texture_dimension: 4096,
     };
@@ -206,11 +292,13 @@ mod tests {
             [
                 Slide {
                     label: "Verse 1".into(),
-                    text: "Line one\nLine two".into()
+                    text: "Line one\nLine two".into(),
+                    format: Default::default(),
                 },
                 Slide {
                     label: "Chorus".into(),
-                    text: String::new()
+                    text: String::new(),
+                    format: Default::default(),
                 }
             ]
         );
@@ -244,50 +332,183 @@ mod tests {
     }
 
     #[test]
-    fn cue_carries_text_font_and_extent() {
+    fn cue_carries_text_font_style_and_extent() {
         let slide = Slide {
             label: "Verse".into(),
             text: "Original test line\nSecond line".into(),
+            format: Default::default(),
         };
         let version = ContentVersion { id: 9, revision: 1 };
-        let cue = cue(version, &slide, EXTENT, CAPS, None).unwrap();
-        assert_eq!(cue.extent(), EXTENT);
-        assert_eq!(cue.version(), version);
-        let text = cue.text().unwrap();
+        let resolved = Resolved::bundled(&slide.format);
+        let basic = cue(version, &slide, &resolved, EXTENT, CAPS, None).unwrap();
+        assert_eq!(basic.extent(), EXTENT);
+        assert_eq!(basic.version(), version);
+        let text = basic.text().unwrap();
         assert_eq!(text.content(), slide.text);
-        assert_eq!(text.font(), FONT);
+        assert_eq!(text.font(), fonts::BUNDLED);
+        assert_eq!(text.face_index(), 0);
+        assert_eq!(text.style(), TextStyle::default());
         assert!(matches!(
-            cue.background(),
+            basic.background(),
             PreparedBackground::Color([0, 0, 0, 255])
         ));
+        // The EW-like bold default resolves to the bundled Bold face.
+        let bold = SlideFormat {
+            bold: Some(true),
+            ..Default::default()
+        };
+        let bold_slide = Slide {
+            format: bold.clone(),
+            ..slide.clone()
+        };
+        let bold_cue = cue(
+            version,
+            &bold_slide,
+            &Resolved::bundled(&bold),
+            EXTENT,
+            CAPS,
+            None,
+        )
+        .unwrap();
+        assert_eq!(bold_cue.text().unwrap().font(), fonts::BUNDLED_BOLD);
     }
 
     #[test]
-    fn font_size_fits_lines_and_width() {
-        let small = font_size("one line", EXTENT).unwrap();
+    fn styled_cue_resolves_the_whole_format() {
+        let format = crate::format::tests::full();
+        let slide = Slide {
+            label: "Verse".into(),
+            text: "Original refrain".into(),
+            format: format.clone(),
+        };
+        let resolved = Resolved::bundled(&format);
+        let version = ContentVersion { id: 9, revision: 4 };
+        let styled = cue(version, &slide, &resolved, EXTENT, CAPS, None).unwrap();
+        let text = styled.text().unwrap();
+        // The fixture asks for bold, and a real bundled Bold face exists.
+        assert_eq!(text.font(), fonts::BUNDLED_BOLD);
+        let style = text.style();
+        assert_eq!(style.color, [255, 128, 0]);
+        assert_eq!(style.align, Align::Right);
+        assert_eq!(style.valign, VAlign::Bottom);
+        assert!(style.underline && !style.italic && !style.synth_italic && !style.synth_bold);
+        assert_eq!(
+            style.outline,
+            Some(OutlineStyle {
+                color: [0, 0, 0],
+                size: 7,
+                opacity: 100,
+            })
+        );
+        assert_eq!(
+            style.shadow,
+            Some(ShadowStyle {
+                color: [0, 0, 0],
+                angle: 315,
+                offset: 18,
+                blur: 9,
+                opacity: 90,
+            })
+        );
+        // Fixed 78 on the reference canvas is 78 px at 1080 lines.
+        assert_eq!(text.font_size(), 78);
+        // A disabled shadow stays absent even when the format carries it.
+        let off = SlideFormat {
+            shadow: Some(Shadow {
+                enabled: false,
+                ..format.shadow.unwrap()
+            }),
+            ..format
+        };
+        let off_slide = Slide {
+            format: off.clone(),
+            ..slide.clone()
+        };
+        let cue = cue(
+            version,
+            &off_slide,
+            &Resolved::bundled(&off),
+            EXTENT,
+            CAPS,
+            None,
+        )
+        .unwrap();
+        assert_eq!(cue.text().unwrap().style().shadow, None);
+    }
+
+    #[test]
+    fn fixed_size_scales_with_height_and_is_refused_when_unshowable() {
+        let format = SlideFormat {
+            size: Some(Size::Fixed(78)),
+            ..Default::default()
+        };
+        let slide = Slide {
+            label: "Verse".into(),
+            text: "A much longer line of original lyrics\nand a second one".into(),
+            format: format.clone(),
+        };
+        let resolved = Resolved::bundled(&format);
+        let version = ContentVersion { id: 9, revision: 5 };
+        // 78 px does not fit 48 wide letters at 1080 lines: refused.
+        let unshowable = Slide {
+            text: "W".repeat(48),
+            ..slide.clone()
+        };
+        assert_eq!(
+            cue(version, &unshowable, &resolved, EXTENT, CAPS, None).err(),
+            Some(PrepareError::InvalidScene)
+        );
+        // Shorter text fits, and the size scales with the output height.
+        let fits = Slide {
+            text: "Refrain".into(),
+            ..slide.clone()
+        };
+        for (height, expected) in [(1080, 78), (720, 52), (1600, 116)] {
+            let extent = Extent {
+                width: 1920,
+                height,
+            };
+            let cue = cue(version, &fits, &resolved, extent, CAPS, None).unwrap();
+            assert_eq!(cue.text().unwrap().font_size(), expected, "{height}");
+        }
+        // The Auto fit keeps using the resolved face and the cap.
+        let auto = Slide {
+            format: Default::default(),
+            ..slide
+        };
+        let auto_resolved = Resolved::bundled(&auto.format);
+        let cue = cue(version, &auto, &auto_resolved, EXTENT, CAPS, Some(60)).unwrap();
+        assert_eq!(cue.text().unwrap().font_size(), 60);
+    }
+
+    #[test]
+    fn fit_size_fits_lines_width_and_synthetic_styles() {
+        let plain = Resolved::bundled(&SlideFormat::default());
+        let small = fit_size("one line", &plain, EXTENT).unwrap();
         assert_eq!(small, ((1080. - 64.) / 6.) as u16);
         let large = Extent {
             width: 2560,
             height: 1600,
         };
-        assert_eq!(font_size("one line", large), Some(256));
+        assert_eq!(fit_size("one line", &plain, large), Some(256));
         let uhd = Extent {
             width: 3840,
             height: 2160,
         };
-        assert_eq!(font_size("one line", uhd), Some(MAX_FONT_SIZE));
-        let narrow = font_size(&"i".repeat(60), EXTENT).unwrap();
-        let wide = font_size(&"W".repeat(60), EXTENT).unwrap();
+        assert_eq!(fit_size("one line", &plain, uhd), Some(MAX_FONT_SIZE));
+        let narrow = fit_size(&"i".repeat(60), &plain, EXTENT).unwrap();
+        let wide = fit_size(&"W".repeat(60), &plain, EXTENT).unwrap();
         assert!(wide < narrow, "{wide} {narrow}");
         let many = vec!["line"; 32].join("\n");
-        let fitted = font_size(&many, EXTENT).unwrap();
+        let fitted = fit_size(&many, &plain, EXTENT).unwrap();
         assert!(f32::from(fitted) * LINE_HEIGHT * 32. <= 1080. - 64.);
-        assert_eq!(font_size(&vec!["line"; 33].join("\n"), EXTENT), None);
-        assert_eq!(font_size(&"x".repeat(4097), EXTENT), None);
-        assert_eq!(font_size("\u{4e2d}", EXTENT), None, "no glyph");
+        assert_eq!(fit_size(&vec!["line"; 33].join("\n"), &plain, EXTENT), None);
+        assert_eq!(fit_size(&"x".repeat(4097), &plain, EXTENT), None);
+        assert_eq!(fit_size("\u{4e2d}", &plain, EXTENT), None, "no glyph");
         assert_eq!(
-            font_size(
+            fit_size(
                 "x",
+                &plain,
                 Extent {
                     width: 4161,
                     height: 1080
@@ -296,14 +517,37 @@ mod tests {
             None
         );
         assert_eq!(
-            font_size(
+            fit_size(
                 "x",
+                &plain,
                 Extent {
                     width: 64,
                     height: 400
                 }
             ),
             None
+        );
+        // Synthetic styles reserve margin, so a width-bound styled fit never
+        // out-sizes the plain fit. Height-capped fits meet the same cap, and
+        // `bold_face` below shows a real bold face fits at the plain size.
+        let styled = Resolved::bundled(&SlideFormat {
+            bold: Some(true),
+            italic: Some(true),
+            ..Default::default()
+        });
+        let text = "W".repeat(60);
+        let plain_fit = fit_size(&text, &plain, EXTENT).unwrap();
+        let styled_fit = fit_size(&text, &styled, EXTENT).unwrap();
+        assert!(styled_fit < plain_fit, "{text}");
+        assert!(styled_fit > 0);
+        // A bold face fits at the plain size: the margin is for synthesis.
+        let bold_face = Resolved::bundled(&SlideFormat {
+            bold: Some(true),
+            ..Default::default()
+        });
+        assert_eq!(
+            fit_size("Signal", &bold_face, EXTENT),
+            fit_size("Signal", &plain, EXTENT)
         );
     }
 
@@ -312,24 +556,41 @@ mod tests {
         let blank = Slide {
             label: "Blank".into(),
             text: String::new(),
+            format: Default::default(),
         };
         let version = ContentVersion { id: 9, revision: 2 };
         assert!(
-            cue(version, &blank, EXTENT, CAPS, Some(40))
-                .unwrap()
-                .text()
-                .is_none()
+            cue(
+                version,
+                &blank,
+                &Resolved::bundled(&blank.format),
+                EXTENT,
+                CAPS,
+                Some(40)
+            )
+            .unwrap()
+            .text()
+            .is_none()
         );
         let words = Slide {
             label: "Verse".into(),
             text: "words".into(),
+            format: Default::default(),
         };
         let tiny = Extent {
             width: 60,
             height: 60,
         };
         assert_eq!(
-            cue(version, &words, tiny, CAPS, Some(40)).err(),
+            cue(
+                version,
+                &words,
+                &Resolved::bundled(&words.format),
+                tiny,
+                CAPS,
+                Some(40)
+            )
+            .err(),
             Some(PrepareError::InvalidScene)
         );
     }
@@ -375,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn normalized_sizing_uses_the_smallest_fitted_size() {
+    fn normalized_sizing_uses_the_smallest_auto_fitted_size() {
         let slides = slides(&song(&[
             ("Verse 1", "Short"),
             ("Blank", ""),
@@ -384,8 +645,12 @@ mod tests {
                 "A much longer line of original lyrics\nand a second one",
             ),
         ]));
-        assert_eq!(size_cap(&slides, EXTENT, Sizing::PerSlide), None);
-        let cap = size_cap(&slides, EXTENT, Sizing::Normalized).unwrap();
+        let base_resolved = resolved(&slides);
+        assert_eq!(
+            size_cap(&slides, &base_resolved, EXTENT, Sizing::PerSlide),
+            None
+        );
+        let cap = size_cap(&slides, &base_resolved, EXTENT, Sizing::Normalized).unwrap();
         let sizes: Vec<u16> = slides
             .iter()
             .enumerate()
@@ -395,8 +660,9 @@ mod tests {
                     id: 9,
                     revision: i as u64,
                 };
-                let per_slide = cue(version, s, EXTENT, CAPS, None).unwrap();
-                let normalized = cue(version, s, EXTENT, CAPS, Some(cap)).unwrap();
+                let per_slide = cue(version, s, &base_resolved[i], EXTENT, CAPS, None).unwrap();
+                let normalized =
+                    cue(version, s, &base_resolved[i], EXTENT, CAPS, Some(cap)).unwrap();
                 assert!(
                     normalized.text().unwrap().font_size() <= per_slide.text().unwrap().font_size()
                 );
@@ -404,15 +670,50 @@ mod tests {
             })
             .collect();
         assert_eq!(sizes, [cap, cap]);
-        assert_eq!(cap, font_size(&slides[2].text, EXTENT).unwrap());
-        assert!(font_size(&slides[0].text, EXTENT).unwrap() > cap);
+        assert_eq!(
+            cap,
+            fit_size(&slides[2].text, &base_resolved[2], EXTENT).unwrap()
+        );
+        assert!(fit_size(&slides[0].text, &base_resolved[0], EXTENT).unwrap() > cap);
         // Slides the renderer would reject never shrink the others to nothing.
         let mut with_bad = slides.clone();
         with_bad.push(Slide {
             label: "Bad".into(),
             text: "\u{4e2d}".into(),
+            format: Default::default(),
         });
-        assert_eq!(size_cap(&with_bad, EXTENT, Sizing::Normalized), Some(cap));
-        assert_eq!(size_cap(&slides[1..2], EXTENT, Sizing::Normalized), None);
+        let bad_resolved = resolved(&with_bad);
+        assert_eq!(
+            size_cap(&with_bad, &bad_resolved, EXTENT, Sizing::Normalized),
+            Some(cap)
+        );
+        assert_eq!(
+            size_cap(
+                &slides[1..2],
+                &base_resolved[1..2],
+                EXTENT,
+                Sizing::Normalized
+            ),
+            None
+        );
+        // A Fixed-size slide is excluded from the cap but keeps its own size.
+        let mut with_fixed = slides.clone();
+        with_fixed[0].format.size = Some(Size::Fixed(20));
+        let fixed_resolved = resolved(&with_fixed);
+        assert_eq!(
+            size_cap(&with_fixed, &fixed_resolved, EXTENT, Sizing::Normalized),
+            Some(cap)
+        );
+        let version = ContentVersion { id: 9, revision: 1 };
+        let fixed_cue = cue(
+            version,
+            &with_fixed[0],
+            &fixed_resolved[0],
+            EXTENT,
+            CAPS,
+            Some(cap.min(1)),
+        )
+        .unwrap();
+        assert_eq!(fixed_cue.text().unwrap().font_size(), 20);
     }
 }

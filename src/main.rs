@@ -92,7 +92,6 @@ fn audience_main(args: &[std::ffi::OsString]) -> ! {
         placement,
         lifetime: None,
         report_surface: true,
-        centered_text: true,
         retain_on_disconnect: true,
     });
     match result {

@@ -2404,3 +2404,61 @@ PY
   installed fonts off the UI thread with bounds, render fill/outline/shadow
   masks and blend them with colors in the compositor, and move the editor
   preview/thumbnails to the same path.
+
+### M1-05g2a — Styled slide rendering core — 2026-10-06 (UTC+7)
+
+- State: **implemented-unqualified**; M1-05g stays **active** (g2b, g3 open).
+- One rendering path for the whole SlideFormat: audience frame, editor
+  preview and Slides thumbnails all go through slides::cue →
+  udience::text::layers → blend (GPU shader or CPU twin). Point-valued
+  effects (outline size, shadow offset/blur) scale by the 1080-line reference
+  height so the audience and previews agree at any extent.
+- src/fonts.rs (new, no GPUI): installed-font Catalog::scan with bounds
+  (8 MiB files, 64-face collections, 8192 faces, 32 MiB loaded-face cache),
+  SHA-256-tracked faces, Resolved (bundled DejaVu Sans regular + Bold from
+  dejavu-fonts 2.37, license note in 	ests/fixtures/README.md).
+  Resolved::bundled resolves without I/O; scanning stays off the UI thread.
+- src/scene.rs: OwnedText/TextStyle/OutlineStyle/ShadowStyle with
+  strict bounds; PreparedCue::from_owned validates face index and style.
+- src/slides.rs: format-aware cue (Bold → bundled Bold face, else synth
+  margins 1/24 em; Italic 0.25 em shear margin; underline; color; H/V
+  alignment); auto-size fit and Fixed refuse-if-unshowable; size_cap
+  resolves the worst-case size across slides for scrolling checks.
+- src/transport.rs: text wire tag 2 carries the resolved format (face
+  index, size, color, align, valign, B/I/U flags, outline, shadow); tag 1
+  rejected with a compatible-version error.
+- src/audience/text.rs: layers renders fill/outline/shadow coverage
+  (RGBA, Rgba8Unorm) via cosmic-text: per-line advance/line-height overflow
+  authority, alignment, synth B/I (shear, stroke double), underline through
+  cosmic decorations, chamfer dilate (outline, units are 12ths of a pixel),
+  axis-generic box blur (shadow), ink clipped only at the canvas edge.
+- src/audience/compositor.rs: three-channel WGSL blend (shadow → outline →
+  fill in linear light), 64-byte uniform, colored readback checks; exact CPU
+  twin lend_pixels for the editor preview/thumbnails.
+- src/song_library.rs: preview and thumbnails render via the same layers +
+  CPU blend, cache key is now (text, format); the thumbnail box filter
+  averages all 16 preview pixels per output pixel (the old filter sampled
+  one). src/audience.rs prepares frames from coverage + Blend; text work
+  stays on the worker. src/operator.rs resolves bundled faces per send;
+  installed-family resolution is deferred to g2b.
+- Decisions: fake-italic shear and negative left bearings clip at the area
+  edge like other effects (the advance-fit authority rejects oversized
+  text; cosmic-text drops glyphs past the buffer width either way); EW
+  parity for negative-bearing rejection was not observed, recorded here.
+- Tests: fonts 6; scene/slides/transport suites updated for owned text and
+  the wire tag; audience text 16 (styled fill/outline/shadow geometry, synth
+  B/I/U, clip-vs-overflow, whole-format 1920×1080 render); compositor colored
+  readback (fill blue / outline red / 50% green shadow, half-linear green
+  187–189); song library styled preview/thumbnail ink.
+- Checks (Windows 11): cargo fmt --all -- --check,
+  cargo clippy --locked --all-targets -- -D warnings,
+  cargo test --locked --all-targets (lib 99, bin 65 + 2 ignored, output
+  9 + 1 ignored, transport 4 + 1 ignored), cargo build --locked.
+- Not run: native DX2 audience-window E2E with a styled cue (g2b, needs the
+  operator format-resolution slice), installed-font scan against a real
+  Windows font directory (g2b), Linux/macOS.
+- Next: g2b. Operator resolves installed families via the catalog with a
+  loading gate, seed one formatted song, extend the song-editor and
+  live-output native scripts, run the Windows DX12 audience check, measure
+  layer preparation timing, update docs/composition-text.md, backlog and
+  work log, commit.

@@ -203,9 +203,46 @@ impl Frame {
             }
         }
         if let Some(text) = cue.text() {
-            f.bytes.push(1);
+            let style = text.style();
+            f.bytes.push(2); // Styled owned text (tag 1 was removed in M1-05g2).
             put_version(&mut f.bytes, text.font_version());
+            f.bytes.extend_from_slice(&text.face_index().to_le_bytes());
             f.bytes.extend_from_slice(&text.font_size().to_le_bytes());
+            f.bytes.extend_from_slice(&style.color);
+            f.bytes.push(style.align as u8);
+            f.bytes.push(style.valign as u8);
+            let mut flags = 0u8;
+            if style.underline {
+                flags |= 1;
+            }
+            if style.italic {
+                flags |= 2;
+            }
+            if style.synth_bold {
+                flags |= 4;
+            }
+            if style.synth_italic {
+                flags |= 8;
+            }
+            f.bytes.push(flags);
+            match style.outline {
+                Some(outline) => {
+                    f.bytes.push(1);
+                    f.bytes.extend_from_slice(&outline.color);
+                    f.bytes.extend_from_slice(&[outline.size, outline.opacity]);
+                }
+                None => f.bytes.push(0),
+            }
+            match style.shadow {
+                Some(shadow) => {
+                    f.bytes.push(1);
+                    f.bytes.extend_from_slice(&shadow.color);
+                    f.bytes.extend_from_slice(&shadow.angle.to_le_bytes());
+                    f.bytes
+                        .extend_from_slice(&[shadow.offset, shadow.blur, shadow.opacity]);
+                }
+                None => f.bytes.push(0),
+            }
             put_blob(&mut f.bytes, text.content().as_bytes());
             put_blob(&mut f.bytes, text.font());
         } else {
@@ -305,14 +342,72 @@ impl Frame {
             };
             let text = match payload.byte()? {
                 0 => None,
-                1 => {
+                // Tag 1 (unstyled text) was removed with M1-05g2; both ends of
+                // the pipe build from the same revision, so reject it outright.
+                1 => return Err(invalid()),
+                2 => {
                     let version = payload.version()?;
+                    let face_index = payload.u32()?;
                     let size = u16::from_le_bytes(payload.take(2)?.try_into().unwrap());
+                    let color: [u8; 3] = payload.take(3)?.try_into().unwrap();
+                    let align = match payload.byte()? {
+                        0 => crate::format::Align::Left,
+                        1 => crate::format::Align::Center,
+                        2 => crate::format::Align::Right,
+                        _ => return Err(invalid()),
+                    };
+                    let valign = match payload.byte()? {
+                        0 => crate::format::VAlign::Top,
+                        1 => crate::format::VAlign::Middle,
+                        2 => crate::format::VAlign::Bottom,
+                        _ => return Err(invalid()),
+                    };
+                    let flags = payload.byte()?;
+                    if flags > 0b1111 {
+                        return Err(invalid());
+                    }
+                    let outline = match payload.byte()? {
+                        0 => None,
+                        1 => Some(crate::scene::OutlineStyle {
+                            color: payload.take(3)?.try_into().unwrap(),
+                            size: payload.byte()?,
+                            opacity: payload.byte()?,
+                        }),
+                        _ => return Err(invalid()),
+                    };
+                    let shadow = match payload.byte()? {
+                        0 => None,
+                        1 => Some(crate::scene::ShadowStyle {
+                            color: payload.take(3)?.try_into().unwrap(),
+                            angle: u16::from_le_bytes(payload.take(2)?.try_into().unwrap()),
+                            offset: payload.byte()?,
+                            blur: payload.byte()?,
+                            opacity: payload.byte()?,
+                        }),
+                        _ => return Err(invalid()),
+                    };
                     let content = std::str::from_utf8(payload.blob(crate::scene::MAX_TEXT_BYTES)?)
                         .map_err(|_| invalid())?
                         .to_owned();
                     let font = payload.blob(crate::scene::MAX_SOURCE_BYTES)?.into();
-                    Some((content, version, font, size))
+                    Some(crate::scene::OwnedText {
+                        content,
+                        font_version: version,
+                        font,
+                        face_index,
+                        font_size: size,
+                        style: crate::scene::TextStyle {
+                            color,
+                            align,
+                            valign,
+                            underline: flags & 1 != 0,
+                            italic: flags & 2 != 0,
+                            synth_bold: flags & 4 != 0,
+                            synth_italic: flags & 8 != 0,
+                            outline,
+                            shadow,
+                        },
+                    })
                 }
                 _ => return Err(invalid()),
             };
@@ -937,7 +1032,9 @@ mod tests {
 
     #[test]
     fn owned_resource_validation_and_aggregate_budget() {
-        use crate::scene::{MAX_SCENE_BYTES, MAX_SOURCE_BYTES, MAX_TEXT_BYTES, PrepareError};
+        use crate::scene::{
+            MAX_SCENE_BYTES, MAX_SOURCE_BYTES, MAX_TEXT_BYTES, OwnedText, PrepareError, TextStyle,
+        };
         let version = ContentVersion {
             id: 71,
             revision: 13,
@@ -949,9 +1046,19 @@ mod tests {
         let caps = RendererCapabilities {
             max_texture_dimension: 8192,
         };
+        let text = |content: String, font: Vec<u8>, style: TextStyle| {
+            Some(OwnedText {
+                content,
+                font_version: version,
+                font: font.into(),
+                face_index: 0,
+                font_size: 32,
+                style,
+            })
+        };
         let construct =
             |background, text| PreparedCue::from_owned(version, extent, background, text, caps);
-        for (font, text, expected) in [
+        for (font, content, expected) in [
             (
                 b"OTTOgarbage".to_vec(),
                 "Signal".to_owned(),
@@ -971,10 +1078,76 @@ mod tests {
             assert_eq!(
                 construct(
                     PreparedBackground::Color([17, 53, 99, 255]),
-                    Some((text, version, font.into(), 32))
+                    text(content, font, TextStyle::default())
                 )
                 .err(),
                 Some(expected)
+            );
+        }
+        let font = include_bytes!("../tests/fixtures/DejaVuSans.ttf");
+        // A face index the font does not have is refused, not wrapped around.
+        let bad_index = OwnedText {
+            content: "Signal".into(),
+            font_version: version,
+            font: font.as_slice().into(),
+            face_index: 1,
+            font_size: 32,
+            style: TextStyle::default(),
+        };
+        assert_eq!(
+            construct(
+                PreparedBackground::Color([17, 53, 99, 255]),
+                Some(bad_index)
+            )
+            .err(),
+            Some(PrepareError::InvalidFont)
+        );
+        // Out-of-range style values are refused even though the face is fine.
+        for style in [
+            TextStyle {
+                outline: Some(crate::scene::OutlineStyle {
+                    color: [0, 0, 0],
+                    size: 51,
+                    opacity: 100,
+                }),
+                ..TextStyle::default()
+            },
+            TextStyle {
+                outline: Some(crate::scene::OutlineStyle {
+                    color: [0, 0, 0],
+                    size: 7,
+                    opacity: 101,
+                }),
+                ..TextStyle::default()
+            },
+            TextStyle {
+                shadow: Some(crate::scene::ShadowStyle {
+                    color: [0, 0, 0],
+                    angle: 360,
+                    offset: 18,
+                    blur: 9,
+                    opacity: 90,
+                }),
+                ..TextStyle::default()
+            },
+            TextStyle {
+                shadow: Some(crate::scene::ShadowStyle {
+                    color: [0, 0, 0],
+                    angle: 315,
+                    offset: 18,
+                    blur: 51,
+                    opacity: 90,
+                }),
+                ..TextStyle::default()
+            },
+        ] {
+            assert_eq!(
+                construct(
+                    PreparedBackground::Color([17, 53, 99, 255]),
+                    text("Signal".to_owned(), font.to_vec(), style)
+                )
+                .err(),
+                Some(PrepareError::InvalidScene)
             );
         }
         assert_eq!(
@@ -992,7 +1165,6 @@ mod tests {
             .err(),
             Some(PrepareError::InvalidImage)
         );
-        let font = include_bytes!("../tests/fixtures/DejaVuSans.ttf");
         assert_eq!(
             construct(
                 PreparedBackground::Image {
@@ -1003,11 +1175,92 @@ mod tests {
                     },
                     rgba: vec![0; MAX_SCENE_BYTES].into(),
                 },
-                Some(("Signal".into(), version, font.as_slice().into(), 32))
+                text("Signal".to_owned(), font.to_vec(), TextStyle::default())
             )
             .err(),
             Some(PrepareError::TooLarge)
         );
+    }
+
+    #[test]
+    fn styled_text_round_trips_and_rejects_bad_wire_values() {
+        let now = Instant::now();
+        let caps = RendererCapabilities {
+            max_texture_dimension: 8192,
+        };
+        let version = ContentVersion {
+            id: 19,
+            revision: 23,
+        };
+        let extent = Extent {
+            width: 641,
+            height: 360,
+        };
+        let format = crate::format::tests::full();
+        let resolved = crate::fonts::Resolved::bundled(&format);
+        let slide = crate::slides::Slide {
+            label: String::new(),
+            text: "Styled wire refrain".into(),
+            format,
+        };
+        let cue =
+            Arc::new(crate::slides::cue(version, &slide, &resolved, extent, caps, None).unwrap());
+        assert!(cue.text().is_some());
+        let command = Command::from_wire(
+            Stamp {
+                epoch: Epoch(42),
+                sequence: 1,
+            },
+            Lane::Cue,
+            Payload::Scene(cue.clone()),
+            now + Duration::from_secs(2),
+        );
+        let mut wire = Vec::new();
+        Frame::command(&command, now)
+            .unwrap()
+            .write(&mut wire)
+            .unwrap();
+        let decoded = Frame::read(wire.as_slice())
+            .unwrap()
+            .into_command(now, caps)
+            .unwrap();
+        let (decoded_text, cue_text) =
+            (decoded.cue().unwrap().text().unwrap(), cue.text().unwrap());
+        assert_eq!(decoded_text.content(), cue_text.content());
+        assert_eq!(decoded_text.font(), cue_text.font());
+        assert_eq!(decoded_text.font_version(), cue_text.font_version());
+        assert_eq!(decoded_text.face_index(), cue_text.face_index());
+        assert_eq!(decoded_text.font_size(), cue_text.font_size());
+        assert_eq!(decoded_text.style(), cue_text.style());
+        // Stream wire: 8-byte header, 4-byte resource length, the fixed
+        // 61-byte body (stamp, lane, budget, version, extent), a color
+        // background, then the text section: tag, version, face index, size,
+        // color, align, valign, flags, outline, shadow, then the blobs.
+        let text = HEADER + 4 + 61 + 5;
+        let [align, valign, flags, outline_size, shadow_blur] =
+            [text + 34, text + 35, text + 36, text + 41, text + 50];
+        for (at, value, what) in [
+            (text, 1u8, "removed unstyled tag"),
+            (text, 3, "unknown text tag"),
+            (align, 3, "align"),
+            (valign, 3, "valign"),
+            (flags, 16, "flag bits"),
+            (outline_size, 51, "outline size"),
+            (shadow_blur, 51, "shadow blur"),
+        ] {
+            let mut bad = wire.clone();
+            bad[at] = value;
+            assert!(
+                Frame::read(bad.as_slice())
+                    .unwrap()
+                    .into_command(now, caps)
+                    .is_err(),
+                "{what} must be rejected"
+            );
+        }
+        for cut in [HEADER, text, text + 40, wire.len() - 1] {
+            assert!(Frame::read(&wire[..cut]).is_err(), "cut at {cut}");
+        }
     }
 
     #[test]

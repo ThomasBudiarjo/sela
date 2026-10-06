@@ -4,7 +4,9 @@ use sela::{
     delivery::{
         Acknowledgment, Delivery, DeliveryError, Epoch, Lane, LiveState, Outcome, RendererSession,
     },
-    scene::{ContentVersion, Extent, PreparedBackground, PreparedCue, RendererCapabilities},
+    scene::{
+        ContentVersion, Extent, OwnedText, PreparedBackground, PreparedCue, RendererCapabilities,
+    },
     transport::{Frame, PipeWorkers},
 };
 use std::{
@@ -256,12 +258,14 @@ fn actual_child_owned_font_text_asymmetric_image() {
             },
             rgba: (1..=24).collect::<Vec<u8>>().into(),
         },
-        Some((
-            "Signal café\nBeacon".into(),
-            resource_version,
-            include_bytes!("fixtures/DejaVuSans.ttf").as_slice().into(),
-            32,
-        )),
+        Some(OwnedText {
+            content: "Signal café\nBeacon".into(),
+            font_version: resource_version,
+            font: include_bytes!("fixtures/DejaVuSans.ttf").as_slice().into(),
+            face_index: 0,
+            font_size: 32,
+            style: Default::default(),
+        }),
         CAPS,
     )
     .unwrap();

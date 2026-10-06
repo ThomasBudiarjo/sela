@@ -1,5 +1,5 @@
 //! Opt-in synchronous offscreen diagnostic, never a live-frame API.
-use sela::scene::{Extent, MAX_SCENE_BYTES};
+use sela::scene::{Extent, MAX_SCENE_BYTES, TextStyle};
 use std::{error::Error, time::Duration};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -8,6 +8,110 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 pub enum Fit {
     Contain,
     Cover,
+}
+
+/// One blended text layer: a linear-light color and an opacity (0..1).
+#[derive(Clone, Copy)]
+pub struct Layer {
+    pub rgb: [f32; 3],
+    pub opacity: f32,
+}
+
+impl Layer {
+    /// Linear-light white at full opacity.
+    pub const WHITE: Layer = Layer {
+        rgb: [1., 1., 1.],
+        opacity: 1.,
+    };
+    /// An inactive layer: nothing blends over the background.
+    pub const OFF: Layer = Layer {
+        rgb: [0., 0., 0.],
+        opacity: 0.,
+    };
+}
+
+/// Shadow, outline and fill blend parameters, back to front. The mask's
+/// coverage channels carry no color; colors live only here.
+#[derive(Clone, Copy)]
+pub struct Blend {
+    pub shadow: Layer,
+    pub outline: Layer,
+    pub fill: Layer,
+}
+
+impl Blend {
+    /// White text with no outline or shadow: the pre-style look.
+    pub fn plain() -> Self {
+        Self {
+            shadow: Layer::OFF,
+            outline: Layer::OFF,
+            fill: Layer::WHITE,
+        }
+    }
+
+    /// Linear-light colors and opacities from a cue style. Absent effects
+    /// blend nothing even if a stale mask channel had coverage.
+    pub fn from_style(style: &TextStyle) -> Self {
+        let effect = |color: [u8; 3], opacity: u8| Layer {
+            rgb: [linear(color[0]), linear(color[1]), linear(color[2])],
+            opacity: f32::from(opacity) / 100.,
+        };
+        Self {
+            shadow: style
+                .shadow
+                .map_or(Layer::OFF, |s| effect(s.color, s.opacity)),
+            outline: style
+                .outline
+                .map_or(Layer::OFF, |o| effect(o.color, o.opacity)),
+            fill: effect(style.color, 100),
+        }
+    }
+}
+
+/// sRGB byte to linear light, matching how the sRGB background texture decodes.
+fn linear(value: u8) -> f32 {
+    let c = f32::from(value) / 255.;
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+/// Linear light to an sRGB byte, matching how the target texture encodes.
+fn srgb(light: f32) -> u8 {
+    let c = if light <= 0.003_130_8 {
+        light * 12.92
+    } else {
+        1.055 * light.powf(1. / 2.4) - 0.055
+    };
+    (c.clamp(0., 1.) * 255.).round() as u8
+}
+/// CPU twin of the shader's blend, for editor previews and thumbnails: the
+/// same three mask channels, colors, opacities, shadow-outline-fill order and
+/// linear-light compositing, over one background color. Returns BGRA bytes
+/// in the GPUI `RenderImage` order.
+pub fn blend_pixels(background: [u8; 4], coverage: &[u8], blend: &Blend) -> Vec<u8> {
+    let base = [
+        linear(background[0]),
+        linear(background[1]),
+        linear(background[2]),
+    ];
+    let mut pixels = Vec::with_capacity(coverage.len());
+    for pixel in coverage.as_chunks::<4>().0 {
+        let mut rgb = base;
+        for (mask, layer) in [
+            (pixel[2], &blend.shadow),
+            (pixel[1], &blend.outline),
+            (pixel[0], &blend.fill),
+        ] {
+            let alpha = f32::from(mask) / 255. * layer.opacity;
+            for (channel, color) in rgb.iter_mut().zip(layer.rgb) {
+                *channel = *channel * (1. - alpha) + color * alpha;
+            }
+        }
+        pixels.extend([srgb(rgb[2]), srgb(rgb[1]), srgb(rgb[0]), 255]);
+    }
+    pixels
 }
 
 pub struct Image<'a> {
@@ -56,7 +160,7 @@ fn byte_len(size: Extent, cap: u32) -> Result<usize> {
     Ok(bytes as usize)
 }
 
-fn validate(size: Extent, image: &Image<'_>, alpha: &[u8], cap: u32) -> Result<usize> {
+fn validate(size: Extent, image: &Image<'_>, coverage: &[u8], cap: u32) -> Result<usize> {
     let bytes = byte_len(size, cap)?;
     let image_bytes = byte_len(
         Extent {
@@ -65,8 +169,9 @@ fn validate(size: Extent, image: &Image<'_>, alpha: &[u8], cap: u32) -> Result<u
         },
         cap,
     )?;
-    if image.rgba.len() != image_bytes || alpha.len() != bytes / 4 {
-        return Err("image RGBA or output alpha length mismatch".into());
+    // Coverage is RGBA: r=fill, g=outline, b=shadow, a unused.
+    if image.rgba.len() != image_bytes || coverage.len() != bytes {
+        return Err("image RGBA or text coverage length mismatch".into());
     }
     Ok(bytes)
 }
@@ -92,7 +197,7 @@ fn rectangle(size: Extent, image: Extent, fit: Fit) -> [f32; 4] {
 const SHADER: &str = r#"
 @group(0) @binding(0) var background: texture_2d<f32>;
 @group(0) @binding(1) var mask: texture_2d<f32>;
-struct Placement { rect: vec4f, text: vec4f }
+struct Placement { rect: vec4f, fill: vec4f, outline: vec4f, shadow: vec4f }
 @group(0) @binding(2) var<uniform> placement: Placement;
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     var p = array<vec2f, 3>(vec2f(-1,-1), vec2f(3,-1), vec2f(-1,3));
@@ -109,9 +214,14 @@ struct Placement { rect: vec4f, text: vec4f }
         let color = textureLoad(background, vec2i(at), 0);
         rgb = color.rgb * color.a;
     }
-    let coverage = textureLoad(mask, vec2i(p.xy), 0).r * placement.text.x;
+    // Coverage mask: r=fill, g=outline, b=shadow. Shadow blends under
+    // outline under fill; each layer's own color and opacity apply here.
+    let m = textureLoad(mask, vec2i(p.xy), 0);
+    rgb = mix(rgb, placement.shadow.rgb, m.b * placement.shadow.a);
+    rgb = mix(rgb, placement.outline.rgb, m.g * placement.outline.a);
+    rgb = mix(rgb, placement.fill.rgb, m.r * placement.fill.a);
 
-    return vec4f(mix(rgb, vec3f(1), coverage), 1);
+    return vec4f(rgb, 1);
 }
 "#;
 
@@ -220,13 +330,14 @@ impl Compositor {
         &self,
         size: Extent,
         background: Image<'_>,
-        alpha: &[u8],
+        coverage: &[u8],
+        blend: &Blend,
         fit: Fit,
     ) -> Result<ReadyComposition> {
         validate(
             size,
             &background,
-            alpha,
+            coverage,
             self.device.limits().max_texture_dimension_2d,
         )?;
         let image_size = Extent {
@@ -240,16 +351,16 @@ impl Compositor {
         );
         let mask = self.texture(
             size,
-            wgpu::TextureFormat::R8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         );
         self.upload(&image, background.rgba, background.width * 4);
-        self.upload(&mask, alpha, size.width);
+        self.upload(&mask, coverage, size.width * 4);
         let image_view = image.create_view(&Default::default());
         let mask_view = mask.create_view(&Default::default());
         let rect = rectangle(size, image_size, fit);
 
-        let bindings = self.bind(&image_view, &mask_view, rect, 1.0);
+        let bindings = self.bind(&image_view, &mask_view, rect, blend, 1.0);
 
         // write_texture stages until submit. Flush and bound this worker's
         // in-flight upload staging before exposing readiness; NEVER in redraw.
@@ -258,7 +369,7 @@ impl Compositor {
             submission_index: Some(upload),
             timeout: Some(Duration::from_secs(2)),
         })?;
-        let background_only = self.bind(&image_view, &mask_view, rect, 0.0);
+        let background_only = self.bind(&image_view, &mask_view, rect, blend, 0.0);
         Ok(ReadyComposition {
             bindings,
             background_only,
@@ -270,19 +381,37 @@ impl Compositor {
         image: &wgpu::TextureView,
         mask: &wgpu::TextureView,
         rect: [f32; 4],
-        text: f32,
+        blend: &Blend,
+        master: f32,
     ) -> wgpu::BindGroup {
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 32,
+            size: 64,
             usage: wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: true,
         });
         {
             let mut data = uniform.get_mapped_range_mut(..);
-            for (i, value) in rect.into_iter().chain([text, 0., 0., 0.]).enumerate() {
-                data.slice(i * 4..i * 4 + 4)
+            let mut write = |index: usize, value: f32| {
+                data.slice(index * 4..index * 4 + 4)
                     .copy_from_slice(&value.to_ne_bytes());
+            };
+            for (index, value) in rect.into_iter().enumerate() {
+                write(index, value);
+            }
+            // rect (vec4), then fill, outline and shadow (rgb + opacity).
+            for (layer, base) in [blend.fill, blend.outline, blend.shadow]
+                .into_iter()
+                .zip([4, 8, 12])
+            {
+                for (offset, value) in layer
+                    .rgb
+                    .into_iter()
+                    .chain([layer.opacity * master])
+                    .enumerate()
+                {
+                    write(base + offset, value);
+                }
             }
         }
         uniform.unmap();
@@ -343,13 +472,14 @@ impl Compositor {
         &self,
         size: Extent,
         background: Image<'_>,
-        text_alpha: &[u8],
+        coverage: &[u8],
+        blend: &Blend,
         fit: Fit,
     ) -> Result<Vec<u8>> {
         let bytes = validate(
             size,
             &background,
-            text_alpha,
+            coverage,
             self.device.limits().max_texture_dimension_2d,
         )?;
         let stride = (size.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
@@ -369,7 +499,7 @@ impl Compositor {
         );
         let mask = self.texture(
             size,
-            wgpu::TextureFormat::R8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         );
         let target = self.texture(
@@ -378,13 +508,13 @@ impl Compositor {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         );
         self.upload(&image, background.rgba, background.width * 4);
-        self.upload(&mask, text_alpha, size.width);
+        self.upload(&mask, coverage, size.width * 4);
         let image_view = image.create_view(&Default::default());
         let mask_view = mask.create_view(&Default::default());
         let rect = rectangle(size, image_size, fit);
 
         let target_view = target.create_view(&Default::default());
-        let bindings = self.bind(&image_view, &mask_view, rect, 1.0);
+        let bindings = self.bind(&image_view, &mask_view, rect, blend, 1.0);
 
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -452,6 +582,7 @@ impl Compositor {
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255, 0, 255, 255, 255,
             255, 0, 255, 255,
         ];
+        let plain = Blend::plain();
         let rgba = self.render(
             size,
             Image {
@@ -459,7 +590,8 @@ impl Compositor {
                 height: 2,
                 rgba: &source,
             },
-            &[0; 6],
+            &[0; 24],
+            &plain,
             Fit::Contain,
         )?;
         if rgba != source {
@@ -473,7 +605,12 @@ impl Compositor {
                 height: 1,
                 rgba: &midtone,
             },
-            &[0, 128, 255, 0, 0, 0],
+            // Fill coverage 0, 128 and 255 across the top row.
+            &[
+                0, 0, 0, 255, 128, 0, 0, 255, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0,
+                255,
+            ],
+            &plain,
             Fit::Cover,
         )?;
         for (pixel, expected) in [(0, midtone), (1, [205, 192, 189, 255])] {
@@ -493,7 +630,11 @@ impl Compositor {
                 height: 1,
                 rgba: &black,
             },
-            &[0, 128, 255, 0, 0, 0],
+            &[
+                0, 0, 0, 255, 128, 0, 0, 255, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0,
+                255,
+            ],
+            &plain,
             Fit::Cover,
         )?;
         if rgba[..4] != black
@@ -504,6 +645,53 @@ impl Compositor {
         {
             return Err("linear white coverage check failed".into());
         }
+        // Colored layers blend in order, each with its own opacity: fill
+        // blue over outline red over a half-opacity green shadow.
+        let colored = Blend {
+            fill: Layer {
+                rgb: [0., 0., 1.],
+                opacity: 1.,
+            },
+            outline: Layer {
+                rgb: [1., 0., 0.],
+                opacity: 1.,
+            },
+            shadow: Layer {
+                rgb: [0., 1., 0.],
+                opacity: 0.5,
+            },
+        };
+        let wide = Extent {
+            width: 4,
+            height: 1,
+        };
+        let coverage = [
+            0, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let rgba = self.render(
+            wide,
+            Image {
+                width: 1,
+                height: 1,
+                rgba: &black,
+            },
+            &coverage,
+            &colored,
+            Fit::Cover,
+        )?;
+        for (pixel, expected) in [
+            (0, [0, 0, 255, 255]),
+            (1, [255, 0, 0, 255]),
+            (3, [0, 0, 255, 255]),
+        ] {
+            if rgba[pixel * 4..pixel * 4 + 4] != expected {
+                return Err("colored layer blend order check failed".into());
+            }
+        }
+        // Shadow at half opacity over black is half linear green.
+        if rgba[8] != 0 || !(187..=189).contains(&rgba[9]) || rgba[10] != 0 || rgba[11] != 255 {
+            return Err("colored layer opacity check failed".into());
+        }
         let white = [255, 255, 255, 128];
         let rgba = self.render(
             size,
@@ -512,7 +700,8 @@ impl Compositor {
                 height: 1,
                 rgba: &white,
             },
-            &[0; 6],
+            &[0; 24],
+            &plain,
             Fit::Cover,
         )?;
         if rgba
@@ -532,7 +721,8 @@ impl Compositor {
                     height: 1,
                     rgba: &hidden,
                 },
-                &[0; 6],
+                &[0; 24],
+                &plain,
                 Fit::Cover,
             )?
             .as_chunks::<4>()
@@ -568,7 +758,8 @@ impl Compositor {
                         height: h,
                         rgba: &pixels,
                     },
-                    &[0; 16],
+                    &[0; 64],
+                    &plain,
                     fit,
                 )?;
                 for y in 0..4 {
@@ -604,6 +795,7 @@ impl Compositor {
                     rgba: &black,
                 },
                 &[],
+                &plain,
                 Fit::Cover,
             )
             .is_ok()
@@ -615,7 +807,8 @@ impl Compositor {
                         height: 1,
                         rgba: &[],
                     },
-                    &[0; 6],
+                    &[0; 24],
+                    &plain,
                     Fit::Cover,
                 )
                 .is_ok()
@@ -631,6 +824,7 @@ impl Compositor {
                         rgba: &black,
                     },
                     &[],
+                    &plain,
                     Fit::Cover,
                 )
                 .is_ok()
@@ -645,7 +839,8 @@ impl Compositor {
                 height: 1,
                 rgba: &black,
             },
-            &[0; 6],
+            &[0; 24],
+            &plain,
             Fit::Cover,
         )?;
         Ok(())
@@ -681,7 +876,7 @@ mod tests {
             height: 1,
             rgba: &[0; 4],
         };
-        assert!(validate(one, &good, &[0], 8192).is_ok());
+        assert!(validate(one, &good, &[0; 4], 8192).is_ok());
         assert!(validate(one, &good, &[], 8192).is_err());
         assert!(
             validate(
@@ -690,7 +885,7 @@ mod tests {
                     rgba: &[0; 3],
                     ..good
                 },
-                &[0],
+                &[0; 4],
                 8192
             )
             .is_err()
@@ -736,5 +931,36 @@ mod tests {
             .unwrap(),
             MAX_SCENE_BYTES
         );
+    }
+
+    #[test]
+    fn style_blend_converts_to_linear_light_and_opacity() {
+        use sela::scene::{OutlineStyle, ShadowStyle};
+        let style = TextStyle {
+            color: [255, 0, 0],
+            outline: Some(OutlineStyle {
+                color: [128, 128, 128],
+                size: 7,
+                opacity: 100,
+            }),
+            shadow: Some(ShadowStyle {
+                color: [10, 10, 10],
+                angle: 315,
+                offset: 18,
+                blur: 9,
+                opacity: 90,
+            }),
+            ..TextStyle::default()
+        };
+        let blend = Blend::from_style(&style);
+        assert_eq!(blend.fill.rgb, [1., 0., 0.]);
+        assert_eq!(blend.fill.opacity, 1.);
+        // 128 is linear 0.2158, the same value the sRGB background decodes to.
+        assert!((blend.outline.rgb[0] - 0.2158).abs() < 0.001);
+        assert_eq!(blend.outline.opacity, 1.);
+        assert!((blend.shadow.opacity - 0.9).abs() < 1e-6);
+        let plain = Blend::plain();
+        assert_eq!(plain.fill.rgb, [1., 1., 1.]);
+        assert_eq!((plain.outline.opacity, plain.shadow.opacity), (0., 0.));
     }
 }

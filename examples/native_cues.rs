@@ -24,7 +24,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         lifetime: Some(Duration::from_secs(24)),
         report_surface: false,
-        centered_text: false,
         retain_on_disconnect: false,
     })
 }

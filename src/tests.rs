@@ -808,7 +808,13 @@ fn normalize_text_size_applies_to_the_live_slide(cx: &mut TestAppContext) {
         );
         (item.version, item.slides.clone(), submitted(o))
     });
-    let cap = size_cap(&slides, FAKE_EXTENT, Sizing::Normalized);
+    let cap = {
+        let resolved: Vec<_> = slides
+            .iter()
+            .map(|slide| sela::fonts::Resolved::bundled(&slide.format))
+            .collect();
+        size_cap(&slides, &resolved, FAKE_EXTENT, Sizing::Normalized)
+    };
     assert!(cap.is_some());
 
     click(&mut cx, "normalize-text");

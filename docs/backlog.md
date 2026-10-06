@@ -533,9 +533,18 @@ Follow-ups:
   (owner-reported, unobserved). **Active**, three slices:
   - [x] g1 per-slide `SlideFormat` model and schema 3 with a verified backup
     (implemented-unqualified, see [storage](storage.md)).
-  - [ ] g2 rendering: cue/wire format, installed fonts and real B/I faces,
-    underline, color, alignment, Outer outline, shadow, fixed size; editor
-    preview and thumbnails on the same path; DX12 native check.
+  - [x] g2 rendering core (g2a): installed-font catalog with bounds and LRU
+    (`src/fonts.rs`, bundled DejaVu Sans + Bold), format-aware cue with
+    1080-reference effect scaling, synth B/I margins and fixed-size
+    refusal; transport text wire tag 2; audience fill/outline/shadow
+    coverage layers (underline via decorations) blended in linear light on
+    the GPU with an exact CPU twin; editor preview and thumbnails on the
+    same path with `(text, format)` cache keys. **Implemented-unqualified**:
+    native DX12 audience check pending (g2b); negative-bearing ink clips at
+    the area edge (EW parity unobserved, recorded in the work log).
+  - [ ] g2b operator/editor integration: installed-family resolution via
+    the catalog with a loading gate, seed formatted song, native Windows
+    DX2 check, timing, docs.
   - [ ] g3 Song Editor Format pane (Text › Style subset), per-slide apply,
     Ctrl+A whole-song selection, undo, GPUI tests and native script.
   - Deferred (record as tickets when g3 lands): superscript/subscript, indent,

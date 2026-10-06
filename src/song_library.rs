@@ -245,43 +245,46 @@ fn groups<'a>(labels: impl IntoIterator<Item = &'a str>) -> Vec<Range<usize>> {
 }
 
 /// Renders one slide exactly as the audience preparer would, off the UI
-/// thread: bundled font, fitted size, centered, white on the cue background.
-/// `None` when the audience would reject the text (overflow, missing glyph).
-fn render_preview(text: &str) -> Option<Arc<RenderImage>> {
-    let (alpha, color) = coverage(text)?;
-    image_from(&alpha, color, PREVIEW)
+/// thread: bundled faces, fitted size, styled layers over the cue
+/// background. `None` when the audience would reject the text (overflow,
+/// missing glyph, unfittable fixed size).
+fn render_preview(slide: &sela::slides::Slide) -> Option<Arc<RenderImage>> {
+    image_from(&pixels(slide)?, PREVIEW)
 }
 
 /// The preview raster box-filtered down by `THUMBNAIL_SCALE`, so thumbnails
 /// keep the audience proportions (the text inset is fixed in pixels, so
 /// fitting at thumbnail size directly would lay out differently).
-fn render_thumbnail(text: &str) -> Option<Arc<RenderImage>> {
-    let (alpha, color) = coverage(text)?;
+fn render_thumbnail(slide: &sela::slides::Slide) -> Option<Arc<RenderImage>> {
+    let bgra = pixels(slide)?;
     let (scale, width) = (THUMBNAIL_SCALE as usize, PREVIEW.width as usize);
-    let mut small = Vec::with_capacity(alpha.len() / (scale * scale));
+    let n = (scale * scale) as u32;
+    let mut small = Vec::with_capacity(bgra.len() / (scale * scale));
     for y in 0..THUMBNAIL.height as usize {
         for x in 0..THUMBNAIL.width as usize {
-            let sum: u32 = (0..scale)
-                .flat_map(|dy| {
-                    let row = (y * scale + dy) * width + x * scale;
-                    alpha[row..row + scale].iter().map(|a| u32::from(*a))
-                })
-                .sum();
-            let n = (scale * scale) as u32;
-            small.push(((sum + n / 2) / n) as u8);
+            let mut sums = [0u32; 4];
+            for dy in 0..scale {
+                let row = ((y * scale + dy) * width + x * scale) * 4;
+                for pixel in bgra[row..row + scale * 4].as_chunks::<4>().0 {
+                    for (sum, byte) in sums.iter_mut().zip(pixel) {
+                        *sum += u32::from(*byte);
+                    }
+                }
+            }
+            small.extend(sums.map(|sum| ((sum + n / 2) / n) as u8));
         }
     }
-    image_from(&small, color, THUMBNAIL)
+    image_from(&small, THUMBNAIL)
 }
 
-fn coverage(text: &str) -> Option<(Vec<u8>, [u8; 3])> {
-    let slide = sela::slides::Slide {
-        label: String::new(),
-        text: text.into(),
-    };
+/// One slide's preview pixels, as BGRA: the cue's fill, outline and shadow
+/// coverage layers blended in linear light over the background color, the
+/// CPU twin of the audience compositor's shader.
+fn pixels(slide: &sela::slides::Slide) -> Option<Vec<u8>> {
     let cue = sela::slides::cue(
         ContentVersion { id: 0, revision: 0 },
-        &slide,
+        slide,
+        &sela::fonts::Resolved::bundled(&slide.format),
         PREVIEW,
         RendererCapabilities {
             max_texture_dimension: 4096,
@@ -289,22 +292,29 @@ fn coverage(text: &str) -> Option<(Vec<u8>, [u8; 3])> {
         None,
     )
     .ok()?;
-    let alpha = crate::audience::text_coverage(&cue, true).ok()?;
-    let PreparedBackground::Color([r, g, b, _]) = *cue.background() else {
-        return None;
-    };
-    Some((alpha, [r, g, b]))
+    let coverage = crate::audience::text::layers(&cue).ok()?.coverage();
+    let blend = cue
+        .text()
+        .map_or(crate::audience::compositor::Blend::plain(), |text| {
+            crate::audience::compositor::Blend::from_style(&text.style())
+        });
+    match *cue.background() {
+        PreparedBackground::Color(background) => Some(crate::audience::compositor::blend_pixels(
+            background, &coverage, &blend,
+        )),
+        // Song slides are always color backgrounds today.
+        PreparedBackground::Image { .. } => None,
+    }
 }
 
-/// White text over the cue background color, as BGRA.
-fn image_from(alpha: &[u8], [r, g, b]: [u8; 3], extent: Extent) -> Option<Arc<RenderImage>> {
-    let mut bgra = Vec::with_capacity(alpha.len() * 4);
-    for a in alpha {
-        let a = u32::from(*a);
-        let mix = |c: u8| ((u32::from(c) * (255 - a) + 255 * a + 127) / 255) as u8;
-        bgra.extend([mix(b), mix(g), mix(r), 255]);
-    }
-    let buffer = image::RgbaImage::from_raw(extent.width, extent.height, bgra)?;
+/// Preview and thumbnail cache key: two slides with the same text but
+/// different formats render differently.
+fn slide_key(slide: &sela::slides::Slide) -> (String, sela::format::SlideFormat) {
+    (slide.text.clone(), slide.format.clone())
+}
+
+fn image_from(bgra: &[u8], extent: Extent) -> Option<Arc<RenderImage>> {
+    let buffer = image::RgbaImage::from_raw(extent.width, extent.height, bgra.to_vec())?;
     Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])))
 }
 
@@ -314,6 +324,13 @@ enum Nav {
     Down,
     Enter,
     Back,
+}
+
+/// One finished preview: the slide it rendered (text + format key) and its
+/// raster, `None` when the audience would reject the slide.
+struct Preview {
+    key: (String, sela::format::SlideFormat),
+    image: Option<Arc<RenderImage>>,
 }
 
 struct Library {
@@ -346,13 +363,13 @@ struct Library {
     committed_close: bool,
     section_focus: [FocusHandle; 128],
     words_scroll: ScrollHandle,
-    /// Latest finished preview: its slide text and image (`None` = rejected).
-    preview: Option<(String, Option<Arc<RenderImage>>)>,
-    /// At most one raster in flight; a newer text starts when it lands.
+    /// Latest finished preview (`None` image = rejected).
+    preview: Option<Preview>,
+    /// At most one raster in flight; a newer slide starts when it lands.
     preview_task: Option<Task<()>>,
-    /// Slides-tab thumbnails by slide text (`None` = rejected), pruned to the
-    /// current slides.
-    thumbnails: HashMap<String, Option<Arc<RenderImage>>>,
+    /// Slides-tab thumbnails by slide key (text + format, `None` =
+    /// rejected), pruned to the current slides.
+    thumbnails: HashMap<(String, sela::format::SlideFormat), Option<Arc<RenderImage>>>,
     /// One thumbnail renders at a time, in slide order.
     thumbnail_task: Option<Task<()>>,
     title: String,
@@ -1051,35 +1068,44 @@ impl Library {
         }
     }
 
-    /// The current slide's text as the audience would show it.
-    fn preview_text(&self, cx: &App) -> Option<String> {
+    /// The current slide as the audience would show it: the caret cell's text
+    /// with the section's stored format.
+    fn preview_slide(&self, cx: &App) -> Option<sela::slides::Slide> {
         let cell = self.cells.get(self.section)?;
+        let format = self
+            .draft
+            .sections
+            .get(self.section)
+            .map_or_else(Default::default, |s| s.format.clone());
         let section = Section {
             id: SectionId(Id([0; 16])),
             label: String::new(),
             lyrics: cell[LYRICS].read(cx).text().into(),
-            format: Default::default(),
+            format,
         };
-        Some(sela::slides::section_slide(&section).text)
+        Some(sela::slides::section_slide(&section))
     }
 
     /// Latest-wins preview preparation off the UI thread.
     fn ensure_preview(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = self.preview_text(cx) else {
+        let Some(slide) = self.preview_slide(cx) else {
             return;
         };
-        if self.preview_task.is_some() || self.preview.as_ref().is_some_and(|(t, _)| *t == text) {
+        let key = slide_key(&slide);
+        if self.preview_task.is_some() || self.preview.as_ref().is_some_and(|p| p.key == key) {
             return;
         }
-        let job = text.clone();
         let raster = cx
             .background_executor()
-            .spawn(async move { render_preview(&job) });
+            .spawn(async move { render_preview(&slide) });
         self.preview_task = Some(cx.spawn(async move |this, cx| {
             let image = raster.await;
             let _ = this.update(cx, |this, cx| {
                 this.preview_task = None;
-                if let Some((_, Some(old))) = this.preview.replace((text, image)) {
+                if let Some(Preview {
+                    image: Some(old), ..
+                }) = this.preview.replace(Preview { key, image })
+                {
                     cx.drop_image(old, None);
                 }
                 cx.notify();
@@ -1088,21 +1114,21 @@ impl Library {
     }
 
     /// Fills the Slides-tab thumbnail cache off the UI thread, one slide at a
-    /// time, and drops thumbnails whose text no longer appears in the draft.
+    /// time, and drops thumbnails whose key no longer appears in the draft.
     fn ensure_thumbnails(&mut self, cx: &mut Context<Self>) {
         if self.thumbnails.is_empty() && (!self.slides || self.locked()) {
             return;
         }
-        let texts: Vec<String> = self
+        let keys: Vec<_> = self
             .draft
             .sections
             .iter()
-            .map(|s| sela::slides::section_slide(s).text)
+            .map(|s| slide_key(&sela::slides::section_slide(s)))
             .collect();
-        let stale: Vec<String> = self
+        let stale: Vec<_> = self
             .thumbnails
             .keys()
-            .filter(|k| !texts.contains(k))
+            .filter(|k| !keys.contains(k))
             .cloned()
             .collect();
         for key in stale {
@@ -1113,18 +1139,24 @@ impl Library {
         if !self.slides || self.locked() || self.thumbnail_task.is_some() {
             return;
         }
-        let Some(text) = texts.into_iter().find(|t| !self.thumbnails.contains_key(t)) else {
+        let Some(slide) = self
+            .draft
+            .sections
+            .iter()
+            .map(sela::slides::section_slide)
+            .find(|slide| !self.thumbnails.contains_key(&slide_key(slide)))
+        else {
             return;
         };
-        let job = text.clone();
+        let key = slide_key(&slide);
         let raster = cx
             .background_executor()
-            .spawn(async move { render_thumbnail(&job) });
+            .spawn(async move { render_thumbnail(&slide) });
         self.thumbnail_task = Some(cx.spawn(async move |this, cx| {
             let image = raster.await;
             let _ = this.update(cx, |this, cx| {
                 this.thumbnail_task = None;
-                if let Some(Some(old)) = this.thumbnails.insert(text, image) {
+                if let Some(Some(old)) = this.thumbnails.insert(key, image) {
                     cx.drop_image(old, None);
                 }
                 cx.notify();
@@ -1139,7 +1171,7 @@ impl Library {
         let kind = kind(&section.label);
         let thumbnail = self
             .thumbnails
-            .get(&sela::slides::section_slide(section).text);
+            .get(&slide_key(&sela::slides::section_slide(section)));
         div()
             .id(("draft-section", index))
             .track_focus(&self.section_focus[index])
@@ -1440,12 +1472,9 @@ impl Render for Library {
             .map(|c| c[LABEL].read(cx).text().to_owned())
             .collect();
         let groups = groups(labels.iter().map(String::as_str));
-        let empty = self.preview_text(cx).is_some_and(|t| t.is_empty());
-        let rejected = self
-            .preview
-            .as_ref()
-            .is_some_and(|(_, image)| image.is_none());
-        let image = self.preview.as_ref().and_then(|(_, image)| image.clone());
+        let empty = self.preview_slide(cx).is_some_and(|s| s.text.is_empty());
+        let rejected = self.preview.as_ref().is_some_and(|p| p.image.is_none());
+        let image = self.preview.as_ref().and_then(|p| p.image.clone());
         div()
             .key_context("Sela SongLibrary")
             .track_focus(&self.focus)
@@ -2244,23 +2273,47 @@ mod tests {
         assert!(groups([]).is_empty());
     }
 
+    fn slide(text: &str) -> sela::slides::Slide {
+        sela::slides::Slide {
+            label: String::new(),
+            text: text.into(),
+            format: Default::default(),
+        }
+    }
+
     #[test]
     fn preview_matches_audience_raster_and_rejects_unshowable_text() {
-        let ink = |image: &RenderImage| {
+        let ink = |image: &RenderImage, channel: usize| {
             image
                 .as_bytes(0)
                 .unwrap()
                 .chunks(4)
-                .filter(|p| p[0] > 128)
+                .filter(|p| p[channel] > 128)
                 .count()
         };
-        let blank = render_preview("").unwrap();
-        assert_eq!(ink(&blank), 0);
-        let text = render_preview("Amazing grace\nhow sweet").unwrap();
+        let blank = render_preview(&slide("")).unwrap();
+        assert_eq!(ink(&blank, 0), 0);
+        let text = render_preview(&slide("Amazing grace\nhow sweet")).unwrap();
         let size = text.size(0);
         assert_eq!((size.width.0, size.height.0), (1280, 720));
-        assert!(ink(&text) > 1000);
-        assert!(render_preview("\u{e000}").is_none(), "missing glyph");
+        assert!(ink(&text, 0) > 1000);
+        // Styled previews blend the format's color: yellow text has green
+        // and red ink but no blue.
+        let styled = sela::slides::Slide {
+            format: sela::format::SlideFormat {
+                bold: Some(true),
+                color: Some([255, 255, 0]),
+                ..Default::default()
+            },
+            ..slide("Amazing grace\nhow sweet")
+        };
+        let yellow = render_preview(&styled).unwrap();
+        assert_eq!(ink(&yellow, 0), 0, "yellow fill has no blue");
+        assert!(ink(&yellow, 1) > 1000, "yellow fill has green");
+        assert!(
+            render_preview(&slide("\u{e000}")).is_none(),
+            "missing glyph"
+        );
     }
 
     #[gpui::test]
@@ -2275,7 +2328,7 @@ mod tests {
         assert!(view.read_with(&cx, |v, _| {
             v.preview
                 .as_ref()
-                .is_some_and(|(t, i)| t.is_empty() && i.is_some())
+                .is_some_and(|p| p.key.0.is_empty() && p.image.is_some())
         }));
         caret(&mut cx, &view, 0, LYRICS, 0);
         cx.update(|_, cx| view.update(cx, |v, cx| v.ensure_preview(cx)));
@@ -2284,22 +2337,22 @@ mod tests {
             v.preview_task.is_none()
                 && v.preview
                     .as_ref()
-                    .is_some_and(|(t, i)| t == "First slide" && i.is_some())
+                    .is_some_and(|p| p.key.0 == "First slide" && p.image.is_some())
         }));
         type_cell(&mut cx, &view, 0, LYRICS, "\u{e000}");
         cx.update(|_, cx| view.update(cx, |v, cx| v.ensure_preview(cx)));
         cx.run_until_parked();
         assert!(view.read_with(&cx, |v, _| {
-            v.preview.as_ref().is_some_and(|(_, i)| i.is_none())
+            v.preview.as_ref().is_some_and(|p| p.image.is_none())
         }));
     }
 
     #[test]
     fn thumbnail_is_the_preview_box_filtered() {
-        let text = "Amazing grace\nhow sweet the sound";
+        let text = slide("Amazing grace\nhow sweet the sound");
         let (full, small) = (
-            render_preview(text).unwrap(),
-            render_thumbnail(text).unwrap(),
+            render_preview(&text).unwrap(),
+            render_thumbnail(&text).unwrap(),
         );
         let size = small.size(0);
         assert_eq!((size.width.0, size.height.0), (320, 180));
@@ -2314,7 +2367,7 @@ mod tests {
         let (full, small) = (sum(&full), sum(&small) * 16);
         assert!(small > 0);
         assert!(full.abs_diff(small) * 200 < full, "{full} vs {small}");
-        assert!(render_thumbnail("\u{e000}").is_none());
+        assert!(render_thumbnail(&slide("\u{e000}")).is_none());
     }
 
     #[gpui::test]
@@ -2335,7 +2388,7 @@ mod tests {
                 let mut keys: Vec<_> = v
                     .thumbnails
                     .iter()
-                    .map(|(k, i)| (k.clone(), i.is_some()))
+                    .map(|(k, i)| (k.0.clone(), i.is_some()))
                     .collect();
                 keys.sort();
                 keys

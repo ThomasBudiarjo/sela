@@ -1,10 +1,16 @@
 //! Owned editable inputs and immutable, resolved scene snapshots. No GPUI types.
+use crate::format::{
+    Align, MAX_OPACITY, MAX_OUTLINE_SIZE, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET, VAlign,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
     io::{Cursor, Read},
     path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 pub const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
@@ -48,6 +54,87 @@ pub struct TextSpec {
     pub font_size: u16,
 }
 
+/// Resolved per-slide text style (M1-05g2). Values are Sela's units on the
+/// 1080-line reference canvas, not observed EasyWorship ranges; the raster
+/// scales them to its own extent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextStyle {
+    pub color: [u8; 3],
+    pub align: Align,
+    pub valign: VAlign,
+    pub underline: bool,
+    /// The format wants italic; `synth_italic` means no italic face exists,
+    /// so the slant is synthesized at raster time.
+    pub italic: bool,
+    pub synth_bold: bool,
+    pub synth_italic: bool,
+    pub outline: Option<OutlineStyle>,
+    pub shadow: Option<ShadowStyle>,
+}
+
+impl Default for TextStyle {
+    /// Today's look: white, centered both ways, no decoration or effects.
+    fn default() -> Self {
+        Self {
+            color: [255, 255, 255],
+            align: Align::Center,
+            valign: VAlign::Middle,
+            underline: false,
+            italic: false,
+            synth_bold: false,
+            synth_italic: false,
+            outline: None,
+            shadow: None,
+        }
+    }
+}
+
+impl TextStyle {
+    /// Same bounds as `format::SlideFormat`, so a valid format resolves to a
+    /// valid style and the wire never widens them.
+    pub fn is_valid(&self) -> bool {
+        self.outline
+            .is_none_or(|o| (1..=MAX_OUTLINE_SIZE).contains(&o.size) && o.opacity <= MAX_OPACITY)
+            && self.shadow.is_none_or(|s| {
+                s.angle < 360
+                    && s.offset <= MAX_SHADOW_OFFSET
+                    && s.blur <= MAX_SHADOW_BLUR
+                    && s.opacity <= MAX_OPACITY
+            })
+    }
+}
+
+/// EW outline type None/Outer with round join; Center and Inner are open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OutlineStyle {
+    pub color: [u8; 3],
+    /// Reference-canvas points; dilation radius at 1080 lines.
+    pub size: u8,
+    pub opacity: u8,
+}
+
+/// EW shadow with the observed dial convention (315 = down-right).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShadowStyle {
+    pub color: [u8; 3],
+    pub angle: u16,
+    pub offset: u8,
+    pub blur: u8,
+    pub opacity: u8,
+}
+
+/// Owned text as the cue carries it: content, face, pixel size and style.
+#[derive(Clone)]
+pub struct OwnedText {
+    pub content: String,
+    pub font_version: ContentVersion,
+    pub font: Arc<[u8]>,
+    /// Face within a collection; validated by parsing, not a wire range.
+    pub face_index: u32,
+    pub font_size: u16,
+    pub style: TextStyle,
+}
+
 /// Editing/selection owns this value. Submit a clone to freeze that revision.
 #[derive(Clone)]
 pub struct SceneSpec {
@@ -71,8 +158,10 @@ pub enum PreparedBackground {
 pub struct PreparedText {
     content: String,
     font_version: ContentVersion,
-    font: Box<[u8]>,
+    font: Arc<[u8]>,
+    face_index: u32,
     font_size: u16,
+    style: TextStyle,
 }
 
 impl PreparedText {
@@ -85,8 +174,14 @@ impl PreparedText {
     pub fn font_version(&self) -> ContentVersion {
         self.font_version
     }
+    pub fn face_index(&self) -> u32 {
+        self.face_index
+    }
     pub fn font_size(&self) -> u16 {
         self.font_size
+    }
+    pub fn style(&self) -> TextStyle {
+        self.style
     }
 }
 
@@ -105,7 +200,7 @@ impl PreparedCue {
         version: ContentVersion,
         extent: Extent,
         background: PreparedBackground,
-        text: Option<(String, ContentVersion, Box<[u8]>, u16)>,
+        text: Option<OwnedText>,
         caps: RendererCapabilities,
     ) -> Result<Self, PrepareError> {
         check_extent(extent, caps)?;
@@ -125,20 +220,28 @@ impl PreparedCue {
             PreparedBackground::Color(_) => {}
         }
         let text = text
-            .map(|(content, font_version, font, font_size)| {
-                if content.is_empty() || font_size == 0 || font_size > 512 {
+            .map(|text| {
+                if text.content.is_empty()
+                    || text.font_size == 0
+                    || text.font_size > 512
+                    || !text.style.is_valid()
+                {
                     return Err(PrepareError::InvalidScene);
                 }
-                if content.len() > MAX_TEXT_BYTES || font.len() > MAX_SOURCE_BYTES {
+                if text.content.len() > MAX_TEXT_BYTES || text.font.len() > MAX_SOURCE_BYTES {
                     return Err(PrepareError::TooLarge);
                 }
-                ttf_parser::Face::parse(&font, 0).map_err(|_| PrepareError::InvalidFont)?;
-                bytes += content.len() + font.len();
+                // Also validates the face index against the collection.
+                ttf_parser::Face::parse(&text.font, text.face_index)
+                    .map_err(|_| PrepareError::InvalidFont)?;
+                bytes += text.content.len() + text.font.len();
                 Ok(PreparedText {
-                    content,
-                    font_version,
-                    font,
-                    font_size,
+                    content: text.content,
+                    font_version: text.font_version,
+                    font: text.font,
+                    face_index: text.face_index,
+                    font_size: text.font_size,
+                    style: text.style,
                 })
             })
             .transpose()?;
@@ -318,11 +421,15 @@ pub(crate) fn prepare(
         .map(|text| {
             let font = read_resource(&text.font, cancel)?;
             ttf_parser::Face::parse(&font, 0).map_err(|_| PrepareError::InvalidFont)?;
-            Ok(PreparedText {
+            Ok(OwnedText {
                 content: text.content,
                 font_version: text.font.version,
-                font: font.into_boxed_slice(),
+                font: font.into(),
+                face_index: 0,
                 font_size: text.font_size,
+                // The spec path resolves the default look; styled cues are
+                // built by `slides::cue` with a resolved face.
+                style: TextStyle::default(),
             })
         })
         .transpose()?;
@@ -375,11 +482,6 @@ pub(crate) fn prepare(
         }
     };
     cancelled(cancel)?;
-    Ok(PreparedCue {
-        version: spec.version,
-        extent: spec.extent,
-        background,
-        text,
-        bytes,
-    })
+    // Same revalidation an owned transport snapshot gets on a worker.
+    PreparedCue::from_owned(spec.version, spec.extent, background, text, caps)
 }

@@ -10,7 +10,7 @@ pub mod text;
 use sela::{
     delivery::{Command, DeliveryError, Epoch, Lane, Outcome, Payload, RendererSession, Stamp},
     masks::Layer,
-    scene::{Extent, PreparedBackground, PreparedCue, RendererCapabilities},
+    scene::{Extent, PreparedBackground, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
 use std::{
@@ -51,7 +51,6 @@ pub struct Config {
     pub lifetime: Option<Duration>,
     /// Send `Frame::surface` after Ready and whenever the surface extent changes.
     pub report_surface: bool,
-    pub centered_text: bool,
     /// Keep presenting the applied scene after the controller's pipes fail.
     /// New commands are never admitted or presented once detached.
     pub retain_on_disconnect: bool,
@@ -222,51 +221,26 @@ fn draw<'a>(
         Shown::Keep => return None,
     })
 }
-/// White-text coverage over the cue's full extent. Same 32px inset, explicit
-/// font and no-wrap policy as composition_spike; the song editor preview
-/// shares it so authoring shows the audience layout. Preparation only.
-pub fn text_coverage(cue: &PreparedCue, centered: bool) -> Result<Vec<u8>, text::TextError> {
-    let size = cue.extent();
-    let mut alpha = vec![0; size.width as usize * size.height as usize];
-    if let Some(t) = cue.text() {
-        let width = size
-            .width
-            .checked_sub(64)
-            .filter(|w| *w > 0)
-            .ok_or(text::TextError::Bounds)?;
-        let height = size
-            .height
-            .checked_sub(64)
-            .filter(|h| *h > 0)
-            .ok_or(text::TextError::Bounds)?;
-        let raster = text::raster_aligned(
-            t.font(),
-            t.content(),
-            width,
-            height,
-            f32::from(t.font_size()),
-            centered,
-        )?;
-        for row in 0..height as usize {
-            let start = (row + 32) * size.width as usize + 32;
-            alpha[start..start + width as usize]
-                .copy_from_slice(&raster[row * width as usize..(row + 1) * width as usize]);
-        }
-    }
-    Ok(alpha)
-}
+/// One cue's fill, outline and shadow coverage layers, prepared on this
+/// worker. The 32 px inset, explicit font, alignment and no-wrap policy come
+/// from the cue itself; the song editor preview shares the same layers so
+/// authoring shows the audience layout. Preparation only, never a redraw.
 fn prepare_frame(
     frame: Frame,
     caps: RendererCapabilities,
     compositor: &compositor::Compositor,
-    centered: bool,
 ) -> Result<(Command, compositor::ReadyComposition), PreparationFailure> {
     let command = frame
         .into_command(Instant::now(), caps)
         .map_err(|_| PreparationFailure::Resource)?;
     let cue = command.cue().ok_or(PreparationFailure::Resource)?;
     let size = cue.extent();
-    let alpha = text_coverage(cue, centered).map_err(|_| PreparationFailure::Resource)?;
+    let coverage = text::layers(cue)
+        .map_err(|_| PreparationFailure::Resource)?
+        .coverage();
+    let blend = cue.text().map_or(compositor::Blend::plain(), |text| {
+        compositor::Blend::from_style(&text.style())
+    });
     let background = match cue.background() {
         PreparedBackground::Color(rgba) => compositor::Image {
             width: 1,
@@ -283,7 +257,8 @@ fn prepare_frame(
         .prepare_native(
             size,
             background,
-            &alpha,
+            &coverage,
+            &blend,
             match cue.background() {
                 PreparedBackground::Color(_) => compositor::Fit::Cover,
                 PreparedBackground::Image { .. } => compositor::Fit::Contain,
@@ -458,7 +433,6 @@ impl ApplicationHandler for Audience {
         let (jobs, work) = mpsc::sync_channel::<Frame>(1);
         let (results, completions) = mpsc::sync_channel(1);
         let worker = compositor.clone();
-        let centered = self.config.centered_text;
         let spawned = std::thread::Builder::new()
             .name("audience-prepare".into())
             .spawn(move || {
@@ -473,7 +447,6 @@ impl ApplicationHandler for Audience {
                             max_texture_dimension: max,
                         },
                         &worker,
-                        centered,
                     );
                     let fatal = matches!(result, Err(PreparationFailure::Upload));
                     if results
@@ -935,6 +908,38 @@ mod tests {
             "WWWW MMMM\n".repeat(31) + "WWWW MMMM",
             "Café a\u{301} déjà vu — \u{201c}quoted\u{201d}".to_string(),
         ];
+        let mut formats = Vec::new();
+        for bold in [None, Some(false), Some(true)] {
+            for italic in [None, Some(false), Some(true)] {
+                formats.push(sela::format::SlideFormat {
+                    bold,
+                    italic,
+                    underline: Some(bold == Some(true)),
+                    ..sela::format::SlideFormat::default()
+                });
+            }
+        }
+        formats.push(sela::format::SlideFormat {
+            bold: Some(true),
+            italic: Some(true),
+            underline: Some(true),
+            color: Some([255, 255, 0]),
+            outline: Some(sela::format::Outline {
+                enabled: true,
+                color: [0, 0, 0],
+                size: 4,
+                opacity: 100,
+            }),
+            shadow: Some(sela::format::Shadow {
+                enabled: true,
+                color: [0, 0, 0],
+                angle: 315,
+                offset: 12,
+                blur: 8,
+                opacity: 100,
+            }),
+            ..sela::format::SlideFormat::default()
+        });
         for (width, height) in [
             (640, 360),
             (1280, 720),
@@ -944,22 +949,19 @@ mod tests {
         ] {
             let extent = Extent { width, height };
             for text in &texts {
-                let slide = sela::slides::Slide {
-                    label: String::new(),
-                    text: text.clone(),
-                };
-                let version = ContentVersion { id: 1, revision: 1 };
-                let cue = sela::slides::cue(version, &slide, extent, caps, None).unwrap();
-                let t = cue.text().unwrap();
-                text::raster_aligned(
-                    t.font(),
-                    t.content(),
-                    width - 64,
-                    height - 64,
-                    f32::from(t.font_size()),
-                    true,
-                )
-                .unwrap_or_else(|e| panic!("{width}x{height} {text:?}: {e:?}"));
+                for format in &formats {
+                    let slide = sela::slides::Slide {
+                        label: String::new(),
+                        text: text.clone(),
+                        format: format.clone(),
+                    };
+                    let version = ContentVersion { id: 1, revision: 1 };
+                    let resolved = sela::fonts::Resolved::bundled(&slide.format);
+                    let cue =
+                        sela::slides::cue(version, &slide, &resolved, extent, caps, None).unwrap();
+                    text::layers(&cue)
+                        .unwrap_or_else(|e| panic!("{width}x{height} {text:?}: {e:?}"));
+                }
             }
         }
     }
@@ -983,22 +985,16 @@ mod tests {
                 let slide = sela::slides::Slide {
                     label: String::new(),
                     text: text.into(),
+                    format: sela::format::SlideFormat::default(),
                 };
                 let version = ContentVersion { id: 1, revision: 1 };
-                let cue = sela::slides::cue(version, &slide, extent, caps, None).unwrap();
-                let t = cue.text().unwrap();
+                let resolved = sela::fonts::Resolved::bundled(&slide.format);
+                let cue =
+                    sela::slides::cue(version, &slide, &resolved, extent, caps, None).unwrap();
                 let mut runs: Vec<Duration> = (0..20)
                     .map(|_| {
                         let start = Instant::now();
-                        text::raster_aligned(
-                            t.font(),
-                            t.content(),
-                            width - 64,
-                            height - 64,
-                            f32::from(t.font_size()),
-                            true,
-                        )
-                        .unwrap();
+                        text::layers(&cue).unwrap();
                         start.elapsed()
                     })
                     .collect();
@@ -1006,7 +1002,7 @@ mod tests {
                 println!(
                     "{width}x{height} {} lines {}px: p50 {:.1} ms, max {:.1} ms",
                     text.lines().count(),
-                    t.font_size(),
+                    cue.text().unwrap().font_size(),
                     runs[10].as_secs_f64() * 1e3,
                     runs[19].as_secs_f64() * 1e3,
                 );

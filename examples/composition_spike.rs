@@ -1,7 +1,10 @@
 //! Static composition/readback diagnostic, not the native live renderer.
+// Diagnostic subset of the shared modules; the library checks the rest.
 #[path = "../src/audience/compositor.rs"]
+#[allow(dead_code)]
 mod gpu;
 #[path = "../src/audience/text.rs"]
+#[allow(dead_code)]
 mod text;
 
 use image::ImageEncoder;
@@ -59,8 +62,9 @@ fn mask(cue: Arc<PreparedCue>) -> Result<Vec<u8>> {
         .name("sela-raster".into())
         .spawn(move || {
             let text = cue.text().expect("diagnostic fixture has explicit text");
-            text::raster(
+            text::fill(
                 text.font(),
+                text.face_index(),
                 text.content(),
                 SIZE.width - 2 * MARGIN,
                 SIZE.height - 2 * MARGIN,
@@ -133,6 +137,8 @@ fn main() -> Result<()> {
     if !alpha.contains(&255) || !alpha.iter().any(|a| *a > 0 && *a < 255) {
         return Err("font fixture lacks opaque and antialiased ink".into());
     }
+    // Fill-only coverage (red channel) with the plain white blend.
+    let coverage: Vec<u8> = alpha.iter().flat_map(|a| [*a, 0, 0, 255]).collect();
     println!(
         "prepare_and_raster_ms={:.3}",
         start.elapsed().as_secs_f64() * 1000.
@@ -159,17 +165,23 @@ fn main() -> Result<()> {
             },
         };
         let start = Instant::now();
-        let pixels = compositor.render(cue.extent(), image, &alpha, fit)?;
+        let pixels =
+            compositor.render(cue.extent(), image, &coverage, &gpu::Blend::plain(), fit)?;
         println!(
             "{name}_compose_readback_ms={:.3}",
             start.elapsed().as_secs_f64() * 1000.
         );
-        for (pixel, coverage) in pixels.as_chunks::<4>().0.iter().zip(&alpha) {
-            if pixel[3] != 255 || (*coverage == 255 && *pixel != [255; 4]) {
+        for (pixel, coverage) in pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(coverage.as_chunks::<4>().0)
+        {
+            if pixel[3] != 255 || (coverage[0] == 255 && *pixel != [255; 4]) {
                 return Err("actual font mask was not composed as opaque white".into());
             }
             if name == "color"
-                && *coverage == 0
+                && coverage[0] == 0
                 && pixel.iter().zip(COLOR).any(|(a, b)| a.abs_diff(b) > 1)
             {
                 return Err("uncovered color pixels changed".into());
@@ -185,7 +197,7 @@ fn main() -> Result<()> {
     }
     // Rejected layout produces no upload/presentation. This is a CPU rejection
     // check, not a claim of native live-state or reference restoration semantics.
-    if text::raster(FONT, "Overflow fixture", 20, 100, 40.) != Err(text::TextError::Overflow) {
+    if text::fill(FONT, 0, "Overflow fixture", 20, 100, 40.) != Err(text::TextError::Overflow) {
         return Err("overflow fixture was silently clipped".into());
     }
     println!("PASS: GPU pixel checks; actual-font color/contain/cover; overflow rejected");

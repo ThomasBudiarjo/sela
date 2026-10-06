@@ -19,7 +19,7 @@ pub const MAX_ENCODED: usize = 256;
 const CODEC: u8 = 1;
 const FIELDS: u16 = 10;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Size {
     /// EW "Resize text to fit element".
     Auto,
@@ -27,14 +27,14 @@ pub enum Size {
     Fixed(u16),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Align {
     Left,
     Center,
     Right,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum VAlign {
     Top,
     Middle,
@@ -42,7 +42,7 @@ pub enum VAlign {
 }
 
 /// EW outline type None/Outer; Center and Inner are not supported yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct Outline {
     pub enabled: bool,
     pub color: [u8; 3],
@@ -50,7 +50,7 @@ pub struct Outline {
     pub opacity: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct Shadow {
     pub enabled: bool,
     pub color: [u8; 3],
@@ -61,7 +61,7 @@ pub struct Shadow {
     pub opacity: u8,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct SlideFormat {
     pub font: Option<String>,
     pub bold: Option<bool>,

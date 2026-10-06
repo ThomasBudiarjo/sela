@@ -1,9 +1,12 @@
 //! Opt-in FFmpeg / offscreen Vulkan integration; no native playback claims.
 #[path = "video/decoder.rs"]
 mod decoder;
+// Diagnostic subset of the shared modules; the library checks the rest.
 #[path = "../src/audience/compositor.rs"]
+#[allow(dead_code)]
 mod gpu;
 #[path = "../src/audience/text.rs"]
+#[allow(dead_code)]
 mod text;
 use sela::scene::Extent;
 use std::{
@@ -125,8 +128,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         ])
         .arg(&video);
     encode(&mut encoder, Duration::from_secs(10))?;
-    let alpha = text::raster(
+    let alpha = text::fill(
         include_bytes!("../tests/fixtures/DejaVuSans.ttf"),
+        0,
         "Video · Café",
         W,
         H,
@@ -134,6 +138,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     )
     .map_err(|e| format!("{e:?}"))?;
     assert!(alpha.contains(&255));
+    // Fill-only coverage (red channel) with the plain white blend.
+    let coverage: Vec<u8> = alpha.iter().flat_map(|a| [*a, 0, 0, 255]).collect();
     let gpu = gpu::Compositor::new(backend)?;
     println!("adapter={:?}", gpu.adapter_info());
     gpu.check_readback()?;
@@ -177,7 +183,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 height: H,
                 rgba: &frame.rgba,
             },
-            &alpha,
+            &coverage,
+            &gpu::Blend::plain(),
             gpu::Fit::Cover,
         )?;
         for ((p, s), a) in accepted

@@ -6,7 +6,7 @@ use gpui::{
 };
 use sela::{
     delivery::{Epoch, LiveState},
-    images,
+    fonts, images,
     masks::{Layer, Mask, Masks},
     output::{Launch, Refusal, Status, Supervisor},
     preparation::{PreparationEvent, Preparer},
@@ -1163,15 +1163,22 @@ impl Operator {
         else {
             return;
         };
+        // Bundled-face resolution is pure; installed-family catalog resolution
+        // and its loading gate are a separate slice.
+        let resolved: Vec<_> = item
+            .slides
+            .iter()
+            .map(|slide| fonts::Resolved::bundled(&slide.format))
+            .collect();
         let cap = match self.size_cap {
             Some((v, e, s, cap)) if (v, e, s) == (item.version, extent, self.sizing) => cap,
             _ => {
-                let cap = slides::size_cap(&item.slides, extent, self.sizing);
+                let cap = slides::size_cap(&item.slides, &resolved, extent, self.sizing);
                 self.size_cap = Some((item.version, extent, self.sizing, cap));
                 cap
             }
         };
-        let result = slides::cue(version, slide, extent, caps, cap)
+        let result = slides::cue(version, slide, &resolved[index], extent, caps, cap)
             .map_err(|error| error.to_string())
             .and_then(|cue| {
                 output
