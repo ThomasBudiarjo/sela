@@ -437,6 +437,7 @@ fn library_with_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
         id: SectionId::allocate(),
         label: label.into(),
         lyrics: lyrics.into(),
+        format: Default::default(),
     };
     repository
         .save_song(
@@ -968,6 +969,7 @@ fn library_with_songs(dir: &tempfile::TempDir) -> std::path::PathBuf {
                     id: SectionId::allocate(),
                     label: "Verse 1".into(),
                     lyrics: "Quiet original line".into(),
+                    format: Default::default(),
                 }],
             },
         )

@@ -527,9 +527,20 @@ Follow-ups:
 - M1-05g Song text formatting (font, auto/fixed size, color, B/I/U,
   shadow, outline, alignment). Observed in RUN-W06G (EW8-OBS-027–033): Format
   inspector Text › Style/Layout controls, theme defaults, and **per-slide**
-  scope in 8.0.49 (an "apply to all slides" path was not observed). Schema
-  change with a verified backup. Planned; scope (per slide as observed, or per
-  song first) needs the owner's decision.
+  scope in 8.0.49 (an "apply to all slides" path was not observed). Owner
+  decision 2026-10-06: per slide; Ctrl+A selects all slides so one change
+  formats the whole song, and typing then replaces the whole text like EW
+  (owner-reported, unobserved). **Active**, three slices:
+  - [x] g1 per-slide `SlideFormat` model and schema 3 with a verified backup
+    (implemented-unqualified, see [storage](storage.md)).
+  - [ ] g2 rendering: cue/wire format, installed fonts and real B/I faces,
+    underline, color, alignment, Outer outline, shadow, fixed size; editor
+    preview and thumbnails on the same path; DX12 native check.
+  - [ ] g3 Song Editor Format pane (Text › Style subset), per-slide apply,
+    Ctrl+A whole-song selection, undo, GPUI tests and native script.
+  - Deferred (record as tickets when g3 lands): superscript/subscript, indent,
+    bullets, margins, capitalization, word wrap, rotation, Center/Inner
+    outline, Style tab (fill/border/reflection), Arrange.
 - M1-05h Per-song background (color or Media image) saved with the revision.
   Planned.
 - M1-05i Library right-click New Song…/Edit Song…/Delete in the operator

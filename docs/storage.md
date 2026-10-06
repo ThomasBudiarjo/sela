@@ -46,14 +46,15 @@ neither paths nor SQLite messages nor lyric payloads; don't log Commands/Replies
 
 ## Schema and durable meaning
 
-Current schema 2 uses `application_id=0x53454c41`, `user_version=2`, foreign keys on,
+Current schema 3 uses `application_id=0x53454c41`, `user_version=3`, foreign keys on,
 default rollback journal and synchronous FULL. `songs` tracks head/tombstone;
 `song_revisions` stores immutable original UTF-8 payloads. Encoding is repeated
 little-endian u32 byte-length + UTF-8: title, authors, copyright, license, then
 label/lyrics pairs until EOF. No normalization, line-break conversion, splitting,
 wrapping or provider assumptions. Empty sections and zero sections are preserved;
 blank title is invalid. The original schema-1 text codec remains unchanged in
-schema 2; explicit identities and arrangements live in revision-keyed tables.
+schemas 2 and 3; explicit identities, arrangements (schema 2) and per-slide
+formats (schema 3, `section_formats`) live in revision-keyed tables.
 
 `schedules` tracks head; `schedule_revisions` stores title; `items` records ordered
 positions and exact immutable song revisions. Repeated occurrences are retained.
@@ -65,15 +66,16 @@ No automatic garbage collection, library-refresh or cascade deletion exists.
 Snapshot occurrence identity currently is `(schedule ID, revision, position)`;
 stable cross-edit/live selection identity belongs to M1-09, not this storage slice.
 
-Fresh schema 0 initializes schema 2. Existing schema 1 upgrades only after the
-verified backup gate documented below. A schema-0 database
+Fresh schema 0 initializes schema 3. Existing schema 1 or 2 upgrades only after
+the verified backup gate documented below (`<profile>.schema1-backup` or
+`<profile>.schema2-backup`; schema 1 goes straight to 3 with one backup). A schema-0 database
 with user objects is foreign and rejected. Migration and validation share one
 transaction; failed migration drops/rolls back it. Nonmatching application IDs,
 newer/unsupported versions, SQLite quick-check/foreign-key failures and malformed
 payload reads are rejected. No reset, overwrite, rename or recovery mutation.
 Required column checks run at open; payload semantic validation runs on bounded
 reads. This is not an adversarial SQLite sandbox or exhaustive schema attestation.
-Backup verification never invokes upgrading open. Versions above 2 remain
+Backup verification never invokes upgrading open. Versions above 3 remain
 `Unsupported`; no migration resets, overwrites or replaces those profiles.
 
 ## Bounds and remaining parent work
@@ -323,3 +325,40 @@ and `cargo fmt --all -- --check`; `uvx ruff check scripts/song-library.py`,
 Python AST parse and `git diff --check` passed. Native replay is parent-owned
 and was not run on shared :99. Windows/hard-link/ACL/physical GPU, installed
 reference, real volume/power-loss failure and performance remain unqualified.
+
+## M1-05g1 — per-slide formats / backed-up schema 3
+
+State: **implemented-unqualified** (slice 1 of M1-05g; rendering and the
+editor Format pane follow). Source: EW8-OBS-028–030 and EW8-OBS-033
+(formatting is per slide in EasyWorship 8.0.49).
+
+`storage::Section` carries a `format::SlideFormat`: optional overrides for font
+family, bold, italic, underline, size (Auto or Fixed 1–288), color, horizontal
+and vertical alignment, outline (enabled, color, size 1–50, opacity 0–100) and
+shadow (enabled, color, angle 0–359, offset 0–100, blur 0–50, opacity 0–100).
+`None` keeps the default look; an explicit `enabled: false` stays distinct from
+`None`. These bounds are Sela's, not observed EW ranges.
+
+`section_formats(song, revision, position, format)` holds a row only for slides
+with a non-default format, keyed to `section_ids` by a foreign key. The blob is
+a versioned canonical codec (codec byte, presence mask, present fields; at most
+256 bytes). Reads reject unknown codecs/fields, truncation, trailing bytes,
+out-of-range values, a stored default and rows past the revision's slides as
+`Corrupt`; nothing is silently dropped. Saving writes the rows in the same
+IMMEDIATE transaction as the revision; old revisions keep their formats.
+
+Opening schema 2 publishes the verified `<profile>.schema2-backup` (schema 2,
+checked with migration disabled) before the DDL, then creates the table and
+sets `user_version=3` in one transaction. Schema 1 migrates to 3 in one
+transaction behind its existing single backup. Backup conflict, writer lock,
+DDL conflict and process abort after the DDL (`SELA_ABORT_MIGRATION_SCHEMA3`
+test hook) leave the profile at schema 2 with identical bytes. RestoreNew
+preserves schema 1, 2 or 3.
+
+Tests: `format::tests::*` (round trip per field, strict decode, bounds) and
+storage `schema2_migrates_with_a_verified_backup_and_keeps_ids`,
+`schema2_migration_gates_leave_the_library_unchanged`,
+`schema2_migration_abort_keeps_schema2_and_the_verified_backup`,
+`slide_formats_round_trip_per_revision_and_default_stores_nothing`,
+`invalid_or_corrupt_formats_are_rejected_not_dropped`; the schema 1 migration
+test now also checks the live profile reaches schema 3 with one backup.

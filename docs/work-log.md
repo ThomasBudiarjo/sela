@@ -6,6 +6,12 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Per-slide formats stored (M1-05g1, 2026-10-06):** M1-05g is **active**.
+  Slice 1 adds `format::SlideFormat` on every `storage::Section` and schema 3
+  (`section_formats`) behind a verified `.schema2-backup`. Nothing renders or
+  edits formats yet. Next: slice g2 (cue/wire format and renderer: installed
+  fonts, B/I/U, color, alignment, outline, shadow, fixed size), then g3 (Format
+  pane, Ctrl+A whole song).
 - **EasyWorship Format pane observed (RUN-W06G, 2026-10-06):** the owner's
   restarted 8.0.49 accepted toolbar clicks, so the Format inspector was recorded
   (EW8-OBS-027–033, superseding unverified EW8-OBS-026): Text › Style (font,
@@ -132,7 +138,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check). M1-05g–i (formatting, background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g active (g1 per-slide format storage done, g2 rendering and g3 Format pane open). M1-05h–i (background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2365,3 +2371,36 @@ PY
 - Next: owner decides M1-05g scope (per slide as observed, or per song first
   as a recorded deviation), then implement with the schema change behind the
   verified-backup gate.
+
+### M1-05g1 — Per-slide format model and schema 3 — 2026-10-06 (UTC+7)
+
+- State: **implemented-unqualified**; M1-05g stays **active** (g2, g3 open).
+- Owner decisions: formatting is per slide (EW8-OBS-033); Ctrl+A selects all
+  slides so one change formats the whole song; typing during Ctrl+A replaces
+  the whole song text like EW (undoable). The Ctrl+A behavior is
+  owner-reported, not yet observed. Approved plan: g1 model/storage, g2
+  rendering with installed fonts, g3 Format pane.
+- `src/format.rs` (new, no GPUI): `SlideFormat` with optional font, B/I/U,
+  `Size::{Auto, Fixed}`, color, `Align`, `VAlign`, `Outline`, `Shadow`;
+  `is_valid` bounds (Sela's, not EW's); canonical versioned codec with strict
+  decode. `storage::Section.format`; `Song::validate` rejects invalid formats.
+- `src/storage.rs`: `SCHEMA3` `section_formats` (rows only for non-default
+  formats, FK to `section_ids`); fresh profiles start at 3; schema 2 migrates
+  behind a verified `.schema2-backup`, schema 1 straight to 3 behind its
+  single `.schema1-backup`; reads reject bad rows as `Corrupt`; copy/restore
+  accept schemas 1–3; unsupported-version tests moved to 4. Editor history
+  byte accounting includes font names. Other `Section` literals gained a
+  default format.
+- Tests: 3 `format::tests`, 5 new storage tests (migration, gates, abort hook
+  `SELA_ABORT_MIGRATION_SCHEMA3`, round trip per revision, invalid/corrupt
+  rows); schema 1 migration test asserts schema 3 and a single backup.
+- Checks (Windows 11): `cargo fmt --all -- --check`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` (lib 90, bin 61 + 2 ignored, other
+  suites pass), `cargo build --locked`.
+- Not run: native scripts (no UI or renderer change in this slice), migration
+  of a real owner profile (none exists outside tests), Linux/macOS.
+- Next: g2. Extend `PreparedText`/transport with the resolved format, load
+  installed fonts off the UI thread with bounds, render fill/outline/shadow
+  masks and blend them with colors in the compositor, and move the editor
+  preview/thumbnails to the same path.

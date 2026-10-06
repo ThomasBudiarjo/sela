@@ -78,6 +78,7 @@ fn blank() -> Song {
             id: SectionId::allocate(),
             label: String::new(),
             lyrics: String::new(),
+            format: Default::default(),
         }],
     }
 }
@@ -129,7 +130,12 @@ impl Document {
                 .song
                 .sections
                 .iter()
-                .map(|s| std::mem::size_of::<Section>() + s.label.len() + s.lyrics.len())
+                .map(|s| {
+                    std::mem::size_of::<Section>()
+                        + s.label.len()
+                        + s.lyrics.len()
+                        + s.format.font.as_ref().map_or(0, String::len)
+                })
                 .sum::<usize>()
     }
 }
@@ -833,6 +839,7 @@ impl Library {
                 id: SectionId::allocate(),
                 label: String::new(),
                 lyrics: String::new(),
+                format: Default::default(),
             });
             section = candidate.sections.len() - 1;
         } else {
@@ -892,6 +899,7 @@ impl Library {
             id: SectionId::allocate(),
             label: String::new(),
             lyrics: tail.into(),
+            format: Default::default(),
         };
         let mut candidate = song.clone();
         candidate.sections[index].lyrics = head.into();
@@ -1050,6 +1058,7 @@ impl Library {
             id: SectionId(Id([0; 16])),
             label: String::new(),
             lyrics: cell[LYRICS].read(cx).text().into(),
+            format: Default::default(),
         };
         Some(sela::slides::section_slide(&section).text)
     }
@@ -1969,6 +1978,7 @@ mod tests {
             id: SectionId::allocate(),
             label: original.sections[0].label.clone(),
             lyrics: "Chorus asymmetric\r\n".into(),
+            format: Default::default(),
         });
         original.variants = vec![Variant {
             id: VariantId(Id([5; 16])),
@@ -2043,6 +2053,7 @@ mod tests {
             id: SectionId::allocate(),
             label: "Chorus".into(),
             lyrics: "Refrain".into(),
+            format: Default::default(),
         });
         let (verse, chorus) = (original.sections[0].id, original.sections[1].id);
         original.variants = vec![Variant {
@@ -2152,6 +2163,7 @@ mod tests {
                         id: SectionId::allocate(),
                         label: "Filler".into(),
                         lyrics: String::new(),
+                        format: Default::default(),
                     });
                 }
                 v.begin(full, None, cx);
@@ -2756,6 +2768,7 @@ mod tests {
                 id: SectionId::allocate(),
                 label: n.to_string(),
                 lyrics: format!("unique {n}"),
+                format: Default::default(),
             })
             .collect();
         cx.update(|_, cx| view.update(cx, |v, cx| v.begin(many.clone(), None, cx)));
@@ -2797,12 +2810,14 @@ mod tests {
                 Section {
                     id: saved.sections[0].id,
                     label: String::new(),
-                    lyrics: "First\r\nline e\u{301}\n".into()
+                    lyrics: "First\r\nline e\u{301}\n".into(),
+                    format: Default::default(),
                 },
                 Section {
                     id: saved.sections[1].id,
                     label: "Chorus".into(),
-                    lyrics: "Different second section".into()
+                    lyrics: "Different second section".into(),
+                    format: Default::default(),
                 },
             ]
         );

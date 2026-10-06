@@ -2,6 +2,7 @@
 use crate::arrangement::{
     Arrangement, Occurrence, OccurrenceId, SectionId, SourceSnapshot, Variant, VariantId,
 };
+use crate::format::SlideFormat;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{
     path::PathBuf,
@@ -28,6 +29,8 @@ pub struct Section {
     pub id: SectionId,
     pub label: String,
     pub lyrics: String,
+    /// The slide's formatting overrides (schema 3); default before that.
+    pub format: SlideFormat,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Song {
@@ -122,6 +125,7 @@ impl Song {
                 .any(|s| !text_ok(s, 4096))
             || self.sections.len() > 128
             || self.sections.iter().any(|s| s.label.len() > 256)
+            || self.sections.iter().any(|s| !s.format.is_valid())
         {
             return Err(Error::Invalid);
         }
@@ -186,6 +190,7 @@ impl Song {
                         id: SectionId(Id([0; 16])), // unbound legacy text, never identity
                         label,
                         lyrics: it.next().unwrap(),
+                        format: SlideFormat::default(),
                     });
                 }
                 v
@@ -205,6 +210,10 @@ const SCHEMA2: &str = "CREATE TABLE section_ids(song BLOB NOT NULL, revision INT
 CREATE TABLE variants(song BLOB NOT NULL, revision INTEGER NOT NULL, position INTEGER NOT NULL, variant BLOB NOT NULL CHECK(length(variant)=16), name TEXT NOT NULL, PRIMARY KEY(song,revision,variant), UNIQUE(song,revision,position), FOREIGN KEY(song,revision) REFERENCES song_revisions(id,revision));
 CREATE TABLE occurrences(song BLOB NOT NULL, revision INTEGER NOT NULL, variant BLOB NOT NULL, position INTEGER NOT NULL, occurrence BLOB NOT NULL CHECK(length(occurrence)=16), section BLOB NOT NULL, PRIMARY KEY(song,revision,variant,position), UNIQUE(song,revision,variant,occurrence), FOREIGN KEY(song,revision,variant) REFERENCES variants(song,revision,variant), FOREIGN KEY(song,revision,section) REFERENCES section_ids(song,revision,section));
 PRAGMA user_version=2;";
+// Rows exist only for slides with non-default formatting.
+const SCHEMA3: &str = "CREATE TABLE section_formats(song BLOB NOT NULL, revision INTEGER NOT NULL, position INTEGER NOT NULL, format BLOB NOT NULL CHECK(length(format)<=256), PRIMARY KEY(song,revision,position), FOREIGN KEY(song,revision,position) REFERENCES section_ids(song,revision,position));
+PRAGMA user_version=3;";
+const SCHEMA_VERSIONS: [i64; 3] = [1, 2, 3];
 
 impl SectionId {
     /// CPU-only allocation with a process-local counter; no random-device I/O.
@@ -256,7 +265,7 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     }
     let app: i64 = source.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     let version: i64 = source.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if app != APP || ![1, 2].contains(&version) {
+    if app != APP || !SCHEMA_VERSIONS.contains(&version) {
         return Err(Error::Unsupported);
     }
     let page_size: i64 = source.query_row("PRAGMA page_size", [], |r| r.get(0))?;
@@ -472,7 +481,7 @@ impl Repository {
         )?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let app: i64 = tx.query_row("PRAGMA application_id", [], |r| r.get(0))?;
-        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let mut version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if app == 0 && version == 0 {
             let count: i64 = tx.query_row(
                 "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
@@ -484,7 +493,9 @@ impl Repository {
             }
             tx.execute_batch(SCHEMA)?;
             tx.execute_batch(SCHEMA2)?;
-        } else if app != APP || ![1, 2].contains(&version) {
+            tx.execute_batch(SCHEMA3)?;
+            version = 3;
+        } else if app != APP || !SCHEMA_VERSIONS.contains(&version) {
             return Err(Error::Unsupported);
         }
         let check: String = tx.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
@@ -497,7 +508,7 @@ impl Repository {
         // Verify required columns before accepting an otherwise foreign schema.
         tx.prepare("SELECT s.deleted,r.payload FROM songs s JOIN song_revisions r ON s.id=r.id")?;
         tx.prepare("SELECT r.title,i.position,i.song_revision FROM schedule_revisions r JOIN items i ON r.id=i.id AND r.revision=i.revision JOIN schedules s ON s.id=r.id")?;
-        if version == 1 && upgrade {
+        if version < 3 && upgrade {
             // Hold the writer reservation across backup and migration. The separate
             // read connection copies the same committed state, without attempting
             // an online backup from a connection with an active write transaction.
@@ -507,12 +518,14 @@ impl Repository {
             )?;
             source.busy_timeout(Duration::from_millis(100))?;
             let mut backup = path.as_os_str().to_owned();
-            backup.push(".schema1-backup");
+            backup.push(format!(".schema{version}-backup"));
             copy_new(
                 &source,
                 std::path::Path::new(&backup),
                 &AtomicBool::new(false),
             )?;
+        }
+        if version == 1 && upgrade {
             tx.execute_batch(SCHEMA2)?;
             let mut statement = tx.prepare("SELECT id,revision,payload FROM song_revisions")?;
             let mut rows = statement.query([])?;
@@ -538,10 +551,20 @@ impl Repository {
                 song.validate().map_err(|_| Error::Corrupt)?;
             }
         }
-        if version == 2 || upgrade {
+        if version < 3 && upgrade {
+            tx.execute_batch(SCHEMA3)?;
+            #[cfg(test)]
+            if std::env::var_os("SELA_ABORT_MIGRATION_SCHEMA3").is_some() {
+                std::process::abort();
+            }
+        }
+        if version >= 2 || upgrade {
             tx.prepare("SELECT section FROM section_ids")?;
             tx.prepare("SELECT variant,name FROM variants")?;
             tx.prepare("SELECT occurrence,section FROM occurrences")?;
+        }
+        if version == 3 || upgrade {
+            tx.prepare("SELECT position,format FROM section_formats")?;
         }
         tx.commit()?;
         Ok(Self { db })
@@ -578,6 +601,18 @@ impl Repository {
                 return Err(Error::Corrupt);
             }
             song.sections[index].id = SectionId(read_id(id)?);
+        }
+        if schema >= 3 {
+            let mut statement = self.db.prepare("SELECT position,format FROM section_formats WHERE song=? AND revision=? ORDER BY position LIMIT 129")?;
+            let mut rows = statement.query(params![&v.id.0[..], v.revision])?;
+            while let Some(row) = rows.next()? {
+                let section = usize::try_from(row.get::<_, i64>(0)?)
+                    .ok()
+                    .and_then(|position| song.sections.get_mut(position))
+                    .ok_or(Error::Corrupt)?;
+                section.format =
+                    SlideFormat::decode(&row.get::<_, Vec<u8>>(1)?).ok_or(Error::Corrupt)?;
+            }
         }
         let mut statement = self.db.prepare("SELECT position,variant,name FROM variants WHERE song=? AND revision=? ORDER BY position LIMIT 17")?;
         let mut rows = statement.query(params![&v.id.0[..], v.revision])?;
@@ -667,6 +702,17 @@ impl Repository {
                     &section.id.0.0[..]
                 ],
             )?;
+            if !section.format.is_default() {
+                tx.execute(
+                    "INSERT INTO section_formats VALUES(?,?,?,?)",
+                    params![
+                        &v.id.0[..],
+                        v.revision,
+                        position as i64,
+                        section.format.encode()
+                    ],
+                )?;
+            }
         }
         for (position, variant) in song.variants.iter().enumerate() {
             tx.execute(
@@ -1005,6 +1051,14 @@ mod tests {
         )
         .unwrap();
         let repo = Repository::open(&path).unwrap();
+        assert_eq!(
+            repo.db
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+        // One verified backup of the original schema, not one per step.
+        assert!(!d.path().join("legacy.schema2-backup").exists());
         let first = repo.song(v).unwrap();
         let second = repo.song(Version { revision: 2, ..v }).unwrap();
         assert_ne!(first.sections[0].id, second.sections[0].id);
@@ -1196,6 +1250,7 @@ mod tests {
             id: SectionId(Id([3; 16])),
             label: "Verse".into(),
             lyrics: "Verse two distinct".into(),
+            format: Default::default(),
         });
         s.variants = vec![Variant {
             id: VariantId(Id([8; 16])),
@@ -1448,7 +1503,7 @@ mod tests {
             );
             assert_eq!(std::fs::read(input).unwrap(), bytes);
         }
-        repo.db.execute_batch("PRAGMA user_version=3").unwrap();
+        repo.db.execute_batch("PRAGMA user_version=4").unwrap();
         drop(repo);
         let before = std::fs::read(&p).unwrap();
         assert_eq!(
@@ -1590,11 +1645,13 @@ mod tests {
                     id: SectionId(Id([1; 16])),
                     label: "Verse".into(),
                     lyrics: "one\r\n\n二\n".into(),
+                    format: Default::default(),
                 },
                 Section {
                     id: SectionId(Id([2; 16])),
                     label: "".into(),
                     lyrics: "".into(),
+                    format: Default::default(),
                 },
             ],
         }
@@ -1663,7 +1720,7 @@ mod tests {
     }
     #[test]
     fn rejects_newer_foreign_corrupt_without_replacement() {
-        for sql in ["PRAGMA user_version=3", "PRAGMA application_id=42"] {
+        for sql in ["PRAGMA user_version=4", "PRAGMA application_id=42"] {
             let (_d, p, r) = fixture();
             r.db.execute_batch(sql).unwrap();
             drop(r);
@@ -1870,5 +1927,218 @@ mod tests {
         s.sections = vec![];
         assert_eq!(Song::decode(&s.encode()).unwrap(), s);
         assert_eq!(Song::decode(&[255; 8]), Err(Error::Corrupt));
+    }
+    fn schema_of(path: &std::path::Path) -> i64 {
+        Connection::open(path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap()
+    }
+    /// The legacy library after the schema 2 migration, with known section IDs.
+    fn schema2(path: &std::path::Path) -> Version {
+        let v = legacy(path);
+        let db = Connection::open(path).unwrap();
+        db.execute_batch(SCHEMA2).unwrap();
+        for revision in 1..=2u8 {
+            for position in 0..2u8 {
+                db.execute(
+                    "INSERT INTO section_ids VALUES(?,?,?,?)",
+                    params![
+                        &v.id.0[..],
+                        revision,
+                        position,
+                        &[revision * 10 + position; 16][..]
+                    ],
+                )
+                .unwrap();
+            }
+        }
+        v
+    }
+    #[test]
+    fn schema2_migrates_with_a_verified_backup_and_keeps_ids() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        let v = schema2(&path);
+        let repo = Repository::open(&path).unwrap();
+        assert_eq!(schema_of(&path), 3);
+        let first = repo.song(v).unwrap();
+        assert_eq!(first.sections[1].id, SectionId(Id([11; 16])));
+        assert!(first.sections.iter().all(|s| s.format.is_default()));
+        assert_eq!(first.encode(), song().encode());
+        let backup = d.path().join("library.schema2-backup");
+        let before = std::fs::read(&backup).unwrap();
+        assert_eq!(schema_of(&backup), 2);
+        let old = Repository::open_internal(&backup, false).unwrap();
+        old.verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert_eq!(old.song(v).unwrap(), first);
+        let restored = d.path().join("restored");
+        Repository::restore_new(&backup, &restored, &AtomicBool::new(false)).unwrap();
+        assert_eq!(schema_of(&restored), 2);
+        drop((old, repo));
+        assert_eq!(Repository::open(&path).unwrap().song(v).unwrap(), first);
+        assert_eq!(std::fs::read(&backup).unwrap(), before);
+    }
+    #[test]
+    fn schema2_migration_gates_leave_the_library_unchanged() {
+        for failure in ["backup", "writer", "ddl"] {
+            let d = tempfile::tempdir().unwrap();
+            let path = d.path().join("library");
+            schema2(&path);
+            let db = Connection::open(&path).unwrap();
+            let backup = d.path().join("library.schema2-backup");
+            match failure {
+                "backup" => std::fs::write(&backup, b"retain").unwrap(),
+                "writer" => db
+                    .execute_batch("BEGIN IMMEDIATE; UPDATE songs SET deleted=1")
+                    .unwrap(),
+                _ => db
+                    .execute_batch("CREATE TABLE section_formats(block_upgrade)")
+                    .unwrap(),
+            }
+            let before = std::fs::read(&path).unwrap();
+            let result = Repository::open(&path).map(|_| ());
+            match failure {
+                "backup" => assert_eq!(result, Err(Error::Exists)),
+                "writer" => assert_eq!(result, Err(Error::Locked)),
+                _ => assert_eq!(result, Err(Error::Corrupt)),
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{failure}");
+            assert_eq!(
+                db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                2,
+                "{failure}"
+            );
+            match failure {
+                "backup" => assert_eq!(std::fs::read(&backup).unwrap(), b"retain"),
+                "writer" => assert!(!backup.exists()),
+                _ => Repository::open_internal(&backup, false)
+                    .unwrap()
+                    .verify_history(&AtomicBool::new(false), std::time::Instant::now())
+                    .unwrap(),
+            }
+        }
+    }
+    #[test]
+    fn schema2_migration_abort_keeps_schema2_and_the_verified_backup() {
+        const CHILD: &str = "SELA_ABORT_MIGRATION_SCHEMA3";
+        if let Some(path) = std::env::var_os(CHILD) {
+            let _ = Repository::open(std::path::Path::new(&path));
+            panic!("schema 3 abort hook did not run");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        schema2(&path);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::schema2_migration_abort_keeps_schema2_and_the_verified_backup",
+            ])
+            .env(CHILD, &path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success());
+        assert_eq!(schema_of(&path), 2);
+        assert!(
+            !Connection::open(&path)
+                .unwrap()
+                .prepare("SELECT 1 FROM sqlite_schema WHERE name='section_formats'")
+                .unwrap()
+                .exists([])
+                .unwrap()
+        );
+        Repository::open_internal(&d.path().join("library.schema2-backup"), false)
+            .unwrap()
+            .verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert!(matches!(Repository::open(&path), Err(Error::Exists)));
+    }
+    #[test]
+    fn slide_formats_round_trip_per_revision_and_default_stores_nothing() {
+        let (d, path, mut repo) = fixture();
+        let rows = |repo: &Repository| -> i64 {
+            repo.db
+                .query_row("SELECT count(*) FROM section_formats", [], |r| r.get(0))
+                .unwrap()
+        };
+        let mut formatted = song();
+        formatted.sections[0].format = crate::format::tests::full();
+        let first = repo.save_song(None, formatted.clone()).unwrap();
+        assert_eq!(rows(&repo), 1);
+        assert_eq!(repo.song(first).unwrap(), formatted);
+        let mut edited = formatted.clone();
+        edited.sections[0].format = SlideFormat::default();
+        edited.sections[1].format.italic = Some(true);
+        let second = repo.save_song(Some(first), edited.clone()).unwrap();
+        assert_eq!(rows(&repo), 2);
+        assert_eq!(repo.song(first).unwrap(), formatted);
+        assert_eq!(repo.song(second).unwrap(), edited);
+        let backup = d.path().join("formats-backup");
+        repo.backup_new(&backup, &AtomicBool::new(false)).unwrap();
+        drop(repo);
+        assert_eq!(
+            Repository::open(&path).unwrap().song(first).unwrap(),
+            formatted
+        );
+        assert_eq!(
+            Repository::open(&backup).unwrap().song(second).unwrap(),
+            edited
+        );
+        let mut worker = Worker::open(path).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        worker.submit(Command::Song(first)).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Song(s)) if s == formatted));
+    }
+    #[test]
+    fn invalid_or_corrupt_formats_are_rejected_not_dropped() {
+        let (d, path, mut repo) = fixture();
+        let mut bad = song();
+        bad.sections[1].format.size = Some(crate::format::Size::Fixed(0));
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(repo.save_song(None, bad), Err(Error::Invalid));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let mut good = song();
+        good.sections[0].format = crate::format::tests::full();
+        let v = repo.save_song(None, good).unwrap();
+        for (index, blob) in [&[1u8, 0, 0][..], &[1, 2, 0, 9], &[0xff; 4]]
+            .into_iter()
+            .enumerate()
+        {
+            repo.db
+                .execute("UPDATE section_formats SET format=?", params![blob])
+                .unwrap();
+            assert_eq!(repo.song(v), Err(Error::Corrupt), "{blob:?}");
+            let output = d.path().join(format!("backup-{index}"));
+            assert_eq!(
+                repo.backup_new(&output, &AtomicBool::new(false)),
+                Err(Error::Corrupt)
+            );
+            assert!(!output.exists());
+        }
+        repo.db
+            .execute(
+                "UPDATE section_formats SET format=?",
+                params![crate::format::tests::full().encode()],
+            )
+            .unwrap();
+        drop(repo);
+        // Only a writer without foreign keys can attach a format to a missing slide.
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        db.execute(
+            "INSERT INTO section_formats VALUES(?,?,5,?)",
+            params![
+                &v.id.0[..],
+                v.revision,
+                crate::format::tests::full().encode()
+            ],
+        )
+        .unwrap();
+        drop(db);
+        assert!(matches!(Repository::open(&path), Err(Error::Corrupt)));
     }
 }

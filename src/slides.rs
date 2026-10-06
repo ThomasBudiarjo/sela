@@ -182,6 +182,7 @@ mod tests {
                     id: SectionId::allocate(),
                     label: (*label).into(),
                     lyrics: (*lyrics).into(),
+                    format: Default::default(),
                 })
                 .collect(),
         }
