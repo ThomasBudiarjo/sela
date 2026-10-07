@@ -29,6 +29,7 @@ const SHOW: &str = "SelaShow && !SelaTextInput";
 
 fn bind_operator_keys(cx: &mut App) {
     text_input::bind_keys(cx);
+    song_library::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("ctrl-b", ToggleBlack, Some(SHOW)),
         KeyBinding::new("ctrl-l", ToggleLogo, Some(SHOW)),

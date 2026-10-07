@@ -10,7 +10,13 @@ use sela::scene::{ContentVersion, Extent, PreparedBackground, RendererCapabiliti
 use sela::storage::{Command, Error, Id, Reply, Section, Song, Version, Worker};
 use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Duration};
 
+mod format_pane;
+
 actions!(song_library, [Save, SplitSection]);
+
+pub fn bind_keys(cx: &mut App) {
+    format_pane::bind_keys(cx);
+}
 
 pub fn default_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
@@ -250,12 +256,15 @@ fn groups<'a>(labels: impl IntoIterator<Item = &'a str>) -> Vec<Range<usize>> {
 /// audience would reject the text (overflow, missing glyph, unfittable fixed
 /// size); the warning is set when a named family fell back to the bundled
 /// face.
-fn render_preview(slide: &sela::slides::Slide) -> (Option<Arc<RenderImage>>, Option<String>) {
+fn render_preview(slide: &sela::slides::Slide) -> Preview {
     let resolved = sela::fonts::shared().resolve(&slide.format);
-    (
-        pixels(slide, &resolved).and_then(|bgra| image_from(&bgra, PREVIEW)),
-        resolved.warning().map(str::to_owned),
-    )
+    let raster = pixels(slide, &resolved);
+    Preview {
+        key: slide_key(slide),
+        fitted: raster.as_ref().and_then(|(_, size)| *size),
+        image: raster.and_then(|(bgra, _)| image_from(&bgra, PREVIEW)),
+        warning: resolved.warning().map(str::to_owned),
+    }
 }
 
 /// The preview raster box-filtered down by `THUMBNAIL_SCALE`, so thumbnails
@@ -263,7 +272,7 @@ fn render_preview(slide: &sela::slides::Slide) -> (Option<Arc<RenderImage>>, Opt
 /// fitting at thumbnail size directly would lay out differently).
 fn render_thumbnail(slide: &sela::slides::Slide) -> Option<Arc<RenderImage>> {
     let resolved = sela::fonts::shared().resolve(&slide.format);
-    let bgra = pixels(slide, &resolved)?;
+    let (bgra, _) = pixels(slide, &resolved)?;
     let (scale, width) = (THUMBNAIL_SCALE as usize, PREVIEW.width as usize);
     let n = (scale * scale) as u32;
     let mut small = Vec::with_capacity(bgra.len() / (scale * scale));
@@ -286,8 +295,12 @@ fn render_thumbnail(slide: &sela::slides::Slide) -> Option<Arc<RenderImage>> {
 
 /// One slide's preview pixels, as BGRA: the cue's fill, outline and shadow
 /// coverage layers blended in linear light over the background color, the
-/// CPU twin of the audience compositor's shader.
-fn pixels(slide: &sela::slides::Slide, resolved: &sela::fonts::Resolved) -> Option<Vec<u8>> {
+/// CPU twin of the audience compositor's shader. Also returns the laid-out
+/// font size in 1080-reference px (`None` without text).
+fn pixels(
+    slide: &sela::slides::Slide,
+    resolved: &sela::fonts::Resolved,
+) -> Option<(Vec<u8>, Option<u16>)> {
     let cue = sela::slides::cue(
         ContentVersion { id: 0, revision: 0 },
         slide,
@@ -305,9 +318,15 @@ fn pixels(slide: &sela::slides::Slide, resolved: &sela::fonts::Resolved) -> Opti
         .map_or(crate::audience::compositor::Blend::plain(), |text| {
             crate::audience::compositor::Blend::from_style(&text.style())
         });
+    let size = cue.text().map(|text| {
+        (f32::from(text.font_size()) * sela::slides::REFERENCE_HEIGHT as f32
+            / PREVIEW.height as f32)
+            .round() as u16
+    });
     match *cue.background() {
-        PreparedBackground::Color(background) => Some(crate::audience::compositor::blend_pixels(
-            background, &coverage, &blend,
+        PreparedBackground::Color(background) => Some((
+            crate::audience::compositor::blend_pixels(background, &coverage, &blend),
+            size,
         )),
         // Song slides are always color backgrounds today.
         PreparedBackground::Image { .. } => None,
@@ -338,6 +357,9 @@ enum Nav {
 /// warning from face resolution, if any.
 struct Preview {
     key: (String, sela::format::SlideFormat),
+    /// Laid-out size in 1080-reference px, the start of "Do not auto size
+    /// text" (EW8-OBS-028).
+    fitted: Option<u16>,
     image: Option<Arc<RenderImage>>,
     warning: Option<String>,
 }
@@ -349,7 +371,7 @@ struct Library {
     field_edits: [u64; 4],
     /// Label and lyrics cell per section; always parallel to `draft.sections`.
     cells: Vec<[Entity<TextInput>; 2]>,
-    buttons: [FocusHandle; 18],
+    buttons: [FocusHandle; 19],
     subscriptions: Vec<Subscription>,
     task: Option<Task<()>>,
     worker: Option<Worker>,
@@ -382,6 +404,9 @@ struct Library {
     /// One thumbnail renders at a time, in slide order.
     thumbnail_task: Option<Task<()>>,
     title: String,
+    /// The toolbar's Format toggle docks the pane right of the preview.
+    format: bool,
+    pane: format_pane::Pane,
 }
 
 impl Library {
@@ -453,6 +478,8 @@ impl Library {
             thumbnails: HashMap::new(),
             thumbnail_task: None,
             title: String::new(),
+            format: false,
+            pane: format_pane::Pane::new(cx),
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
@@ -541,6 +568,7 @@ impl Library {
         if self.status.starts_with("A title is required")
             || self.status.starts_with("An input was rejected")
             || self.status.starts_with("Song is invalid")
+            || self.status.ends_with("Slide unchanged.")
         {
             self.status = "Draft changed · validate with Apply or OK".into();
         }
@@ -586,6 +614,7 @@ impl Library {
         if self.locked() {
             return;
         }
+        self.drag_end(cx);
         self.record(self.current(cx));
         if let Some(next) = self.history.step(
             Document {
@@ -600,6 +629,7 @@ impl Library {
             self.section = next.section;
             self.confirm_delete = false;
             self.load_fields(cx);
+            self.pane.reload();
             // The caret follows the restored slide instead of staying in a
             // cell that now holds a different slide.
             if focused.is_some_and(|(i, _)| i != self.section)
@@ -677,6 +707,8 @@ impl Library {
             .min(self.draft.sections.len().saturating_sub(1));
     }
     fn begin(&mut self, song: Song, version: Option<Version>, cx: &mut Context<Self>) {
+        self.pane.drag = None;
+        self.pane.reload();
         self.draft = song.clone();
         self.baseline = song;
         self.history = History::default();
@@ -691,6 +723,12 @@ impl Library {
         let locked = self.locked();
         for field in self.fields.iter().chain(self.cells.iter().flatten()) {
             field.update(cx, |f, _| f.set_read_only(locked));
+        }
+        // Unlocking leaves disabled pane fields to the next `sync_pane`.
+        if locked {
+            for field in self.pane.inputs() {
+                field.update(cx, |f, _| f.set_read_only(true));
+            }
         }
     }
     fn submit(&mut self, command: Command, pending: Pending, cx: &mut Context<Self>) {
@@ -787,6 +825,12 @@ impl Library {
                 self.show_catalog = false;
             }
             13 => self.show_catalog = !self.show_catalog,
+            18 => {
+                self.format = !self.format;
+                if !self.format {
+                    self.pane.menu = None;
+                }
+            }
             14 => self.slides = false,
             17 => self.slides = true,
             15 => {
@@ -1122,16 +1166,13 @@ impl Library {
             .background_executor()
             .spawn(async move { render_preview(&slide) });
         self.preview_task = Some(cx.spawn(async move |this, cx| {
-            let (image, warning) = raster.await;
+            let preview = raster.await;
             let _ = this.update(cx, |this, cx| {
                 this.preview_task = None;
                 if let Some(Preview {
                     image: Some(old), ..
-                }) = this.preview.replace(Preview {
-                    key,
-                    image,
-                    warning,
-                }) {
+                }) = this.preview.replace(preview)
+                {
                     cx.drop_image(old, None);
                 }
                 cx.notify();
@@ -1512,7 +1553,9 @@ impl Render for Library {
         } else {
             ((width - catalog_width) * 0.34).max(330.)
         };
-        let pane = (width - catalog_width - words_width - 48.).max(160.);
+        let show_format = self.format && !busy && !self.show_catalog;
+        let format_width = if show_format { format_pane::WIDTH } else { 0. };
+        let pane = (width - catalog_width - words_width - format_width - 48.).max(160.);
         let slide_width = pane.min((height - 230.).max(90.) * 16. / 9.);
         let labels: Vec<String> = self
             .cells
@@ -1523,6 +1566,7 @@ impl Render for Library {
         let empty = self.preview_slide(cx).is_some_and(|s| s.text.is_empty());
         let rejected = self.preview.as_ref().is_some_and(|p| p.image.is_none());
         let image = self.preview.as_ref().and_then(|p| p.image.clone());
+        let format_pane = show_format.then(|| self.format_pane(window, cx));
         div()
             .key_context("Sela SongLibrary")
             .track_focus(&self.focus)
@@ -1537,6 +1581,17 @@ impl Render for Library {
             .on_action(cx.listener(|s, _: &SplitSection, w, cx| s.split_section(w, cx)))
             .on_action(cx.listener(|s, _: &Undo, w, cx| s.history(false, w, cx)))
             .on_action(cx.listener(|s, _: &Redo, w, cx| s.history(true, w, cx)))
+            // A slider or dial drag follows the pointer anywhere in the
+            // window and ends on release, even outside it.
+            .on_mouse_move(cx.listener(|s, e: &MouseMoveEvent, _, cx| {
+                if e.pressed_button == Some(MouseButton::Left) {
+                    s.drag_to(e.position, cx);
+                } else {
+                    s.drag_end(cx);
+                }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|s, _, _, cx| s.drag_end(cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|s, _, _, cx| s.drag_end(cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -1579,7 +1634,16 @@ impl Render for Library {
                     .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(0xdcdedc)))
                     .children(["Text", "Scripture", "Shape", "Media"].map(inert))
                     .child(div().flex_1())
-                    .children(["Format", "Animate", "Presentation"].map(inert))
+                    .child(if busy {
+                        inert("Format").into_any_element()
+                    } else {
+                        div()
+                            .border_b_2()
+                            .border_color(rgb(if self.format { 0x536aca } else { 0xf4f4f3 }))
+                            .child(self.button(18, "Format", cx))
+                            .into_any_element()
+                    })
+                    .children(["Animate", "Presentation"].map(inert))
                     .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(0xdcdedc)))
                     .when(!busy, |d| {
                         d.child(self.button(13, "Library", cx))
@@ -1911,7 +1975,8 @@ impl Render for Library {
                                     )
                                 }),
                         )
-                    }),
+                    })
+                    .children(format_pane),
             )
             // EW8-OBS-021 footer.
             .when(!busy, |d| {
@@ -2352,10 +2417,10 @@ mod tests {
                 .filter(|p| p[channel] > 128)
                 .count()
         };
-        let blank = render_preview(&slide("")).0.unwrap();
+        let blank = render_preview(&slide("")).image.unwrap();
         assert_eq!(ink(&blank, 0), 0);
         let text = render_preview(&slide("Amazing grace\nhow sweet"))
-            .0
+            .image
             .unwrap();
         let size = text.size(0);
         assert_eq!((size.width.0, size.height.0), (1280, 720));
@@ -2370,13 +2435,28 @@ mod tests {
             },
             ..slide("Amazing grace\nhow sweet")
         };
-        let yellow = render_preview(&styled).0.unwrap();
+        let yellow = render_preview(&styled).image.unwrap();
         assert_eq!(ink(&yellow, 0), 0, "yellow fill has no blue");
         assert!(ink(&yellow, 1) > 1000, "yellow fill has green");
         assert!(
-            render_preview(&slide("\u{e000}")).0.is_none(),
+            render_preview(&slide("\u{e000}")).image.is_none(),
             "missing glyph"
         );
+        // The fitted size is reported in 1080-reference px; a fixed size
+        // round-trips through the 720-high preview.
+        assert_eq!(render_preview(&slide("")).fitted, None);
+        let fitted = render_preview(&slide("Amazing grace\nhow sweet"))
+            .fitted
+            .unwrap();
+        assert!(fitted > 40, "{fitted}");
+        let fixed = sela::slides::Slide {
+            format: sela::format::SlideFormat {
+                size: Some(sela::format::Size::Fixed(78)),
+                ..Default::default()
+            },
+            ..slide("Amazing grace")
+        };
+        assert_eq!(render_preview(&fixed).fitted, Some(78));
     }
 
     #[gpui::test]
@@ -2458,7 +2538,7 @@ mod tests {
     fn thumbnail_is_the_preview_box_filtered() {
         let text = slide("Amazing grace\nhow sweet the sound");
         let (full, small) = (
-            render_preview(&text).0.unwrap(),
+            render_preview(&text).image.unwrap(),
             render_thumbnail(&text).unwrap(),
         );
         let size = small.size(0);
@@ -3054,5 +3134,228 @@ mod tests {
             view.read_with(&cx, |v, cx| v.current(cx).authors),
             "Future author"
         );
+    }
+
+    /// Two slides, the caret in slide 1's lyrics, the Format pane open.
+    fn format_fixture(
+        cx: &mut TestAppContext,
+        path: PathBuf,
+    ) -> (VisualTestContext, Entity<Library>) {
+        let (mut cx, view) = fixture(cx, path);
+        cx.simulate_resize(size(px(1400.), px(900.)));
+        field(&mut cx, &view, 0, "Formatted");
+        type_cell(&mut cx, &view, 0, LYRICS, "One");
+        action(&mut cx, &view, 7);
+        type_cell(&mut cx, &view, 1, LYRICS, "Two");
+        caret(&mut cx, &view, 0, LYRICS, 0);
+        action(&mut cx, &view, 18);
+        cx.run_until_parked();
+        (cx, view)
+    }
+    fn click(cx: &mut VisualTestContext, selector: &str) {
+        let bounds = cx
+            .debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
+            .unwrap_or_else(|| panic!("{selector} is not rendered"));
+        cx.simulate_click(bounds.center(), Default::default());
+        cx.run_until_parked();
+    }
+    fn formats(cx: &VisualTestContext, view: &Entity<Library>) -> Vec<sela::format::SlideFormat> {
+        view.read_with(cx, |v, _| {
+            v.draft.sections.iter().map(|s| s.format.clone()).collect()
+        })
+    }
+    fn undo_len(cx: &VisualTestContext, view: &Entity<Library>) -> usize {
+        view.read_with(cx, |v, _| v.history.undo.len())
+    }
+
+    #[gpui::test]
+    fn format_pane_applies_to_the_caret_slide_as_one_undo_step(cx: &mut TestAppContext) {
+        use format_pane::OUTLINE;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = format_fixture(cx, dir.path().join("library.sqlite"));
+        let count = undo_len(&cx, &view);
+        click(&mut cx, "format-Bold");
+        let f = formats(&cx, &view);
+        assert_eq!((f[0].bold, f[1].bold), (Some(true), None));
+        assert_eq!(undo_len(&cx, &view), count + 1);
+        // Pane buttons keep the caret in Words (EW8-OBS-035).
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(formats(&cx, &view)[0].bold, None);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(formats(&cx, &view)[0].bold, Some(true));
+
+        click(&mut cx, "format-OutlineType");
+        assert!(view.read_with(&cx, |v, _| v.pane.menu.is_some()));
+        // Center and Inner are listed but unavailable.
+        click(&mut cx, "format-menu-2");
+        assert_eq!(formats(&cx, &view)[0].outline, None);
+        click(&mut cx, "format-menu-1");
+        assert_eq!(formats(&cx, &view)[0].outline, Some(OUTLINE));
+        assert!(view.read_with(&cx, |v, _| v.pane.menu.is_none()));
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+
+        // The pane follows the caret slide.
+        caret(&mut cx, &view, 1, LYRICS, 0);
+        click(&mut cx, "format-Right");
+        let f = formats(&cx, &view);
+        assert_eq!(
+            (f[0].align, f[1].align),
+            (None, Some(sela::format::Align::Right))
+        );
+        assert_eq!(f[1].bold, None);
+
+        // Nothing applies while storage work is pending.
+        view.update(&mut cx, |v, _| v.pending = Some(Pending::Catalog));
+        let before = formats(&cx, &view);
+        cx.update(|_, cx| view.update(cx, |v, cx| v.toggle_style(format_pane::Ctl::Bold, cx)));
+        assert_eq!(formats(&cx, &view), before);
+    }
+
+    #[gpui::test]
+    fn menus_open_by_keyboard_and_a_dismissing_click_does_not_reopen(cx: &mut TestAppContext) {
+        use sela::format::Size;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = format_fixture(cx, dir.path().join("library.sqlite"));
+        let fitted = view
+            .read_with(&cx, |v, cx| v.fitted(cx))
+            .expect("preview landed");
+        click(&mut cx, "format-Size");
+        // Auto is checked; Up then Enter picks "Do not auto size text",
+        // which starts from the fitted size (EW8-OBS-028).
+        cx.simulate_keystrokes("up enter");
+        assert_eq!(formats(&cx, &view)[0].size, Some(Size::Fixed(fitted)));
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        click(&mut cx, "format-Size");
+        cx.simulate_keystrokes("escape");
+        assert!(view.read_with(&cx, |v, _| v.pane.menu.is_none()));
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        click(&mut cx, "format-Size");
+        click(&mut cx, "format-Size");
+        assert!(view.read_with(&cx, |v, _| v.pane.menu.is_none()));
+        click(&mut cx, "format-SizeUp");
+        assert_eq!(
+            formats(&cx, &view)[0].size,
+            Some(Size::Fixed(fitted + format_pane::SIZE_STEP))
+        );
+    }
+
+    #[gpui::test]
+    fn number_fields_refuse_invalid_values_and_hex_sets_the_color(cx: &mut TestAppContext) {
+        use sela::format::Size;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = format_fixture(cx, dir.path().join("library.sqlite"));
+        cx.update(|w, cx| view.update(cx, |v, cx| v.choose(format_pane::Menu::Size, 0, w, cx)));
+        cx.run_until_parked();
+        let size = formats(&cx, &view)[0].size;
+        let field = view.read_with(&cx, |v, _| v.pane.nums[0].clone());
+        let count = undo_len(&cx, &view);
+        for bad in ["9999", "0", "big"] {
+            replace(&mut cx, field.clone(), bad);
+            cx.simulate_keystrokes("enter");
+            cx.run_until_parked();
+            assert_eq!(formats(&cx, &view)[0].size, size, "{bad}");
+            assert!(view.read_with(&cx, |v, _| v.status.starts_with("Size must be")));
+            let Some(Size::Fixed(n)) = size else {
+                unreachable!()
+            };
+            assert_eq!(
+                field.read_with(&cx, |f, _| f.text().to_owned()),
+                n.to_string()
+            );
+        }
+        assert_eq!(undo_len(&cx, &view), count);
+        replace(&mut cx, field.clone(), "40");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(formats(&cx, &view)[0].size, Some(Size::Fixed(40)));
+        // Up in the field steps the value.
+        cx.simulate_keystrokes("up");
+        assert_eq!(formats(&cx, &view)[0].size, Some(Size::Fixed(41)));
+        assert_eq!(undo_len(&cx, &view), count + 2);
+
+        caret(&mut cx, &view, 0, LYRICS, 0);
+        click(&mut cx, "format-Color");
+        let hex = view.read_with(&cx, |v, _| v.pane.hex.clone());
+        assert_eq!(hex.read_with(&cx, |f, _| f.text().to_owned()), "#FFFFFF");
+        replace(&mut cx, hex.clone(), "#12345g");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(formats(&cx, &view)[0].color, None);
+        assert!(view.read_with(&cx, |v, _| v.status.starts_with("Enter a color")));
+        replace(&mut cx, hex, "#ff0000");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(formats(&cx, &view)[0].color, Some([255, 0, 0]));
+        assert!(view.read_with(&cx, |v, _| v.pane.menu.is_none()));
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+    }
+
+    #[gpui::test]
+    fn slider_and_dial_drags_are_one_undo_step_and_save_round_trips(cx: &mut TestAppContext) {
+        use format_pane::{OUTLINE, SHADOW};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let (mut cx, view) = format_fixture(cx, path.clone());
+        // Disabled until Outline is on: a press changes nothing.
+        let track = cx.debug_bounds("format-slider-OutlineSize").unwrap();
+        cx.simulate_mouse_down(track.center(), MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(track.center(), MouseButton::Left, Default::default());
+        assert_eq!(formats(&cx, &view)[0].outline, None);
+        click(&mut cx, "format-OutlineType");
+        click(&mut cx, "format-menu-1");
+        let count = undo_len(&cx, &view);
+        let track = cx.debug_bounds("format-slider-OutlineSize").unwrap();
+        let y = track.center().y;
+        cx.simulate_mouse_down(
+            point(track.left(), y),
+            MouseButton::Left,
+            Default::default(),
+        );
+        assert_eq!(formats(&cx, &view)[0].outline.unwrap().size, 1);
+        cx.simulate_mouse_move(track.center(), Some(MouseButton::Left), Default::default());
+        cx.simulate_mouse_move(
+            point(track.right() + px(80.), y),
+            Some(MouseButton::Left),
+            Default::default(),
+        );
+        assert_eq!(formats(&cx, &view)[0].outline.unwrap().size, 50, "clamped");
+        cx.simulate_mouse_up(
+            point(track.right() + px(80.), y),
+            MouseButton::Left,
+            Default::default(),
+        );
+        cx.run_until_parked();
+        assert_eq!(
+            undo_len(&cx, &view),
+            count + 1,
+            "one step for the whole drag"
+        );
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(formats(&cx, &view)[0].outline, Some(OUTLINE));
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(formats(&cx, &view)[0].outline.unwrap().size, 50);
+
+        click(&mut cx, "format-ShadowMode");
+        click(&mut cx, "format-menu-1");
+        assert_eq!(formats(&cx, &view)[0].shadow, Some(SHADOW));
+        let dial = cx.debug_bounds("format-dial").unwrap();
+        let up = point(dial.center().x, dial.top());
+        cx.simulate_mouse_down(up, MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(up, MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        assert_eq!(formats(&cx, &view)[0].shadow.unwrap().angle, 90);
+
+        cx.simulate_keystrokes("ctrl-s");
+        wait(&mut cx, &view);
+        let version = view.read_with(&cx, |v, _| v.version.unwrap());
+        let saved = Repository::open(&path).unwrap().song(version).unwrap();
+        assert_eq!(
+            saved
+                .sections
+                .iter()
+                .map(|s| s.format.clone())
+                .collect::<Vec<_>>(),
+            formats(&cx, &view)
+        );
+        assert_eq!(saved.sections[1].format, Default::default());
     }
 }

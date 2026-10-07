@@ -66,8 +66,9 @@ finish. Original GPUI code; no EasyWorship code or assets.
 
 - Window "Song Editor - <title>" ("Untitled" while empty). Toolbar: Title field
   top-left with New/Undo/Redo below it, then Text, Scripture, Shape, Media and,
-  at the right, Format, Animate, Presentation. Those seven are shown disabled
-  until implemented (M1-05g/h and later). Sela's Library and Inspector follow.
+  at the right, Format, Animate, Presentation. Format opens the Format pane
+  (M1-05g3a, below); the other six are shown disabled until implemented.
+  Sela's Library and Inspector follow.
 - Words is one list of slides. Each row has the slide number, a bold label cell
   (placeholder "label") and a lyrics cell (placeholder "song"). A labeled slide
   starts a bordered group; unlabeled slides join the group above. Group colors
@@ -157,6 +158,78 @@ reordering and auto-scrolling to the selected thumbnail.
 Checks: `thumbnail_is_the_preview_box_filtered`,
 `slides_tab_thumbnails_render_off_thread_and_prune_edits` and the native replay
 above (captures `05-slides`, `06-slide-1-selected`, `07-unlabeled-slide`).
+
+## M1-05g3a — Format pane
+
+Implemented-unqualified. Layout and defaults follow EW8-OBS-027..029 and
+EW8-OBS-033 (RUN-W06G); code in `src/song_library/format_pane.rs`.
+
+- The toolbar **Format** toggle (underlined while on) docks a 284 px pane at
+  the right of the preview, which shrinks to make room. The pane shows the
+  EW element tabs Style · Text · Arrange with Text active and its
+  Style/Layout switch on Style; the other tabs and Layout are shown
+  disabled.
+- **Font**: the bundled DejaVu Sans first, then every installed family from
+  the shared catalog, each row with a sample in that family. The list is
+  virtualized, so only visible rows load faces. It reads "Loading fonts…"
+  and cannot open until the background scan has landed.
+- **Size**: Auto, or the number field after "Do not auto size text". That
+  choice starts from the size the preview laid out (in 1080-reference px,
+  EW8-OBS-028). "Resize text to fit element" returns to Auto and "Reset
+  Size" clears the override. A▾/A▴ step by 2 px (Sela choice; EW's step is
+  unobserved).
+- **Color**, Outline color and Shadow color: a swatch grid (Sela's own
+  colors in EW's grey-ramp-over-hues layout) and a Hex Value field
+  (`#RRGGBB`). Spectrum and Values are shown disabled.
+- **B / I / U**, left/center/right and top/middle/bottom alignment buttons.
+  X², X₂ and the indent buttons are shown disabled.
+- **Outline**: None or Outer (Center and Inner are listed but disabled), then
+  color, size and opacity. **Shadow**: None or Enabled, then color, an
+  angle dial (degrees counterclockwise from the right; 315 points
+  down-right) with its number field, then offset, blur and opacity.
+  Turning an effect on starts from the EW theme values (outline black 7 px
+  at 100 %, shadow black 315° offset 18 blur 9 at 90 %). Its other controls
+  stay disabled until it is on.
+- A change applies to the **caret slide** (in Slides, the selected slide)
+  and is one whole-document undo step. A slider or dial drag is one step
+  too: the drag follows the pointer anywhere in the window without
+  history and records the pre-drag document when the button is released.
+  A typed value commits on Enter, Up/Down (which also step it) or focus
+  loss. Out-of-range or non-numeric values are refused with a status
+  message, the slide stays unchanged and the field reloads. Nothing applies
+  while a storage operation is pending.
+- Buttons, menus, sliders and the dial do not take focus on click, so the
+  caret stays in Words. They are keyboard reachable in layout order after
+  the editor's own controls: Space/Enter activates, Up/Down/Enter/Escape
+  drive an open menu, arrows step a focused slider or dial. Escape or a
+  click outside closes a menu and restores the previous focus, and a click
+  that dismisses a menu on its own trigger does not reopen it.
+
+Not yet matched: Ctrl+A whole-song formatting (g3b, EW8-OBS-034–036), the
+deferred Text › Style/Layout controls listed in the backlog, the Style and
+Arrange tabs, and what the pane shows when slides disagree (unobserved).
+
+Checks: GPUI tests `format_pane_applies_to_the_caret_slide_as_one_undo_step`,
+`menus_open_by_keyboard_and_a_dismissing_click_does_not_reopen`,
+`number_fields_refuse_invalid_values_and_hex_sets_the_color`,
+`slider_and_dial_drags_are_one_undo_step_and_save_round_trips`, the fitted
+size in `preview_matches_audience_raster_and_rejects_unshowable_text`, and
+unit tests for hex parsing, slider and dial mapping, theme defaults, the
+palette and the font label. The native replay above opens the pane, sets
+slide 1 red and bold by keyboard and decodes the stored format (captures
+`08-before-format` to `12-format-saved`).
+
+GPUI patterns inspected at the pinned Zed revision
+`a84689073d296dfd39987bc7dd478e43ef76d83a` (Apache-2.0 GPUI only):
+`crates/gpui/src/keymap.rs` and `keymap/context.rs` (context depth
+precedence for `SelaMenu`/`SelaSlider` bindings over the root),
+`elements/div.rs` (mouse-down focus after element listeners, so
+`prevent_default` keeps the caret; capture-phase `on_mouse_down_out`;
+`on_mouse_move` while hovered), `elements/anchored.rs` and
+`elements/deferred.rs` (popovers above the pane, snapped to the window),
+`elements/uniform_list.rs` (font list and `scroll_to_item`) and
+`elements/canvas.rs` (slider and dial bounds from prepaint). Zed's GPL
+`font_picker` was read for names only; no code was copied.
 
 ## Ownership and reference patterns
 

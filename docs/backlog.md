@@ -555,8 +555,15 @@ Follow-ups:
     Arial; margins compared because auto-fit fills the area width, the
     gold slide uses a fixed size). Rendering is qualified for this
     machine; timing recorded in `docs/composition-text.md`.
-  - [ ] g3 Song Editor Format pane (Text › Style subset), per-slide apply,
-    Ctrl+A whole-song selection, undo, GPUI tests and native script.
+  - [x] g3a Format pane (M1-05g3a, 2026-10-07): toolbar Format toggle docks
+    a Text › Style pane with font list (samples, virtualized, waits for the
+    scan), Auto/fixed size and A▾/A▴, swatch + hex colors, B/I/U, H/V
+    alignment, Outer outline and shadow with sliders and an angle dial;
+    applies to the caret slide as one undo step (a whole drag included).
+    **Implemented-unqualified**: GPUI tests and the native script pass
+    (see [song library](song-library.md#m1-05g3a--format-pane)).
+  - [ ] g3b Ctrl+A whole-song selection (every format change applies to all
+    slides), replace-typing, Copy, exit rules, GPUI tests, native script.
   - Deferred (record as tickets when g3 lands): superscript/subscript, indent,
     bullets, margins, capitalization, word wrap, rotation, Center/Inner
     outline, Style tab (fill/border/reflection), Arrange.

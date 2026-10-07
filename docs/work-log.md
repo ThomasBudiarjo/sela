@@ -6,6 +6,12 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Song Editor Format pane (M1-05g3a, 2026-10-07):** the toolbar Format
+  toggle docks the Text › Style pane (font list with samples, size, colors,
+  B/I/U, alignment, outline and shadow with sliders and an angle dial).
+  Changes apply to the caret slide as one undo step. GPUI tests and the
+  Windows native script pass. M1-05g stays **active**; next is g3b, Ctrl+A
+  whole-song selection with replace-typing.
 - **Ctrl+A formatting observed (RUN-W06H, 2026-10-07):** EW8-OBS-034–036:
   Ctrl+A selects every slide and a format change (Italic, font) applies to
   all of them. M1-05g stays **active**; next is g3a (Format pane), then g3b
@@ -150,7 +156,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g active (g1 per-slide format storage and g2 styled rendering with the operator font gate done, Windows DX12 native check passed; g3 Format pane open). M1-05h–i (background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g active (g1 per-slide format storage and g2 styled rendering with the operator font gate done, Windows DX12 native check passed; g3a Format pane done with GPUI and Windows native checks; g3b Ctrl+A whole-song selection open). M1-05h–i (background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2556,3 +2562,43 @@ PY
 - The owner closed EasyWorship himself; the agent saved nothing.
 - Next: g3a Format pane (per-slide apply, sliders, dial, undo), then g3b
   Ctrl+A whole-song selection.
+
+### M1-05g3a — Song Editor Format pane — 2026-10-07 (UTC+7)
+
+- State: g3a **implemented-unqualified**; g3b (Ctrl+A) open, so M1-05g
+  stays active. Behavior and provenance are in
+  [song-library.md](song-library.md#m1-05g3a--format-pane).
+- Code: new `src/song_library/format_pane.rs` (pane state, controls,
+  popovers, sliders, dial, `format_targets` = the caret slide today, so
+  g3b only widens that range). `song_library.rs`: toolbar button 18 toggles
+  the pane, which docks right of the preview; `Preview.fitted` carries the
+  laid-out size (1080-reference px) from the same off-thread raster; root
+  mouse move/up listeners end a drag anywhere; undo/redo end a drag first;
+  `begin` drops one; pane fields lock with the editor. `main.rs` binds the
+  `SelaMenu`/`SelaSlider` keys through `song_library::bind_keys`.
+- Sela choices (EW unobserved): A▾/A▴ step 2 px; a whole drag is one undo
+  step; out-of-range typed values are refused rather than clamped; the
+  palette is Sela's own; a dismissing click on a trigger does not reopen
+  its menu.
+- Fixed during the slice: the hex field stayed read-only after the
+  initial library open (`sync_input_lock` locked it, nothing unlocked
+  it), so `sync_pane` now resets it each render; a click on pane chrome or
+  a disabled control moved focus to the window root, so the pane root
+  prevents the default focus change (fields still focus first in bubble
+  order).
+- Checks (Windows 11): `cargo fmt --all -- --check`, `cargo clippy
+  --locked --all-targets -- -D warnings`, `cargo test --locked
+  --all-targets` (lib 99, bin 77 + 2 ignored, other suites pass), `cargo
+  build --locked`, `ruff check scripts`; `scripts/song-editor-windows.py`
+  **PASS** (preview black=38854/white=931, thumbnails black=16784/white=74,
+  red preview samples 4528, stored format `01 22 00 01 FF 00 00` for slide
+  1 only). Captures `08-before-format` to `12-format-saved` inspected:
+  popover under Color, red bold slide 1 in preview and thumbnail, slide 2
+  unchanged, disabled outline/shadow values dimmed.
+- Not run: Linux/macOS, screen reader/IME, a mouse drag of a slider in the
+  native script (GPUI tests cover drags), a font choice from the installed
+  list natively.
+- Next: g3b. `SelectAllSlides` on Ctrl+A in Words and Slides, all-slides
+  visual, exit on caret/click/tab/undo, replace-typing as one undo step
+  (one unlabeled slide keeping slide 1's id and format, arrangements
+  pruned), Copy of the whole text, tests, native script, deferred tickets.
