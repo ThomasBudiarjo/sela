@@ -47,7 +47,24 @@ pub fn default_path() -> Option<PathBuf> {
     base.map(|p| p.join("sela/library.sqlite"))
 }
 
+/// Bumped whenever an editor window commits a save or a delete, so other
+/// windows (the operator's Songs list) reload their catalog from storage.
+#[derive(Default)]
+pub struct LibraryChanged(pub u64);
+
+impl Global for LibraryChanged {}
+
+fn library_changed(cx: &mut App) {
+    cx.default_global::<LibraryChanged>().0 += 1;
+}
+
 pub fn open(path: PathBuf, cx: &mut App) -> Result<(), String> {
+    open_song(path, None, cx)
+}
+
+/// Opens an editor window; with `version`, it loads that saved revision once
+/// its own storage worker has opened the library (never on the UI thread).
+pub fn open_song(path: PathBuf, version: Option<Version>, cx: &mut App) -> Result<(), String> {
     let bounds = Bounds::centered(None, size(px(1180.), px(740.)), cx);
     cx.open_window(
         WindowOptions {
@@ -60,7 +77,11 @@ pub fn open(path: PathBuf, cx: &mut App) -> Result<(), String> {
             ..Default::default()
         },
         |window, cx| {
-            let view = cx.new(|cx| Library::new(path, cx));
+            let view = cx.new(|cx| {
+                let mut library = Library::new(path, cx);
+                library.open_version = version;
+                library
+            });
             let weak = view.downgrade();
             window.on_window_should_close(cx, move |_, cx| {
                 weak.update(cx, |view, cx| view.may_close(cx))
@@ -497,7 +518,7 @@ struct Preview {
     warning: Option<String>,
 }
 
-struct Library {
+pub(crate) struct Library {
     focus: FocusHandle,
     /// Title, authors, copyright, license.
     fields: [Entity<TextInput>; 4],
@@ -550,6 +571,8 @@ struct Library {
     /// Edit Slide Layouts: the Layouts tab shows sample text over the song
     /// master, and the Slide pane edits the master (EW8-OBS-043).
     layouts: bool,
+    /// A saved revision to load once the catalog has loaded (Edit Song…).
+    open_version: Option<Version>,
 }
 
 impl Library {
@@ -632,6 +655,7 @@ impl Library {
             all: false,
             all_focus: None,
             layouts: false,
+            open_version: None,
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
@@ -977,6 +1001,9 @@ impl Library {
                 self.catalog = items;
                 self.status =
                     "Library ready · committed changes stay offline on this computer".into();
+                if let Some(version) = self.open_version.take() {
+                    self.select(version, cx);
+                }
             }
             (Some(Pending::Load(v)), Ok(Reply::Song(song))) => {
                 // Storage can retain documents outside this provisional field policy.
@@ -995,6 +1022,7 @@ impl Library {
                 self.confirm_delete = false;
                 self.confirm_close = false;
                 self.cursor = None;
+                library_changed(cx);
                 if self.close_after_save {
                     self.committed_close = !self.dirty(cx);
                     self.close_after_save = false;
@@ -1006,6 +1034,7 @@ impl Library {
                 }
             }
             (Some(Pending::Delete), Ok(Reply::Deleted)) => {
+                library_changed(cx);
                 self.begin(blank(), None, cx);
                 self.cursor = None;
                 self.refresh(cx);
@@ -1922,6 +1951,25 @@ impl Library {
                             .child(self.cells[index][LYRICS].clone()),
                     ),
             )
+    }
+}
+
+/// Lets the operator's tests read and drive an editor window it opened.
+#[cfg(test)]
+impl Library {
+    /// The loaded revision, the current document and whether storage is busy.
+    pub(crate) fn probe(&self, cx: &App) -> (Option<Version>, Song, bool) {
+        (self.version, self.current(cx), self.pending.is_some())
+    }
+    pub(crate) fn probe_poll(&mut self, cx: &mut Context<Self>) {
+        self.poll(cx);
+    }
+    pub(crate) fn probe_title_field(&self) -> Entity<TextInput> {
+        self.fields[0].clone()
+    }
+    /// The footer Apply button: saves without closing.
+    pub(crate) fn probe_apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.action(1, window, cx);
     }
 }
 

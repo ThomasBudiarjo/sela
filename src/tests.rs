@@ -1655,3 +1655,477 @@ fn library_double_click_goes_straight_to_live(cx: &mut TestAppContext) {
         o.on_screen() == Some("Signal Hymn · Verse 1")
     });
 }
+
+fn right_click(cx: &mut VisualTestContext, selector: &'static str) {
+    let position = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is rendered"))
+        .center();
+    cx.simulate_mouse_down(position, gpui::MouseButton::Right, Default::default());
+    cx.simulate_mouse_up(position, gpui::MouseButton::Right, Default::default());
+}
+
+fn menu_open(o: &Operator) -> bool {
+    o.song_menu.is_some()
+}
+
+fn highlight(o: &Operator) -> Option<usize> {
+    o.song_menu.and_then(|menu| menu.highlight)
+}
+
+fn version_of(o: &Operator, title: &str) -> sela::storage::Version {
+    o.catalog
+        .iter()
+        .find(|(_, t)| t == title)
+        .map(|(v, _)| *v)
+        .unwrap_or_else(|| panic!("{title} is in Songs"))
+}
+
+fn editor_windows(cx: &VisualTestContext) -> Vec<gpui::WindowHandle<crate::song_library::Library>> {
+    cx.cx
+        .windows()
+        .into_iter()
+        .filter_map(|window| window.downcast::<crate::song_library::Library>())
+        .collect()
+}
+
+type EditorState = (Option<sela::storage::Version>, Song, bool);
+
+/// The editor window opened since `before`, polled until `done`.
+fn opened_editor(
+    cx: &mut VisualTestContext,
+    before: &[gpui::WindowHandle<crate::song_library::Library>],
+    done: impl Fn(&EditorState) -> bool,
+) -> (VisualTestContext, Entity<crate::song_library::Library>) {
+    let opened: Vec<_> = editor_windows(cx)
+        .into_iter()
+        .filter(|window| !before.contains(window))
+        .collect();
+    assert_eq!(opened.len(), 1, "exactly one editor window opened");
+    let mut editor_cx = VisualTestContext::from_window(opened[0].into(), &cx.cx);
+    let editor = opened[0].root(&mut editor_cx).unwrap();
+    settle_editor(&mut editor_cx, &editor, done);
+    (editor_cx, editor)
+}
+
+fn settle_editor(
+    cx: &mut VisualTestContext,
+    editor: &Entity<crate::song_library::Library>,
+    done: impl Fn(&EditorState) -> bool,
+) {
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        editor.update(cx, |e, cx| e.probe_poll(cx));
+        cx.run_until_parked();
+        if editor.read_with(cx, |e, cx| done(&e.probe(cx))) {
+            return;
+        }
+        assert!(Instant::now() < end, "bounded wait for the editor");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[gpui::test]
+fn song_menu_items_order_disabled_items_and_dismissal(cx: &mut TestAppContext) {
+    use crate::operator::{SONG_MENU, SongItem};
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_songs(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    let hymn = song_row(&mut cx, &operator, "Signal Hymn");
+
+    // Right-click selects the row and opens the menu (EW8-OBS-021 order).
+    right_click(&mut cx, hymn);
+    let selected = operator.read_with(&cx, |o, _| version_of(o, "Signal Hymn"));
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.song_menu.map(|m| m.version), Some(selected));
+        assert_eq!((o.selected_song, o.selected_entry), (Some(selected), None));
+        assert_eq!(
+            highlight(o),
+            None,
+            "a pointer-opened menu highlights nothing"
+        );
+    });
+    assert_eq!(
+        SONG_MENU.map(SongItem::label),
+        [
+            "New Song…",
+            "Edit Song…",
+            "Delete",
+            "Update items in Schedule",
+            "Sort by ▸",
+            "Refresh"
+        ]
+    );
+    let rendered: Vec<_> = [
+        "song-menu-new",
+        "song-menu-edit",
+        "song-menu-delete",
+        "song-menu-update",
+        "song-menu-sort",
+        "song-menu-refresh",
+    ]
+    .into_iter()
+    .map(|id| {
+        cx.debug_bounds(id)
+            .unwrap_or_else(|| panic!("{id} rendered"))
+    })
+    .collect();
+    assert!(
+        rendered.windows(2).all(|p| p[0].bottom() <= p[1].top()),
+        "items stack top to bottom in that order"
+    );
+    let menu = cx.debug_bounds("song-menu").unwrap();
+    let row = cx.debug_bounds(hymn).unwrap();
+    assert!(
+        menu.contains(&row.center()),
+        "the menu opens at the pointer"
+    );
+
+    // Disabled items are inert: the menu stays, nothing opens.
+    let editors = editor_windows(&cx).len();
+    click(&mut cx, "song-menu-update");
+    click(&mut cx, "song-menu-sort");
+    operator.read_with(&cx, |o, _| {
+        assert!(menu_open(o));
+        assert_eq!(o.dialog, None);
+        assert!(o.library_error.is_none());
+    });
+    assert_eq!(editor_windows(&cx).len(), editors);
+
+    // Escape closes it and returns focus to the row.
+    cx.simulate_keystrokes("escape");
+    assert!(!operator.read_with(&cx, |o, _| menu_open(o)));
+    assert!(cx.debug_bounds("song-menu").is_none());
+    let row_index = if hymn == "song-0" { 0 } else { 1 };
+    cx.update(|window, cx| {
+        let focused = window.focused(cx);
+        operator.read_with(cx, |o, _| {
+            assert_eq!(focused.as_ref(), o.song_rows.get(row_index))
+        })
+    });
+
+    // A click outside closes it.
+    right_click(&mut cx, hymn);
+    click(&mut cx, "Preview");
+    assert!(!operator.read_with(&cx, |o, _| menu_open(o)));
+
+    // Keyboard: Shift+F10 opens on the focused row with the first item lit;
+    // Up/Down skip disabled items and wrap; they never reach the schedule.
+    click(&mut cx, hymn);
+    cx.simulate_keystrokes("shift-f10");
+    assert_eq!(operator.read_with(&cx, highlight_of), Some(0));
+    cx.simulate_keystrokes("down");
+    assert_eq!(operator.read_with(&cx, highlight_of), Some(1));
+    cx.simulate_keystrokes("down");
+    assert_eq!(operator.read_with(&cx, highlight_of), Some(2));
+    cx.simulate_keystrokes("down");
+    assert_eq!(operator.read_with(&cx, highlight_of), Some(5));
+    cx.simulate_keystrokes("down");
+    assert_eq!(operator.read_with(&cx, highlight_of), Some(0));
+    cx.simulate_keystrokes("up");
+    assert_eq!(operator.read_with(&cx, highlight_of), Some(5));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        operator.read_with(&cx, highlight_of),
+        Some(0),
+        "Tab stays in the menu"
+    );
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.schedule_message, None, "Up/Down went to the menu");
+        assert!(o.schedule.entries().is_empty());
+    });
+    cx.simulate_keystrokes("escape");
+    assert!(!operator.read_with(&cx, |o, _| menu_open(o)));
+
+    // Refresh reloads Songs through the storage worker.
+    Repository::open(&path)
+        .unwrap()
+        .save_song(
+            None,
+            Song {
+                title: "Third Psalm".into(),
+                authors: String::new(),
+                copyright: String::new(),
+                license: String::new(),
+                variants: Vec::new(),
+                sections: vec![Section {
+                    id: SectionId::allocate(),
+                    label: String::new(),
+                    lyrics: "An added original line".into(),
+                    format: Default::default(),
+                    background: None,
+                }],
+                master: None,
+            },
+        )
+        .unwrap();
+    cx.simulate_keystrokes("menu up enter");
+    assert!(!operator.read_with(&cx, |o, _| menu_open(o)));
+    settle(&mut cx, &operator, "refreshed songs", |o| {
+        o.catalog.len() == 3
+    });
+    assert!(operator.read_with(&cx, |o, _| {
+        o.catalog.iter().any(|(_, t)| t == "Third Psalm")
+    }));
+}
+
+fn highlight_of(o: &Operator, _: &gpui::App) -> Option<usize> {
+    highlight(o)
+}
+
+#[gpui::test]
+fn edit_song_opens_that_song_new_song_a_blank_one_and_a_save_refreshes_songs(
+    cx: &mut TestAppContext,
+) {
+    use gpui::EntityInputHandler;
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_songs(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    let hymn = song_row(&mut cx, &operator, "Signal Hymn");
+    let canticle = song_row(&mut cx, &operator, SECOND_SONG);
+    let first = operator.read_with(&cx, |o, _| version_of(o, "Signal Hymn"));
+
+    // New Song… opens an empty, unsaved editor.
+    let before = editor_windows(&cx);
+    right_click(&mut cx, canticle);
+    click(&mut cx, "song-menu-new");
+    let (_, blank) = opened_editor(&mut cx, &before, |(_, _, busy)| !busy);
+    blank.read_with(&cx, |e, cx| {
+        let (version, song, _) = e.probe(cx);
+        assert_eq!(version, None);
+        assert_eq!(song.title, "");
+        assert_eq!(song.sections.len(), 1);
+        assert_eq!(
+            (
+                song.sections[0].label.as_str(),
+                song.sections[0].lyrics.as_str()
+            ),
+            ("", "")
+        );
+    });
+
+    // Edit Song… opens the right-clicked song's saved revision.
+    let before = editor_windows(&cx);
+    right_click(&mut cx, hymn);
+    click(&mut cx, "song-menu-edit");
+    let (mut editor_cx, editor) = opened_editor(&mut cx, &before, |(version, _, busy)| {
+        version.is_some() && !busy
+    });
+    editor.read_with(&editor_cx, |e, cx| {
+        let (version, song, _) = e.probe(cx);
+        assert_eq!(version, Some(first));
+        assert_eq!(song.title, "Signal Hymn");
+        let lyrics: Vec<_> = song.sections.iter().map(|s| s.lyrics.as_str()).collect();
+        assert_eq!(
+            lyrics,
+            [
+                "First original line\nSecond original line",
+                "Original refrain",
+                "Original bridge"
+            ]
+        );
+    });
+    assert_eq!(
+        editor_cx.window_title().as_deref(),
+        Some("Song Editor - Signal Hymn")
+    );
+    settle(&mut cx, &operator, "preview", |o| {
+        o.preview.as_ref().is_some_and(|p| p.version == first)
+    });
+
+    // Apply in the editor: the operator's Songs reload without a cue.
+    let title = editor.read_with(&editor_cx, |e, _| e.probe_title_field());
+    editor_cx.update(|window, cx| {
+        title.update(cx, |field, cx| {
+            let end = field.text().encode_utf16().count();
+            field.replace_text_in_range(Some(0..end), "Signal Hymn (edited)", window, cx);
+        });
+        editor.update(cx, |e, cx| e.probe_apply(window, cx));
+    });
+    settle_editor(&mut editor_cx, &editor, |(version, _, busy)| {
+        !busy && version.is_some_and(|v| v.revision == first.revision + 1)
+    });
+    settle(&mut cx, &operator, "songs show the saved title", |o| {
+        o.catalog.iter().any(|(_, t)| t == "Signal Hymn (edited)")
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.catalog.len(), 2);
+        assert!(!o.catalog.iter().any(|(_, t)| t == "Signal Hymn"));
+        assert!(o.output.is_none() && o.live.is_none());
+    });
+    // The selection follows the song to its saved revision.
+    settle(&mut cx, &operator, "preview of the saved revision", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.title == "Signal Hymn (edited)" && p.version.id == first.id)
+    });
+    assert_eq!(
+        Repository::open(&path)
+            .unwrap()
+            .catalog(None)
+            .unwrap()
+            .into_iter()
+            .filter(|(v, _)| v.id == first.id)
+            .map(|(_, t)| t)
+            .collect::<Vec<_>>(),
+        ["Signal Hymn (edited)"]
+    );
+}
+
+#[gpui::test]
+fn deleting_a_scheduled_live_song_keeps_snapshots_and_the_live_scene(cx: &mut TestAppContext) {
+    use crate::operator::{DIALOG_CANCEL, Dialog};
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_songs(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    let pinned = operator.read_with(&cx, |o, _| o.schedule.entries()[0].version);
+    assert_eq!(
+        pinned,
+        operator.read_with(&cx, |o, _| version_of(o, "Signal Hymn"))
+    );
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    let hymn = song_row(&mut cx, &operator, "Signal Hymn");
+    double_click(&mut cx, hymn);
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+
+    // Delete asks first; Keep (the default) leaves the song.
+    right_click(&mut cx, hymn);
+    click(&mut cx, "song-menu-delete");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.dialog),
+        Some(Dialog::DeleteSong(pinned))
+    );
+    assert_control(&mut cx, &operator, DIALOG_CANCEL);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.dialog, None);
+        assert_eq!(o.catalog.len(), 2);
+        assert_eq!(o.song_message, None);
+    });
+    assert_eq!(
+        Repository::open(&path)
+            .unwrap()
+            .catalog(None)
+            .unwrap()
+            .len(),
+        2
+    );
+
+    right_click(&mut cx, hymn);
+    click(&mut cx, "song-menu-delete");
+    click(&mut cx, "dialog-confirm");
+    settle(&mut cx, &operator, "song deleted", |o| {
+        o.song_message == Some(("Deleted “Signal Hymn”".into(), false))
+    });
+    settle(&mut cx, &operator, "songs refreshed", |o| {
+        o.catalog.len() == 1 && !o.catalog_refresh_pending()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.catalog[0].1, SECOND_SONG);
+        assert_eq!(submitted(o), sent, "a delete sends no cue");
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
+        assert_eq!(o.live.as_ref().unwrap().version, pinned);
+        // Preview keeps the slides it had prepared.
+        let preview = o.preview.as_ref().unwrap();
+        assert_eq!((preview.version, preview.slides.len()), (pinned, 3));
+        assert_eq!(o.selected_song, None);
+        assert_eq!(entry_titles(o), ["Signal Hymn"]);
+    });
+    let repository = Repository::open(&path).unwrap();
+    assert_eq!(
+        repository
+            .catalog(None)
+            .unwrap()
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect::<Vec<_>>(),
+        [SECOND_SONG]
+    );
+    assert_eq!(repository.song(pinned).unwrap().title, "Signal Hymn");
+    drop(repository);
+
+    // The scheduled snapshot still previews and navigates live.
+    click(&mut cx, "schedule-item-0");
+    settle(&mut cx, &operator, "scheduled snapshot previewed", |o| {
+        o.preview.as_ref().is_some_and(|p| {
+            p.entry.is_some() && p.version == pinned && p.slides[2].text == "Original bridge"
+        })
+    });
+    click(&mut cx, "live-next");
+    settle(&mut cx, &operator, "live still navigates", |o| {
+        o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+
+    // And it still saves and reopens from storage.
+    cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+    cx.simulate_keystrokes("ctrl-s");
+    let input = operator.read_with(&cx, |o, _| o.title_input.clone().unwrap());
+    cx.update(|_, cx| input.update(cx, |i, cx| i.set_text("After delete", cx).unwrap()));
+    cx.simulate_keystrokes("enter");
+    settle(&mut cx, &operator, "schedule saved", |o| {
+        o.schedule.saved().is_some() && !o.schedule.is_dirty()
+    });
+    let saved = operator.read_with(&cx, |o, _| o.schedule.saved().unwrap());
+    let (stored, songs) = Repository::open(&path).unwrap().schedule(saved).unwrap();
+    assert_eq!(stored.items, [pinned]);
+    assert_eq!(songs[0].title, "Signal Hymn");
+    assert_eq!(songs[0].sections[1].lyrics, "Original refrain");
+}
+
+#[gpui::test]
+fn a_failed_delete_shows_why_and_keeps_the_row(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_songs(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    let hymn = song_row(&mut cx, &operator, "Signal Hymn");
+    let shown = operator.read_with(&cx, |o, _| version_of(o, "Signal Hymn"));
+    right_click(&mut cx, hymn);
+    click(&mut cx, "song-menu-delete");
+
+    // A newer revision is saved elsewhere before the delete is confirmed.
+    let mut repository = Repository::open(&path).unwrap();
+    let mut revised = repository.song(shown).unwrap();
+    revised.sections[0].lyrics = "Revised elsewhere".into();
+    let head = repository.save_song(Some(shown), revised).unwrap();
+    drop(repository);
+
+    click(&mut cx, "dialog-confirm");
+    settle(&mut cx, &operator, "delete refused", |o| {
+        o.song_message.as_ref().is_some_and(|(_, failed)| *failed)
+    });
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.song_message.clone()),
+        Some((
+            "Not deleted: “Signal Hymn” was changed or deleted elsewhere".into(),
+            true
+        ))
+    );
+    assert!(cx.debug_bounds("song-message").is_some());
+    settle(&mut cx, &operator, "songs refreshed", |o| {
+        o.catalog.iter().any(|(v, _)| *v == head) && !o.catalog_refresh_pending()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.catalog.len(), 2, "the row stays");
+        assert_eq!(
+            o.selected_song,
+            Some(head),
+            "the selection follows the song"
+        );
+    });
+    let catalog = Repository::open(&path).unwrap().catalog(None).unwrap();
+    assert!(catalog.contains(&(head, "Signal Hymn".to_string())));
+}

@@ -621,8 +621,14 @@ Follow-ups:
 - M1-05s EW's Auto aspect toggle (EW8-OBS-040: what Auto means beyond
   showing Stretch is unrecorded) and rendered image backgrounds in the
   operator's Preview/Live tiles. Planned.
-- M1-05i Library right-click New Song…/Edit Song…/Delete in the operator
-  (EW8-OBS-021). Planned.
+- [x] M1-05i Library right-click New Song…/Edit Song…/Delete in the operator
+  (EW8-OBS-021); Delete confirms and keeps schedule snapshots and Live,
+  Refresh and editor saves reload Songs off the UI thread
+  (implemented-unqualified, see
+  [operator shell](operator-shell.md#m1-05i--operator-song-menu)). Open:
+  running `scripts/operator-menu-windows.py`, EW observation of menu
+  keyboard access and the Delete confirmation, Update items in Schedule
+  and Sort by ▸ (shown disabled), multi-song delete.
 
 - [ ] Implement title, authors, copyright/license identifiers, lyrics and labeled
   sections based on observed fields; keep identity separate from display title.
