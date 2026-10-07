@@ -225,6 +225,11 @@ Depends on: none; reference installation/access required. Tests: N, H, L.
   create child tickets for every uncovered workflow or approved deviation.
 - [ ] Map observations to acceptance scenarios; mark all unknowns explicitly.
 
+Progress: RUN-W07A (2026-10-08) added EW8-OBS-044–066 (W04 search, arrow/page
+keys, Options inventory, schedule menus, song Info fields, Sort by, Delete,
+Go Live under masks); label jump keys and Master edit reach stay UNOBSERVED.
+All boxes stay open.
+
 Acceptance: implementation has a traceable behavioral reference, not screenshots
 alone. Partial observations unblock only the workflows they actually cover.
 

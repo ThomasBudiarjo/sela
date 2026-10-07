@@ -200,7 +200,7 @@ remain `planned`. Update the current state above when switching work.
 | --- | --- | --- |
 | PLAN-001 | done | 63 implementation tickets, 326 ticket checklist items, test/compatibility matrices and commit/resume rules. Documentation verified; delivered in this local planning commit. No application implementation. |
 | M0-01 | done | Pinned native GPUI window, lockfile, CI and instructions; Linux and Windows 11 build/test/native launch/resize/quit verified (2026-10-06). |
-| M0-02 | active | Public-source ledger (SRC-01–11) and runbook; installed runs on unlicensed 8.0.49: W01 partial (layout, unlicensed output, song editor) and W02/W03 single-song static cases (selection, Go Live, masks, shortcuts, logo); W06 partial (Song Editor layout, Format pane, Ctrl+A formatting, slide backgrounds and the Master layout, RUN-W06E–I). Open: multi-item W02, combined-mask double-click, motion/audio, W04–W06. |
+| M0-02 | active | Public-source ledger (SRC-01–11) and runbook; installed runs on unlicensed 8.0.49: W01 partial (layout, unlicensed output, song editor) and W02/W03 single-song static cases (selection, Go Live, masks, shortcuts, logo); W06 partial (Song Editor layout, Format pane, Ctrl+A formatting, slide backgrounds and the Master layout, RUN-W06E–I). RUN-W07A (2026-10-08): W04 search rule, key/page semantics, Options, schedule menu, song Info/copyright, Sort by, Delete (EW8-OBS-044–066). Open: multi-item W02, combined-mask double-click, motion/audio, label jump keys, Master edit reach, W05–W06. |
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, synthetic preparation and operator exit/kill on Linux and Windows DX12 physical displays, incl. mixed-DPI moves, fullscreen, both GPUs, and an idle-machine rerun; hotplug, device loss, present pacing open. |
 | M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
@@ -3130,3 +3130,20 @@ PY
   - Or a second wave pairing M1-11b with an independent backend ticket
     (for example M1-14 OpenLyrics core). M1-11b and the search box both
     touch `operator.rs`, so they should not run in parallel.
+
+### M0-02 / RUN-W07A — Foundation and Sunday-core EW observation — 2026-10-08
+
+- State: observation only, no code. Recorded EW8-OBS-044–066 in
+  `reference-observations.md`. Captures (ignored) under
+  `.amp/in/artifacts/ew-w07*/`.
+- Decisions: library search is live from 1 character and word-prefix over
+  title, labels and lyric words (Sela keeps the >=2 character FTS decision as
+  a deviation); Left/Right/Home/End navigate slides, PageDown/PageUp navigate
+  schedule items; Delete confirm defaults to No.
+- UNOBSERVED with best guesses: label jump keys, Master edit reach, Update
+  items dialog wording, Administrator/CCLI rendering, schedule multi-select
+  and drag reorder, Preview Up/Down.
+- Checks: EW closed via WM_CLOSE, `Get-Process EasyWorship` empty; the
+  unsaved-schedule prompt was answered No; nothing saved.
+- Next: consume the records in M1-07b (search), M1-02/M1-03 (keys), M5-06
+  (Options).

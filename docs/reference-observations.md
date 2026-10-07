@@ -465,6 +465,127 @@ in a combined state is provisional (EW8-OBS-020). Output off keeps mask state.
 | EW8-OBS-042 | observed (RUN-W06I) | After Ctrl+A in Words, the Slide pane shows blank values where slides differ: Media Fill with an empty thumbnail and no name, an empty aspect with Auto off, an empty Theme Elements list (i14). Choosing Color Fill then gave every slide the blue fill (slide 1 sampled `0000ff`, slide 2 in the preview; i16, i17). |
 | EW8-OBS-043 | observed (RUN-W06I) | Edit Slide Layouts opens a "Layouts ⊗" tab beside Words and Slides with a "Theme - sela-w03-background ▾" selector and one layout card "Master" (black thumbnail). The canvas shows sample lyrics ("song text line one…four") and a "Song Title Example - Author / © 2014 Publishing Company Copyright" footer over the theme background; the pane shows only a Slide tab with Theme Elements and the Master's Background (Media Fill sela-w03-background, Auto + Stretch, Opacity 100) (i19). Not observed: whether a Master change reaches slides without their own background, whether it changes the theme for other songs, and how the Layouts tab closes. |
 
+## RUN-W07A-2026-10-08 — Foundation and Sunday-core unknowns (W04 search, keys, Options, editor, schedule)
+
+- Date/observer: 2026-10-08, Droid agent (mission worker) on the owner's
+  machine. EasyWorship 8.0.49.0, unlicensed edition (the "About EasyWorship"
+  registration nag was dismissed with Continue at window pixels (574,353),
+  96 DPI). Main window `FMTFormEZWorshipMain` "EasyWorship - Default" 1936x1048
+  physical at 96 DPI on DISPLAY6; Song Editor 2578x1398 at 120 DPI.
+- Fixture: the single library song "waeqwe" (labels "etsaer" and "sadsdasd",
+  gibberish lyrics such as "wqeqwewe", "qweqwe", "fedwfeq2fqef"). No song was
+  added, edited-and-saved or deleted; the schedule held three drags of that
+  song. The Song Editor and the Delete confirmation were cancelled; on exit
+  EW asked "The current Schedule is not saved. Would you like to save it
+  now?" (Yes / No / Cancel) and the agent chose No. Nothing was saved; no EW
+  data directory was written. EW closed via WM_CLOSE and `Get-Process
+  EasyWorship` was empty.
+- Method: local drivers in `.amp/in/artifacts/ew-w07-driver/` (`w07.py` wrapping
+  `.amp/in/explore/ew.py`; `crop.py`, `montage.py`, `grabrect.py`, `drag.py`),
+  PrintWindow captures plus screen grabs for popups. Captures (ignored,
+  local): `.amp/in/artifacts/ew-w07a-search/`, `ew-w07b-keys/`,
+  `ew-w07c-labeljump/`, `ew-w07d-options/`, `ew-w07f-editor/`,
+  `ew-w07g-schedule/`, `ew-w07h-update/`, `ew-w07i-songs-menu/`,
+  `ew-w07j-boundary/`, `ew-w07k-golive-masks/`, `ew-w07-nag/`.
+- Input caveats (tooling, not EW semantics): toolbar buttons (Go Live, Logo,
+  Black, Clear) ignore synthetic mouse clicks (the known toolbar quirk), so
+  masks were driven with Ctrl+B / Ctrl+L and Go Live with the Live menu
+  (Alt+L, Down, Enter). Top menus open only with Alt+letter; a menu opens
+  upward and is cut off when the window is maximized, so menus were read at the
+  800x600 restored size. Library-pane clicks that missed a control are
+  noted below where it matters.
+- Only one song exists, so search ranking, multi-hit lists and Sort by effects
+  on order could not be observed.
+
+### W04 library search box (topic 1)
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-044 | observed (RUN-W07A) | Songs search box lives at the bottom of the Songs pane, left of it a magnifier/menu icon; placeholder "Search". When the pane first showed the box it displayed the previewed song title ("waeqwe") with the whole text selected and ignored typed keys (typed letters were dropped); clicking the left icon switched it to the empty "Search" field that accepts text. Likely a "current item" display state versus a search state; trigger not isolated (UNOBSERVED exact rule). Best guess for Sela: a plain empty search field, no title echo. |
+| EW8-OBS-045 | observed (RUN-W07A) | Live filtering: the list updates after each keystroke, no Enter, minimum length 1 ("w" matches). A "clear" ⊗ button appears at the right of the box while it holds text; clicking it (or Ctrl+A then Backspace, or Esc) empties the box and restores the full list. Focus stays in the box while typing. No-results state: the list is empty with no message text, no "no results" row (typing "z" or "zq"). Enter in the box did nothing visible (no list change, no preview/live change). |
+| EW8-OBS-046 | observed (RUN-W07A) | Match rule: case-insensitive **word-prefix** match over title, slide labels and lyric words. Matches: "w", "WAE", "waeqwe" (title word prefix); "qwe", "qweq" (lyric word "qweqwe"); "ets", "etsa" (label "etsaer"); "sad", "sads" (label "sadsdasd"). Non-matches: "aeq", "ae" (substrings inside "waeqwe" do not match), "z". Not a substring match. Whether the field is "contextual" beyond title+lyrics+labels (author, copyright) is UNOBSERVED (single song with empty metadata); best guess: same word-prefix rule over Title/Author/Copyright and lyrics. |
+| EW8-OBS-047 | observed (RUN-W07A) | After a search, selection/focus: a click on the result row selects it into Preview; double-click sends it to Preview and Live. Down in the box was not shown to move into the list (UNOBSERVED). |
+
+Implementation implications (M1-07b): live filter from 1 character is EW
+behaviour; the owner decision is FTS only for >=2 chars, so Sela shows the full
+list for 1 character and records it as a deliberate deviation. Use word-prefix
+matching on title, labels and lyric words, not substring. Esc and ⊗ clear;
+empty result shows an empty list.
+
+### Arrow/page/home/end semantics (topic 2)
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-048 | observed (RUN-W07A) | Schedule focused (three song items): Up/Down move the selected item one step, End selects the last item, Home the first (no wrap at the ends); Preview and Live do not change when only the selection moves. PageDown moved the selection down one item and its highlight turned grey (focus left the Schedule); a following PageUp did not move it back. The exact focus target after PageDown is UNOBSERVED. Right/Left in the Schedule had no visible effect. |
+| EW8-OBS-049 | observed (RUN-W07A) | Preview focused (song with 4 slides): Home selects slide 1, End slide 4, Up moved slide 2 → 1; Down at slide 2 did not move it (once; may step through lines inside a slide, UNOBSERVED); Right/Left did not change the slide from slide 1; PageDown left the slide and turned the highlight grey. Treat Preview arrows as partially observed. |
+| EW8-OBS-050 | observed (RUN-W07A) | Live focused: Right goes to the next slide (s2 → s3), Left to the previous (s3 → s2); Home → slide 1, End → slide 4; Up and Down did not change the slide. PageDown from slide 2 loaded the **next Schedule item** into Live at its slide 1 (the schedule items were the same song three times); PageUp at slide 1 did not change it. This resolves the help-page conflict as: Left/Right (and Home/End) move slides, PageDown/PageUp move schedule items; Up/Down are not slide navigation in Live. |
+| EW8-OBS-051 | observed (RUN-W07A) | Boundaries: with slide 4 (last) live, Right stayed on slide 4 twice (no wrap, no automatic jump to the next item); with slide 1 live, Left stayed on slide 1 (no previous item). The schedule selection did not change. Advancing across items is by PageDown (EW8-OBS-050) and by Go Live with Options › Advanced "Advance Schedule after Go Live is pressed". |
+
+Implementation implications (M1-02/M1-03): Left/Right = prev/next slide with
+no wrap or item crossing; Home/End = first/last slide of the live song;
+PageDown/PageUp = next/previous schedule item (loads slide 1); Up/Down in the
+Schedule move the selection. Preview Up/Down and PageUp-in-Schedule remain
+open (best guess: Up/Down = line step, PageUp mirrors PageDown).
+
+### Label jump keys (topic 3)
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-052 | UNOBSERVED (RUN-W07A) | Plain keys V, then 2, then Enter, and C, Enter, and 3, Enter with Live focused and slide 2 live changed nothing. The fixture's labels ("etsaer", "sadsdasd") are not recognised label kinds and a new labelled song cannot reach Live without saving, so a real "V,1,Enter" jump could not be tested. Options › Slide Labels (EW8-OBS-056) lists the key table, so the jump keys exist as a feature of the label table. Best guess: typing the label's shortcut letter, an optional number and Enter jumps to that labelled slide within a short timeout (as the help text says); Sela's label-jump feature will use that and treat unrecognised labels as Verse. |
+
+### Options dialog inventory (topic 4)
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-053 | observed (RUN-W07A) | Menus (read at 800x600): **File** New ▸, Open Schedule Ctrl+O, Open Recent, Save Schedule Ctrl+S, Save Schedule As..., Export Standalone Schedule..., Close Schedule, Reports and Printing ▸, Exit. **Edit** Cut, Copy, Paste, Delete, Select All and Options... (last). **Live** Go Live, Go Back (disabled), separator, Show Logo on Live Output, Black on Live Output, Clear Text on Live Output, separator, ✓ Show Live Output. Also Profiles, View and Help menus (captures `ew-w07d-options/menu-*.png`). The Options dialog opens from Edit › Options (class `FMTForm_Options`, 716x570, modal with OK / Cancel). |
+| EW8-OBS-054 | observed (RUN-W07A) | Options is a left list of sections: Main Output, Alternate Output, Foldback, Service Intervals, Slide Labels, Advanced. **Main Output** has a tab strip General, Song, Scripture, Presentations, Transitions, Alerts (captures `main-*.png`, `opt00.png`). |
+| EW8-OBS-055 | observed (RUN-W07A) | Main Output › Song tab includes copyright handling: the option "Show on first displayed slide only" governs where the copyright strip appears (unchecked in this install = every slide). Other Song/Scripture/Presentations/Transitions/Alerts controls were read from captures `ew-w07d-options/main-song.png`…`main-alerts.png` (montages `mA.png`, `mB.png`); list the text in those images when implementing Output settings. |
+| EW8-OBS-056 | observed (RUN-W07A) | Slide Labels section: table of label kind → shortcut: BRIDGE "B, NUM ."; CHORUS "C"; END/ENDING "E, NUM ."; INTRO "I"; MISC "M"; PRE-CHORUS "R"; TAG "T, NUM ."; VERSE "V" (`sec-labels.png`, `mD.png`). Advanced section contains "Advance Schedule after Go Live is pressed" (checked here) among its options; Alternate Output, Foldback and Service Intervals pages are in `mC.png`/`mD.png`. No Language selector was found in any section (UNOBSERVED beyond that; Sela's English/Indonesian switch is Sela's own). The dialog was closed with Cancel. |
+
+Implementation implications (M5-06 settings): mirror the section list; Options
+stays Edit › Options with Cancel discarding. Per-field details are in the
+captures; do not claim a field that is not in `mA/mB/mC/mD.png`.
+
+### Song Master edit and Ctrl+A in the Song Editor (topics 5, 6)
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-057 | UNOBSERVED (RUN-W07A) | Whether a Master layout edit reaches existing slides. Edit Slide Layouts was not opened again: RUN-W06I already found synthetic clicks on the Fill control ignored, and no input path was found this run. Best guess (used by M1-05h): slides without their own background follow the Master; slides with their own keep it. |
+| EW8-OBS-058 | observed (RUN-W07A) | Ctrl+A in Words (caret in slide 2) selects the whole document and the preview moves to the last slide. The Format pane then shows two tabs, **Slide and Text**, and clicking Text works: it shows Style/Layout (Tahoma, Auto, etc.) for the multi-selection, with Theme Elements blank. This differs from EW8-OBS-035 (only Slide tab while all slides selected in the Slides tab): the Text tab stays reachable after Ctrl+A in Words (`ew-w07f-editor/e09-ctrla.png`, `e10-text-click.png`). The editor was cancelled with Cancel → No. |
+
+### Schedule (topic 7)
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-059 | observed (RUN-W07A) | Dragging the song row from the Songs list onto the Schedule pane adds an item ("Schedule - UNTITLED"); three drags gave three items titled "waeqwe". Double-click on a library row sends it to Preview and Live, not to the Schedule. Right-click on a schedule item: Add Item ▸, Edit Item..., Edit Title..., Edit Note..., Move Item Up, Move Item Down, Remove from Schedule, Duplicate Slide (disabled), Expand All Items, Collapse All Items, Check Schedule for changes..., ✓ Auto-Expand Items When Dragging, Refresh Thumbnails, View ▸. There is **no** Duplicate Item or Copy Item entry. |
+| EW8-OBS-060 | observed (RUN-W07A) | Ctrl+C then Ctrl+V and Ctrl+D with a schedule item selected did not add or copy an item. Multi-select (Ctrl/Shift click) was not captured (UNOBSERVED; best guess: Ctrl/Shift multi-select as in other lists, Move/Remove apply to the selection). Reorder by drag inside the Schedule was not captured. |
+| EW8-OBS-061 | observed (RUN-W07A) | Library context menu on a song: New Song..., Edit Song..., Delete, Update items in Schedule, Sort by ▸, Refresh. With an empty schedule "Update items in Schedule" is disabled. With three schedule items it is enabled; choosing it (song unchanged) closed the menu with no dialog (UNOBSERVED: the dialog wording/diff only shows when the song changed, which needs a save). Best guess: a confirmation listing the affected schedule items; Sela's equivalent shows a count and Yes/No. |
+
+### Song properties and copyright (topic 8)
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-062 | observed (RUN-W07A) | Song Editor › Presentation › Info tab fields: Title, Author, Copyright (with a © button), Administrator, Song Number, and Reporting Provider ▾ (None). The Presentation pane sits at the right end of the toolbar and has tabs; Info is the metadata tab. |
+| EW8-OBS-063 | observed (RUN-W07A) | Copyright on output: the slide's copyright strip (theme element "copyright") renders "Title - Author" on line 1 and the Copyright text on line 2 (typed Author "Synthetic Author", Copyright "Synthetic Copyright 2026" → strip "waeqwe - Synthetic Author…" / "Synthetic Copyright 2026"); updates as typed. Song Number was not shown in the strip. Administrator display and the CCLI number mapping are UNOBSERVED (a click aimed at the Administrator field typed into another field). First- vs last-slide: Options › Main Output › Song "Show on first displayed slide only" decides it (unchecked: every slide); the editor preview showed the strip on the shown slide. |
+
+### Songs list Sort by and Delete (topic 9)
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-064 | observed (RUN-W07A) | Library context menu Sort by ▸ submenu: Title (✓), Author, Copyright, Administrator, Song Number; separator; Ascending (✓?) / Descending. The checked direction mark was read as Descending checked in the capture; treat direction default as unconfirmed. `ew-w07i-songs-menu/ctx2-sortby.png`. |
+| EW8-OBS-065 | observed (RUN-W07A) | Delete opens a "Confirm" dialog (class `FMTForm_CollectionItemRemoveDlg`) "Are you sure you want to permanently delete this song?" with Yes and No. The default is No (it looks focused); Esc did **not** close it; clicking No closed it and kept the song. Enter was not pressed (it could have deleted). |
+
+### Go Live under masks (topic 10)
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-066 | observed (RUN-W07A) | With Black on (Ctrl+B), selecting Preview slide 2 and Live › Go Live moves Live to slide 2 and Black stays on; Ctrl+B again turns it off. Same with Logo (Ctrl+L): Go Live to slide 3 kept Logo until Ctrl+L. This repeats and agrees with the W03 masked-apply rows. Toolbar button clicks were ignored by synthetic input and are not part of this observation. |
+
+Implementation implications: Go Live and navigation keep masks; the Delete
+confirmation defaults to No and ignores Esc (Sela should still allow Esc =
+No); Sort by lists Title, Author, Copyright, Administrator, Song Number plus
+direction.
+
 ## D-UI-01 — Official toolbar image (documented-only, 2026-10-04)
 
 - Source: <https://www.easyworship.com/software/features>; directly fetched and
