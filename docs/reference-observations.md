@@ -406,6 +406,32 @@ in a combined state is provisional (EW8-OBS-020). Output off keeps mask state.
 | EW8-OBS-032 | observed (RUN-W06G) | Slide pane: Slide Layout thumbnail with "Master" ▾; Theme Elements (Show/Hide) checklist song [x], scripture [ ], copyright [x]; Background: Media Fill ▾ with thumbnail and name, Select Media…, Media Usage ▾ (Background), Aspect Ratio Auto + ▾ (Stretch), Repeating Auto (disabled), Rotate + flip H/V, Volume (disabled for an image), Opacity 100; Edit Slide Layouts at the bottom. |
 | EW8-OBS-033 | observed (RUN-W06G) | Formatting scope is per slide: Shadow → None on slide 1 removed the shadow on slide 1 only; slide 3 kept Shadow Enabled, and slide 1 kept None after switching away and back. Apply became enabled once the box was selected and the Format › Text pane shown, before any value changed. A reopened editor shows the saved/theme values again (unsaved changes are discarded with Cancel → No). Not observed: a way to apply formatting to all slides at once (multi-select, Masters, Reset Styles, Reapply Layout to Element), what is saved, schedule/live rendering of a formatted song. |
 
+## RUN-W06H-2026-10-07 — Ctrl+A whole-song formatting (partial W06)
+
+- Date/observer: 2026-10-07 +07:00, Droid agent on the owner's machine with
+  the owner present and authorizing; same install and host as RUN-W06G. The
+  owner opened and maximized the editor himself (2578x1398 physical, 120 DPI);
+  it was later restored to 1816x1005 (cause not recorded).
+- Fixture: the owner's placeholder song "waeqwe" (four slides: "etsaer",
+  two unlabeled, "sadsdasd"). The owner closed EasyWorship himself at the end;
+  the agent saved nothing (its final Cancel click found no editor window).
+- Method: the RUN-W06E driver through a local wrapper
+  (`.amp/in/explore/ewh.py`, not committed). Captures (ignored, local):
+  `.amp/in/artifacts/reference/ew8-w06h-format/h00…h08`.
+- Input caveat (tooling): a synthetic `mouse_event` click and a hover-then-click
+  on Italic both focused the font-family field instead (the RUN-W06G
+  B/I/U quirk). The owner clicked Italic with the real mouse.
+- The owner ended the run after EW8-OBS-035, reporting that with Ctrl+A every
+  formatting choice (font and the rest) applies to all slides. Undo of a
+  whole-song format change, typing over the selection, slider/dial drags and
+  the Size step amount were not observed.
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-034 | observed (RUN-W06H) | Ctrl+A with the caret in slide 2's lyrics selects the text of every Words row (labels and lyrics of all slides, empty labels shown as selected gaps) and moves the caret to the end of the last slide; the preview follows that slide. The selection stays (grey) while a Format pane control has focus (h02, h03). |
+| EW8-OBS-035 | observed (RUN-W06H) | With everything selected, Italic (owner's real click) made every slide italic: all Words rows render italic and every Slides thumbnail shows italic text (h05, h06). In the same run the family became Agency FB on every slide after the stray font-field focus; the agent did not choose it, so the trigger is unrecorded, but the change applied to all slides. The Slides tab shows every thumbnail selected and the Format pane shows only the Slide tab (no Text tab) while all slides are selected (h06). Owner-reported (not separately observed): every Format pane choice applies to all slides after Ctrl+A. |
+| EW8-OBS-036 | observed (RUN-W06H) | Switching Words → Slides → Words ends the whole-song selection: Words shows only a caret at the end of the last slide, and the Text pane shows that slide's values (Agency FB, B and I on) (h07). One Ctrl+Z then changed no visible format (h08); what it undid is unrecorded. |
+
 ## D-UI-01 — Official toolbar image (documented-only, 2026-10-04)
 
 - Source: <https://www.easyworship.com/software/features>; directly fetched and

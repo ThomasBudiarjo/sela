@@ -6,6 +6,10 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Ctrl+A formatting observed (RUN-W06H, 2026-10-07):** EW8-OBS-034–036:
+  Ctrl+A selects every slide and a format change (Italic, font) applies to
+  all of them. M1-05g stays **active**; next is g3a (Format pane), then g3b
+  (Ctrl+A whole-song selection) per the approved spec.
 - **Styled slides render (M1-05g2, 2026-10-06):** M1-05g stays **active**;
   g1 and g2 are done, g3 is next. Every per-slide `SlideFormat` field stored
   in g1 now renders on one shared path (audience, editor preview, Slides
@@ -2529,3 +2533,26 @@ PY
   backtick (and turned some following letters into control characters).
   Restored from the source; write docs with the file tools or .NET
   `File.WriteAllText`, never through PowerShell string interpolation.
+
+### M0-02 / RUN-W06H — Ctrl+A whole-song formatting observation — 2026-10-07 (UTC+7)
+
+- State: observation only, no code. Phase 0 of the approved M1-05g3 spec
+  (owner answers: EW-style font rows with samples, full sliders and angle
+  dial now, observe first with the owner present). Recorded
+  EW8-OBS-034–036 in reference-observations.md; captures in
+  `.amp/in/artifacts/reference/ew8-w06h-format/`.
+- Result: Ctrl+A in Words selects every slide's labels and lyrics with the
+  caret at the end of the last slide; Italic then applied to every slide
+  (Words and Slides thumbnails); the Slides tab shows every thumbnail
+  selected. Leaving Words for Slides and back ended the selection. The
+  owner ended the run and confirmed that after Ctrl+A every format choice
+  (font and the rest) applies to all slides.
+- Not observed (Sela choices recorded in the g3 entries): undo of a
+  whole-song change, typing/paste/Backspace over the selection, Copy,
+  slider/dial drags, Size step amount, Reset Size/Styles, what the pane
+  shows for mixed values. A synthetic Italic click focused the font field
+  instead (RUN-W06G quirk); the family became Agency FB on all slides
+  without an agent choice, trigger unrecorded.
+- The owner closed EasyWorship himself; the agent saved nothing.
+- Next: g3a Format pane (per-slide apply, sliders, dial, undo), then g3b
+  Ctrl+A whole-song selection.

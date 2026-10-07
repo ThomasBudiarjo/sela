@@ -529,8 +529,9 @@ Follow-ups:
   inspector Text › Style/Layout controls, theme defaults, and **per-slide**
   scope in 8.0.49 (an "apply to all slides" path was not observed). Owner
   decision 2026-10-06: per slide; Ctrl+A selects all slides so one change
-  formats the whole song, and typing then replaces the whole text like EW
-  (owner-reported, unobserved). **Active**, three slices:
+  formats the whole song (observed in RUN-W06H, EW8-OBS-034–036), and
+  typing then replaces the whole text like EW (owner-reported, unobserved).
+  **Active**, three slices:
   - [x] g1 per-slide `SlideFormat` model and schema 3 with a verified backup
     (implemented-unqualified, see [storage](storage.md)).
   - [x] g2 rendering core (g2a): installed-font catalog with bounds and LRU
