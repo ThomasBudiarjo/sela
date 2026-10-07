@@ -33,7 +33,7 @@ def payload(path):
 
 def section_ids(path):
     with sqlite3.connect(path, timeout=1) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
         return [
             row[0]
             for row in db.execute(

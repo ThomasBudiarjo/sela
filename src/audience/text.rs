@@ -951,6 +951,7 @@ mod tests {
             label: "Verse".into(),
             text: "Original refrain".into(),
             format: format.clone(),
+            background: None,
         };
         let resolved = sela::fonts::Resolved::bundled(&format);
         let extent = Extent {

@@ -46,15 +46,16 @@ neither paths nor SQLite messages nor lyric payloads; don't log Commands/Replies
 
 ## Schema and durable meaning
 
-Current schema 3 uses `application_id=0x53454c41`, `user_version=3`, foreign keys on,
+Current schema 4 uses `application_id=0x53454c41`, `user_version=4`, foreign keys on,
 default rollback journal and synchronous FULL. `songs` tracks head/tombstone;
 `song_revisions` stores immutable original UTF-8 payloads. Encoding is repeated
 little-endian u32 byte-length + UTF-8: title, authors, copyright, license, then
 label/lyrics pairs until EOF. No normalization, line-break conversion, splitting,
 wrapping or provider assumptions. Empty sections and zero sections are preserved;
 blank title is invalid. The original schema-1 text codec remains unchanged in
-schemas 2 and 3; explicit identities, arrangements (schema 2) and per-slide
-formats (schema 3, `section_formats`) live in revision-keyed tables.
+schemas 2 to 4; explicit identities, arrangements (schema 2), per-slide
+formats (schema 3, `section_formats`) and backgrounds (schema 4,
+`song_backgrounds`, `section_backgrounds`) live in revision-keyed tables.
 
 `schedules` tracks head; `schedule_revisions` stores title; `items` records ordered
 positions and exact immutable song revisions. Repeated occurrences are retained.
@@ -66,16 +67,17 @@ No automatic garbage collection, library-refresh or cascade deletion exists.
 Snapshot occurrence identity currently is `(schedule ID, revision, position)`;
 stable cross-edit/live selection identity belongs to M1-09, not this storage slice.
 
-Fresh schema 0 initializes schema 3. Existing schema 1 or 2 upgrades only after
-the verified backup gate documented below (`<profile>.schema1-backup` or
-`<profile>.schema2-backup`; schema 1 goes straight to 3 with one backup). A schema-0 database
+Fresh schema 0 initializes schema 4. Existing schema 1, 2 or 3 upgrades only after
+the verified backup gate documented below (`<profile>.schema1-backup`,
+`<profile>.schema2-backup` or `<profile>.schema3-backup`; every older schema
+goes straight to 4 with one backup). A schema-0 database
 with user objects is foreign and rejected. Migration and validation share one
 transaction; failed migration drops/rolls back it. Nonmatching application IDs,
 newer/unsupported versions, SQLite quick-check/foreign-key failures and malformed
 payload reads are rejected. No reset, overwrite, rename or recovery mutation.
 Required column checks run at open; payload semantic validation runs on bounded
 reads. This is not an adversarial SQLite sandbox or exhaustive schema attestation.
-Backup verification never invokes upgrading open. Versions above 3 remain
+Backup verification never invokes upgrading open. Versions above 4 remain
 `Unsupported`; no migration resets, overwrites or replaces those profiles.
 
 ## Bounds and remaining parent work
@@ -362,3 +364,44 @@ storage `schema2_migrates_with_a_verified_backup_and_keeps_ids`,
 `slide_formats_round_trip_per_revision_and_default_stores_nothing`,
 `invalid_or_corrupt_formats_are_rejected_not_dropped`; the schema 1 migration
 test now also checks the live profile reaches schema 3 with one backup.
+
+## M1-05h1 — slide backgrounds / backed-up schema 4
+
+State: **implemented-unqualified** (slice h1 of M1-05h; rendering and the
+editor Slide pane follow). Source: EW8-OBS-037–043 (RUN-W06I) and the owner
+decisions recorded in the work log.
+
+`background::Background` is a fill plus an aspect. Fills are EW's None, Color
+Fill (RGB) and Media Fill: no image yet, or a profile image by bare file name
+(`images::valid_name`) pinned to the SHA-256 of the bytes chosen. Aspects
+are Maintain, Stretch and Zoom (Sela default Zoom; EW shows Auto + Stretch).
+Gradient Fill, opacity, rotate and flip are not stored yet.
+`storage::Section.background` is the slide's own background (`None` follows
+the master); `storage::Song.master` is the song's master (`None` is black).
+`slides::Slide.background` carries the resolved value.
+
+`song_backgrounds(song, revision, background)` and
+`section_backgrounds(song, revision, position, background)` hold rows only
+for a master and for slides with their own background; the section table is
+keyed to `section_ids`. The blob is a versioned canonical codec (codec byte,
+fill tag and payload, aspect; at most 320 bytes). Reads reject unknown codecs,
+tags or aspects, truncation, trailing bytes, unusable image names and rows
+past the revision's slides as `Corrupt`. Saving writes the rows in the
+revision's transaction; old revisions keep their backgrounds and schedule
+snapshots resolve them.
+
+Opening schema 3 publishes the verified `<profile>.schema3-backup` before the
+DDL, then creates both tables and sets `user_version=4` in one transaction.
+Schemas 1 and 2 reach 4 in one transaction behind their single backup.
+Backup conflict, writer lock, DDL conflict and process abort after the DDL
+(`SELA_ABORT_MIGRATION_SCHEMA4` test hook) leave the profile at schema 3 with
+identical bytes.
+
+Tests: `background::tests::*` (round trip, strict decode, resolution) and
+storage `schema3_migrates_with_a_verified_backup_and_keeps_formats`,
+`schema3_migration_gates_leave_the_library_unchanged`,
+`schema3_migration_abort_keeps_schema3_and_the_verified_backup`,
+`backgrounds_round_trip_per_revision_and_none_stores_nothing`,
+`invalid_or_corrupt_backgrounds_are_rejected_not_dropped`; the schema 1 and 2
+migration tests now check the live profile reaches schema 4 with one backup;
+`slides::tests::slides_resolve_their_own_background_else_the_master`.

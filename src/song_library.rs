@@ -95,7 +95,9 @@ fn blank() -> Song {
             label: String::new(),
             lyrics: String::new(),
             format: Default::default(),
+            background: None,
         }],
+        master: None,
     }
 }
 
@@ -343,10 +345,20 @@ fn pixels(
     }
 }
 
+type SlideKey = (
+    String,
+    sela::format::SlideFormat,
+    Option<sela::background::Background>,
+);
+
 /// Preview and thumbnail cache key: two slides with the same text but
-/// different formats render differently.
-fn slide_key(slide: &sela::slides::Slide) -> (String, sela::format::SlideFormat) {
-    (slide.text.clone(), slide.format.clone())
+/// different formats or backgrounds render differently.
+fn slide_key(slide: &sela::slides::Slide) -> SlideKey {
+    (
+        slide.text.clone(),
+        slide.format.clone(),
+        slide.background.clone(),
+    )
 }
 
 fn image_from(bgra: &[u8], extent: Extent) -> Option<Arc<RenderImage>> {
@@ -375,7 +387,7 @@ enum Nav {
 /// raster (`None` when the audience would reject the slide) and the fallback
 /// warning from face resolution, if any.
 struct Preview {
-    key: (String, sela::format::SlideFormat),
+    key: SlideKey,
     /// Laid-out size in 1080-reference px, the start of "Do not auto size
     /// text" (EW8-OBS-028).
     fitted: Option<u16>,
@@ -419,7 +431,7 @@ struct Library {
     preview_task: Option<Task<()>>,
     /// Slides-tab thumbnails by slide key (text + format, `None` =
     /// rejected), pruned to the current slides.
-    thumbnails: HashMap<(String, sela::format::SlideFormat), Option<Arc<RenderImage>>>,
+    thumbnails: HashMap<SlideKey, Option<Arc<RenderImage>>>,
     /// One thumbnail renders at a time, in slide order.
     thumbnail_task: Option<Task<()>>,
     title: String,
@@ -1007,6 +1019,7 @@ impl Library {
                 label: String::new(),
                 lyrics: String::new(),
                 format: Default::default(),
+                background: None,
             });
             section = candidate.sections.len() - 1;
         } else {
@@ -1068,6 +1081,7 @@ impl Library {
             label: String::new(),
             lyrics: tail.into(),
             format: Default::default(),
+            background: None,
         };
         let mut candidate = song.clone();
         candidate.sections[index].lyrics = head.into();
@@ -1197,7 +1211,7 @@ impl Library {
 
     /// Typing, pasting or deleting over the whole-song selection: the song
     /// becomes one unlabeled slide holding `text`, keeping slide 1's
-    /// identity and format; arrangements keep only that slide. One undo
+    /// identity, format and background; arrangements keep only that slide. One undo
     /// step restores the original. EW's exact result is unobserved.
     fn replace_all(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.locked() || !self.all {
@@ -1205,9 +1219,9 @@ impl Library {
         }
         self.exit_all(cx);
         let song = self.current(cx);
-        let (id, format) = song.sections.first().map_or_else(
-            || (SectionId::allocate(), Default::default()),
-            |s| (s.id, s.format.clone()),
+        let (id, format, background) = song.sections.first().map_or_else(
+            || (SectionId::allocate(), Default::default(), None),
+            |s| (s.id, s.format.clone(), s.background.clone()),
         );
         let mut candidate = song.clone();
         candidate.sections = vec![Section {
@@ -1215,6 +1229,7 @@ impl Library {
             label: String::new(),
             lyrics: text.into(),
             format,
+            background,
         }];
         for variant in &mut candidate.variants {
             variant.occurrences.retain(|o| o.section == id);
@@ -1343,21 +1358,21 @@ impl Library {
     }
 
     /// The current slide as the audience would show it: the caret cell's text
-    /// with the section's stored format.
+    /// with the section's stored format and resolved background.
     fn preview_slide(&self, cx: &App) -> Option<sela::slides::Slide> {
         let cell = self.cells.get(self.section)?;
-        let format = self
-            .draft
-            .sections
-            .get(self.section)
-            .map_or_else(Default::default, |s| s.format.clone());
+        let stored = self.draft.sections.get(self.section);
         let section = Section {
             id: SectionId(Id([0; 16])),
             label: String::new(),
             lyrics: cell[LYRICS].read(cx).text().into(),
-            format,
+            format: stored.map_or_else(Default::default, |s| s.format.clone()),
+            background: stored.and_then(|s| s.background.clone()),
         };
-        Some(sela::slides::section_slide(&section))
+        Some(sela::slides::section_slide(
+            &section,
+            self.draft.master.as_ref(),
+        ))
     }
 
     /// Latest-wins preview preparation off the UI thread.
@@ -1419,7 +1434,7 @@ impl Library {
             .draft
             .sections
             .iter()
-            .map(|s| slide_key(&sela::slides::section_slide(s)))
+            .map(|s| slide_key(&sela::slides::section_slide(s, self.draft.master.as_ref())))
             .collect();
         let stale: Vec<_> = self
             .thumbnails
@@ -1439,7 +1454,7 @@ impl Library {
             .draft
             .sections
             .iter()
-            .map(sela::slides::section_slide)
+            .map(|s| sela::slides::section_slide(s, self.draft.master.as_ref()))
             .find(|slide| !self.thumbnails.contains_key(&slide_key(slide)))
         else {
             return;
@@ -1465,9 +1480,10 @@ impl Library {
         let selected = self.all || index == self.section;
         let labeled = !section.label.is_empty();
         let kind = kind(&section.label);
-        let thumbnail = self
-            .thumbnails
-            .get(&slide_key(&sela::slides::section_slide(section)));
+        let thumbnail = self.thumbnails.get(&slide_key(&sela::slides::section_slide(
+            section,
+            self.draft.master.as_ref(),
+        )));
         div()
             .id(("draft-section", index))
             .track_focus(&self.section_focus[index])
@@ -2381,6 +2397,7 @@ mod tests {
             label: original.sections[0].label.clone(),
             lyrics: "Chorus asymmetric\r\n".into(),
             format: Default::default(),
+            background: None,
         });
         original.variants = vec![Variant {
             id: VariantId(Id([5; 16])),
@@ -2456,6 +2473,7 @@ mod tests {
             label: "Chorus".into(),
             lyrics: "Refrain".into(),
             format: Default::default(),
+            background: None,
         });
         let (verse, chorus) = (original.sections[0].id, original.sections[1].id);
         original.variants = vec![Variant {
@@ -2566,6 +2584,7 @@ mod tests {
                         label: "Filler".into(),
                         lyrics: String::new(),
                         format: Default::default(),
+                        background: None,
                     });
                 }
                 v.begin(full, None, cx);
@@ -2651,6 +2670,7 @@ mod tests {
             label: String::new(),
             text: text.into(),
             format: Default::default(),
+            background: None,
         }
     }
 
@@ -2759,7 +2779,9 @@ mod tests {
                             font: Some("Sela Missing Family".into()),
                             ..Default::default()
                         },
+                        background: None,
                     }],
+                    master: None,
                 },
             )
             .unwrap();
@@ -3256,6 +3278,7 @@ mod tests {
                 label: n.to_string(),
                 lyrics: format!("unique {n}"),
                 format: Default::default(),
+                background: None,
             })
             .collect();
         cx.update(|_, cx| view.update(cx, |v, cx| v.begin(many.clone(), None, cx)));
@@ -3299,12 +3322,14 @@ mod tests {
                     label: String::new(),
                     lyrics: "First\r\nline e\u{301}\n".into(),
                     format: Default::default(),
+                    background: None,
                 },
                 Section {
                     id: saved.sections[1].id,
                     label: "Chorus".into(),
                     lyrics: "Different second section".into(),
                     format: Default::default(),
+                    background: None,
                 },
             ]
         );

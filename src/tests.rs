@@ -439,6 +439,7 @@ fn library_with_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
         label: label.into(),
         lyrics: lyrics.into(),
         format: Default::default(),
+        background: None,
     };
     repository
         .save_song(
@@ -454,6 +455,7 @@ fn library_with_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
                     section("Chorus", "Original refrain"),
                     section("Bridge", "Original bridge"),
                 ],
+                master: None,
             },
         )
         .unwrap();
@@ -1037,14 +1039,17 @@ fn library_with_formatted_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
                             font: Some("Sela Missing Family".into()),
                             ..Default::default()
                         },
+                        background: None,
                     },
                     Section {
                         id: SectionId::allocate(),
                         label: "Chorus".into(),
                         lyrics: "Second falling line".into(),
                         format: Default::default(),
+                        background: None,
                     },
                 ],
+                master: None,
             },
         )
         .unwrap();
@@ -1068,7 +1073,9 @@ fn library_with_songs(dir: &tempfile::TempDir) -> std::path::PathBuf {
                     label: "Verse 1".into(),
                     lyrics: "Quiet original line".into(),
                     format: Default::default(),
+                    background: None,
                 }],
+                master: None,
             },
         )
         .unwrap();

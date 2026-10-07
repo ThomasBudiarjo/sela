@@ -6,6 +6,11 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Slide background model (M1-05h1, 2026-10-07):** `background::Background`
+  (None/Color/Media fill, Maintain/Stretch/Zoom), `Section.background`,
+  `Song.master` and schema 4 behind a verified `.schema3-backup`; slides
+  carry the resolved background. Nothing renders or edits it yet. M1-05h
+  stays **active**; next: h2 rendering and preparation.
 - **Slide backgrounds observed (RUN-W06I, 2026-10-07):** EW8-OBS-037–043:
   backgrounds are per slide and fall back to the theme's Master layout
   (Edit Slide Layouts opens a Layouts tab); fills None/Color/Gradient/Media;
@@ -168,10 +173,10 @@ remain `planned`. Update the current state above when switching work.
 | M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
 | M0-06 | implemented-unqualified | Ordered bounded native owned-resource IPC/receipts and failure/expiry retention, passed on Linux GL and Windows DX12; production safety coordination/supervision and reference mask semantics open. |
 | M0-07 | implemented-unqualified | Explicit-font/image native worker preparation/submission plus static/FFV1 GPU readback; resized output, transitions, performance and physical qualification open. |
-| M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
+| M1-01 | implemented-unqualified | Schema 4 (backgrounds, M1-05h1) after schema 3 (formats, M1-05g1); schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h active (h0 RUN-W06I observed; h1–h3 slide backgrounds open), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), drag selection across cells, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h active (h0 RUN-W06I observed, h1 model and schema 4; h2–h3 rendering and editing open), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2694,3 +2699,30 @@ PY
 - The agent closed the editor with Cancel → No; nothing was saved.
 - Next: h1, `src/background.rs` model, `Song.master` and
   `Section.background`, schema 4 with a verified backup, slide resolution.
+
+### M1-05h1 — Slide background model and schema 4 — 2026-10-07 (UTC+7)
+
+- State: h1 **implemented-unqualified**; M1-05h stays active. Contract in
+  [storage](storage.md#m1-05h1--slide-backgrounds--backed-up-schema-4).
+- Code: new `src/background.rs` (`Background`, `Fill`, `Aspect`, `ImageRef`,
+  codec, `resolve`). `storage.rs`: `Section.background`, `Song.master`,
+  validation, `SCHEMA4` (`song_backgrounds`, `section_backgrounds`), one
+  backup for any schema below 4, `SELA_ABORT_MIGRATION_SCHEMA4` test hook,
+  load and save. `slides.rs`: `Slide.background`, `section_slide(section,
+  master)`. `song_library.rs`: the preview slide and thumbnails resolve
+  against the draft's master, the cache key includes the background, and
+  the whole-song replacement keeps slide 1's background. Every other new
+  section (+, Ctrl+Enter split, blank song) has none, so it follows the
+  master like a new EW slide (EW8-OBS-041). `scripts/song-library.py` (Linux
+  replay, stale since schema 3) now expects schema 4.
+- Checks (Windows 11): `cargo fmt --all -- --check`, `cargo clippy --locked
+  --all-targets -- -D warnings`, `cargo test --locked --all-targets` (lib
+  108, bin 79 + 2 ignored, other suites pass), `cargo build --locked`,
+  `ruff check scripts`; `scripts/song-editor-windows.py` **PASS** (unchanged
+  samples: preview black=38854/white=931, thumbnails 16784/74, red 4528).
+- Not run: `scripts/song-library.py` (Linux/X11 replay), Linux/macOS.
+- Next: h2. `background::fit` (Maintain/Stretch/Zoom to the output extent,
+  black bars), an images worker `Decode` job with a bounded cache in the
+  operator, a "Preparing background…" gate, black plus a Preview warning for
+  a missing or changed image, editor preview/thumbnail compositing over the
+  fitted image, the native live-output check.

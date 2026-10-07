@@ -3,6 +3,7 @@
 //! stored section. Arrangement selection, pagination and themes are not
 //! implemented.
 use crate::{
+    background::{self, Background},
     fonts::Resolved,
     format::{Align, Size, SlideFormat, VAlign},
     scene::{
@@ -26,6 +27,9 @@ pub struct Slide {
     pub label: String,
     pub text: String,
     pub format: SlideFormat,
+    /// Resolved background: the section's own, else the song master; `None`
+    /// is black.
+    pub background: Option<Background>,
 }
 
 /// Text sizing across one item's slides. Auto slides are always resized to fit
@@ -51,12 +55,16 @@ pub fn slides(song: &Song) -> Vec<Slide> {
             .filter(|sections| !sections.is_empty())
     });
     let sections = ordered.unwrap_or_else(|| song.sections.iter().collect());
-    sections.into_iter().map(section_slide).collect()
+    sections
+        .into_iter()
+        .map(|section| section_slide(section, song.master.as_ref()))
+        .collect()
 }
 
 /// One section's slide: trailing spaces and surrounding blank lines dropped.
-pub fn section_slide(section: &Section) -> Slide {
+pub fn section_slide(section: &Section, master: Option<&Background>) -> Slide {
     Slide {
+        background: background::resolve(section.background.as_ref(), master).cloned(),
         label: section.label.clone(),
         text: section
             .lyrics
@@ -263,8 +271,10 @@ mod tests {
                     label: (*label).into(),
                     lyrics: (*lyrics).into(),
                     format: Default::default(),
+                    background: None,
                 })
                 .collect(),
+            master: None,
         }
     }
     fn resolved(slides: &[Slide]) -> Vec<Resolved> {
@@ -294,13 +304,34 @@ mod tests {
                     label: "Verse 1".into(),
                     text: "Line one\nLine two".into(),
                     format: Default::default(),
+                    background: None,
                 },
                 Slide {
                     label: "Chorus".into(),
                     text: String::new(),
                     format: Default::default(),
+                    background: None,
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn slides_resolve_their_own_background_else_the_master() {
+        use crate::background::{Background, tests::image};
+        let mut song = song(&[("A", "one"), ("B", "two")]);
+        song.sections[1].background = Some(image("own.png"));
+        let backgrounds = |song: &Song| {
+            slides(song)
+                .into_iter()
+                .map(|s| s.background)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(backgrounds(&song), [None, Some(image("own.png"))]);
+        song.master = Some(Background::color([0, 0, 255]));
+        assert_eq!(
+            backgrounds(&song),
+            [Some(Background::color([0, 0, 255])), Some(image("own.png"))]
         );
     }
 
@@ -337,6 +368,7 @@ mod tests {
             label: "Verse".into(),
             text: "Original test line\nSecond line".into(),
             format: Default::default(),
+            background: None,
         };
         let version = ContentVersion { id: 9, revision: 1 };
         let resolved = Resolved::bundled(&slide.format);
@@ -380,6 +412,7 @@ mod tests {
             label: "Verse".into(),
             text: "Original refrain".into(),
             format: format.clone(),
+            background: None,
         };
         let resolved = Resolved::bundled(&format);
         let version = ContentVersion { id: 9, revision: 4 };
@@ -446,6 +479,7 @@ mod tests {
             label: "Verse".into(),
             text: "A much longer line of original lyrics\nand a second one".into(),
             format: format.clone(),
+            background: None,
         };
         let resolved = Resolved::bundled(&format);
         let version = ContentVersion { id: 9, revision: 5 };
@@ -557,6 +591,7 @@ mod tests {
             label: "Blank".into(),
             text: String::new(),
             format: Default::default(),
+            background: None,
         };
         let version = ContentVersion { id: 9, revision: 2 };
         assert!(
@@ -576,6 +611,7 @@ mod tests {
             label: "Verse".into(),
             text: "words".into(),
             format: Default::default(),
+            background: None,
         };
         let tiny = Extent {
             width: 60,
@@ -681,6 +717,7 @@ mod tests {
             label: "Bad".into(),
             text: "\u{4e2d}".into(),
             format: Default::default(),
+            background: None,
         });
         let bad_resolved = resolved(&with_bad);
         assert_eq!(

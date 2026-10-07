@@ -598,7 +598,8 @@ Follow-ups:
   black; a missing or changed image renders black with a visible warning
   in Preview; color and image now, gradient and video later. Slices:
   - [x] h0 RUN-W06I observation (EW8-OBS-037–043).
-  - [ ] h1 background model and schema 4 with a verified backup.
+  - [x] h1 background model and schema 4 with a verified backup
+    (implemented-unqualified, see [storage](storage.md#m1-05h1--slide-backgrounds--backed-up-schema-4)).
   - [ ] h2 fit/decode worker, operator preparation gate and substitution,
     editor preview and thumbnails.
   - [ ] h3 Slide pane Background section, Select Media…, aspect, Layouts

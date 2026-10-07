@@ -1202,6 +1202,7 @@ mod tests {
             label: String::new(),
             text: "Styled wire refrain".into(),
             format,
+            background: None,
         };
         let cue =
             Arc::new(crate::slides::cue(version, &slide, &resolved, extent, caps, None).unwrap());

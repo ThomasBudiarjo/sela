@@ -43,12 +43,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         label: label.into(),
         lyrics: lyrics.into(),
         format: Default::default(),
+        background: None,
     };
     let formatted_section = |label: &str, lyrics: &str, format: SlideFormat| Section {
         id: SectionId::allocate(),
         label: label.into(),
         lyrics: lyrics.into(),
         format,
+        background: None,
     };
     if formatted {
         repository
@@ -109,6 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             },
                         ),
                     ],
+                    master: None,
                 },
             )
             .map_err(|e| format!("{e:?}"))?;
@@ -128,6 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     section("Chorus", "Original refrain"),
                     section("Bridge", "Original bridge\nthat ends the song"),
                 ],
+                master: None,
             },
         )
         .map_err(|e| format!("{e:?}"))?;
@@ -142,6 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     license: String::new(),
                     variants: Vec::new(),
                     sections: vec![section("Verse 1", "A quiet original canticle")],
+                    master: None,
                 },
             )
             .map_err(|e| format!("{e:?}"))?;

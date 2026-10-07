@@ -954,6 +954,7 @@ mod tests {
                         label: String::new(),
                         text: text.clone(),
                         format: format.clone(),
+                        background: None,
                     };
                     let version = ContentVersion { id: 1, revision: 1 };
                     let resolved = sela::fonts::Resolved::bundled(&slide.format);
@@ -986,6 +987,7 @@ mod tests {
                     label: String::new(),
                     text: text.into(),
                     format: sela::format::SlideFormat::default(),
+                    background: None,
                 };
                 let version = ContentVersion { id: 1, revision: 1 };
                 let resolved = sela::fonts::Resolved::bundled(&slide.format);
