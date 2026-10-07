@@ -8,9 +8,9 @@ impl Operator {
             (available * self.ratios[0]).clamp(minimum, (available - 2. * minimum).max(minimum));
         let boundary = (available * self.ratios[1])
             .clamp(left + minimum, (available - minimum).max(left + minimum));
-        let body = (height - 76.).max(0.);
+        let body = (height - 76. - MENU_BAR_H).max(0.);
         let upper = if self.collapsed {
-            (height - 70.).max(0.)
+            (height - 70. - MENU_BAR_H).max(0.)
         } else {
             (body * self.ratios[2]).clamp(
                 140_f32.min(body / 2.),
@@ -70,7 +70,7 @@ impl Operator {
                         }
                         let viewport = window.viewport_size();
                         let extent = if horizontal {
-                            f32::from(viewport.height) - 76.
+                            f32::from(viewport.height) - 76. - MENU_BAR_H
                         } else {
                             f32::from(viewport.width) - 12.
                         };
@@ -162,6 +162,24 @@ impl Render for Operator {
                 this.go_live();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &OpenFileMenu, window, cx| {
+                this.toggle_bar_menu(TopMenu::File, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenEditMenu, window, cx| {
+                this.toggle_bar_menu(TopMenu::Edit, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenLiveMenu, window, cx| {
+                this.toggle_bar_menu(TopMenu::Live, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenProfilesMenu, window, cx| {
+                this.toggle_bar_menu(TopMenu::Profiles, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenViewMenu, window, cx| {
+                this.toggle_bar_menu(TopMenu::View, true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenHelpMenu, window, cx| {
+                this.toggle_bar_menu(TopMenu::Help, true, window, cx);
+            }))
             .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
             .capture_any_mouse_up(cx.listener(|this, _, _, _| this.drag = None))
@@ -174,6 +192,7 @@ impl Render for Operator {
             .text_color(rgb(TEXT))
             .font_family("DejaVu Sans")
             .text_size(px(TEXT_BASE))
+            .child(self.menu_bar(cx))
             .child(
                 div()
                     .h(px(TOP_BAR_H))
@@ -197,7 +216,6 @@ impl Render for Operator {
                         t!(Msg::ToolbarSave),
                         cx,
                     ))
-                    .child(self.button(Control::Options, "options", t!(Msg::ToolbarOptions), cx))
                     .children(
                         [Msg::ToolbarWeb, Msg::ToolbarRemote]
                             .map(|msg| div().px_1().text_color(rgb(INACTIVE)).child(t!(msg))),
@@ -538,7 +556,7 @@ impl Render for Operator {
                     div()
                         .occlude()
                         .absolute()
-                        .top(px(TOP_BAR_H))
+                        .top(px(MENU_BAR_H + TOP_BAR_H))
                         .left(px(8.))
                         .bg(rgb(SURFACE))
                         .border_1()
@@ -582,6 +600,7 @@ impl Render for Operator {
                 )
             })
             .children(self.song_menu_overlay(cx))
+            .children(self.bar_menu_overlay(cx))
             .children(self.dialog_overlay(cx))
             .children(self.options_overlay(cx))
     }

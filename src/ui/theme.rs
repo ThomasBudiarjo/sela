@@ -54,6 +54,8 @@ pub(crate) const TEXT_CAPTION: f32 = 11.;
 pub(crate) const TEXT_TILE: f32 = 9.;
 
 // Bar and row heights.
+/// The EW-style menu row above the toolbar (File, Edit, Live, …).
+pub(crate) const MENU_BAR_H: f32 = 28.;
 pub(crate) const TOP_BAR_H: f32 = 40.;
 pub(crate) const PANE_HEADER_H: f32 = 32.;
 pub(crate) const TAB_BAR_H: f32 = 32.;

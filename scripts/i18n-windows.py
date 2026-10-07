@@ -36,10 +36,10 @@ _spec = importlib.util.spec_from_file_location(
 lo = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lo)
 
-TABS_TO_FIRST_SONG = 26
-SHIFT_TABS_SONG_TO_LIVE_OUTPUT = 16
-TABS_LIVE_OUTPUT_TO_OPTIONS = 10
-TABS_START_TO_OPTIONS = 21
+# The Options toolbar button moved to the Edit menu (M1-02), shortening the
+# pre-songs traversal by one; Options opens via the Alt+E mnemonic instead.
+TABS_TO_FIRST_SONG = 25
+SHIFT_TABS_SONG_TO_LIVE_OUTPUT = 15
 
 
 def monitors(binary: pathlib.Path) -> list[str]:
@@ -70,11 +70,10 @@ class Session:
         nw.write_png(self.out / f"{name}.png", width, height, pixels)
 
     def open_options(self, from_start: bool) -> None:
-        if from_start:
-            self.keys(*["tab"] * TABS_START_TO_OPTIONS, "enter")
-        else:
-            # Live output was toggled from here and focus never moved since.
-            self.keys(*["tab"] * TABS_LIVE_OUTPUT_TO_OPTIONS, "enter")
+        # Edit > Options... via the Alt+E mnemonic (M1-02); works from any
+        # focus, so the from_start distinction no longer matters.
+        del from_start
+        self.keys("alt+e", "enter")
         time.sleep(0.6)
 
     def pick_language(self, rows: int, indonesian: bool) -> None:

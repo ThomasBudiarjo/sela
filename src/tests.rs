@@ -212,7 +212,8 @@ fn shell_controls_and_resize(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("library-detail").is_none());
     assert_eq!(
         operator.read_with(&cx, |o, _| o.dimensions(1280., 800.))[3],
-        730.
+        // 800 minus the 28px menu bar and the 42px of toolbar/borders.
+        702.
     );
     let bounds = cx.debug_bounds("collapse-resources").unwrap();
     cx.simulate_click(bounds.center(), Default::default());
@@ -344,7 +345,6 @@ fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
         Control::Normalize,
         Control::OpenSchedule,
         Control::SaveSchedule,
-        Control::Options,
         Control::AddToSchedule,
         Control::MoveUp,
         Control::MoveDown,
@@ -443,8 +443,8 @@ fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
     cx.simulate_click(b.center(), Default::default());
     assert_control(&mut cx, &operator, Control::CollapseResources);
     // 2 → 9 → Live output, Go Live, Previous, Next → Logo, Black, Clear →
-    // Open, Save, Options → schedule Up, Down, Remove → 0.
-    cx.simulate_keystrokes("tab tab tab tab tab tab tab tab tab tab tab tab tab tab tab enter");
+    // Open, Save → schedule Up, Down, Remove → 0 (Options lives in Edit › now).
+    cx.simulate_keystrokes("tab tab tab tab tab tab tab tab tab tab tab tab tab tab enter");
     assert_control(&mut cx, &operator, Control::ResetLayout);
     assert!(!operator.read_with(&cx, |o, _| o.collapsed));
     assert!(operator.read_with(&cx, |o, _| o.output.is_none()));
@@ -1818,9 +1818,13 @@ fn song_menu_items_order_disabled_items_and_dismissal(cx: &mut TestAppContext) {
     );
     let menu = cx.debug_bounds("song-menu").unwrap();
     let row = cx.debug_bounds(hymn).unwrap();
+    // The anchored popup rounds to whole pixels; the pointer may sit half a
+    // pixel off when the pane ratio lands on a fractional height.
+    let pointer = row.center();
     assert!(
-        menu.contains(&row.center()),
-        "the menu opens at the pointer"
+        (f32::from(menu.origin.x) - f32::from(pointer.x)).abs() <= 1.
+            && (f32::from(menu.origin.y) - f32::from(pointer.y)).abs() <= 1.,
+        "the menu opens at the pointer ({menu:?} vs {pointer:?})"
     );
 
     // Disabled items are inert: the menu stays, nothing opens.
@@ -2221,12 +2225,18 @@ mod settings_ui {
         std::fs::read_to_string(settings::path_in(dir.path())).ok()
     }
 
+    /// The toolbar has no Options button (EW8-OBS-010); Edit › Options... is
+    /// the only route. Alt+E opens Edit with the first enabled row lit.
+    fn open_options(cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes("alt-e enter");
+    }
+
     #[gpui::test]
     fn ok_applies_and_persists_the_output_monitor(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let (mut vcx, operator, slot) = start(cx, &dir, settings::default_writer());
         assert_eq!(slot.get(), "secondary");
-        click(&mut vcx, "options");
+        open_options(&mut vcx);
         assert_eq!(
             operator.read_with(&vcx, |o, _| o.dialog),
             Some(Dialog::Options)
@@ -2266,7 +2276,7 @@ mod settings_ui {
             o.settings.current.output_monitor.is_some()
         });
         assert_eq!(slot.get(), r"name:\\.\DISPLAY6");
-        click(&mut vcx, "options");
+        open_options(&mut vcx);
         assert_eq!(
             operator.read_with(&vcx, |o, _| o.settings.draft.clone()),
             Some(Some(r"\\.\DISPLAY6".to_string()))
@@ -2278,7 +2288,7 @@ mod settings_ui {
         let dir = tempfile::tempdir().unwrap();
         let (mut vcx, operator, _slot) = start(cx, &dir, settings::default_writer());
         assert_eq!(i18n::language(), Language::English);
-        click(&mut vcx, "options");
+        open_options(&mut vcx);
         click(&mut vcx, "options-language-id");
         click(&mut vcx, "dialog-confirm");
         assert_eq!(i18n::language(), Language::Indonesian);
@@ -2298,7 +2308,7 @@ mod settings_ui {
             o.settings.current.language == Language::Indonesian
         });
         assert_eq!(i18n::language(), Language::Indonesian);
-        click(&mut vcx, "options");
+        open_options(&mut vcx);
         click(&mut vcx, "options-language-en");
         click(&mut vcx, "dialog-confirm");
         assert_eq!(i18n::language(), Language::English);
@@ -2311,7 +2321,7 @@ mod settings_ui {
     fn cancel_discards_and_leaves_the_file_alone(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let (mut vcx, operator, slot) = start(cx, &dir, settings::default_writer());
-        click(&mut vcx, "options");
+        open_options(&mut vcx);
         click(&mut vcx, "options-monitor-2");
         click(&mut vcx, "dialog-cancel");
         assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
@@ -2333,7 +2343,7 @@ mod settings_ui {
         assert_eq!(slot.get(), "secondary");
         assert!(operator.read_with(&vcx, |o, _| o.settings_note().unwrap().contains("DISPLAY9")));
         assert!(vcx.debug_bounds("settings-note").is_some());
-        click(&mut vcx, "options");
+        open_options(&mut vcx);
         assert!(vcx.debug_bounds("options-missing").is_some());
         click(&mut vcx, "dialog-confirm");
         vcx.run_until_parked();
@@ -2342,7 +2352,7 @@ mod settings_ui {
             Some(saved),
             "unchanged OK never rewrites"
         );
-        click(&mut vcx, "options");
+        open_options(&mut vcx);
         click(&mut vcx, "options-monitor-0");
         click(&mut vcx, "dialog-confirm");
         settle(&mut vcx, &operator, "rewritten", |_| {
@@ -2370,7 +2380,7 @@ mod settings_ui {
             settings::save(path, settings)
         });
         let (mut vcx, operator, slot) = start(cx, &dir, writer);
-        click(&mut vcx, "options");
+        open_options(&mut vcx);
         click(&mut vcx, "options-monitor-2");
         let started = Instant::now();
         click(&mut vcx, "dialog-confirm");
@@ -2381,12 +2391,369 @@ mod settings_ui {
         assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
         assert_eq!(slot.get(), r"name:\\.\DISPLAY6");
         // The UI still takes input and paints while the write is pending.
-        click(&mut vcx, "options");
+        open_options(&mut vcx);
         assert!(vcx.debug_bounds("options-dialog").is_some());
         click(&mut vcx, "dialog-cancel");
         assert!(file(&dir).is_none(), "the write is still running");
         settle(&mut vcx, &operator, "file written", |_| {
             file(&dir).is_some()
         });
+    }
+}
+
+mod menu_bar {
+    use super::*;
+    use crate::operator::{Dialog, TOP_MENUS, TopMenu};
+
+    #[gpui::test]
+    fn labels_follow_the_ew_order(cx: &mut TestAppContext) {
+        let (mut cx, _operator, _) = fixture(cx);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        let mut previous: Option<gpui::Bounds<gpui::Pixels>> = None;
+        for top in TOP_MENUS {
+            let bounds = cx
+                .debug_bounds(top.id())
+                .unwrap_or_else(|| panic!("{top:?} label is rendered"));
+            if let Some(before) = previous {
+                assert!(bounds.origin.x > before.origin.x, "EW8-OBS-010 order");
+                assert_eq!(bounds.origin.y, before.origin.y, "one menu row");
+            }
+            previous = Some(bounds);
+        }
+        // The labels are not tab stops: the keyboard traversal test's fixed
+        // control order would fail if they were.
+    }
+
+    #[gpui::test]
+    fn menu_contents_match_the_captures(cx: &mut TestAppContext) {
+        let (mut cx, _operator, _) = fixture(cx);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        // EW8-OBS-053 plus the menu-p/v/h.png captures; the New ▸ submenu is
+        // flattened into a header row followed by Song.../Schedule.
+        let menus: [(&str, &[&str]); 6] = [
+            (
+                "alt-f",
+                &[
+                    "bar-file-new",
+                    "bar-file-new-song",
+                    "bar-file-new-schedule",
+                    "bar-file-open",
+                    "bar-file-open-recent",
+                    "bar-file-save",
+                    "bar-file-save-as",
+                    "bar-file-export",
+                    "bar-file-close",
+                    "bar-file-reports",
+                    "bar-file-exit",
+                ],
+            ),
+            (
+                "alt-e",
+                &[
+                    "bar-edit-cut",
+                    "bar-edit-copy",
+                    "bar-edit-paste",
+                    "bar-edit-delete",
+                    "bar-edit-select-all",
+                    "bar-edit-options",
+                ],
+            ),
+            (
+                "alt-l",
+                &[
+                    "bar-live-go-live",
+                    "bar-live-go-back",
+                    "bar-live-logo",
+                    "bar-live-black",
+                    "bar-live-clear",
+                    "bar-live-show",
+                ],
+            ),
+            (
+                "alt-p",
+                &[
+                    "bar-profiles-default",
+                    "bar-profiles-manager",
+                    "bar-profiles-demo-data",
+                    "bar-profiles-utilities",
+                ],
+            ),
+            (
+                "alt-v",
+                &[
+                    "bar-view-preview-live",
+                    "bar-view-combined",
+                    "bar-view-resource",
+                    "bar-view-interface-color",
+                ],
+            ),
+            (
+                "alt-h",
+                &[
+                    "bar-help-contents",
+                    "bar-help-getting-started",
+                    "bar-help-logs",
+                    "bar-help-updates",
+                    "bar-help-helper",
+                    "bar-help-about",
+                ],
+            ),
+        ];
+        for (key, ids) in menus {
+            cx.simulate_keystrokes(key);
+            let mut previous: Option<gpui::Bounds<gpui::Pixels>> = None;
+            for id in ids {
+                let bounds = cx
+                    .debug_bounds(id)
+                    .unwrap_or_else(|| panic!("{id} is rendered for {key}"));
+                if let Some(before) = previous {
+                    assert!(
+                        bounds.origin.y > before.origin.y,
+                        "{id} after the previous row"
+                    );
+                }
+                previous = Some(bounds);
+            }
+            cx.simulate_keystrokes("escape");
+        }
+    }
+
+    #[gpui::test]
+    fn mouse_opens_switches_and_closes_menus(cx: &mut TestAppContext) {
+        let (mut cx, operator, _) = fixture(cx);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        let menu = |cx: &VisualTestContext, o: &Entity<Operator>| {
+            o.read_with(cx, |o, _| o.bar_menu.map(|m| (m.top, m.highlight)))
+        };
+
+        click(&mut cx, "bar-live");
+        assert_eq!(menu(&cx, &operator), Some((TopMenu::Live, None)));
+        // A mouse-opened menu keeps the menu keys: the press must not let
+        // the root's track_focus auto-focus steal the menu's focus.
+        cx.simulate_keystrokes("down");
+        assert_eq!(menu(&cx, &operator), Some((TopMenu::Live, Some(0))));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(menu(&cx, &operator), None);
+        click(&mut cx, "bar-live");
+        assert_eq!(menu(&cx, &operator), Some((TopMenu::Live, None)));
+        // While a menu is open, hovering another label switches to it.
+        let profiles = cx.debug_bounds("bar-profiles").unwrap();
+        cx.simulate_mouse_move(profiles.center(), None, gpui::Modifiers::none());
+        assert_eq!(menu(&cx, &operator), Some((TopMenu::Profiles, None)));
+        // Clicking another label while open is swallowed: the menu closes
+        // and the press does nothing else, like a Windows menu.
+        click(&mut cx, "bar-live");
+        assert_eq!(menu(&cx, &operator), None);
+        // A second click opens it.
+        click(&mut cx, "bar-live");
+        assert_eq!(menu(&cx, &operator), Some((TopMenu::Live, None)));
+        // Clicking the open menu's label closes it again.
+        click(&mut cx, "bar-live");
+        assert_eq!(menu(&cx, &operator), None);
+        // A click outside dismisses the open menu.
+        click(&mut cx, "bar-view");
+        assert_eq!(menu(&cx, &operator), Some((TopMenu::View, None)));
+        click(&mut cx, "Preview");
+        assert_eq!(menu(&cx, &operator), None);
+    }
+
+    #[gpui::test]
+    fn alt_mnemonics_open_and_esc_restores_focus(cx: &mut TestAppContext) {
+        let (mut cx, operator, _) = fixture(cx);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        cx.update(|window, cx| {
+            operator.read(cx).controls[Control::GoLive]
+                .clone()
+                .focus(window, cx)
+        });
+        // First enabled row per menu: File skips the New group header, Edit
+        // skips the clipboard rows, Live starts at Go Live; the menus whose
+        // features are not built yet have nothing selectable.
+        let cases = [
+            ("alt-f", TopMenu::File, Some(1)),
+            ("alt-e", TopMenu::Edit, Some(6)),
+            ("alt-l", TopMenu::Live, Some(0)),
+            ("alt-p", TopMenu::Profiles, None),
+            ("alt-v", TopMenu::View, None),
+            ("alt-h", TopMenu::Help, None),
+        ];
+        for (key, top, highlight) in cases {
+            cx.simulate_keystrokes(key);
+            assert_eq!(
+                operator.read_with(&cx, |o, _| o.bar_menu.map(|m| (m.top, m.highlight))),
+                Some((top, highlight)),
+                "{key} opens {top:?}"
+            );
+            cx.update(|window, cx| {
+                let operator = operator.read(cx);
+                assert!(
+                    !operator.controls[Control::GoLive].is_focused(window),
+                    "the menu took focus"
+                );
+                assert!(operator.focus.contains_focused(window, cx));
+            });
+            cx.simulate_keystrokes("escape");
+            assert_eq!(operator.read_with(&cx, |o, _| o.bar_menu), None);
+            cx.update(|window, cx| {
+                assert!(
+                    operator.read(cx).controls[Control::GoLive].is_focused(window),
+                    "Esc returned focus to the previous control"
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn arrows_move_the_highlight_and_switch_menus(cx: &mut TestAppContext) {
+        let (mut cx, operator, _) = fixture(cx);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        let state = |cx: &VisualTestContext, o: &Entity<Operator>| {
+            o.read_with(cx, |o, _| o.bar_menu.map(|m| (m.top, m.highlight)))
+        };
+        cx.simulate_keystrokes("alt-l");
+        assert_eq!(state(&cx, &operator), Some((TopMenu::Live, Some(0))));
+        // Down skips disabled Go Back, the separator, and Logo (no logo yet).
+        cx.simulate_keystrokes("down");
+        assert_eq!(state(&cx, &operator), Some((TopMenu::Live, Some(4))));
+        cx.simulate_keystrokes("up");
+        assert_eq!(state(&cx, &operator), Some((TopMenu::Live, Some(0))));
+        // Right/Left walk across menus; menus without enabled rows keep None.
+        cx.simulate_keystrokes("right");
+        assert_eq!(state(&cx, &operator), Some((TopMenu::Profiles, None)));
+        cx.simulate_keystrokes("right");
+        assert_eq!(state(&cx, &operator), Some((TopMenu::View, None)));
+        cx.simulate_keystrokes("left");
+        assert_eq!(state(&cx, &operator), Some((TopMenu::Profiles, None)));
+        cx.simulate_keystrokes("left");
+        assert_eq!(state(&cx, &operator), Some((TopMenu::Live, Some(0))));
+        // Tab stays inside the menu, like the Songs context menu.
+        cx.simulate_keystrokes("tab");
+        assert_eq!(state(&cx, &operator), Some((TopMenu::Live, Some(4))));
+        cx.simulate_keystrokes("shift-tab");
+        assert_eq!(state(&cx, &operator), Some((TopMenu::Live, Some(0))));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(state(&cx, &operator), None);
+    }
+
+    #[gpui::test]
+    fn items_dispatch_the_same_actions_as_the_shortcuts(cx: &mut TestAppContext) {
+        let (mut cx, operator, seen) = fixture(cx);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "monitors", |o| {
+            o.settings.monitors.is_some()
+        });
+
+        // Black on Live Output toggles the same mask as Ctrl+B / the button.
+        cx.simulate_keystrokes("alt-l down enter");
+        assert!(operator.read_with(&cx, |o, _| o.masks.is_on(Mask::Black)));
+        assert_eq!(operator.read_with(&cx, |o, _| o.bar_menu), None);
+        cx.simulate_keystrokes("alt-l down enter");
+        assert!(!operator.read_with(&cx, |o, _| o.masks.is_on(Mask::Black)));
+
+        // Show Live Output toggles the audience window like the Live button.
+        cx.simulate_keystrokes("alt-l up enter");
+        assert!(operator.read_with(&cx, |o, _| o.output.is_some()));
+        cx.simulate_keystrokes("alt-l up enter");
+        assert!(operator.read_with(&cx, |o, _| o.output.is_none()));
+
+        // Open Schedule routes the same guard as Ctrl+O (no library here).
+        cx.simulate_keystrokes("alt-f down down enter");
+        assert!(operator.read_with(&cx, |o, _| o.schedule_message.is_some()));
+
+        // New Schedule clears without asking (nothing unsaved).
+        cx.simulate_keystrokes("alt-f down enter");
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&cx, |o, _| o.bar_menu), None);
+
+        // Options opens the existing Options dialog.
+        cx.simulate_keystrokes("alt-e enter");
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.dialog),
+            Some(Dialog::Options)
+        );
+        click(&mut cx, "dialog-cancel");
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+
+        // Exit dispatches Quit, the same as Ctrl+Q (probe counts; window stays).
+        cx.simulate_keystrokes("alt-f up enter");
+        assert_eq!(seen.get(), 1);
+    }
+
+    #[gpui::test]
+    fn disabled_items_are_rendered_but_inert(cx: &mut TestAppContext) {
+        let (mut cx, operator, seen) = fixture(cx);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        cx.simulate_keystrokes("alt-f");
+        for id in [
+            "bar-file-open-recent",
+            "bar-file-save-as",
+            "bar-file-reports",
+        ] {
+            click(&mut cx, id);
+            assert_eq!(
+                operator.read_with(&cx, |o, _| o.bar_menu.map(|m| m.top)),
+                Some(TopMenu::File),
+                "{id} did not close the menu"
+            );
+        }
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+        assert_eq!(seen.get(), 0);
+        cx.simulate_keystrokes("escape");
+
+        cx.simulate_keystrokes("alt-p");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.bar_menu.map(|m| m.top)),
+            Some(TopMenu::Profiles),
+            "Enter with nothing selectable is a no-op"
+        );
+        click(&mut cx, "bar-profiles-manager");
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.bar_menu.map(|m| m.top)),
+            Some(TopMenu::Profiles)
+        );
+        cx.simulate_keystrokes("escape");
+        assert_eq!(operator.read_with(&cx, |o, _| o.bar_menu), None);
+    }
+
+    #[gpui::test]
+    fn typing_in_text_fields_never_opens_menus(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, _) = with_library(cx, Some(library_with_song(&dir)), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+
+        cx.simulate_keystrokes("ctrl-s");
+        let input = operator.read_with(&cx, |o, _| {
+            assert_eq!(o.dialog, Some(Dialog::SaveAs));
+            o.title_input.clone().unwrap()
+        });
+        cx.simulate_keystrokes("f e l p v h");
+        cx.update(|_, cx| assert_eq!(input.read(cx).text(), "felpvh"));
+        cx.simulate_keystrokes("alt-f alt-l");
+        assert_eq!(operator.read_with(&cx, |o, _| o.bar_menu), None);
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.dialog),
+            Some(Dialog::SaveAs)
+        );
+        cx.update(|_, cx| assert_eq!(input.read(cx).text(), "felpvh"));
+        click(&mut cx, "dialog-cancel");
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+    }
+
+    #[gpui::test]
+    fn file_new_song_opens_the_editor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, _) = with_library(cx, Some(library_with_song(&dir)), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+        let before = editor_windows(&cx);
+        cx.simulate_keystrokes("alt-f enter");
+        let (_editor_cx, editor) = opened_editor(&mut cx, &before, |(_, _, busy)| !busy);
+        editor.read_with(&cx, |e, cx| {
+            let (version, _, _) = e.probe(cx);
+            assert_eq!(version, None, "a blank unsaved song");
+        });
+        assert_eq!(operator.read_with(&cx, |o, _| o.bar_menu), None);
     }
 }

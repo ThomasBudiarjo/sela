@@ -24,8 +24,9 @@ actions!(
 
 /// Show controls (EW8-OBS-018). `!SelaTextInput` is evaluated against the
 /// whole context stack, so a focused text field anywhere below keeps Ctrl+C
-/// and friends for editing.
-const SHOW: &str = "SelaShow && !SelaTextInput";
+/// and friends for editing; `!SelaMenuBar` keeps an open menu modal-ish, so
+/// show shortcuts stay inert until it closes.
+const SHOW: &str = "SelaShow && !SelaTextInput && !SelaMenuBar";
 
 fn bind_operator_keys(cx: &mut App) {
     text_input::bind_keys(cx);

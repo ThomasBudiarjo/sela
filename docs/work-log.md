@@ -6,6 +6,16 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Main menu bar (M1-02d, 2026-10-08):** the operator window has the
+  observed EasyWorship menu bar (File, Edit, Live, Profiles, View, Help)
+  above the toolbar. Menus open by Alt+mnemonic and mouse (hover switches,
+  a dismissing press is swallowed); Esc restores the previous focus; items
+  dispatch the same commands as the toolbar/shortcuts and unbuilt items are
+  disabled. The toolbar Options button is gone (Options is Edit › Options).
+  Nine new GPUI tests, the new `scripts/menu-bar-windows.py` and all six
+  baseline native scripts pass. **Implemented-unqualified**
+  (VAL-SHELL-011; disabled-item features, mnemonic confirmation and screen
+  readers remain). Next: enable items with their features, M1-07 search box.
 - **UI language switch (M1-16 language slice, 2026-10-08):** `src/i18n.rs`
   holds every operator, menu, dialog and Song Editor string as a `Msg` enum
   with exhaustive English and Indonesian tables and `{name}` placeholders;
@@ -219,8 +229,8 @@ remain `planned`. Update the current state above when switching work.
 | M0-07 | implemented-unqualified | Explicit-font/image native worker preparation/submission plus static/FFV1 GPU readback; resized output, transitions, performance and physical qualification open. |
 | M0-08 | implemented-unqualified | M0-08a mask layer and logo slot: `masks` (None/Black/Logo plus independent Clear), Safety-lane masks and Cue-lane logo over the delivery wire (kinds 5 MASK, 6 LOGO), per-lane ordering, audience Black/Clear/Logo rendering. Operator side is M1-10c. Native hardware capture, reference mask semantics for combined masks (EW8-OBS-020) and video logo (M2-03) open. |
 | M1-01 | implemented-unqualified | Schema 5 (search index, M1-07a) after schema 4 (backgrounds, M1-05h1) and schema 3 (formats, M1-05g1); schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
-| M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
-| M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
+| M1-02 | implemented-unqualified | Separate-pane contemporary shell, documented-reference toolbar correction and M1-02d menu bar (EW order, Alt+mnemonic and mouse access, action parity, native script passed); persistence/modes/installed-reference/DPI checks open. |
+| M1-03 | implemented-unqualified | Contextual keyboard access to shell and menu commands mapped to GPUI actions/key contexts with native checks; text-entry/modal/selection/live command ownership open. |
 | M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h implemented-unqualified (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check, h3 Slide pane editing with the master's Layouts tab and Windows native check), M1-05i implemented-unqualified (operator song menu, GPUI tests and Windows native script), M1-05j–o (planned format controls and tabs), M1-05p–s (planned: gradient, opacity/rotate/flip, Theme Elements/layouts, Auto aspect and image tiles), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-07 | active | M1-07a implemented-unqualified: schema 5 FTS5 index maintained in the song transaction, escaped prefix queries, bm25 ranking with deterministic ties, generation-tagged search, repair/rebuild, 20k database benchmark (pooled p95 75.9 ms; one-letter prefix p95 109 ms). Search UI, EW search observation (W04), end-to-end latency open. |
@@ -3307,3 +3317,68 @@ PY
   plural/date/number rules (none needed by current messages).
 - Next: remaining Main Output tabs, Reassign on the output warning, menu-bar
   placement (EW Edit › Options), M1-07 search box.
+
+### Foundation / main-menu-bar — M1-02d menu bar — 2026-10-08
+
+- State: implemented-unqualified (VAL-SHELL-011; disabled-item enablement,
+  mnemonic confirmation and screen-reader exposure remain open).
+- Scope: an EasyWorship 8.0.49 menu bar (File, Edit, Live, Profiles, View,
+  Help; EW8-OBS-010/053, Profiles/View/Help contents from
+  `ew-w07d-options/menu-*.png`) as a 28 px in-window row above the toolbar —
+  GPUI app menus are macOS-only. Alt+F/E/L/P/V/H opens menus with the first
+  enabled item highlighted; mouse clicks open/switch/close, hover switches
+  while open, and a press that dismisses is swallowed like a Windows menu;
+  Down/Up/Tab/Shift+Tab move the highlight (wrapping, skipping separators,
+  headers and disabled rows), Left/Right switch menus, Enter/Space chooses,
+  Esc restores the pre-menu focus. File/Edit/Live dispatch the existing
+  commands (New Song/Schedule, Open/Save Schedule, Options, Go Live,
+  Logo/Black/Clear, Show Live Output, Exit) through the same Operator methods
+  as the toolbar and shortcuts; everything not yet built renders disabled and
+  inert. The toolbar Options button is removed (EW has no equivalent; Options
+  is Edit › Options). All strings via `src/i18n.rs` (42 new `Msg` entries,
+  EN+ID; table guard 327→369). New actions: `OpenFile/Edit/Live/Profiles/
+  View/HelpMenu`, `BarMenuLeft/Right`, plus the shared `MenuNext/…` set in the
+  new `SelaMenuBar` context; `SelaShow` bindings now exclude `SelaMenuBar`.
+- Decisions/deviations: File › New ▸ is flattened to an inert "New ▸" header
+  row plus Song…/Schedule items — the GPUI popover supports one level;
+  Alt+mnemonics other than Alt+L are unobserved first-letter best guesses
+  (recorded as provisional in operator-shell.md); the bar is not a Tab stop
+  so pane traversal counts were preserved except for the removed Options
+  button (25 tabs to the first song; 15 shift-tabs slide→Live output; 14
+  collapsed). Bug found by the native run: GPUI's `div` track_focus logic
+  auto-focuses an ancestor (the root) on a bubble-phase mouse down, so a
+  mouse-opened menu lost its keyboard focus — fixed with
+  `window.prevent_default()` in the label's mouse-down listener plus
+  `cx.stop_propagation()` in the dismissing down-out listener (GPUI
+  `a84689073d` `div.rs::paint_mouse_listeners`, `window.rs` click synthesis).
+- Upstream zed/gpui paths consulted: `crates/gpui/examples/popover.rs`,
+  `crates/gpui/src/elements/{div,deferred,anchored}.rs`,
+  `crates/gpui/src/window.rs`, `crates/gpui/src/keymap/context.rs`,
+  `crates/gpui/src/app/test_context.rs`.
+- Checks (all exit 0): `cargo fmt --all -- --check`; `cargo clippy --locked
+  --all-targets -- -D warnings`; `cargo test --locked --all-targets --
+  --test-threads=12` (lib 164; bin 109 incl. nine new `tests::menu_bar`
+  tests: label order, per-menu contents against the captures, mouse
+  open/hover-switch/swallow/dismiss, Alt+Esc focus restore, arrow/wrap
+  navigation, dispatch parity, disabled inertness, text-field isolation);
+  `python -m ruff check scripts` (menu-bar-windows.py also ruff-formatted;
+  the other five unformatted scripts predate this change and CI does not
+  gate on ruff format). Native, one at a time: `scripts/menu-bar-windows.py`
+  PASS (Esc-restores-focus probe, all six menus captured via Alt and mouse,
+  toggle/outside dismiss, disabled Open Recent inert, menu-driven Logo/
+  Black/Clear with audience pixel checks and lit toolbar buttons, Show Live
+  Output off/on ending and restarting the audience child, Edit › Options,
+  File › Save As "Menu Set" / Open / Exit, clean exit 0;
+  `.amp/in/artifacts/menu-bar-windows/summary.json` + PNGs; `menu-file`,
+  `menu-live`, `menu-profiles` and `options-from-menu` captures viewed).
+  Baselines `live-output-windows`, `schedule-windows`,
+  `song-editor-windows`, `operator-menu-windows`, `options-windows` and
+  `i18n-windows` updated (tab counts, menu-based Options opening, lit-pixel
+  band offset by the menu row) and all PASS.
+- Unexecuted: EW confirmation of the five unobserved mnemonics and of the
+  flattened New ▸ submenu; screen-reader/UIA exposure of the bar; menu
+  captures at the collapsed window width; physical multi-DPI run (this run
+  was at 1.25 scale).
+- Next: enable the disabled items with their features (Open Recent, Save
+  As…, clipboard Edit items, Go Back, Profiles/View/Help), M1-07 search box,
+  remaining Main Output tabs.

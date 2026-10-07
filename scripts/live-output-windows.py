@@ -46,8 +46,10 @@ AUDIENCE_TITLE = "Sela audience output"
 OPERATOR_TITLE = "Sela — Technical preview"
 # Operator tab order: controls 0-9, Live output, Go Live, Previous, Next,
 # Logo, Black, Clear, Normalize text size (Songs tab), Open, Save, Add to
-# Schedule, schedule Up/Down/Remove, songs, schedule items, slides.
-TABS_TO_FIRST_SONG = 26
+# Schedule, schedule Up/Down/Remove, songs, schedule items, slides. The
+# Options toolbar button moved to the Edit menu (M1-02), shortening the
+# pre-songs traversal by one.
+TABS_TO_FIRST_SONG = 25
 # Original fixture logo: one opaque color, neither black nor text white.
 LOGO_RGB = (30, 110, 210)
 # Formatted song slide 1: bold gold fill, right/bottom aligned.
@@ -211,9 +213,12 @@ def near(a: tuple[int, ...], b: tuple[int, ...], tolerance: int = 12) -> bool:
 def lit_pixels(hwnd: int) -> int:
     """Count acknowledged-mask fill pixels in the operator's toolbar band."""
     width, height, bgra = nw.capture_client(hwnd)
-    band = min(height, round(44 * nw.dpi(hwnd) / 96))
+    scale = nw.dpi(hwnd) / 96
+    # The 28px menu bar sits above the 40px toolbar (M1-02).
+    top = round(28 * scale)
+    band = min(height, round(68 * scale))
     count = 0
-    for y in range(0, band, 2):
+    for y in range(top, band, 2):
         row = y * width * 4
         for x in range(0, width, 2):
             if near(tuple(bgra[row + x * 4 : row + x * 4 + 3]), MASK_ON_BGR, 3):
@@ -392,7 +397,7 @@ def main() -> int:
 
         # Slide 0 -> song 0 -> Remove, Down, Up, Add, Save, Open -> Normalize ->
         # Clear, Black, Logo -> Next -> Previous -> Go Live -> Live output.
-        run.keys(*["shift+tab"] * 16, "enter")
+        run.keys(*["shift+tab"] * 15, "enter")
         started = time.monotonic()
         found = audience(app.process.pid, 15)
         if not found:
@@ -488,7 +493,7 @@ def main() -> int:
             run2.keys(*["tab"] * TABS_TO_FIRST_SONG, "enter", "tab", "enter")
             time.sleep(0.3)
             run2.save(operator2, "formatted-preview")
-            run2.keys(*["shift+tab"] * 16, "enter")
+            run2.keys(*["shift+tab"] * 15, "enter")
             found = audience(second.process.pid, 15)
             if not found:
                 raise nw.Failure(f"no formatted audience window: {second.log()}")
@@ -584,7 +589,7 @@ def main() -> int:
             run3.keys(*["tab"] * TABS_TO_FIRST_SONG, "enter", "tab", "enter")
             time.sleep(0.3)
             run3.save(operator3, "backdrop-preview")
-            run3.keys(*["shift+tab"] * 16, "enter")
+            run3.keys(*["shift+tab"] * 15, "enter")
             found = audience(third_app.process.pid, 15)
             if not found:
                 raise nw.Failure(f"no backdrop audience window: {third_app.log()}")

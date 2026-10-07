@@ -45,9 +45,14 @@ use controls::{
     SLIDE_TAB_INDEX, SONG_TAB_INDEX,
 };
 pub(super) use dialogs::{Dialog, Then};
-use menus::{MenuConfirm, MenuDismiss, MenuNext, MenuPrevious, OpenSongMenu, SongMenu};
+pub(crate) use menus::{BarMenu, TopMenu};
+use menus::{
+    BarMenuLeft, BarMenuRight, MenuConfirm, MenuDismiss, MenuNext, MenuPrevious, OpenEditMenu,
+    OpenFileMenu, OpenHelpMenu, OpenLiveMenu, OpenProfilesMenu, OpenSongMenu, OpenViewMenu,
+    SongMenu,
+};
 #[cfg(test)]
-pub(super) use menus::{SONG_MENU, SongItem};
+pub(super) use menus::{SONG_MENU, SongItem, TOP_MENUS};
 use options::SettingsState;
 pub(super) use options::{MonitorSlot, SettingsConfig};
 use resources::{TAB_IDS, TABS};
@@ -203,6 +208,16 @@ pub(super) struct Operator {
     item_menu: Option<(EntryId, Point<Pixels>)>,
     pub(super) song_menu: Option<SongMenu>,
     song_menu_focus: FocusHandle,
+    /// Open main-menu-bar popup, if any (File/Edit/Live/Profiles/View/Help).
+    pub(super) bar_menu: Option<BarMenu>,
+    bar_menu_focus: FocusHandle,
+    /// Focus to restore when the menu bar closes (EW8-OBS-010 Esc behavior).
+    bar_return: Option<FocusHandle>,
+    /// Set when a label mouse-down opened a menu; the click completing that
+    /// same press must not immediately close it again.
+    bar_opened_with_mouse: Option<(TopMenu, Instant)>,
+    /// Menu-label bounds from the last prepaint; popups anchor below them.
+    bar_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
     /// Song row bounds from the last prepaint; a keyboard-opened menu is
     /// placed under its row.
     song_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
@@ -284,6 +299,26 @@ impl Operator {
             KeyBinding::new("space", MenuConfirm, Some("SelaSongMenu")),
             KeyBinding::new("escape", MenuDismiss, Some("SelaSongMenu")),
         ]);
+        // Main menu bar (M1-02/M1-03): Alt+mnemonics open the six menus
+        // (EW8-OBS-010; only Alt+L observed, the rest are first-letter best
+        // guesses). `!SelaTextInput` keeps plain typing from opening menus.
+        cx.bind_keys([
+            KeyBinding::new("alt-f", OpenFileMenu, Some("Sela && !SelaTextInput")),
+            KeyBinding::new("alt-e", OpenEditMenu, Some("Sela && !SelaTextInput")),
+            KeyBinding::new("alt-l", OpenLiveMenu, Some("Sela && !SelaTextInput")),
+            KeyBinding::new("alt-p", OpenProfilesMenu, Some("Sela && !SelaTextInput")),
+            KeyBinding::new("alt-v", OpenViewMenu, Some("Sela && !SelaTextInput")),
+            KeyBinding::new("alt-h", OpenHelpMenu, Some("Sela && !SelaTextInput")),
+            KeyBinding::new("down", MenuNext, Some("SelaMenuBar")),
+            KeyBinding::new("up", MenuPrevious, Some("SelaMenuBar")),
+            KeyBinding::new("tab", MenuNext, Some("SelaMenuBar")),
+            KeyBinding::new("shift-tab", MenuPrevious, Some("SelaMenuBar")),
+            KeyBinding::new("right", BarMenuRight, Some("SelaMenuBar")),
+            KeyBinding::new("left", BarMenuLeft, Some("SelaMenuBar")),
+            KeyBinding::new("enter", MenuConfirm, Some("SelaMenuBar")),
+            KeyBinding::new("space", MenuConfirm, Some("SelaMenuBar")),
+            KeyBinding::new("escape", MenuDismiss, Some("SelaMenuBar")),
+        ]);
         // An editor window saved or deleted a song: reload Songs off the UI
         // thread through the storage worker.
         let library_changed =
@@ -360,6 +395,11 @@ impl Operator {
             item_menu: None,
             song_menu: None,
             song_menu_focus: cx.focus_handle(),
+            bar_menu: None,
+            bar_menu_focus: cx.focus_handle(),
+            bar_return: None,
+            bar_opened_with_mouse: None,
+            bar_bounds: Rc::default(),
             song_bounds: Rc::default(),
             song_message: None,
             live_on_load: None,

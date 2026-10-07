@@ -446,7 +446,10 @@ Depends on: M0-02, M0-03, M0-10. Tests: N, E if viable, H.
 Early slice M1-02a is authorized by the sequencing exception above: separate-pane
 empty shell, provisional geometry, splitters and resource tabs, now locally merged
 and native-tested. M1-02b/c add contemporary chrome and official-image-directed
-toolbar placement (D-UI-01), including New Song entry. Persisted layout,
+toolbar placement (D-UI-01), including New Song entry. M1-02d adds the observed
+main menu bar (EW8-OBS-010/053: File, Edit, Live, Profiles, View, Help) with
+Alt+mnemonic and mouse access, action-parity dispatch and disabled unbuilt items;
+see the M1-02d section of operator-shell.md. Persisted layout,
 other modes and installed-reference behavior remain parent follow-through.
 
 - [x] Inspect relevant current GPUI split-pane/list/focus code and record references.
@@ -468,9 +471,12 @@ Depends on: M0-02, M1-02. Tests: U, N, E if viable.
 M1-03a adds keyboard access to current shell controls only. Tab/Shift+Tab and
 Enter/Space are explicitly provisional Sela accessibility policy, not installed
 reference observations. Native input/focus/selection checks passed; text-entry,
-modal scopes, multi-selection and live commands remain open.
+modal scopes, multi-selection and live commands remain open. M1-02d's menu bar
+extends the same rule to menu commands: every menu item dispatches a GPUI action
+in the `Sela`/`SelaMenuBar` key contexts or calls the same Operator method as
+its toolbar/keyboard equivalent.
 
-- [ ] Map observed commands to GPUI actions/key contexts, not global key matching.
+- [x] Map observed commands to GPUI actions/key contexts, not global key matching.
 - [ ] Define focus traversal, text-input ownership, modal scope and selection
   anchors for single, range and multi-selection where observed.
 - [ ] Implement next/previous, Go Live and safety bindings in the proper contexts.

@@ -41,7 +41,6 @@ pub(crate) enum Control {
     DialogCancel,
     NewSchedule,
     ItemMenuRemove,
-    Options,
 }
 
 /// First tab index of each focus band. Rows are placed by band so lists of
@@ -54,7 +53,7 @@ pub(crate) const SLIDE_TAB_INDEX: isize = 1000;
 pub(crate) const IMAGE_TAB_INDEX: isize = 2000;
 
 impl Control {
-    pub(crate) const ALL: [Control; 33] = [
+    pub(crate) const ALL: [Control; 32] = [
         Self::ResetLayout,
         Self::Quit,
         Self::CollapseResources,
@@ -87,7 +86,6 @@ impl Control {
         Self::DialogCancel,
         Self::NewSchedule,
         Self::ItemMenuRemove,
-        Self::Options,
     ];
 
     pub(crate) const COUNT: usize = Self::ALL.len();
@@ -135,7 +133,6 @@ impl Control {
     pub(crate) fn tab_position(self) -> isize {
         match self {
             Self::NewSchedule => 2 * 11 + 1,
-            Self::Options => 2 * (Self::SaveSchedule.index() as isize + 1) + 1,
             Self::DialogConfirm => DIALOG_TAB_INDEX + 1,
             Self::DialogCancel => DIALOG_TAB_INDEX + 2,
             _ => 2 * (self.index() as isize + 1),
@@ -203,7 +200,10 @@ impl Operator {
                 self.collapsed = false;
                 self.drag = None;
             }
-            Control::NewMenu => self.new_menu = !self.new_menu,
+            Control::NewMenu => {
+                self.bar_menu = None;
+                self.new_menu = !self.new_menu;
+            }
             Control::Quit => window.dispatch_action(Box::new(Quit), cx),
             Control::CollapseResources => {
                 self.collapsed = !self.collapsed;
@@ -256,7 +256,6 @@ impl Operator {
                     self.send(index);
                 }
             }
-            Control::Options => self.open_options(window, cx),
             Control::OpenSchedule => self.open_schedule(window, cx),
             Control::SaveSchedule => self.save_schedule(window, cx),
             Control::AddToSchedule if !self.collapsed && self.tab == 0 => {

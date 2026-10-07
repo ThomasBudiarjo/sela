@@ -164,7 +164,8 @@ def main() -> int:
         save(operator, "operator-saved")
 
         # Focus returned to schedule Up: back to Live output and turn it on.
-        keys(operator, *["shift+tab"] * 12, "enter")
+        # (One fewer stop since the Options toolbar button moved to Edit >.)
+        keys(operator, *["shift+tab"] * 11, "enter")
         found = lo.audience(app.process.pid, 15)
         if not found:
             raise nw.Failure(f"no audience window within 15s: {app.log()}")

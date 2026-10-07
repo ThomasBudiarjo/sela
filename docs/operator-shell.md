@@ -511,3 +511,81 @@ of the unobserved items was skipped by owner decision for this ticket.
 Open: EW observation of keyboard access,
 Delete confirmation and the two disabled items; Linux/macOS native runs; UIA
 names.
+
+## M1-02d — EasyWorship main menu bar
+
+Implemented-unqualified. A 28 px menu row above the toolbar carries **File,
+Edit, Live, Profiles, View, Help** in the observed order (EW8-OBS-010,
+EW8-OBS-053; Profiles/View/Help contents from `ew-w07d-options/menu-*.png`).
+It is not a Tab stop: Alt+mnemonics and the mouse reach it, keeping the pane
+traversal unchanged. The toolbar Options button was removed (EW has no
+equivalent; Options is Edit › Options).
+
+- **File**: New ▸ header with **Song…** and **Schedule** (the GPUI popover
+  supports one level, so the ▸ submenu is flattened into an inert header row
+  plus its two items, a documented deviation), Open Schedule (Ctrl+O), Open
+  Recent (disabled), Save Schedule (Ctrl+S), Save Schedule As… / Export
+  Standalone Schedule… / Close Schedule (disabled; not yet built), Reports
+  and Printing ▸ (disabled), Exit.
+- **Edit**: Cut, Copy, Paste, Delete, Select All (all disabled until
+  text-editing targets exist) and **Options…**, which opens the existing
+  Options dialog.
+- **Live**: **Go Live**, Go Back (disabled), **Show Logo on Live Output**,
+  **Black on Live Output**, **Clear Text on Live Output** and **Show Live
+  Output** — the same code paths as the toolbar buttons and Ctrl+L/B/C, with
+  a ✓ on Show Live Output while the audience output is on.
+- **Profiles/View/Help** render their captured items disabled (Default ✓,
+  Profiles Manager…, Add/Remove Demo Data…, Utilities ▸; the captured view
+  items; Help topics, Sela Help and About Sela…); unbuilt features stay inert
+  instead of being hidden.
+
+Interaction: Alt+F/E/L/P/V/H opens a menu with its first enabled item
+highlighted (only Alt+L is observed, EW8-OBS-053 tooling note; the rest are
+first-letter best guesses, reversible policy). Clicking a label opens its
+menu; while a menu is open, hovering another label switches to it and a
+click anywhere else is swallowed, closing the menu, like a Windows menu.
+Down/Up (and Tab/Shift+Tab) move the highlight past separators, headers and
+disabled rows and wrap; Left/Right switch menus; Enter/Space chooses;
+Escape closes and returns focus to whatever had it before the menu opened.
+Opening a dialog or any other menu closes the bar menu; the `SelaMenuBar`
+key context keeps menu keys away from the show/schedule contexts, and text
+fields never see the mnemonics (`Sela && !SelaTextInput`). Items dispatch
+through the same Operator methods as their toolbar/keyboard equivalents, so
+dirty-schedule guards and confirmations are shared. All strings go through
+`src/i18n.rs` (English and Indonesian); element ids stay static English.
+
+GPUI references (pin `a84689073d`): `crates/gpui/examples/popover.rs` and
+`crates/gpui/src/elements/{deferred,anchored}.rs` (popup placement, reused
+from M1-05i), `crates/gpui/src/elements/div.rs` (`on_mouse_down_out`,
+`on_children_prepainted`, and the track_focus mouse-down focus transfer that
+`window.prevent_default()` suppresses on the label press so a mouse-opened
+menu keeps its keyboard focus), `crates/gpui/src/keymap/context.rs`. GPUI's
+app menus are macOS-only, so this is an in-window bar; no GPL UI copied.
+
+GPUI tests: `tests::menu_bar` — label order and menu contents against the
+captures, mouse open/hover-switch/swallow/outside-dismiss, Alt mnemonics
+with Esc focus restore, arrow/wrap navigation, item dispatch parity (masks,
+Show Live Output, New/Open/Save Schedule, Options, Exit), disabled items
+inert, and text-field isolation; the existing song-menu pointer assertion
+gained a 1 px tolerance for fractional pane heights. Existing shell tests
+were updated for the removed Options toolbar stop (14 tabs when collapsed,
+25 to the first song).
+
+Native: `scripts/menu-bar-windows.py` **PASS** on Windows 11
+(`.amp/in/artifacts/menu-bar-windows/`): Esc restores focus (a subsequent
+Enter still fires Go Live), every menu opens via Alt and via the mouse with
+captures, label-click toggles and outside-click dismisses, Open Recent is
+inert, and from the menus: Logo/Black/Clear drive the real audience output
+with lit toolbar buttons, Show Live Output ends and restarts the audience
+child, Edit › Options opens the dialog, File › Save Schedule As… saves
+"Menu Set", Open Schedule reopens it and File › Exit closes both processes
+cleanly. Baselines `live-output-windows`, `schedule-windows`,
+`song-editor-windows`, `operator-menu-windows`, `options-windows` and
+`i18n-windows` were updated for the removed toolbar Options stop and all
+PASS. Captures `menu-file.png`, `menu-live.png`, `menu-profiles.png` and
+`options-from-menu.png` were viewed: order, shortcuts, disabled greys and
+the first-item highlight match the reference.
+
+Open: EW confirmation of the unobserved mnemonics and of File › New ▸'s
+submenu; screen-reader exposure of the bar; collapsed-window menu captures;
+the disabled items become enabled with their features.

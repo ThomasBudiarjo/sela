@@ -41,7 +41,6 @@ lo = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lo)
 
 TABS_TO_LIVE_OUTPUT = 11
-TABS_LIVE_TO_OPTIONS = 10
 BORDER = (0xDC, 0xDE, 0xDC)
 CHROME = (0xF4, 0xF4, 0xF3)
 SELECTED_ROW = (0xE3, 0xE7, 0xF3)
@@ -110,7 +109,10 @@ class Session:
         return found[1]
 
     def open_options(self, from_live: bool) -> None:
-        self.keys(*["tab"] * (TABS_LIVE_TO_OPTIONS if from_live else 21), "enter")
+        # The Options toolbar button moved to Edit > Options... (M1-02); the
+        # Alt+E mnemonic is the EW8-OBS-010 route and works from any focus.
+        del from_live
+        self.keys("alt+e", "enter")
         time.sleep(0.5)
 
     def quit(self) -> None:

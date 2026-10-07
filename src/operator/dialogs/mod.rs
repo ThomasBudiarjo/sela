@@ -34,6 +34,7 @@ impl Operator {
         self.dialog_message = None;
         self.item_menu = None;
         self.song_menu = None;
+        self.bar_menu = None;
         self.new_menu = false;
         if dialog == Dialog::SaveAs {
             let input = self.title_input.get_or_insert_with(|| {
@@ -137,7 +138,7 @@ impl Operator {
                 .debug_selector(|| "schedule-dialog".into())
                 .occlude()
                 .absolute()
-                .top(px(44.))
+                .top(px(MENU_BAR_H + 44.))
                 .left(px(8.))
                 .w(px(380.))
                 .p_3()
