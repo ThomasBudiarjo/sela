@@ -587,8 +587,22 @@ Follow-ups:
 - M1-05n Format Style tab: element fill, border and reflection
   (EW8-OBS-031). Planned.
 - M1-05o Format Arrange tab (EW8-OBS-031). Planned.
-- M1-05h Per-song background (color or Media image) saved with the revision.
-  Planned.
+- M1-05h Slide backgrounds (color or Media image) saved with the revision.
+  **Active.** Observed in RUN-W06I (EW8-OBS-037–043): the background is per
+  slide; a slide without its own falls back to the theme's Master layout,
+  edited from Edit Slide Layouts; Ctrl+A applies a fill to every slide;
+  Aspect Ratio Maintain/Stretch/Zoom. Owner decisions 2026-10-07: per slide
+  with a song master (themes are M1-08, so the master stands in for the
+  theme's Master layout until then), resolution slide → master → black; a
+  new image defaults to Zoom (EW shows Auto + Stretch); Maintain bars are
+  black; a missing or changed image renders black with a visible warning
+  in Preview; color and image now, gradient and video later. Slices:
+  - [x] h0 RUN-W06I observation (EW8-OBS-037–043).
+  - [ ] h1 background model and schema 4 with a verified backup.
+  - [ ] h2 fit/decode worker, operator preparation gate and substitution,
+    editor preview and thumbnails.
+  - [ ] h3 Slide pane Background section, Select Media…, aspect, Layouts
+    tab for the master, Ctrl+A, undo, native script.
 - M1-05i Library right-click New Song…/Edit Song…/Delete in the operator
   (EW8-OBS-021). Planned.
 

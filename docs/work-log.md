@@ -6,6 +6,13 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Slide backgrounds observed (RUN-W06I, 2026-10-07):** EW8-OBS-037–043:
+  backgrounds are per slide and fall back to the theme's Master layout
+  (Edit Slide Layouts opens a Layouts tab); fills None/Color/Gradient/Media;
+  Aspect Maintain/Stretch/Zoom; Ctrl+A applies a fill to all slides.
+  M1-05h is **active** with the approved spec (slide → song master → black,
+  Zoom default, black bars, black plus a warning for a missing image).
+  Next: h1, the background model and schema 4.
 - **Whole-song selection (M1-05g3b, 2026-10-07):** Ctrl+A in Words or Slides
   selects every slide; every Format pane change then applies to all slides
   as one undo step; typing, Paste or Backspace over it replaces the song with
@@ -155,7 +162,7 @@ remain `planned`. Update the current state above when switching work.
 | --- | --- | --- |
 | PLAN-001 | done | 63 implementation tickets, 326 ticket checklist items, test/compatibility matrices and commit/resume rules. Documentation verified; delivered in this local planning commit. No application implementation. |
 | M0-01 | done | Pinned native GPUI window, lockfile, CI and instructions; Linux and Windows 11 build/test/native launch/resize/quit verified (2026-10-06). |
-| M0-02 | active | Public-source ledger (SRC-01–11) and runbook; installed runs on unlicensed 8.0.49: W01 partial (layout, unlicensed output, song editor) and W02/W03 single-song static cases (selection, Go Live, masks, shortcuts, logo). Open: multi-item W02, combined-mask double-click, motion/audio, W04–W06. |
+| M0-02 | active | Public-source ledger (SRC-01–11) and runbook; installed runs on unlicensed 8.0.49: W01 partial (layout, unlicensed output, song editor) and W02/W03 single-song static cases (selection, Go Live, masks, shortcuts, logo); W06 partial (Song Editor layout, Format pane, Ctrl+A formatting, slide backgrounds and the Master layout, RUN-W06E–I). Open: multi-item W02, combined-mask double-click, motion/audio, W04–W06. |
 | M0-03 | implemented-unqualified | Three real Operator action/focus tests and repeated native X11 smoke; domain fixture extension and Windows/accessibility checks open. |
 | M0-04 | implemented-unqualified | Separate audience process measured under UI stalls, synthetic preparation and operator exit/kill on Linux and Windows DX12 physical displays, incl. mixed-DPI moves, fullscreen, both GPUs, and an idle-machine rerun; hotplug, device loss, present pacing open. |
 | M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
@@ -164,7 +171,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h–i (background, operator song menu), M1-05j–o (deferred format controls and tabs), drag selection across cells, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h active (h0 RUN-W06I observed; h1–h3 slide backgrounds open), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2652,3 +2659,38 @@ PY
   and focus change), EW confirmation of the replace result and undo.
 - Next: M1-05h per-song background (color or Media image), following the
   RUN-W06G Slide pane observations (EW8-OBS-032).
+
+### M0-02 / RUN-W06I — Slide pane background observation — 2026-10-07 (UTC+7)
+
+- State: observation only, no code. Slice h0 of the approved M1-05h spec
+  (`~/.factory/specs/2026-10-07-m1-05h-per-slide-backgrounds-with-a-song-master.md`).
+  Recorded EW8-OBS-037–043 in reference-observations.md; captures in
+  `.amp/in/artifacts/reference/ew8-w06i-background/`.
+- Documented sources read first: help.easyworship.com "Edit a Song"
+  (© 2026, build not stated) and the EasyWorship blog "Individual Song
+  Settings" (2020-01-17, EW7 Inspector): a background can be set per
+  slide, or for the whole song through the Masters tab or Apply to Theme.
+  8.0.49 has no Masters tab (EW8-OBS-021); its Master is the theme layout
+  behind Edit Slide Layouts (EW8-OBS-043).
+- Owner decisions before the run (binding for M1-05h): per slide with a
+  master; resolution slide → song master → black (theme slots in with
+  M1-08); a new image defaults to Zoom, not EW's Auto + Stretch; Maintain
+  bars are black; a missing or changed image renders black with a visible
+  warning in Preview, never changing the live scene; color and image in
+  this ticket, gradient (EW lists Gradient Fill) and video later.
+- Result: per-slide background with a theme Master fallback; a new slide
+  uses the Master, not the previous slide's choice; Ctrl+A applies a fill
+  to every slide and shows blank values where slides differ; Select
+  Media… is a category/search/thumbnail picker without import; choosing an
+  image resets aspect to Auto + Stretch; Maintain letterboxes in black.
+- Not observed: Master edits reaching slides (synthetic clicks ignored in
+  the Layouts tab), whether a Master edit changes the theme for other
+  songs, how the Layouts tab closes, Gradient Fill controls, None fill
+  output, what Auto means, background undo, saved/live rendering.
+- Privacy: the first capture used a screen grab of the editor rectangle
+  while another application covered it; that file was deleted unread
+  beyond the first view and later captures use `PrintWindow`, or a screen
+  grab of a popup rectangle only.
+- The agent closed the editor with Cancel → No; nothing was saved.
+- Next: h1, `src/background.rs` model, `Song.master` and
+  `Section.background`, schema 4 with a verified backup, slide resolution.

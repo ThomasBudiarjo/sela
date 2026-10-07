@@ -432,6 +432,39 @@ in a combined state is provisional (EW8-OBS-020). Output off keeps mask state.
 | EW8-OBS-035 | observed (RUN-W06H) | With everything selected, Italic (owner's real click) made every slide italic: all Words rows render italic and every Slides thumbnail shows italic text (h05, h06). In the same run the family became Agency FB on every slide after the stray font-field focus; the agent did not choose it, so the trigger is unrecorded, but the change applied to all slides. The Slides tab shows every thumbnail selected and the Format pane shows only the Slide tab (no Text tab) while all slides are selected (h06). Owner-reported (not separately observed): every Format pane choice applies to all slides after Ctrl+A. |
 | EW8-OBS-036 | observed (RUN-W06H) | Switching Words → Slides → Words ends the whole-song selection: Words shows only a caret at the end of the last slide, and the Text pane shows that slide's values (Agency FB, B and I on) (h07). One Ctrl+Z then changed no visible format (h08); what it undid is unrecorded. |
 
+## RUN-W06I-2026-10-07 — Slide pane background and the Master layout (partial W06)
+
+- Date/observer: 2026-10-07 +07:00, Droid agent on the owner's machine with
+  the owner authorizing; same install and host as RUN-W06G. The owner had
+  opened a new song editor ("Song Editor - Untitled", maximized 2578x1398
+  physical, 120 DPI) with the Format pane on the Slide tab. The owner made
+  steps i01–i04 with the real mouse, then went away; the agent drove the
+  rest with synthetic clicks.
+- Fixture: the new, untitled song (one empty slide, then two). The installed
+  theme is "sela-w03-background" (the RUN-W03 image as its background).
+  Images in Media › Images: "sela-w03-background" and "sela-w03-logo". The
+  agent closed the editor with Cancel → No (i21); nothing was saved.
+- Method: the RUN-W06E driver through a local wrapper
+  (`.amp/in/explore/ewi.py`, not committed). Popups are separate
+  `FMTsdPopupForm` windows that `PrintWindow` captures as blank, so they
+  were captured with a screen grab of the popup rectangle only. Captures
+  (ignored, local): `.amp/in/artifacts/reference/ew8-w06i-background/i00…i21`.
+- Input caveat (tooling): the first synthetic click on Slide Layout ▾ opened
+  an empty popup. After Edit Slide Layouts, synthetic clicks on the Fill ▾
+  were ignored (the RUN-W06G quirk), so master edits were not observed.
+- Owner-reported before the run: Aspect Ratio offers Maintain, Stretch and
+  Zoom; the master theme is reached from the Slide tab.
+
+| ID | Status | Observation |
+| --- | --- | --- |
+| EW8-OBS-037 | observed (RUN-W06I) | Slide Layout ▾ opens "Select a Layout" with one entry, "Master" (checked, black thumbnail), and a "< Change Theme" link (i02). The Master is a layout of the song's theme, not a separate song setting. |
+| EW8-OBS-038 | observed (RUN-W06I) | Background fill ▾ lists None, Color Fill, Gradient Fill, Media Fill (i03). Color Fill shows a color swatch ▾ (blue, `#0000FF`, on first choice) and Opacity 100; the media rows disappear and Apply becomes enabled (i04). Switching back to Media Fill shows "None" with a black background: the earlier image is not kept (i05). |
+| EW8-OBS-039 | observed (RUN-W06I) | Select Media… opens a picker: a category ▾ (MEDIA Videos, Images, Feeds; COLLECTIONS ▸; MY COLLECTIONS ▸, Videos first and empty here), a search field, and a grid of thumbnails named without extensions (i06–i08). No import control. One click on a thumbnail chooses it and closes the picker; the pane shows the thumbnail and name (i09). |
+| EW8-OBS-040 | observed (RUN-W06I) | Aspect Ratio ▾ lists Maintain, Stretch, Zoom (i10). Choosing an image resets it to Auto (highlighted) + Stretch, which stretches a 16:9 image over the 16:10 (2304x1440) slide (i09). Choosing an aspect turns Auto off (i05, i11). Maintain letterboxes the image with black bars (i11). What Auto means beyond showing Stretch is unrecorded. |
+| EW8-OBS-041 | observed (RUN-W06I) | A background is per slide: with slide 1 set to the logo image, a new slide (+) shows the theme's background (sela-w03-background, Auto + Stretch), not slide 1's (i12). The new slide's pane shows only the Slide tab. The slide context menu offers New Slide, Duplicate Slide, Delete Slide, Cut, Copy, Paste, Paste Without Formatting; no revert or reset of the background (i13). |
+| EW8-OBS-042 | observed (RUN-W06I) | After Ctrl+A in Words, the Slide pane shows blank values where slides differ: Media Fill with an empty thumbnail and no name, an empty aspect with Auto off, an empty Theme Elements list (i14). Choosing Color Fill then gave every slide the blue fill (slide 1 sampled `0000ff`, slide 2 in the preview; i16, i17). |
+| EW8-OBS-043 | observed (RUN-W06I) | Edit Slide Layouts opens a "Layouts ⊗" tab beside Words and Slides with a "Theme - sela-w03-background ▾" selector and one layout card "Master" (black thumbnail). The canvas shows sample lyrics ("song text line one…four") and a "Song Title Example - Author / © 2014 Publishing Company Copyright" footer over the theme background; the pane shows only a Slide tab with Theme Elements and the Master's Background (Media Fill sela-w03-background, Auto + Stretch, Opacity 100) (i19). Not observed: whether a Master change reaches slides without their own background, whether it changes the theme for other songs, and how the Layouts tab closes. |
+
 ## D-UI-01 — Official toolbar image (documented-only, 2026-10-04)
 
 - Source: <https://www.easyworship.com/software/features>; directly fetched and
