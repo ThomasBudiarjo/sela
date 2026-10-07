@@ -412,12 +412,16 @@ fn read_resource(resource: &ResourceRef, cancel: &AtomicBool) -> Result<Vec<u8>,
 
 /// Bounded static PNG/JPEG decode to straight RGBA: dimensions are checked
 /// against `caps` and the decoded bytes against `budget` before decoding.
+/// The Exif orientation (JPEG APP1, PNG eXIf) is applied, so the returned
+/// extent is the displayed one. Embedded ICC profiles are ignored and the
+/// samples are taken as sRGB (see `docs/images.md`).
 pub(crate) fn decode_image(
     source: &[u8],
     caps: RendererCapabilities,
     budget: usize,
     cancel: &AtomicBool,
 ) -> Result<(Extent, Vec<u8>), PrepareError> {
+    use image::ImageDecoder as _;
     let format = image::guess_format(source).map_err(|_| PrepareError::UnsupportedImage)?;
     if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
         return Err(PrepareError::UnsupportedImage);
@@ -444,12 +448,27 @@ pub(crate) fn decode_image(
         }
     }
     reader.limits(limits);
-    let rgba = reader
-        .decode()
-        .map_err(|_| PrepareError::InvalidImage)?
-        .into_rgba8()
-        .into_raw();
-    Ok((extent, rgba))
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|_| PrepareError::InvalidImage)?;
+    // `ImageReader::decode` reserves this before allocating; `into_decoder`
+    // does not, so the intermediate (e.g. 16-bit PNG) buffer is bounded here.
+    if decoder.total_bytes() > MAX_SCENE_BYTES as u64 {
+        return Err(PrepareError::TooLarge);
+    }
+    let orientation = decoder
+        .orientation()
+        .map_err(|_| PrepareError::InvalidImage)?;
+    let mut decoded =
+        image::DynamicImage::from_decoder(decoder).map_err(|_| PrepareError::InvalidImage)?;
+    cancelled(cancel)?;
+    decoded.apply_orientation(orientation);
+    let rgba = decoded.into_rgba8();
+    let extent = Extent {
+        width: rgba.width(),
+        height: rgba.height(),
+    };
+    Ok((extent, rgba.into_raw()))
 }
 
 pub(crate) fn prepare(

@@ -7,6 +7,7 @@ pub mod format;
 pub mod images;
 pub mod masks;
 pub mod output;
+pub mod preflight;
 pub mod preparation;
 pub mod scene;
 pub mod schedule;
