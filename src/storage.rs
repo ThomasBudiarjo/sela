@@ -4,6 +4,7 @@ use crate::arrangement::{
 };
 use crate::background::Background;
 use crate::format::SlideFormat;
+use crate::search;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{
     path::PathBuf,
@@ -230,7 +231,17 @@ PRAGMA user_version=3;";
 const SCHEMA4: &str = "CREATE TABLE song_backgrounds(song BLOB NOT NULL, revision INTEGER NOT NULL, background BLOB NOT NULL CHECK(length(background)<=320), PRIMARY KEY(song,revision), FOREIGN KEY(song,revision) REFERENCES song_revisions(id,revision));
 CREATE TABLE section_backgrounds(song BLOB NOT NULL, revision INTEGER NOT NULL, position INTEGER NOT NULL, background BLOB NOT NULL CHECK(length(background)<=320), PRIMARY KEY(song,revision,position), FOREIGN KEY(song,revision,position) REFERENCES section_ids(song,revision,position));
 PRAGMA user_version=4;";
-const SCHEMA_VERSIONS: [i64; 4] = [1, 2, 3, 4];
+// Derived search index over each nondeleted song's head revision, rebuilt from
+// the payloads whenever it is missing or damaged. `search_rows` gives every
+// song a stable INTEGER PRIMARY KEY, because VACUUM may renumber the implicit
+// rowids of `songs`. Diacritic folding mode 2 also folds letters that mode 1
+// leaves unchanged.
+const SEARCH: &str = "CREATE TABLE search_rows(row INTEGER PRIMARY KEY, song BLOB NOT NULL UNIQUE REFERENCES songs(id));
+CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='unicode61 remove_diacritics 2');";
+const SCHEMA_VERSIONS: [i64; 5] = [1, 2, 3, 4, 5];
+const CURRENT: i64 = 5;
+// bm25 column weights: title, lyrics, metadata.
+const SEARCH_SQL: &str = "SELECT m.song,s.head,f.title FROM song_search f JOIN search_rows m ON m.row=f.rowid JOIN songs s ON s.id=m.song WHERE song_search MATCH ?1 AND s.deleted=0 ORDER BY bm25(song_search,10.0,1.0,2.0),f.title COLLATE NOCASE,f.title,m.song LIMIT ?2";
 
 impl SectionId {
     /// CPU-only allocation with a process-local counter; no random-device I/O.
@@ -512,13 +523,27 @@ impl Repository {
             tx.execute_batch(SCHEMA2)?;
             tx.execute_batch(SCHEMA3)?;
             tx.execute_batch(SCHEMA4)?;
-            version = 4;
+            tx.execute_batch(SEARCH)?;
+            tx.execute_batch("PRAGMA user_version=5")?;
+            version = CURRENT;
         } else if app != APP || !SCHEMA_VERSIONS.contains(&version) {
             return Err(Error::Unsupported);
         }
-        let check: String = tx.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
-        if check != "ok" {
-            return Err(Error::Corrupt);
+        // quick_check also runs the FTS5 index check. When dropping the derived
+        // index makes the file pass, only the index was damaged and it is
+        // rebuilt; otherwise the transaction rolls the drop back.
+        if !quick_check(&tx)? {
+            if version != CURRENT {
+                return Err(Error::Corrupt);
+            }
+            tx.execute_batch("DROP TABLE IF EXISTS song_search")
+                .map_err(|_| Error::Corrupt)?;
+            if !quick_check(&tx)? {
+                return Err(Error::Corrupt);
+            }
+            rebuild_search(&tx)?;
+        } else if version == CURRENT && !search_consistent(&tx)? {
+            rebuild_search(&tx)?;
         }
         if tx.prepare("PRAGMA foreign_key_check")?.exists([])? {
             return Err(Error::Corrupt);
@@ -526,7 +551,7 @@ impl Repository {
         // Verify required columns before accepting an otherwise foreign schema.
         tx.prepare("SELECT s.deleted,r.payload FROM songs s JOIN song_revisions r ON s.id=r.id")?;
         tx.prepare("SELECT r.title,i.position,i.song_revision FROM schedule_revisions r JOIN items i ON r.id=i.id AND r.revision=i.revision JOIN schedules s ON s.id=r.id")?;
-        if version < 4 && upgrade {
+        if version < CURRENT && upgrade {
             // Hold the writer reservation across backup and migration. The separate
             // read connection copies the same committed state, without attempting
             // an online backup from a connection with an active write transaction.
@@ -583,6 +608,15 @@ impl Repository {
                 std::process::abort();
             }
         }
+        if version < 5 && upgrade {
+            tx.execute_batch(SEARCH)?;
+            fill_search(&tx)?;
+            tx.execute_batch("PRAGMA user_version=5")?;
+            #[cfg(test)]
+            if std::env::var_os("SELA_ABORT_MIGRATION_SCHEMA5").is_some() {
+                std::process::abort();
+            }
+        }
         if version >= 2 || upgrade {
             tx.prepare("SELECT section FROM section_ids")?;
             tx.prepare("SELECT variant,name FROM variants")?;
@@ -594,6 +628,10 @@ impl Repository {
         if version >= 4 || upgrade {
             tx.prepare("SELECT background FROM song_backgrounds")?;
             tx.prepare("SELECT position,background FROM section_backgrounds")?;
+        }
+        if version >= 5 || upgrade {
+            tx.prepare("SELECT row,song FROM search_rows")?;
+            tx.prepare("SELECT title,lyrics,metadata FROM song_search")?;
         }
         tx.commit()?;
         Ok(Self { db })
@@ -807,18 +845,103 @@ impl Repository {
                 )?;
             }
         }
+        index_song(&tx, v.id, &song)?;
         tx.commit()?;
         Ok(v)
     }
     pub fn delete_song(&mut self, v: Version) -> Result<()> {
-        if self.db.execute(
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.execute(
             "UPDATE songs SET deleted=1 WHERE id=? AND head=? AND deleted=0",
             params![&v.id.0[..], v.revision],
         )? != 1
         {
             return Err(Error::Conflict);
         }
+        unindex_song(&tx, v.id)?;
+        tx.commit()?;
         Ok(())
+    }
+    /// Ranked current songs matching every term of `query` (see `search`);
+    /// an empty or punctuation-only query returns no hits without I/O.
+    pub fn search(&self, query: &str, generation: u64) -> Result<search::Results> {
+        if query.len() > search::MAX_QUERY_BYTES {
+            return Err(Error::Invalid);
+        }
+        let mut results = search::Results {
+            generation,
+            hits: Vec::new(),
+            truncated: false,
+        };
+        let Some(expression) = search::expression(query) else {
+            return Ok(results);
+        };
+        let mut statement = self.db.prepare_cached(SEARCH_SQL)?;
+        let mut rows = statement.query(params![expression, search::MAX_HITS as i64 + 1])?;
+        while let Some(row) = rows.next()? {
+            if results.hits.len() == search::MAX_HITS {
+                results.truncated = true;
+                break;
+            }
+            let title: String = row.get(2)?;
+            if title.len() > 1024 {
+                return Err(Error::Corrupt);
+            }
+            results.hits.push(search::Hit {
+                version: Version {
+                    id: read_id(row.get(0)?)?,
+                    revision: row.get(1)?,
+                },
+                title,
+            });
+        }
+        Ok(results)
+    }
+    /// Full check of the derived index: FTS5 integrity, one row per
+    /// nondeleted song, and every row's text equal to its head revision.
+    pub fn check_search(&self) -> Result<bool> {
+        match self.check_search_rows() {
+            Err(Error::Corrupt) => Ok(false),
+            result => result,
+        }
+    }
+    fn check_search_rows(&self) -> Result<bool> {
+        if !search_consistent(&self.db)? {
+            return Ok(false);
+        }
+        self.db.execute(
+            "INSERT INTO song_search(song_search) VALUES('integrity-check')",
+            [],
+        )?;
+        let mut statement = self.db.prepare("SELECT r.payload,f.title,f.lyrics,f.metadata FROM search_rows m JOIN songs s ON s.id=m.song JOIN song_revisions r ON r.id=s.id AND r.revision=s.head JOIN song_search f ON f.rowid=m.row")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let indexed: [String; 3] = [row.get(1)?, row.get(2)?, row.get(3)?];
+            if search_fields(&Song::decode(&row.get::<_, Vec<u8>>(0)?)?) != indexed {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    /// Rebuilds the derived index from the current revisions in one
+    /// transaction; song tables are only read.
+    pub fn rebuild_search(&mut self) -> Result<search::IndexState> {
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let songs = rebuild_search(&tx)?;
+        tx.commit()?;
+        Ok(search::IndexState::Rebuilt { songs })
+    }
+    /// `check_search`, then `rebuild_search` only when the check fails.
+    pub fn repair_search(&mut self) -> Result<search::IndexState> {
+        if self.check_search()? {
+            Ok(search::IndexState::Healthy)
+        } else {
+            self.rebuild_search()
+        }
     }
     pub fn save_schedule(
         &mut self,
@@ -858,6 +981,91 @@ impl Repository {
 }
 fn read_id(bytes: Vec<u8>) -> Result<Id> {
     Ok(Id(bytes.try_into().map_err(|_| Error::Corrupt)?))
+}
+fn quick_check(db: &Connection) -> Result<bool> {
+    let check: String = db.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+    Ok(check == "ok")
+}
+/// The indexed columns of a song: title, lyrics, metadata. Labels are not indexed.
+fn search_fields(song: &Song) -> [String; 3] {
+    let lyrics = song
+        .sections
+        .iter()
+        .map(|s| s.lyrics.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let metadata = [&song.authors, &song.copyright, &song.license]
+        .map(String::as_str)
+        .join("\n");
+    [song.title.clone(), lyrics, metadata]
+}
+/// Replaces the song's index entry inside the caller's transaction.
+fn index_song(db: &Connection, id: Id, song: &Song) -> Result<()> {
+    let row: Option<i64> = db
+        .query_row(
+            "SELECT row FROM search_rows WHERE song=?",
+            params![&id.0[..]],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let row = match row {
+        Some(row) => {
+            db.execute("DELETE FROM song_search WHERE rowid=?", params![row])?;
+            row
+        }
+        None => {
+            db.execute(
+                "INSERT INTO search_rows(song) VALUES(?)",
+                params![&id.0[..]],
+            )?;
+            db.last_insert_rowid()
+        }
+    };
+    let [title, lyrics, metadata] = search_fields(song);
+    db.execute(
+        "INSERT INTO song_search(rowid,title,lyrics,metadata) VALUES(?,?,?,?)",
+        params![row, title, lyrics, metadata],
+    )?;
+    Ok(())
+}
+fn unindex_song(db: &Connection, id: Id) -> Result<()> {
+    db.execute(
+        "DELETE FROM song_search WHERE rowid=(SELECT row FROM search_rows WHERE song=?)",
+        params![&id.0[..]],
+    )?;
+    db.execute("DELETE FROM search_rows WHERE song=?", params![&id.0[..]])?;
+    Ok(())
+}
+/// Indexes every nondeleted head into empty search tables; returns the count.
+fn fill_search(db: &Connection) -> Result<usize> {
+    let mut statement = db.prepare("SELECT s.id,r.payload FROM songs s JOIN song_revisions r ON r.id=s.id AND r.revision=s.head WHERE s.deleted=0 ORDER BY s.id")?;
+    let mut rows = statement.query([])?;
+    let mut songs = 0;
+    while let Some(row) = rows.next()? {
+        let id = read_id(row.get(0)?)?;
+        index_song(db, id, &Song::decode(&row.get::<_, Vec<u8>>(1)?)?)?;
+        songs += 1;
+    }
+    Ok(songs)
+}
+/// Drops and rebuilds the derived index inside the caller's transaction.
+fn rebuild_search(db: &Connection) -> Result<usize> {
+    db.execute_batch("DROP TABLE IF EXISTS song_search; DROP TABLE IF EXISTS search_rows;")?;
+    db.execute_batch(SEARCH)?;
+    fill_search(db)
+}
+/// Cheap structural agreement between the index and the song table: both
+/// tables exist and exactly the nondeleted songs have one index row each.
+fn search_consistent(db: &Connection) -> Result<bool> {
+    let tables: i64 = db.query_row(
+        "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('search_rows','song_search')",
+        [],
+        |r| r.get(0),
+    )?;
+    if tables != 2 {
+        return Ok(false);
+    }
+    Ok(!db.prepare("SELECT 1 FROM songs s WHERE s.deleted=0 AND NOT EXISTS(SELECT 1 FROM search_rows m WHERE m.song=s.id) UNION ALL SELECT 1 FROM search_rows m LEFT JOIN songs s ON s.id=m.song WHERE s.id IS NULL OR s.deleted!=0 UNION ALL SELECT 1 FROM search_rows m WHERE NOT EXISTS(SELECT 1 FROM song_search f WHERE f.rowid=m.row) UNION ALL SELECT 1 FROM song_search f WHERE NOT EXISTS(SELECT 1 FROM search_rows m WHERE m.row=f.rowid) LIMIT 1")?.exists([])?)
 }
 fn advance(
     tx: &rusqlite::Transaction<'_>,
@@ -915,6 +1123,15 @@ pub enum Command {
         source: PathBuf,
         destination: PathBuf,
     },
+    /// Ranked current songs; the reply returns `generation` unchanged.
+    Search {
+        query: String,
+        generation: u64,
+    },
+    /// Checks the search index and rebuilds it only if the check fails.
+    RepairSearch,
+    /// Rebuilds the search index unconditionally.
+    RebuildSearch,
 }
 #[derive(Debug)]
 pub enum Reply {
@@ -928,6 +1145,8 @@ pub enum Reply {
     Catalog(Vec<(Version, String)>),
     ScheduleCatalog(Vec<(Version, String)>),
     Copied,
+    Search(search::Results),
+    SearchIndex(search::IndexState),
 }
 struct Request {
     command: Command,
@@ -955,6 +1174,9 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
             destination,
         } => Repository::restore_new(&source, &destination, &request.canceled)
             .map(|()| Reply::Copied),
+        Command::Search { query, generation } => repo.search(&query, generation).map(Reply::Search),
+        Command::RepairSearch => repo.repair_search().map(Reply::SearchIndex),
+        Command::RebuildSearch => repo.rebuild_search().map(Reply::SearchIndex),
     }
 }
 /// Cancellation only wins before the worker starts a command. Always poll its result.
@@ -1034,6 +1256,9 @@ impl Worker {
                 source,
                 destination,
             } if source.as_os_str().len() > 4096 || destination.as_os_str().len() > 4096 => {
+                return Err(Error::Invalid);
+            }
+            Command::Search { query, .. } if query.len() > search::MAX_QUERY_BYTES => {
                 return Err(Error::Invalid);
             }
             _ => (),
@@ -1123,11 +1348,12 @@ mod tests {
             repo.db
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            4
+            5
         );
         // One verified backup of the original schema, not one per step.
         assert!(!d.path().join("legacy.schema2-backup").exists());
         assert!(!d.path().join("legacy.schema3-backup").exists());
+        assert!(!d.path().join("legacy.schema4-backup").exists());
         let first = repo.song(v).unwrap();
         let second = repo.song(Version { revision: 2, ..v }).unwrap();
         assert_ne!(first.sections[0].id, second.sections[0].id);
@@ -1573,7 +1799,7 @@ mod tests {
             );
             assert_eq!(std::fs::read(input).unwrap(), bytes);
         }
-        repo.db.execute_batch("PRAGMA user_version=5").unwrap();
+        repo.db.execute_batch("PRAGMA user_version=6").unwrap();
         drop(repo);
         let before = std::fs::read(&p).unwrap();
         assert_eq!(
@@ -1793,7 +2019,7 @@ mod tests {
     }
     #[test]
     fn rejects_newer_foreign_corrupt_without_replacement() {
-        for sql in ["PRAGMA user_version=5", "PRAGMA application_id=42"] {
+        for sql in ["PRAGMA user_version=6", "PRAGMA application_id=42"] {
             let (_d, p, r) = fixture();
             r.db.execute_batch(sql).unwrap();
             drop(r);
@@ -2034,7 +2260,7 @@ mod tests {
         let path = d.path().join("library");
         let v = schema2(&path);
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 4);
+        assert_eq!(schema_of(&path), 5);
         let first = repo.song(v).unwrap();
         assert_eq!(first.sections[1].id, SectionId(Id([11; 16])));
         assert!(first.sections.iter().all(|s| s.format.is_default()));
@@ -2232,7 +2458,7 @@ mod tests {
         let path = d.path().join("library");
         let v = schema3(&path);
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 4);
+        assert_eq!(schema_of(&path), 5);
         let first = repo.song(v).unwrap();
         assert_eq!(first.sections[0].format, crate::format::tests::full());
         assert!(first.master.is_none());
@@ -2436,5 +2662,655 @@ mod tests {
         .unwrap();
         drop(db);
         assert!(matches!(Repository::open(&path), Err(Error::Corrupt)));
+    }
+    fn lyric_song(title: &str, lyrics: &str) -> Song {
+        Song {
+            title: title.into(),
+            authors: String::new(),
+            copyright: String::new(),
+            license: String::new(),
+            variants: Vec::new(),
+            sections: vec![Section {
+                id: SectionId::allocate(),
+                label: "Verse 1".into(),
+                lyrics: lyrics.into(),
+                format: Default::default(),
+                background: None,
+            }],
+            master: None,
+        }
+    }
+    fn titles(repo: &Repository, query: &str) -> Vec<String> {
+        repo.search(query, 1)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|hit| hit.title)
+            .collect()
+    }
+    fn sorted(mut titles: Vec<String>) -> Vec<String> {
+        titles.sort();
+        titles
+    }
+    fn table_rows(db: &Connection, sql: &str) -> Vec<Vec<rusqlite::types::Value>> {
+        let mut statement = db.prepare(sql).unwrap();
+        let columns = statement.column_count();
+        statement
+            .query_map([], |r| (0..columns).map(|i| r.get(i)).collect())
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap()
+    }
+    /// Every song-owned table, for proving that index repair leaves them alone.
+    fn song_tables(path: &std::path::Path) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
+        let db = Connection::open(path).unwrap();
+        [
+            "songs",
+            "song_revisions",
+            "section_ids",
+            "section_formats",
+            "song_backgrounds",
+            "section_backgrounds",
+            "variants",
+            "occurrences",
+        ]
+        .iter()
+        .map(|table| table_rows(&db, &format!("SELECT * FROM {table} ORDER BY rowid")))
+        .collect()
+    }
+    #[test]
+    fn fts5_is_compiled_into_the_bundled_sqlite() {
+        let db = Connection::open_in_memory().unwrap();
+        let options = table_rows(&db, "PRAGMA compile_options");
+        assert!(
+            options
+                .iter()
+                .any(|row| row[0] == rusqlite::types::Value::Text("ENABLE_FTS5".into()))
+        );
+        db.execute_batch(
+            "CREATE VIRTUAL TABLE probe USING fts5(x, tokenize='unicode61 remove_diacritics 2')",
+        )
+        .unwrap();
+    }
+    #[test]
+    fn search_folds_case_and_diacritics_and_keeps_display_text() {
+        let (_d, _p, mut repo) = fixture();
+        let composed = lyric_song("Café Lumière", "Original morning line");
+        let decomposed = lyric_song("Cafe\u{301} Noir", "Another original line");
+        let kasih = lyric_song(
+            "Kasih-Mu Sungguh Ajaib",
+            "Yesus, Engkau s'lamanya setia\nKu t'lah menerima anugerah-Mu",
+        );
+        let mut bapa = lyric_song("Bapa Yang Kekal", "Bersyukur kepada-Mu, ya Tuhan");
+        bapa.authors = "Penulis Asli".into();
+        for song in [&composed, &decomposed, &kasih, &bapa] {
+            repo.save_song(None, song.clone()).unwrap();
+        }
+        let both = vec!["Cafe\u{301} Noir".to_string(), "Café Lumière".to_string()];
+        for query in ["cafe", "CAFÉ", "cafe\u{301}", "Café"] {
+            assert_eq!(sorted(titles(&repo, query)), both, "{query:?}");
+        }
+        let expectations: [(&str, &[&str]); 18] = [
+            ("lumiere", &["Café Lumière"]),
+            ("LUMIÈRE", &["Café Lumière"]),
+            ("kasih mu", &["Kasih-Mu Sungguh Ajaib"]),
+            ("kasih-mu", &["Kasih-Mu Sungguh Ajaib"]),
+            ("KASIH-MU", &["Kasih-Mu Sungguh Ajaib"]),
+            // Punctuation separates words, so the joined spelling does not match.
+            ("kasihmu", &[]),
+            ("sungguh", &["Kasih-Mu Sungguh Ajaib"]),
+            ("t'lah", &["Kasih-Mu Sungguh Ajaib"]),
+            ("s'lamanya", &["Kasih-Mu Sungguh Ajaib"]),
+            ("slamanya", &[]),
+            ("anugerah", &["Kasih-Mu Sungguh Ajaib"]),
+            ("tuhan", &["Bapa Yang Kekal"]),
+            ("penulis", &["Bapa Yang Kekal"]),
+            ("yesus engkau", &["Kasih-Mu Sungguh Ajaib"]),
+            ("yesus bapa", &[]),
+            ("ajai", &["Kasih-Mu Sungguh Ajaib"]),
+            ("keka", &["Bapa Yang Kekal"]),
+            // Only the last term is a prefix.
+            ("kek yang", &[]),
+        ];
+        for (query, expected) in expectations {
+            assert_eq!(titles(&repo, query), expected, "{query:?}");
+        }
+        for hit in repo.search("cafe", 1).unwrap().hits {
+            let stored = repo.song(hit.version).unwrap();
+            assert_eq!(hit.title, stored.title);
+            assert!(stored == composed || stored == decomposed);
+        }
+        assert!(repo.check_search().unwrap());
+    }
+    #[test]
+    fn search_treats_punctuation_and_fts_syntax_as_text() {
+        let (_d, _p, mut repo) = fixture();
+        for (title, lyrics) in [
+            (
+                "It Is Well (With My Soul)",
+                "When peace like a river\nAND sorrows like sea billows roll",
+            ),
+            ("Draw Near", "Nearer still, O Lord, your title: glory"),
+            ("Plain Song", "Nothing special"),
+        ] {
+            repo.save_song(None, lyric_song(title, lyrics)).unwrap();
+        }
+        let well: &[&str] = &["It Is Well (With My Soul)"];
+        let near: &[&str] = &["Draw Near"];
+        let expectations: [(&str, &[&str]); 21] = [
+            ("\"", &[]),
+            ("\"\"", &[]),
+            ("*", &[]),
+            ("-", &[]),
+            ("(", &[]),
+            (")", &[]),
+            ("well,", well),
+            ("(with", well),
+            ("soul)", well),
+            ("\"well", well),
+            ("^when", well),
+            ("peace*", well),
+            // Operators are words: AND must occur, OR/NOT/NEAR are not operators.
+            ("AND", well),
+            ("OR plain", &[]),
+            ("NOT peace", &[]),
+            ("NEAR(", near),
+            ("NEAR(peace river)", &[]),
+            // A column filter is a two-word phrase.
+            ("title:glory", near),
+            ("lyrics:nothing", &[]),
+            ("a\"b", &[]),
+            ("'; DROP TABLE songs; --", &[]),
+        ];
+        for (query, expected) in expectations {
+            assert_eq!(titles(&repo, query), expected, "{query:?}");
+        }
+        assert_eq!(repo.heads(false, None).unwrap().len(), 3);
+        let longest = format!("well {}", "x".repeat(search::MAX_QUERY_BYTES - 5));
+        assert_eq!(titles(&repo, &longest), Vec::<String>::new());
+        assert_eq!(repo.search(&format!("{longest}x"), 1), Err(Error::Invalid));
+    }
+    #[test]
+    fn empty_and_whitespace_queries_return_no_hits() {
+        let (_d, path, mut repo) = fixture();
+        repo.save_song(None, lyric_song("Morning Light", "original"))
+            .unwrap();
+        for query in ["", " ", "\t\n", "\u{3000}", " \" * "] {
+            assert_eq!(
+                repo.search(query, 9),
+                Ok(search::Results {
+                    generation: 9,
+                    hits: Vec::new(),
+                    truncated: false
+                }),
+                "{query:?}"
+            );
+        }
+        let mut worker = Worker::open(path).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        worker
+            .submit(Command::Search {
+                query: "   ".into(),
+                generation: 7,
+            })
+            .unwrap();
+        assert!(matches!(
+            wait(&mut worker),
+            Ok(Reply::Search(r)) if r.generation == 7 && r.hits.is_empty()
+        ));
+        assert!(matches!(
+            worker.submit(Command::Search {
+                query: "x".repeat(search::MAX_QUERY_BYTES + 1),
+                generation: 8,
+            }),
+            Err(Error::Invalid)
+        ));
+    }
+    #[test]
+    fn search_ranks_title_above_lyrics_and_breaks_ties_by_title_then_id() {
+        let (_d, _p, mut repo) = fixture();
+        repo.save_song(None, lyric_song("Evening Hymn", "morning comes again"))
+            .unwrap();
+        repo.save_song(None, lyric_song("Morning Light", "original first song"))
+            .unwrap();
+        let mut faithful = Vec::new();
+        // bm25 normalizes by the whole row's token count, so these duplicates
+        // have equally long lyrics to tie exactly.
+        for lyrics in ["one", "two", "six"] {
+            faithful.push(
+                repo.save_song(None, lyric_song("Great Is Thy Faithfulness", lyrics))
+                    .unwrap(),
+            );
+        }
+        for title in ["Zeal Grace", "amber grace", "Amber Grace"] {
+            repo.save_song(None, lyric_song(title, "unrelated words"))
+                .unwrap();
+        }
+        assert_eq!(titles(&repo, "morning"), ["Morning Light", "Evening Hymn"]);
+        // Equal scores: title ignoring ASCII case, then exact title, then ID.
+        assert_eq!(
+            titles(&repo, "grace"),
+            ["Amber Grace", "amber grace", "Zeal Grace"]
+        );
+        faithful.sort_by_key(|v| v.id.0);
+        for _ in 0..3 {
+            let hits = repo.search("great faithfulness", 1).unwrap().hits;
+            assert_eq!(
+                hits.iter().map(|hit| hit.version).collect::<Vec<_>>(),
+                faithful
+            );
+        }
+        // With equal title matches, the shorter song ranks first.
+        repo.save_song(
+            None,
+            lyric_song("Great Is Thy Faithfulness", "much longer original lyrics"),
+        )
+        .unwrap();
+        let hits = repo.search("great faithfulness", 1).unwrap().hits;
+        assert_eq!(hits.len(), 4);
+        assert_eq!(
+            hits[..3].iter().map(|hit| hit.version).collect::<Vec<_>>(),
+            faithful
+        );
+    }
+    #[test]
+    fn damage_outside_the_search_index_keeps_the_library_closed() {
+        let (_d, path, mut repo) = fixture();
+        repo.save_song(None, lyric_song("Morning Light", "original"))
+            .unwrap();
+        let (root, page_size): (i64, i64) = repo
+            .db
+            .query_row(
+                "SELECT rootpage,(SELECT page_size FROM pragma_page_size) FROM sqlite_schema WHERE name='song_revisions'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        drop(repo);
+        let mut bytes = std::fs::read(&path).unwrap();
+        // An invalid b-tree page type on the song table's root page.
+        bytes[((root - 1) * page_size) as usize] = 0x07;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(matches!(Repository::open(&path), Err(Error::Corrupt)));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+    #[test]
+    fn search_truncates_at_the_hit_bound_in_title_order() {
+        let (_d, _p, mut repo) = fixture();
+        let mut expected = Vec::new();
+        for i in 0..=search::MAX_HITS {
+            let title = format!("Common {i}");
+            repo.save_song(None, lyric_song(&title, "original"))
+                .unwrap();
+            expected.push(title);
+        }
+        expected.sort();
+        expected.truncate(search::MAX_HITS);
+        let results = repo.search("common", 3).unwrap();
+        assert!(results.truncated);
+        assert_eq!(
+            results
+                .hits
+                .into_iter()
+                .map(|hit| hit.title)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(!repo.search("common 7", 3).unwrap().truncated);
+    }
+    #[test]
+    fn search_index_follows_save_edit_delete_in_the_same_transaction() {
+        let (_d, path, mut repo) = fixture();
+        let first = repo
+            .save_song(None, lyric_song("Shelter", "refuge in the storm"))
+            .unwrap();
+        assert_eq!(titles(&repo, "refuge"), ["Shelter"]);
+        let mut edited = lyric_song("Harbor", "anchor holds");
+        edited.copyright = "Original copyright holder".into();
+        let second = repo.save_song(Some(first), edited).unwrap();
+        assert!(titles(&repo, "refuge").is_empty());
+        assert!(titles(&repo, "shelter").is_empty());
+        assert_eq!(
+            repo.search("anchor", 1).unwrap().hits,
+            [search::Hit {
+                version: second,
+                title: "Harbor".into()
+            }]
+        );
+        assert_eq!(titles(&repo, "holder"), ["Harbor"]);
+        // A failure while indexing rolls back the whole save.
+        repo.db.execute_batch("CREATE TRIGGER fail_index BEFORE INSERT ON search_rows BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+        assert!(
+            repo.save_song(None, lyric_song("Lantern", "light"))
+                .is_err()
+        );
+        assert_eq!(repo.heads(false, None).unwrap(), [second]);
+        assert!(titles(&repo, "lantern").is_empty());
+        repo.db.execute_batch("DROP TRIGGER fail_index; CREATE TRIGGER fail_unindex BEFORE DELETE ON search_rows BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+        assert!(repo.delete_song(second).is_err());
+        assert_eq!(repo.heads(false, None).unwrap(), [second]);
+        assert_eq!(titles(&repo, "anchor"), ["Harbor"]);
+        repo.db.execute_batch("DROP TRIGGER fail_unindex").unwrap();
+        repo.delete_song(second).unwrap();
+        assert!(titles(&repo, "anchor").is_empty());
+        assert!(repo.check_search().unwrap());
+        // History still resolves after the song left the index.
+        assert_eq!(repo.song(first).unwrap().title, "Shelter");
+        drop(repo);
+        let mut worker = Worker::open(path).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        worker
+            .submit(Command::SaveSong(None, lyric_song("Lantern", "light")))
+            .unwrap();
+        let Ok(Reply::Saved(lantern)) = wait(&mut worker) else {
+            panic!()
+        };
+        worker
+            .submit(Command::Search {
+                query: "lant".into(),
+                generation: 4,
+            })
+            .unwrap();
+        assert!(matches!(
+            wait(&mut worker),
+            Ok(Reply::Search(r)) if r.generation == 4 && r.hits == [search::Hit { version: lantern, title: "Lantern".into() }]
+        ));
+    }
+    #[test]
+    fn search_generations_reject_late_and_canceled_older_replies() {
+        let (_d, path, mut repo) = fixture();
+        repo.save_song(None, lyric_song("Faith Alone", "original faith line"))
+            .unwrap();
+        repo.save_song(None, lyric_song("Grace Alone", "original grace line"))
+            .unwrap();
+        drop(repo);
+        let mut a = Worker::open(path.clone()).unwrap();
+        let mut b = Worker::open(path).unwrap();
+        assert!(matches!(wait(&mut a), Ok(Reply::Opened)));
+        assert!(matches!(wait(&mut b), Ok(Reply::Opened)));
+        let mut generations = search::Generations::default();
+        let mut shown = None;
+        let older = generations.advance();
+        a.submit(Command::Search {
+            query: "faith".into(),
+            generation: older,
+        })
+        .unwrap();
+        let newer = generations.advance();
+        b.submit(Command::Search {
+            query: "grace".into(),
+            generation: newer,
+        })
+        .unwrap();
+        // The newer reply is consumed first; the older one arrives after it.
+        for worker in [&mut b, &mut a] {
+            let Ok(Reply::Search(results)) = wait(worker) else {
+                panic!()
+            };
+            if generations.is_current(results.generation) {
+                shown = Some(results);
+            }
+        }
+        let shown = shown.unwrap();
+        assert_eq!(shown.generation, newer);
+        assert_eq!(shown.hits[0].title, "Grace Alone");
+        assert_eq!(shown.hits.len(), 1);
+        // One worker: a query superseded while busy is canceled and ignored.
+        let first = generations.advance();
+        let cancel = a
+            .submit(Command::Search {
+                query: "faith".into(),
+                generation: first,
+            })
+            .unwrap();
+        let second = generations.advance();
+        assert!(matches!(
+            a.submit(Command::Search {
+                query: "grace".into(),
+                generation: second,
+            }),
+            Err(Error::Busy)
+        ));
+        cancel.cancel();
+        match wait(&mut a) {
+            Err(Error::Canceled) => (),
+            Ok(Reply::Search(r)) => {
+                assert!(r.generation == first && !generations.is_current(first))
+            }
+            other => panic!("{other:?}"),
+        }
+        a.submit(Command::Search {
+            query: "grace".into(),
+            generation: second,
+        })
+        .unwrap();
+        assert!(matches!(
+            wait(&mut a),
+            Ok(Reply::Search(r)) if generations.is_current(r.generation) && r.hits[0].title == "Grace Alone"
+        ));
+        let (_d, _p, mut repo) = fixture();
+        let canceled = Arc::new(AtomicBool::new(true));
+        let request = Request {
+            command: Command::Search {
+                query: "grace".into(),
+                generation: 1,
+            },
+            canceled,
+        };
+        assert!(matches!(execute(&mut repo, request), Err(Error::Canceled)));
+    }
+    #[test]
+    fn damaged_or_missing_search_index_is_rebuilt_without_touching_songs() {
+        for damage in ["stale", "content", "data", "mapping", "missing"] {
+            let (_d, path, mut repo) = fixture();
+            let mut arranged = arranged_song();
+            arranged.title = "Morning Light".into();
+            repo.save_song(None, arranged).unwrap();
+            repo.save_song(None, lyric_song("Evening Hymn", "quiet night"))
+                .unwrap();
+            let retired = repo
+                .save_song(None, lyric_song("Retired Anthem", "gone"))
+                .unwrap();
+            repo.delete_song(retired).unwrap();
+            let songs = song_tables(&path);
+            let other = Connection::open(&path).unwrap();
+            other
+                .execute_batch(match damage {
+                    "stale" => "UPDATE song_search SET title='Ghost' WHERE title='Evening Hymn'",
+                    "content" => {
+                        "UPDATE song_search_content SET c0='Ghost' WHERE c0='Evening Hymn'"
+                    }
+                    "data" => "DELETE FROM song_search_data WHERE id>10",
+                    "mapping" => {
+                        "DELETE FROM search_rows WHERE row=(SELECT min(row) FROM search_rows)"
+                    }
+                    _ => "DROP TABLE song_search",
+                })
+                .unwrap();
+            drop(other);
+            if damage != "missing" {
+                assert!(!repo.check_search().unwrap(), "{damage}");
+            }
+            let correct = |repo: &Repository| {
+                assert_eq!(titles(repo, "morning"), ["Morning Light"], "{damage}");
+                assert_eq!(titles(repo, "evening"), ["Evening Hymn"], "{damage}");
+                assert!(titles(repo, "ghost").is_empty(), "{damage}");
+                assert!(titles(repo, "retired").is_empty(), "{damage}");
+                assert!(repo.check_search().unwrap(), "{damage}");
+            };
+            if matches!(damage, "stale" | "content") {
+                // Only the full check finds these; reopening keeps them.
+                assert_eq!(
+                    repo.repair_search(),
+                    Ok(search::IndexState::Rebuilt { songs: 2 })
+                );
+                correct(&repo);
+            } else {
+                drop(repo);
+                let repo = Repository::open(&path).unwrap_or_else(|e| panic!("{damage}: {e:?}"));
+                correct(&repo);
+            }
+            assert_eq!(song_tables(&path), songs, "{damage}");
+        }
+        let (_d, path, mut repo) = fixture();
+        repo.save_song(None, lyric_song("Morning Light", "original"))
+            .unwrap();
+        drop(repo);
+        let mut worker = Worker::open(path).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        worker.submit(Command::RepairSearch).unwrap();
+        assert!(matches!(
+            wait(&mut worker),
+            Ok(Reply::SearchIndex(search::IndexState::Healthy))
+        ));
+        worker.submit(Command::RebuildSearch).unwrap();
+        assert!(matches!(
+            wait(&mut worker),
+            Ok(Reply::SearchIndex(search::IndexState::Rebuilt { songs: 1 }))
+        ));
+    }
+    /// The schema 3 library after the schema 4 migration, with a master and a
+    /// deleted song.
+    fn schema4(path: &std::path::Path) -> Version {
+        let v = schema3(path);
+        let db = Connection::open(path).unwrap();
+        db.execute_batch(SCHEMA4).unwrap();
+        db.execute(
+            "INSERT INTO song_backgrounds VALUES(?,2,?)",
+            params![&v.id.0[..], Background::color([1, 2, 3]).encode()],
+        )
+        .unwrap();
+        let retired = Id([43; 16]);
+        db.execute("INSERT INTO songs VALUES(?,1,1)", params![&retired.0[..]])
+            .unwrap();
+        let mut song = song();
+        song.title = "Retired anthem".into();
+        song.sections.clear();
+        db.execute(
+            "INSERT INTO song_revisions VALUES(?,1,?)",
+            params![&retired.0[..], song.encode()],
+        )
+        .unwrap();
+        v
+    }
+    #[test]
+    fn schema4_migrates_with_a_verified_backup_and_builds_the_search_index() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        let v = schema4(&path);
+        let repo = Repository::open(&path).unwrap();
+        assert_eq!(schema_of(&path), 5);
+        let head = Version { revision: 2, ..v };
+        let current = repo.song(head).unwrap();
+        assert_eq!(current.master, Some(Background::color([1, 2, 3])));
+        for query in ["cafe", "CAFÉ", "سلام", "二", "作者", "test"] {
+            let hits = repo.search(query, 1).unwrap().hits;
+            assert_eq!(
+                hits,
+                [search::Hit {
+                    version: head,
+                    title: "Café e\u{301} سلام".into()
+                }],
+                "{query:?}"
+            );
+        }
+        assert!(titles(&repo, "retired").is_empty());
+        assert!(repo.check_search().unwrap());
+        let backup = d.path().join("library.schema4-backup");
+        let before = std::fs::read(&backup).unwrap();
+        assert_eq!(schema_of(&backup), 4);
+        let old = Repository::open_internal(&backup, false).unwrap();
+        old.verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert_eq!(old.song(head).unwrap(), current);
+        let restored = d.path().join("restored");
+        Repository::restore_new(&backup, &restored, &AtomicBool::new(false)).unwrap();
+        assert_eq!(schema_of(&restored), 4);
+        drop((old, repo));
+        assert_eq!(
+            Repository::open(&path).unwrap().song(head).unwrap(),
+            current
+        );
+        assert_eq!(std::fs::read(&backup).unwrap(), before);
+    }
+    #[test]
+    fn schema4_migration_gates_leave_the_library_unchanged() {
+        for failure in ["backup", "writer", "ddl"] {
+            let d = tempfile::tempdir().unwrap();
+            let path = d.path().join("library");
+            schema4(&path);
+            let db = Connection::open(&path).unwrap();
+            let backup = d.path().join("library.schema4-backup");
+            match failure {
+                "backup" => std::fs::write(&backup, b"retain").unwrap(),
+                "writer" => db
+                    .execute_batch("BEGIN IMMEDIATE; UPDATE songs SET deleted=1")
+                    .unwrap(),
+                _ => db
+                    .execute_batch("CREATE TABLE search_rows(block_upgrade)")
+                    .unwrap(),
+            }
+            let before = std::fs::read(&path).unwrap();
+            let result = Repository::open(&path).map(|_| ());
+            match failure {
+                "backup" => assert_eq!(result, Err(Error::Exists)),
+                "writer" => assert_eq!(result, Err(Error::Locked)),
+                _ => assert_eq!(result, Err(Error::Corrupt)),
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{failure}");
+            assert_eq!(
+                db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                4,
+                "{failure}"
+            );
+            match failure {
+                "backup" => assert_eq!(std::fs::read(&backup).unwrap(), b"retain"),
+                "writer" => assert!(!backup.exists()),
+                _ => Repository::open_internal(&backup, false)
+                    .unwrap()
+                    .verify_history(&AtomicBool::new(false), std::time::Instant::now())
+                    .unwrap(),
+            }
+        }
+    }
+    #[test]
+    fn schema4_migration_abort_keeps_schema4_and_the_verified_backup() {
+        const CHILD: &str = "SELA_ABORT_MIGRATION_SCHEMA5";
+        if let Some(path) = std::env::var_os(CHILD) {
+            let _ = Repository::open(std::path::Path::new(&path));
+            panic!("schema 5 abort hook did not run");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        schema4(&path);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::schema4_migration_abort_keeps_schema4_and_the_verified_backup",
+            ])
+            .env(CHILD, &path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success());
+        assert_eq!(schema_of(&path), 4);
+        for table in ["search_rows", "song_search", "song_search_data"] {
+            assert!(
+                !Connection::open(&path)
+                    .unwrap()
+                    .prepare(&format!("SELECT 1 FROM sqlite_schema WHERE name='{table}'"))
+                    .unwrap()
+                    .exists([])
+                    .unwrap(),
+                "{table}"
+            );
+        }
+        Repository::open_internal(&d.path().join("library.schema4-backup"), false)
+            .unwrap()
+            .verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert!(matches!(Repository::open(&path), Err(Error::Exists)));
     }
 }

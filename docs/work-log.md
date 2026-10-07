@@ -190,11 +190,12 @@ remain `planned`. Update the current state above when switching work.
 | M0-05 | implemented-unqualified | CPU snapshots, bounded workers and native resource shaping/upload checked; production intent coordination and hardware qualification open. |
 | M0-06 | implemented-unqualified | Ordered bounded native owned-resource IPC/receipts and failure/expiry retention, passed on Linux GL and Windows DX12; production safety coordination/supervision and reference mask semantics open. |
 | M0-07 | implemented-unqualified | Explicit-font/image native worker preparation/submission plus static/FFV1 GPU readback; resized output, transitions, performance and physical qualification open. |
-| M1-01 | implemented-unqualified | Schema 4 (backgrounds, M1-05h1) after schema 3 (formats, M1-05g1); schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
+| M1-01 | implemented-unqualified | Schema 5 (search index, M1-07a) after schema 4 (backgrounds, M1-05h1) and schema 3 (formats, M1-05g1); schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
 | M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h implemented-unqualified (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check, h3 Slide pane editing with the master's Layouts tab and Windows native check), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), M1-05p–s (gradient, opacity/rotate/flip, Theme Elements/layouts, Auto aspect and image tiles), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
+| M1-07 | implemented-unqualified | M1-07a: schema 5 FTS5 index maintained in the song transaction, escaped prefix queries, bm25 ranking with deterministic ties, generation-tagged search, repair/rebuild, 20k database benchmark (pooled p95 75.9 ms; one-letter prefix p95 109 ms). Search UI, EW search observation (W04), end-to-end latency open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
 
@@ -2844,3 +2845,72 @@ PY
   (EW8-OBS-021). Ask the owner about the Ctrl+A Text-tab deviation and, in
   an EW session, whether a Master edit reaches slides without their own
   background.
+
+### M1-07a — Search index backend and schema 5 — 2026-10-07 (UTC+7)
+
+- State: **implemented-unqualified**, backend slice of M1-07 in parallel
+  wave 1 (worktree `D:\Projects\sela-wt\m1-07`, branch
+  `ticket/m1-07-search`, base `527030a`). No UI. Design, query rules and
+  measurements in [search](search.md); schema in
+  [storage](storage.md#m1-07a--search-index--backed-up-schema-5).
+- Delivery note: the worker session was interrupted once and then stalled
+  for about 100 minutes, so the parent stopped it and finished the slice from its uncommitted code (applied `cargo fmt`,
+  renamed `Generations::next` to `advance` for clippy's
+  `should_implement_trait`, ran the benchmark and wrote the docs). The
+  worker's own benchmark run had failed with exit code 4. The likeliest
+  cause is a killed command: the half-written temp database and journal it
+  left matched an interrupted run, and the bench takes about 4 minutes.
+- Code: `src/search.rs` (new: `expression`, `Hit`, `Results`, `IndexState`,
+  `Generations`, `MAX_QUERY_BYTES`, `MAX_HITS`); `src/storage.rs` (schema 5
+  `search_rows` and FTS5 `song_search`, the 4→5 migration behind
+  `.schema4-backup`, `index_song`/`unindex_song` in the save and delete
+  transactions, `search`, `check_search`, `rebuild_search`,
+  `repair_search`, open-time index recovery, `Command::Search`,
+  `RepairSearch`, `RebuildSearch`, `Reply::Search`, `Reply::SearchIndex`);
+  `examples/search_bench.rs` (new); `src/lib.rs` exports `search`.
+- Decisions (provisional, EW search unobserved):
+  - Tokenizer `unicode61 remove_diacritics 2`. Punctuation splits words, so
+    `kasihmu` does not find `Kasih-Mu`.
+  - Every term is quoted text, terms are ANDed, and only the last term is a
+    prefix.
+  - Empty or punctuation-only queries return nothing without I/O.
+  - At most 200 hits, with `truncated`.
+  - bm25 weights: title 10, lyrics 1, metadata 2. Ties break by title
+    ignoring ASCII case, then exact title, then id.
+  - Labels are not indexed.
+  - The index is derived and is rebuilt when damaged. Damage outside it
+    keeps the library closed.
+- Checks (Windows 11, i7-14650HX, 48 GB):
+  - `cargo fmt --all -- --check` and `cargo clippy --locked --all-targets
+    -j 8 -- -D warnings` pass.
+  - `cargo test --locked --all-targets -j 8` passes: lib 134 (new: 13
+    storage and 4 search tests), bin 86 + 2 ignored, output_process 9 + 1
+    ignored, transport_process 4 + 1 ignored, composition_spike 11,
+    input_check 9, native_cues 17 + 1 ignored, output_spike 1, video_spike
+    12.
+  - `cargo build --locked -j 8 --example seed_library` passes.
+- Benchmark: `cargo run --locked --release -j 8 --example search_bench`
+  (20,000 songs, seed `0x5e1a0007`), database query latency only.
+  - Pooled 1,400 samples: p50 18.1 ms, p95 75.9 ms, max 119.8 ms. Within
+    the provisional 30 ms target and 100 ms p95 ceiling.
+  - Misses: the one-letter prefix `k` has p95 109.4 ms (over the ceiling).
+    Broad queries (most common word, two common words, two-letter prefix)
+    have p50 of 44–49 ms, above the target.
+  - Other costs: open 451 ms (integrity and consistency checks on the
+    storage worker), full check 388 ms, rebuild 1.46 s, `save_song` p50
+    7.8 ms and p95 12.9 ms.
+  - Full table in [search](search.md#benchmark-examplessearch_benchrs).
+- Not run:
+  - Search UI and end-to-end latency (no UI in this slice).
+  - EW 8.0.49 search observation (W04).
+  - Linux and macOS.
+  - The older integrated-GPU rehearsal laptop.
+  - A save-time baseline without the index.
+  - Native scripts (no operator change).
+- Next:
+  - The operator Library search box (focus ownership so typing never fires
+    live shortcuts, `Generations` for stale replies, empty, loading and
+    error states) after observing EW search in W04.
+  - Measure before choosing a fix for short-prefix cost: start the search
+    at two characters, order very short prefixes by title, or add an FTS5
+    prefix index.

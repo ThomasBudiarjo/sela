@@ -405,3 +405,42 @@ storage `schema3_migrates_with_a_verified_backup_and_keeps_formats`,
 `invalid_or_corrupt_backgrounds_are_rejected_not_dropped`; the schema 1 and 2
 migration tests now check the live profile reaches schema 4 with one backup;
 `slides::tests::slides_resolve_their_own_background_else_the_master`.
+
+## M1-07a — search index / backed-up schema 5
+
+State: **implemented-unqualified** (backend slice of M1-07; query rules,
+ranking and measurements are in [search](search.md)).
+
+Schema 5 adds `search_rows(row INTEGER PRIMARY KEY, song UNIQUE REFERENCES
+songs(id))` and the FTS5 table `song_search(title, lyrics, metadata)` with
+`tokenize='unicode61 remove_diacritics 2'`. Both are derived data: they hold
+the nondeleted songs at their head revision and can always be rebuilt from
+`song_revisions`. `save_song` and `delete_song` update them in the song
+write's immediate transaction (`delete_song` now opens one).
+
+Opening schema 4 publishes the verified `<profile>.schema4-backup` before the
+DDL, then creates the tables, fills them from the head revisions and sets
+`user_version=5` in one transaction. Schemas 1–3 reach 5 in one transaction
+behind their single backup, and a fresh profile is created at 5. Backup
+conflict, writer lock, DDL conflict (a pre-existing `search_rows`) and
+process abort after the DDL (`SELA_ABORT_MIGRATION_SCHEMA5` test hook) leave
+the profile at schema 4 with identical bytes and no search tables. Newer or
+unknown versions are still refused as `Unsupported`.
+
+Open-time integrity: `quick_check` includes the FTS5 check. At schema 5 a
+failure drops the derived index and rechecks. A file that passes then is
+rebuilt and opened; anything else rolls the drop back and stays `Corrupt`.
+Structural disagreement between the index and the songs also rebuilds on
+open. `Command::RepairSearch` and `Command::RebuildSearch` cover damage only
+the full check finds.
+
+Tests: storage `fts5_is_compiled_into_the_bundled_sqlite`,
+`schema4_migrates_with_a_verified_backup_and_builds_the_search_index`,
+`schema4_migration_gates_leave_the_library_unchanged`,
+`schema4_migration_abort_keeps_schema4_and_the_verified_backup`,
+`search_index_follows_save_edit_delete_in_the_same_transaction`,
+`damaged_or_missing_search_index_is_rebuilt_without_touching_songs`,
+`damage_outside_the_search_index_keeps_the_library_closed`, and the search
+behavior tests listed in [search](search.md). The earlier migration tests
+that asserted schema 4 now expect schema 5, and the newer-version refusal
+tests use version 6.

@@ -667,14 +667,28 @@ do not silently truncate lyrics or hide missing sections.
 
 Depends on: M1-01, M1-04, M1-05. Tests: U, I, P.
 
+M1-07a (**implemented-unqualified**, [search](search.md)): schema 5 FTS5
+index over title, lyrics and metadata behind a verified `.schema4-backup`,
+maintained in the song save/delete transaction; quoted-term queries with a
+last-term prefix; bm25 ranking with title weighted, deterministic ties;
+generation-tagged `Command::Search`, repair and rebuild; 20k-song database
+benchmark (pooled p50 18.1 ms, p95 75.9 ms; one-letter prefix p95 109 ms
+misses the ceiling). Open: the operator search box, EW search behavior
+(W04, unobserved), end-to-end latency, short-prefix cost, Linux/macOS.
+
 - [ ] Add indexed/FTS search for observed title/lyrics/metadata queries and filters.
-- [ ] Define normalization, escaping, ranking and deterministic tie handling;
+  (Index and query over title, lyrics and metadata done in M1-07a; EW's
+  searched fields and filters are unobserved, and there is no UI yet.)
+- [x] Define normalization, escaping, ranking and deterministic tie handling;
   keep display text unchanged.
 - [ ] Maintain indexes transactionally on edits/deletes/imports and support rebuild.
-- [ ] Test punctuation, diacritics, Indonesian text, duplicate titles, empty queries,
+  (Edits, deletes and rebuild done in M1-07a; no importer exists yet, so
+  import maintenance is unproven until M1-14 saves through `save_song`.)
+- [x] Test punctuation, diacritics, Indonesian text, duplicate titles, empty queries,
   corrupt index recovery and canceled requests.
 - [ ] Benchmark a synthetic 20k-song corpus, separating database query latency
   from end-to-end rendered result latency; profile before optimizing.
+  (Database latency measured in M1-07a; end-to-end waits for the UI.)
 
 Acceptance: correct ranked results and reproducible measurements against the
 provisional 30 ms target/100 ms p95 ceiling, not an unqualified speed claim.
