@@ -119,6 +119,8 @@ const PREVIEW: Extent = Extent {
     width: 1280,
     height: 720,
 };
+/// Layouts tab canvas text (EW shows sample lyrics there, EW8-OBS-043).
+const LAYOUT_SAMPLE: &str = "Sample text line one\nSample text line two\nSample text line three";
 /// EW8-OBS-024: the Slides tab narrows the left pane to a thumbnail column.
 const SLIDES_PANE: f32 = 264.;
 const THUMBNAIL_WIDTH: f32 = 204.;
@@ -161,6 +163,10 @@ impl Document {
                         + s.label.len()
                         + s.lyrics.len()
                         + s.format.font.as_ref().map_or(0, String::len)
+                        + s.background
+                            .as_ref()
+                            .and_then(|b| b.image_ref())
+                            .map_or(0, |i| i.name.len())
                 })
                 .sum::<usize>()
     }
@@ -498,7 +504,7 @@ struct Library {
     field_edits: [u64; 4],
     /// Label and lyrics cell per section; always parallel to `draft.sections`.
     cells: Vec<[Entity<TextInput>; 2]>,
-    buttons: [FocusHandle; 19],
+    buttons: [FocusHandle; 20],
     subscriptions: Vec<Subscription>,
     task: Option<Task<()>>,
     worker: Option<Worker>,
@@ -541,6 +547,9 @@ struct Library {
     all: bool,
     /// The cell holding the caret when `all` began; leaving it ends `all`.
     all_focus: Option<(usize, usize)>,
+    /// Edit Slide Layouts: the Layouts tab shows sample text over the song
+    /// master, and the Slide pane edits the master (EW8-OBS-043).
+    layouts: bool,
 }
 
 impl Library {
@@ -622,6 +631,7 @@ impl Library {
             pane: format_pane::Pane::new(cx),
             all: false,
             all_focus: None,
+            layouts: false,
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
@@ -901,6 +911,7 @@ impl Library {
     }
     fn begin(&mut self, song: Song, version: Option<Version>, cx: &mut Context<Self>) {
         self.exit_all(cx);
+        self.layouts = false;
         self.pane.drag = None;
         self.pane.reload();
         self.draft = song.clone();
@@ -1028,9 +1039,14 @@ impl Library {
             // EW8-OBS-036: back to Words ends the whole-song selection.
             14 => {
                 self.exit_all(cx);
+                self.layouts = false;
                 self.slides = false;
             }
-            17 => self.slides = true,
+            17 => {
+                self.layouts = false;
+                self.slides = true;
+            }
+            19 => self.edit_layouts(false, window, cx),
             15 => {
                 self.action(1, window, cx);
                 self.close_after_save = matches!(self.pending, Some(Pending::Save(_)));
@@ -1264,9 +1280,14 @@ impl Library {
     /// caret at the end of the last slide (EW8-OBS-034); format changes then
     /// apply to every slide (EW8-OBS-035).
     fn select_all_slides(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.locked() || self.cells.is_empty() {
+        if self.locked() || self.layouts || self.cells.is_empty() {
             return;
         }
+        // EW shows the Slide pane while every slide is selected
+        // (EW8-OBS-035); Sela keeps the Text tab reachable so text formats
+        // still apply to every slide (owner-reported).
+        self.pane.tab = format_pane::Tab::Slide;
+        self.pane.menu = None;
         let last = self.cells.len() - 1;
         if !self.slides {
             self.focus_cell(last, LYRICS, usize::MAX, window, cx);
@@ -1464,6 +1485,18 @@ impl Library {
     /// The current slide as the audience would show it: the caret cell's text
     /// with the section's stored format and resolved background.
     fn preview_slide(&self, cx: &App) -> Option<sela::slides::Slide> {
+        if self.layouts {
+            return Some(sela::slides::section_slide(
+                &Section {
+                    id: SectionId(Id([0; 16])),
+                    label: String::new(),
+                    lyrics: LAYOUT_SAMPLE.into(),
+                    format: Default::default(),
+                    background: None,
+                },
+                self.draft.master.as_ref(),
+            ));
+        }
         let cell = self.cells.get(self.section)?;
         let stored = self.draft.sections.get(self.section);
         let section = Section {
@@ -1579,6 +1612,67 @@ impl Library {
                 cx.notify();
             });
         }));
+    }
+
+    /// The Layouts tab list: the theme selector stands for the song until
+    /// themes exist (M1-08), and the one layout card is the Master
+    /// (EW8-OBS-043), shown with the master's thumbnail.
+    fn layout_list(&self) -> Div {
+        let master = sela::slides::section_slide(
+            &Section {
+                id: SectionId(Id([0; 16])),
+                label: String::new(),
+                lyrics: LAYOUT_SAMPLE.into(),
+                format: Default::default(),
+                background: None,
+            },
+            self.draft.master.as_ref(),
+        );
+        let thumbnail = self
+            .preview
+            .as_ref()
+            .filter(|p| p.key == slide_key(&master))
+            .and_then(|p| p.image.clone());
+        div()
+            .flex_1()
+            .min_h_0()
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .px_1()
+                    .text_size(px(12.))
+                    .text_color(rgb(0x646971))
+                    .child("Song master · until themes exist"),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "layout-master".into())
+                    .w(px(THUMBNAIL_WIDTH))
+                    .rounded(px(4.))
+                    .overflow_hidden()
+                    .border_2()
+                    .border_color(rgb(0x536aca))
+                    .child(
+                        div()
+                            .h(px(THUMBNAIL_WIDTH * 9. / 16.))
+                            .bg(rgb(0x000000))
+                            .children(thumbnail.map(|t| img(t).size_full())),
+                    )
+                    .child(
+                        div()
+                            .h(px(24.))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .text_size(px(12.))
+                            .bg(rgb(0xdce3fa))
+                            .text_color(rgb(0x2f4f99))
+                            .child("Master"),
+                    ),
+            )
     }
 
     fn thumbnail_row(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -2159,7 +2253,7 @@ impl Render for Library {
                                     .pt_1()
                                     .border_b_1()
                                     .border_color(rgb(0xdcdedc))
-                                    .children([(14, "Words", !self.slides), (17, "Slides", self.slides)].map(
+                                    .children([(14, "Words", !self.slides && !self.layouts), (17, "Slides", self.slides && !self.layouts)].map(
                                         |(index, label, active)| {
                                             div()
                                                 .border_b_2()
@@ -2170,7 +2264,19 @@ impl Render for Library {
                                                 }))
                                                 .child(self.button(index, label, cx))
                                         },
-                                    )),
+                                    ))
+                                    // EW8-OBS-043: "Layouts ⊗" beside Words and Slides.
+                                    .when(self.layouts, |d| {
+                                        d.child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .border_b_2()
+                                                .border_color(rgb(0x536aca))
+                                                .child(div().px_2().text_size(px(12.)).child("Layouts"))
+                                                .child(self.button(19, "⊗", cx)),
+                                        )
+                                    }),
                             )
                             .child(if busy {
                                 div()
@@ -2178,6 +2284,8 @@ impl Render for Library {
                                     .p_6()
                                     .child("Loading or saving…")
                                     .into_any_element()
+                            } else if self.layouts {
+                                self.layout_list().into_any_element()
                             } else if self.slides {
                                 div()
                                     .id("slide-list")
@@ -2309,11 +2417,15 @@ impl Render for Library {
                                             .text_size(px(11.))
                                             .text_color(rgb(0x646971))
                                             .gap_1()
-                                            .child(format!(
-                                                "Slide {} of {} · audience layout preview",
-                                                (self.section + 1).min(self.cells.len()),
-                                                self.cells.len()
-                                            ))
+                                            .child(if self.layouts {
+                                                "Master layout · audience layout preview".to_owned()
+                                            } else {
+                                                format!(
+                                                    "Slide {} of {} · audience layout preview",
+                                                    (self.section + 1).min(self.cells.len()),
+                                                    self.cells.len()
+                                                )
+                                            })
                                             // A named family that fell back to
                                             // the bundled face (M1-05g2b).
                                             .children(
@@ -3889,6 +4001,13 @@ mod tests {
         assert!(wholly_selected(&cx, &view));
         // EW8-OBS-034: the caret ends in the last slide.
         assert_eq!(focused(&mut cx, &view), Some((1, LYRICS)));
+        // EW8-OBS-035: the pane turns to the Slide tab; Text stays reachable.
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.tab),
+            format_pane::Tab::Slide
+        );
+        click(&mut cx, "format-TabText");
+        assert!(all(&cx, &view), "the tab click keeps the selection");
         let count = undo_len(&cx, &view);
         click(&mut cx, "format-Bold");
         let f = formats(&cx, &view);
@@ -3908,6 +4027,7 @@ mod tests {
         cx.update(|w, cx| thumbnail.focus(w, cx));
         cx.simulate_keystrokes("ctrl-a");
         assert!(all(&cx, &view));
+        click(&mut cx, "format-TabText");
         click(&mut cx, "format-Italic");
         let f = formats(&cx, &view);
         assert_eq!((f[0].italic, f[1].italic), (Some(true), Some(true)));
@@ -4006,5 +4126,306 @@ mod tests {
         view.update(&mut cx, |v, _| v.pending = Some(Pending::Catalog));
         cx.update(|w, cx| view.update(cx, |v, cx| v.replace_all("gone", w, cx)));
         assert_eq!(lyrics(&cx, &view), original);
+    }
+
+    fn backgrounds(
+        cx: &VisualTestContext,
+        view: &Entity<Library>,
+    ) -> Vec<Option<sela::background::Background>> {
+        view.read_with(cx, |v, _| {
+            v.draft
+                .sections
+                .iter()
+                .map(|s| s.background.clone())
+                .collect()
+        })
+    }
+    fn master(
+        cx: &VisualTestContext,
+        view: &Entity<Library>,
+    ) -> Option<sela::background::Background> {
+        view.read_with(cx, |v, _| v.draft.master.clone())
+    }
+    /// Picks a Fill ▾ row by its label.
+    fn fill(cx: &mut VisualTestContext, view: &Entity<Library>, label: &str) {
+        click(cx, "format-Fill");
+        let row = view
+            .read_with(cx, |v, _| v.menu_rows(format_pane::Menu::Fill))
+            .iter()
+            .position(|r| r.0 == label)
+            .unwrap_or_else(|| panic!("no {label} row"));
+        click(cx, &format!("format-menu-{row}"));
+    }
+
+    #[gpui::test]
+    fn slide_tab_sets_color_image_and_aspect_as_undo_steps(cx: &mut TestAppContext) {
+        use sela::background::{Background, Fill};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let sky = profile_image(dir.path(), "Sky.png", 160, 90, [40, 90, 200]);
+        let (mut cx, view) = format_fixture(cx, path.clone());
+        click(&mut cx, "format-TabSlide");
+        assert_eq!(backgrounds(&cx, &view), [None, None]);
+        let rows = view.read_with(&cx, |v, _| v.menu_rows(format_pane::Menu::Fill));
+        assert_eq!(
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            [
+                "Master",
+                "None",
+                "Color Fill",
+                "Gradient Fill",
+                "Media Fill"
+            ]
+        );
+        assert!(rows[0].2, "a new slide follows the master");
+        assert!(!rows[3].1, "Gradient Fill is listed but unavailable");
+        assert!(cx.debug_bounds("format-master-note").is_some());
+
+        let count = undo_len(&cx, &view);
+        fill(&mut cx, &view, "Color Fill");
+        assert_eq!(
+            backgrounds(&cx, &view),
+            [Some(Background::color(format_pane::COLOR_FILL)), None],
+            "EW's first Color Fill is blue, on the caret slide only"
+        );
+        assert_eq!(undo_len(&cx, &view), count + 1);
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        click(&mut cx, "format-BackgroundColor");
+        let hex = view.read_with(&cx, |v, _| v.pane.hex.clone());
+        assert_eq!(hex.read_with(&cx, |f, _| f.text().to_owned()), "#0000FF");
+        replace(&mut cx, hex, "#00ff00");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            backgrounds(&cx, &view)[0],
+            Some(Background::color([0, 255, 0]))
+        );
+
+        // Media Fill starts without an image (EW8-OBS-038).
+        fill(&mut cx, &view, "Media Fill");
+        assert_eq!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| b.fill.clone()),
+            Some(Fill::Media(None))
+        );
+        click(&mut cx, "format-SelectMedia");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(vec!["Sky.png".to_owned()]))
+        );
+        assert!(
+            view.read_with(&cx, |v, _| v
+                .pane
+                .media
+                .thumbs
+                .get("Sky.png")
+                .is_some_and(Option::is_some)),
+            "thumbnail decoded off the UI thread"
+        );
+        click(&mut cx, "media-item-0");
+        cx.run_until_parked();
+        assert_eq!(
+            backgrounds(&cx, &view)[0],
+            Some(Background::image(sky.clone()))
+        );
+        assert!(
+            view.read_with(&cx, |v, _| v.pane.menu.is_none()),
+            "one click chooses and closes"
+        );
+
+        click(&mut cx, "format-Aspect");
+        click(&mut cx, "format-menu-0");
+        assert_eq!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| b.aspect),
+            Some(Aspect::Maintain)
+        );
+        // Choosing an image again resets the aspect to Zoom.
+        click(&mut cx, "format-SelectMedia");
+        cx.run_until_parked();
+        click(&mut cx, "media-item-0");
+        cx.run_until_parked();
+        assert_eq!(
+            backgrounds(&cx, &view)[0],
+            Some(Background::image(sky.clone()))
+        );
+        assert_eq!(undo_len(&cx, &view), count + 6);
+
+        cx.simulate_keystrokes("ctrl-z ctrl-z");
+        assert_eq!(
+            backgrounds(&cx, &view)[0]
+                .as_ref()
+                .map(|b| (b.image_ref().cloned(), b.aspect)),
+            Some((Some(sky.clone()), Aspect::Zoom)),
+            "undo restores the image chosen before Maintain"
+        );
+        cx.simulate_keystrokes("ctrl-shift-z");
+        assert_eq!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| b.aspect),
+            Some(Aspect::Maintain)
+        );
+        fill(&mut cx, &view, "Master");
+        assert_eq!(backgrounds(&cx, &view), [None, None]);
+        cx.simulate_keystrokes("ctrl-z");
+
+        // Import… copies the file into the profile and sets it.
+        let source = dir.path().join("Dawn.png");
+        image::RgbaImage::from_pixel(32, 18, image::Rgba([220, 120, 40, 255]))
+            .save(&source)
+            .unwrap();
+        click(&mut cx, "format-SelectMedia");
+        cx.run_until_parked();
+        click(&mut cx, "media-import");
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| Some(vec![source.clone()]));
+        cx.run_until_parked();
+        let dawn = backgrounds(&cx, &view)[0]
+            .clone()
+            .and_then(|b| b.image_ref().cloned());
+        assert_eq!(dawn.as_ref().map(|i| i.name.as_str()), Some("Dawn.png"));
+        assert!(
+            sela::images::images_dir(dir.path())
+                .join("Dawn.png")
+                .is_file()
+        );
+
+        cx.simulate_keystrokes("ctrl-s");
+        wait(&mut cx, &view);
+        let version = view.read_with(&cx, |v, _| v.version.unwrap());
+        let saved = Repository::open(&path).unwrap().song(version).unwrap();
+        assert_eq!(
+            saved
+                .sections
+                .iter()
+                .map(|s| s.background.clone())
+                .collect::<Vec<_>>(),
+            backgrounds(&cx, &view)
+        );
+    }
+
+    #[gpui::test]
+    fn ctrl_a_and_the_master_reach_slides_and_cancel_discards(cx: &mut TestAppContext) {
+        use sela::background::Background;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let (mut cx, view) = format_fixture(cx, path.clone());
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Color Fill");
+        caret(&mut cx, &view, 0, LYRICS, 0);
+        cx.simulate_keystrokes("ctrl-a");
+        // Different backgrounds show blank (EW8-OBS-042).
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane_background()),
+            format_pane::Shown::Mixed
+        );
+        assert!(
+            view.read_with(&cx, |v, _| v.menu_rows(format_pane::Menu::Fill))
+                .iter()
+                .all(|r| !r.2)
+        );
+        let count = undo_len(&cx, &view);
+        fill(&mut cx, &view, "Color Fill");
+        let blue = Some(Background::color(format_pane::COLOR_FILL));
+        assert_eq!(backgrounds(&cx, &view), [blue.clone(), blue.clone()]);
+        assert_eq!(undo_len(&cx, &view), count + 1, "one step for every slide");
+        assert!(all(&cx, &view));
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(backgrounds(&cx, &view), [blue.clone(), None]);
+
+        // Edit Slide Layouts edits the master; slides without their own
+        // background follow it (EW8-OBS-043, owner decision).
+        click(&mut cx, "format-EditLayouts");
+        assert!(view.read_with(&cx, |v, _| v.layouts));
+        assert!(cx.debug_bounds("layout-master").is_some());
+        assert!(
+            cx.debug_bounds("format-TabText").is_none(),
+            "Slide pane alone"
+        );
+        let rows = view.read_with(&cx, |v, _| v.menu_rows(format_pane::Menu::Fill));
+        assert_eq!(rows[0].0, "None", "no Master row on the master");
+        assert!(rows[0].2);
+        let count = undo_len(&cx, &view);
+        fill(&mut cx, &view, "Color Fill");
+        click(&mut cx, "format-BackgroundColor");
+        let hex = view.read_with(&cx, |v, _| v.pane.hex.clone());
+        replace(&mut cx, hex, "#802040");
+        cx.simulate_keystrokes("enter");
+        let wine = Some(Background::color([0x80, 0x20, 0x40]));
+        assert_eq!(master(&cx, &view), wine);
+        assert_eq!(backgrounds(&cx, &view), [blue.clone(), None]);
+        assert_eq!(undo_len(&cx, &view), count + 2);
+        view.read_with(&cx, |v, cx| {
+            let preview = v.preview_slide(cx).unwrap();
+            assert_eq!(preview.text, LAYOUT_SAMPLE);
+            assert_eq!(preview.background, wine);
+            let slides: Vec<_> = v
+                .draft
+                .sections
+                .iter()
+                .map(|s| sela::slides::section_slide(s, v.draft.master.as_ref()).background)
+                .collect();
+            assert_eq!(slides, [blue.clone(), wine.clone()]);
+        });
+        cx.update(|w, cx| view.update(cx, |v, cx| v.action(19, w, cx)));
+        assert!(!view.read_with(&cx, |v, _| v.layouts));
+        caret(&mut cx, &view, 1, LYRICS, 0);
+        cx.update(|_, cx| view.update(cx, |v, cx| v.ensure_preview(cx)));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("format-master-note").is_some());
+        assert_eq!(
+            view.read_with(&cx, |v, cx| v.preview_slide(cx).unwrap().background),
+            wine
+        );
+        // Choosing None on the master is the same as no master.
+        click(&mut cx, "format-EditLayouts");
+        fill(&mut cx, &view, "None");
+        assert_eq!(master(&cx, &view), None);
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(master(&cx, &view), wine);
+        action(&mut cx, &view, 14);
+        assert!(
+            !view.read_with(&cx, |v, _| v.layouts),
+            "Words closes Layouts"
+        );
+
+        // Cancel asks before discarding; nothing reaches the library.
+        cx.update(|w, cx| view.update(cx, |v, cx| v.action(16, w, cx)));
+        assert!(view.read_with(&cx, |v, _| v.confirm_close));
+        assert!(
+            Repository::open(&path)
+                .unwrap()
+                .catalog(None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[gpui::test]
+    fn a_changed_slide_image_previews_black_with_the_warning(cx: &mut TestAppContext) {
+        use sela::background::Background;
+        let dir = tempfile::tempdir().unwrap();
+        let mut sky = profile_image(dir.path(), "Sky.png", 160, 90, [40, 90, 200]);
+        sky.sha256[0] ^= 1;
+        let (mut cx, view) = format_fixture(cx, dir.path().join("library.sqlite"));
+        click(&mut cx, "format-TabSlide");
+        cx.update(|_, cx| {
+            view.update(cx, |v, cx| v.choose_image(sky.clone(), cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(backgrounds(&cx, &view)[0], Some(Background::image(sky)));
+        cx.update(|_, cx| view.update(cx, |v, cx| v.ensure_preview(cx)));
+        cx.run_until_parked();
+        let (warning, corner) = view.read_with(&cx, |v, _| {
+            let p = v.preview.as_ref().unwrap();
+            (p.warning.clone(), p.image.as_ref().map(|i| rgb_at(i, 2, 2)))
+        });
+        assert_eq!(
+            warning.as_deref(),
+            Some("Background image ‘Sky.png’ changed since it was chosen; showing black")
+        );
+        assert_eq!(corner, Some([0; 3]));
+        assert_eq!(
+            cx.debug_bounds("format-media-name").map(|_| ()),
+            Some(()),
+            "the pane still names the image"
+        );
     }
 }

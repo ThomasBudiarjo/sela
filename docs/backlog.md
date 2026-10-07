@@ -588,7 +588,10 @@ Follow-ups:
   (EW8-OBS-031). Planned.
 - M1-05o Format Arrange tab (EW8-OBS-031). Planned.
 - M1-05h Slide backgrounds (color or Media image) saved with the revision.
-  **Active.** Observed in RUN-W06I (EW8-OBS-037–043): the background is per
+  **Implemented-unqualified** (open: Linux/macOS, screen reader, EW
+  confirmation of a Master edit reaching slides and of Ctrl+A keeping the
+  Text tab, physical-display check of image backgrounds beyond the 2560×1600
+  run). Observed in RUN-W06I (EW8-OBS-037–043): the background is per
   slide; a slide without its own falls back to the theme's Master layout,
   edited from Edit Slide Layouts; Ctrl+A applies a fill to every slide;
   Aspect Ratio Maintain/Stretch/Zoom. Owner decisions 2026-10-07: per slide
@@ -603,8 +606,21 @@ Follow-ups:
   - [x] h2 fit/decode worker, operator preparation gate and substitution,
     editor preview and thumbnails (implemented-unqualified, see
     [song library](song-library.md#m1-05h2--slide-backgrounds-render)).
-  - [ ] h3 Slide pane Background section, Select Media…, aspect, Layouts
-    tab for the master, Ctrl+A, undo, native script.
+  - [x] h3 Slide pane Background section, Select Media… with Import…,
+    aspect, Layouts tab for the master, Ctrl+A, undo, native script
+    (implemented-unqualified, see
+    [song library](song-library.md#m1-05h3--slide-pane-backgrounds)).
+- M1-05p Gradient Fill backgrounds (listed but unavailable in Fill ▾,
+  EW8-OBS-038); controls unobserved. Planned.
+- M1-05q Background Opacity, Rotate, flip H/V, Repeating and Media Usage
+  (EW8-OBS-032, 038). Planned.
+- M1-05r Theme Elements show/hide list and Edit Slide Layouts beyond the
+  Master: theme selector, other layouts, whether a Master edit changes the
+  theme for other songs, how the Layouts tab closes (EW8-OBS-032, 037, 043);
+  needs themes (M1-08). Planned.
+- M1-05s EW's Auto aspect toggle (EW8-OBS-040: what Auto means beyond
+  showing Stretch is unrecorded) and rendered image backgrounds in the
+  operator's Preview/Live tiles. Planned.
 - M1-05i Library right-click New Song…/Edit Song…/Delete in the operator
   (EW8-OBS-021). Planned.
 
@@ -856,6 +872,9 @@ Depends on: M2-01, M0-06. Tests: U, I, R, H.
 - [ ] Recycle resources safely on cue switch; prevent stale frames after seek/restart.
 - [ ] Test variable frame rate, multiple resolutions, short clips, unsupported codecs
   and failed first-frame preparation; inspect text overlay on playing video.
+- [ ] Video slide backgrounds: a Media Fill video per slide or song master
+  (EW8-OBS-032 Volume and Media Usage, EW8-OBS-039 Videos category), with
+  the M1-05h resolution, gate and missing-file substitution.
 
 Acceptance: ready video is cue-addressable and failure leaves live stable.
 

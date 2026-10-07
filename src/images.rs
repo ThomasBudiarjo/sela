@@ -352,6 +352,35 @@ pub fn fitted_background(
         .ok_or(Substitute::Invalid)
 }
 
+/// A profile image pinned to its current bytes, for choosing it as a slide
+/// background.
+pub fn image_ref(profile: &Path, name: &str) -> Result<ImageRef, Error> {
+    let resource = resource(profile, name)?;
+    Ok(ImageRef {
+        name: name.to_owned(),
+        sha256: resource.sha256,
+    })
+}
+
+/// A media picker thumbnail: the image zoomed to cover `extent`, as RGBA.
+pub fn thumbnail(profile: &Path, name: &str, extent: Extent) -> Result<Vec<u8>, Error> {
+    if !valid_name(name) {
+        return Err(Error::InvalidName);
+    }
+    let bytes = read_bounded(&images_dir(profile).join(name))?;
+    let (from, rgba) = scene::decode_image(
+        &bytes,
+        SOURCE_CAPS,
+        MAX_SCENE_BYTES,
+        &AtomicBool::new(false),
+    )
+    .map_err(|error| match error {
+        PrepareError::TooLarge => Error::TooLarge,
+        _ => Error::Unsupported,
+    })?;
+    background::fit(&rgba, from, extent, Aspect::Zoom).ok_or(Error::Unsupported)
+}
+
 /// Prepared-background identity: the image content and its fit.
 pub fn background_version(image: &ImageRef, aspect: Aspect) -> ContentVersion {
     ContentVersion {
@@ -690,6 +719,32 @@ mod tests {
         assert_eq!(
             Substitute::Missing.warning("Sunrise.jpg"),
             "Background image ‘Sunrise.jpg’ is missing; showing black"
+        );
+    }
+
+    #[test]
+    fn picker_pins_the_current_bytes_and_thumbnails_cover_the_extent() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path();
+        let good = pinned(profile, "wide.png", &png(4, 2));
+        assert_eq!(image_ref(profile, "wide.png").unwrap(), good);
+        assert_eq!(decode_background(profile, &good).unwrap().0.width, 4);
+        let thumb = Extent {
+            width: 3,
+            height: 3,
+        };
+        let rgba = thumbnail(profile, "wide.png", thumb).unwrap();
+        assert_eq!(rgba.len(), 3 * 3 * 4);
+        assert_eq!(rgba[..4], [200, 200, 200, 200], "zoomed, no bars");
+        assert_eq!(image_ref(profile, "gone.png").err(), Some(Error::Missing));
+        assert_eq!(
+            thumbnail(profile, "../wide.png", thumb).err(),
+            Some(Error::InvalidName)
+        );
+        pinned(profile, "corrupt.png", b"\x89PNG\r\n\x1a\nnot really");
+        assert_eq!(
+            thumbnail(profile, "corrupt.png", thumb).err(),
+            Some(Error::Unsupported)
         );
     }
 

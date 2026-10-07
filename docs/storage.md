@@ -367,8 +367,8 @@ test now also checks the live profile reaches schema 3 with one backup.
 
 ## M1-05h1 — slide backgrounds / backed-up schema 4
 
-State: **implemented-unqualified** (slice h1 of M1-05h; rendering and the
-editor Slide pane follow). Source: EW8-OBS-037–043 (RUN-W06I) and the owner
+State: **implemented-unqualified** (slice h1 of M1-05h; rendering is h2 and
+the editor Slide pane h3, see [song library](song-library.md#m1-05h2--slide-backgrounds-render)). Source: EW8-OBS-037–043 (RUN-W06I) and the owner
 decisions recorded in the work log.
 
 `background::Background` is a fill plus an aspect. Fills are EW's None, Color

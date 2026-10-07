@@ -1,8 +1,11 @@
-//! Song Editor Format pane: the Text › Style subset of EasyWorship's Format
-//! inspector (EW8-OBS-027..029). Formatting is per slide (EW8-OBS-033); every
-//! change is one whole-document undo step, a whole slider or dial drag
-//! included. Original GPUI code on GPUI primitives only.
+//! Song Editor Format pane: the Slide tab's Background section
+//! (EW8-OBS-032, 037..043) and the Text › Style subset of EasyWorship's
+//! Format inspector (EW8-OBS-027..029). Formatting and backgrounds are per
+//! slide (EW8-OBS-033, 041); every change is one whole-document undo step, a
+//! whole slider or dial drag included. Original GPUI code on GPUI primitives
+//! only.
 use super::*;
+use sela::background::{Background, Fill};
 use sela::format::{
     Align, MAX_FIXED_SIZE, MAX_OPACITY, MAX_OUTLINE_SIZE, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET,
     Outline, Shadow, Size, SlideFormat, VAlign,
@@ -34,6 +37,14 @@ pub(super) const FALLBACK_SIZE: u16 = 72;
 /// A▾/A▴ step in 1080-reference px. EW's step is unobserved (Sela choice).
 pub(super) const SIZE_STEP: u16 = 2;
 const BUNDLED: &str = "DejaVu Sans";
+/// EW's first Color Fill (EW8-OBS-038).
+pub(super) const COLOR_FILL: [u8; 3] = [0, 0, 255];
+/// Media picker thumbnails: 20 KiB each, at most `MEDIA_THUMBS` of them.
+const MEDIA_THUMB: Extent = Extent {
+    width: 96,
+    height: 54,
+};
+const MEDIA_THUMBS: usize = 256;
 const BORDER: u32 = 0xcbd0d6;
 const ACCENT: u32 = 0x536aca;
 const MUTED: u32 = 0xa5a9af;
@@ -179,12 +190,15 @@ impl Num {
     }
 }
 
-/// The three color settings.
+/// The color settings. `Background` is the slide's Color Fill, which lives
+/// on the section rather than its format: `Library::color_of` and
+/// `pick_color` handle it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Pick {
     Text,
     Outline,
     Shadow,
+    Background,
 }
 impl Pick {
     pub(super) fn get(self, f: &SlideFormat) -> [u8; 3] {
@@ -192,10 +206,12 @@ impl Pick {
             Pick::Text => f.color.unwrap_or(WHITE),
             Pick::Outline => f.outline.unwrap_or(OUTLINE).color,
             Pick::Shadow => f.shadow.unwrap_or(SHADOW).color,
+            Pick::Background => COLOR_FILL,
         }
     }
     pub(super) fn set(self, f: &mut SlideFormat, color: [u8; 3]) {
         match self {
+            Pick::Background => {}
             Pick::Text => f.color = Some(color),
             Pick::Outline => {
                 f.outline = Some(Outline {
@@ -213,7 +229,7 @@ impl Pick {
     }
     fn enabled(self, f: &SlideFormat) -> bool {
         match self {
-            Pick::Text => true,
+            Pick::Text | Pick::Background => true,
             Pick::Outline => f.outline.is_some_and(|o| o.enabled),
             Pick::Shadow => f.shadow.is_some_and(|s| s.enabled),
         }
@@ -227,6 +243,119 @@ pub(super) enum Menu {
     Color(Pick),
     Outline,
     Shadow,
+    Fill,
+    Aspect,
+    /// Select Media…: the profile's images and Import….
+    Media,
+}
+
+/// EW8-OBS-027: the Slide pane, and a Text tab beside it for the slide's
+/// text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Tab {
+    Slide,
+    Text,
+}
+
+/// Fill ▾ rows (EW8-OBS-038). `Master` is Sela's: a slide following the
+/// song master (EW has no reset, EW8-OBS-041); it is not offered while
+/// editing the master itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FillChoice {
+    Master,
+    None,
+    Color,
+    Gradient,
+    Media,
+}
+impl FillChoice {
+    pub(super) fn rows(master: bool) -> &'static [FillChoice] {
+        use FillChoice::*;
+        if master {
+            &[None, Color, Gradient, Media]
+        } else {
+            &[Master, None, Color, Gradient, Media]
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            FillChoice::Master => "Master",
+            FillChoice::None => "None",
+            FillChoice::Color => "Color Fill",
+            FillChoice::Gradient => "Gradient Fill",
+            FillChoice::Media => "Media Fill",
+        }
+    }
+    /// What `shown` displays as; `None` when the targets differ.
+    pub(super) fn of(shown: &Shown, master: bool) -> Option<FillChoice> {
+        match shown {
+            Shown::Mixed => None,
+            Shown::Own(None) if master => Some(FillChoice::None),
+            Shown::Own(None) => Some(FillChoice::Master),
+            Shown::Own(Some(b)) => Some(match b.fill {
+                Fill::None => FillChoice::None,
+                Fill::Color(_) => FillChoice::Color,
+                Fill::Media(_) => FillChoice::Media,
+            }),
+        }
+    }
+    /// The background choosing this row gives, from the shown one: a new
+    /// Color Fill starts blue and a new Media Fill without an image
+    /// (EW8-OBS-038); the current color, image and aspect stay otherwise.
+    /// No master is the same as a master with no fill.
+    pub(super) fn apply(self, shown: &Shown, master: bool) -> Option<Background> {
+        let current = match shown {
+            Shown::Own(Some(b)) => Some(b.clone()),
+            _ => None,
+        };
+        let aspect = current.as_ref().map(|b| b.aspect).unwrap_or_default();
+        let fill = match (self, current.map(|b| b.fill)) {
+            (FillChoice::Master | FillChoice::Gradient, _) => return None,
+            (FillChoice::None, _) if master => return None,
+            (FillChoice::None, _) => Fill::None,
+            (FillChoice::Color, Some(Fill::Color(rgb))) => Fill::Color(rgb),
+            (FillChoice::Color, _) => Fill::Color(COLOR_FILL),
+            (FillChoice::Media, Some(Fill::Media(image))) => Fill::Media(image),
+            (FillChoice::Media, _) => Fill::Media(None),
+        };
+        Some(Background { fill, aspect })
+    }
+}
+
+/// The background the Slide pane shows: the master while editing it, else
+/// the caret slide's own, or `Mixed` when a whole-song selection holds
+/// different ones (EW shows blank values then, EW8-OBS-042).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Shown {
+    Mixed,
+    Own(Option<Background>),
+}
+
+pub(super) const ASPECTS: [Aspect; 3] = [Aspect::Maintain, Aspect::Stretch, Aspect::Zoom];
+
+fn aspect_label(aspect: Aspect) -> &'static str {
+    match aspect {
+        Aspect::Maintain => "Maintain",
+        Aspect::Stretch => "Stretch",
+        Aspect::Zoom => "Zoom",
+    }
+}
+
+/// The image name without its extension, as EW's picker shows it
+/// (EW8-OBS-039).
+pub(super) fn stem(name: &str) -> &str {
+    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
+}
+
+/// Profile images for Select Media…, listed and thumbnailed off the UI
+/// thread one job at a time.
+#[derive(Default)]
+pub(super) struct Media {
+    /// `None` until listed; the error text when listing failed.
+    pub(super) names: Option<Result<Vec<String>, String>>,
+    /// By name, for the first `MEDIA_THUMBS` names; `None` = unreadable.
+    pub(super) thumbs: HashMap<String, Option<Arc<RenderImage>>>,
+    pub(super) task: Option<Task<()>>,
 }
 
 /// Focusable pane buttons, in layout order.
@@ -250,8 +379,15 @@ pub(super) enum Ctl {
     OutlineColor,
     ShadowMode,
     ShadowColor,
+    TabSlide,
+    TabText,
+    Fill,
+    BackgroundColor,
+    SelectMedia,
+    Aspect,
+    EditLayouts,
 }
-const CTLS: usize = 18;
+const CTLS: usize = 25;
 impl Ctl {
     fn tab(self) -> isize {
         TAB + match self {
@@ -273,6 +409,14 @@ impl Ctl {
             Ctl::OutlineColor => 16,
             Ctl::ShadowMode => 21,
             Ctl::ShadowColor => 22,
+            // The tabs come first; the Slide tab's controls follow them.
+            Ctl::TabSlide => -10,
+            Ctl::TabText => -9,
+            Ctl::Fill => -8,
+            Ctl::BackgroundColor => -7,
+            Ctl::SelectMedia => -6,
+            Ctl::Aspect => -5,
+            Ctl::EditLayouts => -4,
         }
     }
 }
@@ -307,6 +451,9 @@ pub(super) struct Pane {
     pub(super) tracks: Rc<RefCell<[Option<Bounds<Pixels>>; 7]>>,
     fonts: UniformListScrollHandle,
     subscriptions: Vec<Subscription>,
+    /// Kept while the pane is closed: EW reopens on the last tab.
+    pub(super) tab: Tab,
+    pub(super) media: Media,
 }
 
 impl Pane {
@@ -339,6 +486,8 @@ impl Pane {
             tracks: Rc::new(RefCell::new([None; 7])),
             fonts: UniformListScrollHandle::new(),
             subscriptions: Vec::new(),
+            tab: Tab::Text,
+            media: Media::default(),
         }
     }
     pub(super) fn inputs(&self) -> impl Iterator<Item = &Entity<TextInput>> {
@@ -587,6 +736,233 @@ impl Library {
         true
     }
 
+    pub(super) fn pane_background(&self) -> Shown {
+        if self.layouts {
+            return Shown::Own(self.draft.master.clone());
+        }
+        let mut backgrounds = self.draft.sections[self.format_targets()]
+            .iter()
+            .map(|s| &s.background);
+        let Some(first) = backgrounds.next() else {
+            return Shown::Own(None);
+        };
+        if backgrounds.all(|b| b == first) {
+            Shown::Own(first.clone())
+        } else {
+            Shown::Mixed
+        }
+    }
+
+    /// One background change on the master (Layouts tab) or on every target
+    /// slide, as one undo step; refused like `apply_format`.
+    pub(super) fn apply_background(
+        &mut self,
+        cx: &mut Context<Self>,
+        change: impl Fn(&mut Option<Background>),
+    ) -> bool {
+        if self.locked() {
+            return false;
+        }
+        self.drag_end(cx);
+        let mut song = self.current(cx);
+        if self.layouts {
+            change(&mut song.master);
+        } else {
+            for index in self.format_targets() {
+                change(&mut song.sections[index].background);
+            }
+        }
+        if !valid_draft(&song) {
+            self.status = "That background cannot be stored. Slide unchanged.".into();
+            cx.notify();
+            return false;
+        }
+        self.clear_rejection();
+        self.record(song);
+        cx.notify();
+        true
+    }
+
+    /// The color a swatch trigger and its popover show.
+    pub(super) fn color_of(&self, pick: Pick) -> [u8; 3] {
+        match (pick, self.pane_background()) {
+            (
+                Pick::Background,
+                Shown::Own(Some(Background {
+                    fill: Fill::Color(rgb),
+                    ..
+                })),
+            ) => rgb,
+            _ => pick.get(&self.pane_format()),
+        }
+    }
+
+    pub(super) fn choose_fill(&mut self, choice: FillChoice, cx: &mut Context<Self>) {
+        if choice == FillChoice::Gradient {
+            return;
+        }
+        let value = choice.apply(&self.pane_background(), self.layouts);
+        self.apply_background(cx, |b| *b = value.clone());
+    }
+
+    /// Choosing an image resets the aspect to the owner's default, Zoom, as
+    /// EW resets it to its own default (EW8-OBS-040).
+    pub(super) fn choose_image(&mut self, image: ImageRef, cx: &mut Context<Self>) {
+        self.apply_background(cx, |b| *b = Some(Background::image(image.clone())));
+    }
+
+    /// Starts listing the profile's images unless that is under way.
+    pub(super) fn list_media(&mut self, cx: &mut Context<Self>) {
+        if self.pane.media.task.is_some() {
+            return;
+        }
+        let Some(profile) = self.backdrops.profile.clone() else {
+            self.pane.media.names = Some(Err("No profile folder; images are unavailable".into()));
+            return;
+        };
+        let names = cx
+            .background_executor()
+            .spawn(async move { sela::images::list(&profile) });
+        self.pane.media.task = Some(cx.spawn(async move |this, cx| {
+            let names = names.await;
+            let _ = this.update(cx, |this, cx| {
+                this.pane.media.task = None;
+                for (_, old) in this.pane.media.thumbs.drain() {
+                    if let Some(old) = old {
+                        cx.drop_image(old, None);
+                    }
+                }
+                this.pane.media.names = Some(names.map_err(|e| format!("Images unavailable: {e}")));
+                this.next_media_thumb(cx);
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Thumbnails the next listed image without one, one at a time.
+    fn next_media_thumb(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.backdrops.profile.clone() else {
+            return;
+        };
+        let Some(Ok(names)) = &self.pane.media.names else {
+            return;
+        };
+        let Some(name) = names
+            .iter()
+            .take(MEDIA_THUMBS)
+            .find(|n| !self.pane.media.thumbs.contains_key(*n))
+            .cloned()
+        else {
+            return;
+        };
+        let raster = cx.background_executor().spawn({
+            let name = name.clone();
+            async move {
+                let mut rgba = sela::images::thumbnail(&profile, &name, MEDIA_THUMB).ok()?;
+                for pixel in rgba.as_chunks_mut::<4>().0 {
+                    pixel.swap(0, 2);
+                }
+                image_from(&rgba, MEDIA_THUMB)
+            }
+        });
+        self.pane.media.task = Some(cx.spawn(async move |this, cx| {
+            let thumb = raster.await;
+            let _ = this.update(cx, |this, cx| {
+                this.pane.media.task = None;
+                if let Some(Some(old)) = this.pane.media.thumbs.insert(name, thumb) {
+                    cx.drop_image(old, None);
+                }
+                this.next_media_thumb(cx);
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Pins the image's current bytes off the UI thread, then sets it.
+    pub(super) fn pick_media(&mut self, name: String, cx: &mut Context<Self>) {
+        let Some(profile) = self.backdrops.profile.clone() else {
+            return;
+        };
+        let pinned = cx.background_executor().spawn({
+            let name = name.clone();
+            async move { sela::images::image_ref(&profile, &name) }
+        });
+        cx.spawn(async move |this, cx| {
+            let pinned = pinned.await;
+            let _ = this.update(cx, |this, cx| match pinned {
+                Ok(image) => this.choose_image(image, cx),
+                Err(e) => {
+                    this.status = format!("‘{name}’ cannot be used: {e}. Slide unchanged.");
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Import… copies a chosen PNG or JPEG into the profile (as the Media
+    /// tab's import does) and sets it as the background.
+    pub(super) fn import_media(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menu(window, cx);
+        let Some(profile) = self.backdrops.profile.clone() else {
+            self.status = "No profile folder; images cannot be imported".into();
+            cx.notify();
+            return;
+        };
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import".into()),
+        });
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let imported = executor
+                .spawn(async move { sela::images::import(&profile, &path) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match imported {
+                    Ok(name) => {
+                        this.status = format!("Imported ‘{name}’");
+                        this.pane.media.names = None;
+                        this.pick_media(name, cx);
+                    }
+                    Err(e) => this.status = format!("Import failed: {e}"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Edit Slide Layouts: the Layouts tab edits the song master
+    /// (EW8-OBS-043); `false` closes it.
+    pub(super) fn edit_layouts(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.locked() || self.layouts == open {
+            return;
+        }
+        self.exit_all(cx);
+        self.layouts = open;
+        self.pane.menu = None;
+        if open {
+            self.pane.tab = Tab::Slide;
+            self.format = true;
+            // The Words cells are not rendered here; Fill ▾ takes the focus
+            // so keys continue in the pane and Undo and Save bubble up.
+            self.pane.buttons[Ctl::Fill as usize].focus(window, cx);
+        } else {
+            let index = self.section;
+            self.focus_cell(index, LYRICS, usize::MAX, window, cx);
+        }
+        cx.notify();
+    }
+
     fn commit_num(&mut self, num: Num, cx: &mut Context<Self>) {
         let i = num.index();
         let text = self.pane.nums[i].read(cx).text().trim().to_owned();
@@ -657,7 +1033,7 @@ impl Library {
     }
 
     /// Menu rows: label, enabled, checked.
-    fn menu_rows(&self, menu: Menu) -> Vec<(String, bool, bool)> {
+    pub(super) fn menu_rows(&self, menu: Menu) -> Vec<(String, bool, bool)> {
         let format = self.pane_format();
         match menu {
             Menu::Font => {
@@ -693,6 +1069,48 @@ impl Library {
                 let on = format.shadow.is_some_and(|s| s.enabled);
                 vec![("None".into(), true, !on), ("Enabled".into(), true, on)]
             }
+            Menu::Fill => {
+                let shown = FillChoice::of(&self.pane_background(), self.layouts);
+                FillChoice::rows(self.layouts)
+                    .iter()
+                    .map(|&row| {
+                        (
+                            row.label().into(),
+                            row != FillChoice::Gradient,
+                            shown == Some(row),
+                        )
+                    })
+                    .collect()
+            }
+            Menu::Aspect => {
+                let shown = match self.pane_background() {
+                    Shown::Own(Some(b)) => Some(b.aspect),
+                    _ => None,
+                };
+                ASPECTS
+                    .iter()
+                    .map(|&a| (aspect_label(a).into(), true, shown == Some(a)))
+                    .collect()
+            }
+            Menu::Media => {
+                let chosen = match self.pane_background() {
+                    Shown::Own(Some(b)) => b.image_ref().map(|i| i.name.clone()),
+                    _ => None,
+                };
+                let names = match &self.pane.media.names {
+                    Some(Ok(names)) => names.as_slice(),
+                    _ => &[],
+                };
+                names
+                    .iter()
+                    .map(|n| (stem(n).to_owned(), true, chosen.as_ref() == Some(n)))
+                    .chain(std::iter::once((
+                        "Import…".to_owned(),
+                        self.backdrops.profile.is_some(),
+                        false,
+                    )))
+                    .collect()
+            }
             Menu::Color(_) => Vec::new(),
         }
     }
@@ -727,6 +1145,9 @@ impl Library {
             highlight,
             restore,
         });
+        if menu == Menu::Media {
+            self.list_media(cx);
+        }
         if let Menu::Color(_) = menu {
             self.pane.hex_shown = None;
             self.pane.hex.read(cx).focus_handle(cx).focus(window, cx);
@@ -849,6 +1270,29 @@ impl Library {
                     })
                 });
             }
+            (Menu::Fill, i) => {
+                if let Some(&choice) = FillChoice::rows(self.layouts).get(i) {
+                    self.choose_fill(choice, cx);
+                }
+            }
+            (Menu::Aspect, i) => {
+                let aspect = ASPECTS[i.min(ASPECTS.len() - 1)];
+                self.apply_background(cx, |b| {
+                    if let Some(b) = b {
+                        b.aspect = aspect;
+                    }
+                });
+            }
+            (Menu::Media, i) => {
+                let name = match &self.pane.media.names {
+                    Some(Ok(names)) => names.get(i).cloned(),
+                    _ => None,
+                };
+                match name {
+                    Some(name) => self.pick_media(name, cx),
+                    None => return self.import_media(window, cx),
+                }
+            }
             (Menu::Color(_), _) => {}
         }
         self.close_menu(window, cx);
@@ -861,7 +1305,17 @@ impl Library {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.apply_format(cx, |f| pick.set(f, color));
+        if pick == Pick::Background {
+            self.apply_background(cx, |b| {
+                let aspect = b.as_ref().map(|b| b.aspect).unwrap_or_default();
+                *b = Some(Background {
+                    fill: Fill::Color(color),
+                    aspect,
+                });
+            });
+        } else {
+            self.apply_format(cx, |f| pick.set(f, color));
+        }
         self.close_menu(window, cx);
     }
 
@@ -990,7 +1444,7 @@ impl Library {
             ..
         }) = self.pane.menu
         {
-            let value = hex(pick.get(&format));
+            let value = hex(self.color_of(pick));
             if self.pane.hex_shown.as_deref() != Some(value.as_str()) {
                 self.pane.hex.update(cx, |f, cx| {
                     let _ = f.set_text(&value, cx);
@@ -1274,7 +1728,7 @@ impl Library {
     }
 
     fn color_popover(&self, pick: Pick, cx: &mut Context<Self>) -> AnyElement {
-        let current = pick.get(&self.pane_format());
+        let current = self.color_of(pick);
         div()
             .w(px(268.))
             .p_1()
@@ -1352,6 +1806,7 @@ impl Library {
             .when(open, |d| {
                 let content = match menu {
                     Menu::Color(pick) => self.color_popover(pick, cx),
+                    Menu::Media => self.media_popover(cx),
                     _ => self.menu_list(menu, cx),
                 };
                 d.child(self.popover(content, cx))
@@ -1360,7 +1815,7 @@ impl Library {
 
     fn color_dropdown(&self, ctl: Ctl, pick: Pick, cx: &mut Context<Self>) -> Div {
         let format = self.pane_format();
-        let (color, enabled) = (pick.get(&format), pick.enabled(&format));
+        let (color, enabled) = (self.color_of(pick), pick.enabled(&format));
         div().w(px(64.)).flex_shrink_0().child(
             self.dropdown(
                 Menu::Color(pick),
@@ -1577,6 +2032,398 @@ impl Library {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.sync_pane(window, cx);
+        let tab = if self.layouts {
+            Tab::Slide
+        } else {
+            self.pane.tab
+        };
+        let slide = (tab == Tab::Slide).then(|| self.slide_tab(cx));
+        let text = (tab == Tab::Text).then(|| self.text_tab(cx));
+        div()
+            .id("format-pane")
+            // Runs after a clicked field focuses itself (bubble order), so
+            // only clicks on chrome or disabled controls keep the caret.
+            .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
+            .w(px(WIDTH))
+            .flex_shrink_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .bg(rgb(0xfbfbfa))
+            .border_l_1()
+            .border_color(rgb(0xdcdedc))
+            // EW8-OBS-027: the Slide pane with a Text tab beside it; the
+            // Layouts tab edits the master in a Slide pane alone
+            // (EW8-OBS-043).
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .px_2()
+                    .pt_1()
+                    .gap_1()
+                    .border_b_1()
+                    .border_color(rgb(0xdcdedc))
+                    .text_size(px(12.))
+                    .child(self.tab_button(Ctl::TabSlide, Tab::Slide, tab, cx))
+                    .when(!self.layouts, |d| {
+                        d.child(self.tab_button(Ctl::TabText, Tab::Text, tab, cx))
+                    }),
+            )
+            .child(
+                div()
+                    .id("format-pane-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_3()
+                    .pb_3()
+                    .children(slide)
+                    .children(text),
+            )
+            .into_any_element()
+    }
+
+    fn tab_button(
+        &self,
+        ctl: Ctl,
+        value: Tab,
+        active: Tab,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let select = move |s: &mut Library, cx: &mut Context<Library>| {
+            s.pane.tab = value;
+            s.pane.menu = None;
+            cx.notify();
+        };
+        div()
+            .id(("format-tab", ctl as usize))
+            .debug_selector(move || format!("format-{ctl:?}"))
+            .track_focus(
+                &self.pane.buttons[ctl as usize]
+                    .clone()
+                    .tab_stop(true)
+                    .tab_index(ctl.tab()),
+            )
+            .key_context("SelaControl")
+            .px_2()
+            .py_1()
+            .cursor_pointer()
+            .border_b_2()
+            .border_color(rgb(if value == active { ACCENT } else { 0xfbfbfa }))
+            .text_color(rgb(if value == active { 0x292c30 } else { 0x7a7f86 }))
+            .hover(|d| d.text_color(rgb(0x292c30)))
+            .focus(|d| d.bg(rgb(0xeef1fb)))
+            .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
+            .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
+                w.prevent_default();
+                select(s, cx)
+            }))
+            .on_click(cx.listener(move |s, _, _, cx| select(s, cx)))
+            .child(match value {
+                Tab::Slide => "Slide",
+                Tab::Text => "Text",
+            })
+    }
+
+    /// EW8-OBS-032 Slide pane, Background section only: Fill ▾, the color
+    /// or the image with Select Media… and Aspect Ratio ▾, then Edit Slide
+    /// Layouts. Theme Elements, Media Usage, Repeating, Rotate, flip and
+    /// Opacity are not built (M1-05q, M1-05r).
+    fn slide_tab(&mut self, cx: &mut Context<Self>) -> Div {
+        let shown = self.pane_background();
+        let choice = FillChoice::of(&shown, self.layouts);
+        let own = match &shown {
+            Shown::Own(Some(b)) => Some(b.clone()),
+            _ => None,
+        };
+        let image = own.as_ref().and_then(|b| b.image_ref().cloned());
+        if image.is_some() && self.pane.media.names.is_none() {
+            self.list_media(cx);
+        }
+        let thumb = image
+            .as_ref()
+            .and_then(|i| self.pane.media.thumbs.get(&i.name).cloned().flatten());
+        let aspect = own.as_ref().map_or(Aspect::default(), |b| b.aspect);
+        div()
+            .flex()
+            .flex_col()
+            .child(section("SLIDE LAYOUT"))
+            // EW8-OBS-037: one layout, the Master.
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(48.))
+                            .h(px(27.))
+                            .rounded(px(2.))
+                            .border_1()
+                            .border_color(rgb(0x9a9ea5))
+                            .bg(rgb_of(match plan(self.draft.master.as_ref()) {
+                                Plan::Color(rgb) => rgb,
+                                Plan::Image(..) => [0x30, 0x34, 0x3a],
+                            })),
+                    )
+                    .child(div().text_size(px(12.)).child("Master")),
+            )
+            .child(section("BACKGROUND"))
+            .child(self.dropdown(
+                Menu::Fill,
+                self.trigger(
+                    Ctl::Fill,
+                    Menu::Fill,
+                    choice.map_or("", FillChoice::label),
+                    true,
+                    cx,
+                ),
+                cx,
+            ))
+            .when(choice == Some(FillChoice::Master), |d| {
+                d.child(
+                    div()
+                        .debug_selector(|| "format-master-note".into())
+                        .mt_1()
+                        .text_size(px(11.))
+                        .text_color(rgb(0x646971))
+                        .child(format!(
+                            "Follows the song master: {}",
+                            describe(self.draft.master.as_ref())
+                        )),
+                )
+            })
+            .when(choice == Some(FillChoice::Color), |d| {
+                d.child(
+                    div()
+                        .mt_1()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(div().w(px(40.)).child(label("Color")))
+                        .child(self.color_dropdown(Ctl::BackgroundColor, Pick::Background, cx)),
+                )
+            })
+            .when(choice == Some(FillChoice::Media), |d| {
+                d.child(
+                    div()
+                        .mt_1()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(96.))
+                                .h(px(54.))
+                                .flex_shrink_0()
+                                .rounded(px(2.))
+                                .overflow_hidden()
+                                .border_1()
+                                .border_color(rgb(0x9a9ea5))
+                                .bg(rgb(0x000000))
+                                .children(thumb.map(|t| img(t).size_full())),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "format-media-name".into())
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_size(px(12.))
+                                .child(image.as_ref().map_or("None", |i| stem(&i.name)).to_owned()),
+                        ),
+                )
+                .child(div().mt_1().flex().child(self.dropdown(
+                    Menu::Media,
+                    self.pane_button(
+                        Ctl::SelectMedia,
+                        "Select Media…",
+                        false,
+                        true,
+                        cx,
+                        |s, w, cx| s.open_menu(Menu::Media, w, cx),
+                    ),
+                    cx,
+                )))
+                .child(
+                    div()
+                        .mt_1()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(div().w(px(80.)).child(label("Aspect Ratio")))
+                        .child(self.dropdown(
+                            Menu::Aspect,
+                            self.trigger(Ctl::Aspect, Menu::Aspect, aspect_label(aspect), true, cx),
+                            cx,
+                        )),
+                )
+            })
+            .when(!self.layouts, |d| {
+                d.child(div().mt_3().flex().child(self.pane_button(
+                    Ctl::EditLayouts,
+                    "Edit Slide Layouts",
+                    false,
+                    true,
+                    cx,
+                    |s, w, cx| s.edit_layouts(true, w, cx),
+                )))
+            })
+    }
+
+    fn media_popover(&self, cx: &mut Context<Self>) -> AnyElement {
+        const COLUMNS: usize = 3;
+        let highlight = self.pane.menu.as_ref().map_or(0, |o| o.highlight);
+        let rows = self.menu_rows(Menu::Media);
+        let count = rows.len() - 1;
+        let import_enabled = rows[count].1;
+        let status = |text: String, color: u32| {
+            div()
+                .p_2()
+                .text_size(px(12.))
+                .text_color(rgb(color))
+                .child(text)
+                .into_any_element()
+        };
+        let body = match &self.pane.media.names {
+            None => status("Loading images…".into(), MUTED),
+            Some(Err(e)) => status(e.clone(), 0xb36b00),
+            Some(Ok(_)) if count == 0 => status("No images yet. Import one.".into(), MUTED),
+            Some(Ok(_)) => div()
+                .h(px(260.))
+                .child(
+                    uniform_list(
+                        "media-grid",
+                        count.div_ceil(COLUMNS),
+                        cx.processor(move |s: &mut Library, range: Range<usize>, _, cx| {
+                            let rows = s.menu_rows(Menu::Media);
+                            let highlight = s.pane.menu.as_ref().map_or(0, |o| o.highlight);
+                            let names = match &s.pane.media.names {
+                                Some(Ok(names)) => names.clone(),
+                                _ => Vec::new(),
+                            };
+                            range
+                                .map(|row| {
+                                    div().flex().gap_1().children(
+                                        (row * COLUMNS..(row * COLUMNS + COLUMNS).min(names.len()))
+                                            .map(|i| {
+                                                let thumb = s
+                                                    .pane
+                                                    .media
+                                                    .thumbs
+                                                    .get(&names[i])
+                                                    .cloned()
+                                                    .flatten();
+                                                let checked = rows[i].2;
+                                                div()
+                                                    .id(("media-item", i))
+                                                    .debug_selector(move || {
+                                                        format!("media-item-{i}")
+                                                    })
+                                                    .w(px(96.))
+                                                    .p(px(2.))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .rounded(px(4.))
+                                                    .border_1()
+                                                    .border_color(rgb(if checked {
+                                                        ACCENT
+                                                    } else {
+                                                        0xffffff
+                                                    }))
+                                                    .when(i == highlight, |d| d.bg(rgb(0xe8ecfb)))
+                                                    .cursor_pointer()
+                                                    .hover(|d| d.bg(rgb(0xeef0f3)))
+                                                    .on_click(cx.listener(move |s, _, w, cx| {
+                                                        s.choose(Menu::Media, i, w, cx)
+                                                    }))
+                                                    .child(
+                                                        div()
+                                                            .w(px(90.))
+                                                            .h(px(50.))
+                                                            .bg(rgb(0x000000))
+                                                            .children(
+                                                                thumb.map(|t| img(t).size_full()),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(11.))
+                                                            .overflow_hidden()
+                                                            .whitespace_nowrap()
+                                                            .child(rows[i].0.clone()),
+                                                    )
+                                            }),
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        }),
+                    )
+                    .size_full(),
+                )
+                .into_any_element(),
+        };
+        div()
+            .w(px(306.))
+            .flex()
+            .flex_col()
+            .gap_1()
+            // EW8-OBS-039 lists Videos, Images and Feeds; Sela has images.
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x646971))
+                    .child("Images"),
+            )
+            .child(body)
+            .child(
+                div()
+                    .id("media-import")
+                    .debug_selector(|| "media-import".into())
+                    .mt_1()
+                    .pt_1()
+                    .h(px(28.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .rounded(px(4.))
+                    .border_t_1()
+                    .border_color(rgb(0xe4e5e3))
+                    .when(highlight == count && import_enabled, |d| {
+                        d.bg(rgb(0xe8ecfb))
+                    })
+                    .text_color(rgb(if import_enabled { 0x292c30 } else { MUTED }))
+                    .child("Import…")
+                    .when(import_enabled, |d| {
+                        d.cursor_pointer().hover(|d| d.bg(rgb(0xeef0f3))).on_click(
+                            cx.listener(move |s, _, w, cx| s.choose(Menu::Media, count, w, cx)),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+}
+
+/// The master as the Slide pane names it for a slide that follows it.
+fn describe(master: Option<&Background>) -> String {
+    match master.map(|b| &b.fill) {
+        None | Some(Fill::None) => "no fill (black)".into(),
+        Some(Fill::Color(rgb)) => format!("Color Fill {}", hex(*rgb)),
+        Some(Fill::Media(None)) => "Media Fill without an image (black)".into(),
+        Some(Fill::Media(Some(image))) => format!(
+            "{} ({})",
+            stem(&image.name),
+            aspect_label(master.map_or(Aspect::default(), |b| b.aspect))
+        ),
+    }
+}
+
+impl Library {
+    fn text_tab(&self, cx: &mut Context<Self>) -> Div {
         let format = self.pane_format();
         let catalog = sela::fonts::shared().catalog();
         let (font, font_ready) = font_label(catalog.as_deref(), &format);
@@ -1631,216 +2478,167 @@ impl Library {
             ))
         };
         div()
-            .id("format-pane")
-            // Runs after a clicked field focuses itself (bubble order), so
-            // only clicks on chrome or disabled controls keep the caret.
-            .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
-            .w(px(WIDTH))
-            .flex_shrink_0()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .bg(rgb(0xfbfbfa))
-            .border_l_1()
-            .border_color(rgb(0xdcdedc))
-            // EW8-OBS-027 element tabs; only Text is built.
             .child(
                 div()
+                    .mt_2()
+                    .mx_auto()
                     .flex()
-                    .flex_shrink_0()
-                    .px_2()
-                    .pt_1()
-                    .gap_3()
-                    .border_b_1()
-                    .border_color(rgb(0xdcdedc))
+                    .w(px(150.))
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
                     .text_size(px(12.))
-                    .child(div().py_1().text_color(rgb(MUTED)).child("Style"))
                     .child(
                         div()
-                            .py_1()
-                            .border_b_2()
-                            .border_color(rgb(ACCENT))
-                            .child("Text"),
+                            .flex_1()
+                            .py(px(3.))
+                            .flex()
+                            .justify_center()
+                            .bg(rgb(0xdce3fa))
+                            .text_color(rgb(0x2f4f99))
+                            .child("Style"),
                     )
-                    .child(div().py_1().text_color(rgb(MUTED)).child("Arrange")),
+                    .child(
+                        div()
+                            .flex_1()
+                            .py(px(3.))
+                            .flex()
+                            .justify_center()
+                            .text_color(rgb(MUTED))
+                            .child("Layout"),
+                    ),
+            )
+            .child(section("FONT"))
+            .child(self.dropdown(
+                Menu::Font,
+                self.trigger(Ctl::Font, Menu::Font, font, font_ready, cx),
+                cx,
+            ))
+            .child(
+                div()
+                    .mt_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().w(px(40.)).child(label("Size")))
+                    .child(size_box)
+                    .child(
+                        self.pane_button(Ctl::SizeDown, "A▾", false, true, cx, |s, _, cx| {
+                            s.step_size(false, cx)
+                        }),
+                    )
+                    .child(
+                        self.pane_button(Ctl::SizeUp, "A▴", false, true, cx, |s, _, cx| {
+                            s.step_size(true, cx)
+                        }),
+                    ),
             )
             .child(
                 div()
-                    .id("format-pane-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_3()
-                    .pb_3()
-                    .child(
-                        div()
-                            .mt_2()
-                            .mx_auto()
-                            .flex()
-                            .w(px(150.))
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .text_size(px(12.))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .py(px(3.))
-                                    .flex()
-                                    .justify_center()
-                                    .bg(rgb(0xdce3fa))
-                                    .text_color(rgb(0x2f4f99))
-                                    .child("Style"),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .py(px(3.))
-                                    .flex()
-                                    .justify_center()
-                                    .text_color(rgb(MUTED))
-                                    .child("Layout"),
-                            ),
-                    )
-                    .child(section("FONT"))
-                    .child(self.dropdown(
-                        Menu::Font,
-                        self.trigger(Ctl::Font, Menu::Font, font, font_ready, cx),
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .mt_1()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(div().w(px(40.)).child(label("Size")))
-                            .child(size_box)
-                            .child(self.pane_button(
-                                Ctl::SizeDown,
-                                "A▾",
-                                false,
-                                true,
-                                cx,
-                                |s, _, cx| s.step_size(false, cx),
-                            ))
-                            .child(self.pane_button(
-                                Ctl::SizeUp,
-                                "A▴",
-                                false,
-                                true,
-                                cx,
-                                |s, _, cx| s.step_size(true, cx),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .mt_1()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(div().w(px(40.)).child(label("Color")))
-                            .child(self.color_dropdown(Ctl::Color, Pick::Text, cx)),
-                    )
-                    .child(
-                        div()
-                            .mt_1()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(style(
-                                Ctl::Bold,
-                                div().font_weight(FontWeight::BOLD).child("B"),
-                                format.bold == Some(true),
-                                cx,
-                            ))
-                            .child(style(
-                                Ctl::Italic,
-                                div().italic().child("I"),
-                                format.italic == Some(true),
-                                cx,
-                            ))
-                            .child(style(
-                                Ctl::Underline,
-                                div().underline().child("U"),
-                                format.underline == Some(true),
-                                cx,
-                            ))
-                            .child(inert_box("X²"))
-                            .child(inert_box("X₂"))
-                            .child(div().flex_1())
-                            .child(inert_box("⇤"))
-                            .child(inert_box("⇥")),
-                    )
-                    .child(
-                        div()
-                            .mt_1()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(align(Ctl::Left, Align::Left, cx))
-                            .child(align(Ctl::Center, Align::Center, cx))
-                            .child(align(Ctl::Right, Align::Right, cx))
-                            .child(div().w(px(10.)))
-                            .child(valign(Ctl::Top, VAlign::Top, cx))
-                            .child(valign(Ctl::Middle, VAlign::Middle, cx))
-                            .child(valign(Ctl::Bottom, VAlign::Bottom, cx)),
-                    )
-                    .child(section("OUTLINE"))
-                    .child(self.dropdown(
-                        Menu::Outline,
-                        self.trigger(
-                            Ctl::OutlineType,
-                            Menu::Outline,
-                            if outline { "Outer" } else { "None" },
-                            true,
-                            cx,
-                        ),
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .mt_1()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(self.color_dropdown(Ctl::OutlineColor, Pick::Outline, cx))
-                            .child(inert_box("Round ▾").flex_1().justify_between()),
-                    )
-                    .child(self.slider_row(Num::OutlineSize, outline, cx))
-                    .child(self.slider_row(Num::OutlineOpacity, outline, cx))
-                    .child(section("SHADOW"))
-                    .child(self.dropdown(
-                        Menu::Shadow,
-                        self.trigger(
-                            Ctl::ShadowMode,
-                            Menu::Shadow,
-                            if shadow { "Enabled" } else { "None" },
-                            true,
-                            cx,
-                        ),
-                        cx,
-                    ))
-                    .child(div().mt_1().flex().child(self.color_dropdown(
-                        Ctl::ShadowColor,
-                        Pick::Shadow,
-                        cx,
-                    )))
-                    .child(
-                        div()
-                            .mt_1()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().w(px(40.)).child(label("Angle")))
-                            .child(self.dial(shadow, cx))
-                            .child(self.number(Num::Angle, shadow, cx)),
-                    )
-                    .child(self.slider_row(Num::Offset, shadow, cx))
-                    .child(self.slider_row(Num::Blur, shadow, cx))
-                    .child(self.slider_row(Num::ShadowOpacity, shadow, cx)),
+                    .mt_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().w(px(40.)).child(label("Color")))
+                    .child(self.color_dropdown(Ctl::Color, Pick::Text, cx)),
             )
-            .into_any_element()
+            .child(
+                div()
+                    .mt_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(style(
+                        Ctl::Bold,
+                        div().font_weight(FontWeight::BOLD).child("B"),
+                        format.bold == Some(true),
+                        cx,
+                    ))
+                    .child(style(
+                        Ctl::Italic,
+                        div().italic().child("I"),
+                        format.italic == Some(true),
+                        cx,
+                    ))
+                    .child(style(
+                        Ctl::Underline,
+                        div().underline().child("U"),
+                        format.underline == Some(true),
+                        cx,
+                    ))
+                    .child(inert_box("X²"))
+                    .child(inert_box("X₂"))
+                    .child(div().flex_1())
+                    .child(inert_box("⇤"))
+                    .child(inert_box("⇥")),
+            )
+            .child(
+                div()
+                    .mt_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(align(Ctl::Left, Align::Left, cx))
+                    .child(align(Ctl::Center, Align::Center, cx))
+                    .child(align(Ctl::Right, Align::Right, cx))
+                    .child(div().w(px(10.)))
+                    .child(valign(Ctl::Top, VAlign::Top, cx))
+                    .child(valign(Ctl::Middle, VAlign::Middle, cx))
+                    .child(valign(Ctl::Bottom, VAlign::Bottom, cx)),
+            )
+            .child(section("OUTLINE"))
+            .child(self.dropdown(
+                Menu::Outline,
+                self.trigger(
+                    Ctl::OutlineType,
+                    Menu::Outline,
+                    if outline { "Outer" } else { "None" },
+                    true,
+                    cx,
+                ),
+                cx,
+            ))
+            .child(
+                div()
+                    .mt_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(self.color_dropdown(Ctl::OutlineColor, Pick::Outline, cx))
+                    .child(inert_box("Round ▾").flex_1().justify_between()),
+            )
+            .child(self.slider_row(Num::OutlineSize, outline, cx))
+            .child(self.slider_row(Num::OutlineOpacity, outline, cx))
+            .child(section("SHADOW"))
+            .child(self.dropdown(
+                Menu::Shadow,
+                self.trigger(
+                    Ctl::ShadowMode,
+                    Menu::Shadow,
+                    if shadow { "Enabled" } else { "None" },
+                    true,
+                    cx,
+                ),
+                cx,
+            ))
+            .child(div().mt_1().flex().child(self.color_dropdown(
+                Ctl::ShadowColor,
+                Pick::Shadow,
+                cx,
+            )))
+            .child(
+                div()
+                    .mt_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().w(px(40.)).child(label("Angle")))
+                    .child(self.dial(shadow, cx))
+                    .child(self.number(Num::Angle, shadow, cx)),
+            )
+            .child(self.slider_row(Num::Offset, shadow, cx))
+            .child(self.slider_row(Num::Blur, shadow, cx))
+            .child(self.slider_row(Num::ShadowOpacity, shadow, cx))
     }
 }
 

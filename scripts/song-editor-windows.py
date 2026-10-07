@@ -18,15 +18,23 @@ removes it again. The toolbar Format toggle docks the Format pane; by Tab,
 Enter and a typed #FF0000 the text Color of slide 1 turns red in the preview,
 Tab Space turns Bold on, Ctrl+S stores exactly that format for slide 1 only.
 Ctrl+A on slide 1's thumbnail selects the whole song; the same Color path
-then stores green for both slides. A double click on the preview returns to
-Words, where typing over Ctrl+A leaves one unlabeled slide with slide 1's
-format. Unchanged after saving that, Ctrl+Q closes without a guard.
+then stores green for both slides (Ctrl+A turns the pane to its Slide tab, so
+the path first selects the Text tab). Slide backgrounds (M1-05h3), by
+keyboard in the Slide tab: Fill ▾ Color Fill with #FFAA00 turns slide 1's
+preview orange; Media Fill, Select Media… and Enter pick a seeded 4:1 profile
+image (Zoom covers the preview), Aspect Ratio ▾ Maintain letterboxes it in
+black; Edit Slide Layouts sets the master to #2040A0, which slide 2's
+thumbnail then shows; each step is saved and decoded from SQLite. A double
+click on the preview returns to Words, where typing over Ctrl+A leaves one
+unlabeled slide with slide 1's format and background. Unchanged after saving
+that, Ctrl+Q closes without a guard.
 Requires exclusive use of the keyboard and mouse while it runs.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import pathlib
 import sqlite3
 import struct
@@ -120,6 +128,45 @@ def red_ink(width: int, height: int, bgra: bytes, scale: float) -> int:
     return red
 
 
+def ink(
+    width: int,
+    height: int,
+    bgra: bytes,
+    scale: float,
+    rgb: tuple[int, int, int],
+    thumbnails: bool = False,
+) -> int:
+    """Samples within 8 of `rgb`: in the preview between the Slides-tab pane
+    and the Format pane, or in the thumbnail column."""
+    left, right = (
+        (int(40 * scale), int(240 * scale))
+        if thumbnails
+        else (int(270 * scale), width - int(290 * scale))
+    )
+    count = 0
+    for y in range(int(110 * scale), height - int(80 * scale), 2):
+        row = y * width * 4
+        for x in range(left, right, 2):
+            b, g, r = bgra[row + 4 * x : row + 4 * x + 3]
+            if abs(r - rgb[0]) <= 8 and abs(g - rgb[1]) <= 8 and abs(b - rgb[2]) <= 8:
+                count += 1
+    return count
+
+
+def backgrounds(library: pathlib.Path) -> tuple[list[tuple[int, bytes]], list[bytes]]:
+    """(slide backgrounds by position, song master) of the head revision."""
+    with sqlite3.connect(library.as_uri() + "?mode=ro", uri=True) as db:
+        slides = db.execute(
+            "SELECT b.position, b.background FROM section_backgrounds b JOIN songs s "
+            "ON b.song=s.id AND b.revision=s.head ORDER BY b.position"
+        ).fetchall()
+        master = db.execute(
+            "SELECT b.background FROM song_backgrounds b JOIN songs s "
+            "ON b.song=s.id AND b.revision=s.head"
+        ).fetchall()
+    return slides, [row[0] for row in master]
+
+
 def formats(library: pathlib.Path) -> list[tuple[int, bytes]]:
     with sqlite3.connect(library.as_uri() + "?mode=ro", uri=True) as db:
         return db.execute(
@@ -153,6 +200,15 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     scratch = pathlib.Path(tempfile.mkdtemp(prefix="sela-native-"))
     library = scratch / "library.sqlite"
+    # A 4:1 profile image for the Slide tab's Select Media…
+    images = scratch / "Resources" / "Images"
+    images.mkdir(parents=True)
+    sky_rgb = (30, 110, 210)
+    sky = images / "Native Sky.png"
+    nw.write_png(
+        sky, 400, 100, bytes([sky_rgb[2], sky_rgb[1], sky_rgb[0], 255]) * 40000
+    )
+    sky_hash = hashlib.sha256(sky.read_bytes()).digest()
     app = nw.App(args.binary, ["--library", str(library)], scratch=scratch)
     try:
         hwnd = app.window()
@@ -225,9 +281,10 @@ def main() -> int:
         keys(hwnd, "ctrl+z")
 
         # Format pane (M1-05g3a): the toolbar toggle docks it at the right.
-        # Keyboard from slide 1's thumbnail: Tab Tab reaches the Font
-        # trigger, four more the text Color trigger; Enter opens it with
-        # the hex field focused. Red, then Tab Space toggles Bold.
+        # Keyboard from slide 1's thumbnail: Tab past slide 2 and the Slide
+        # and Text tabs reaches the Font trigger, four more the text Color
+        # trigger; Enter opens it with the hex field focused. Red, then Tab
+        # Space toggles Bold.
         width, height, bgra = capture("08-before-format")
         button = format_button(width, height, bgra, scale)
         assert button, "no Format toggle in the toolbar"
@@ -235,7 +292,7 @@ def main() -> int:
         time.sleep(0.5)
         nw.click(hwnd, int(140 * scale), int(210 * scale))
         capture("09-format-pane")
-        keys(hwnd, *["tab"] * 6, "enter")
+        keys(hwnd, *["tab"] * 8, "enter")
         capture("10-color-popover")
         keys(hwnd, "ctrl+a")
         write(hwnd, "#FF0000")
@@ -257,7 +314,9 @@ def main() -> int:
         nw.click(hwnd, int(140 * scale), int(210 * scale))
         keys(hwnd, "ctrl+a")
         capture("13-all-selected")
-        keys(hwnd, *["tab"] * 6, "enter", "ctrl+a")
+        # Ctrl+A shows the Slide tab (EW8-OBS-035): Enter on the Text tab,
+        # then Font and four more to Color.
+        keys(hwnd, *["tab"] * 3, "enter", *["tab"] * 5, "enter", "ctrl+a")
         write(hwnd, "#00FF00")
         keys(hwnd, "enter", "ctrl+s")
         time.sleep(1.5)
@@ -268,6 +327,75 @@ def main() -> int:
             (0, bytes([1, 0x22, 0, 1, 0, 0xFF, 0])),
             (1, bytes([1, 0x20, 0, 0, 0xFF, 0])),
         ], stored
+
+        # Slide backgrounds (M1-05h3). From slide 1's thumbnail: slide 2, the
+        # Slide tab (Enter), the Text tab, then Fill ▾ whose rows are Master,
+        # None, Color Fill, Gradient Fill (unavailable), Media Fill.
+        nw.click(hwnd, int(140 * scale), int(210 * scale))
+        keys(
+            hwnd, "tab", "tab", "enter", "tab", "tab", "enter", "down", "down", "enter"
+        )
+        keys(hwnd, "tab", "enter", "ctrl+a")
+        write(hwnd, "#FFAA00")
+        keys(hwnd, "enter")
+        width, height, bgra = capture("16-color-fill")
+        orange = ink(width, height, bgra, scale, (255, 170, 0))
+        print(f"orange preview samples: {orange}")
+        assert orange > 2000, "preview did not show the Color Fill"
+        keys(hwnd, "ctrl+s")
+        time.sleep(1.5)
+        # Codec 1, Color tag 1, RGB, aspect Zoom (2).
+        slides, master = backgrounds(library)
+        assert slides == [(0, bytes([1, 1, 0xFF, 0xAA, 0, 2]))], slides
+        assert master == [], master
+
+        # Back to Fill ▾, Down skips Gradient Fill to Media Fill; Select
+        # Media… lists the profile image and Enter picks it (Zoom).
+        keys(hwnd, "shift+tab", "enter", "down", "enter", "tab", "enter")
+        time.sleep(1.5)
+        capture("17-select-media")
+        keys(hwnd, "enter")
+        time.sleep(1.0)
+        width, height, bgra = capture("18-media-zoom")
+        zoom_sky = ink(width, height, bgra, scale, sky_rgb)
+        zoom_black = ink(width, height, bgra, scale, (0, 0, 0))
+        print(f"zoom preview samples: sky={zoom_sky} black={zoom_black}")
+        assert zoom_sky > 2000, "preview did not show the image"
+        # Aspect Ratio ▾ (Zoom checked): Up Up is Maintain.
+        keys(hwnd, "tab", "enter", "up", "up", "enter")
+        width, height, bgra = capture("19-media-maintain")
+        bars = ink(width, height, bgra, scale, (0, 0, 0))
+        print(f"maintain preview samples: black={bars}")
+        assert bars > zoom_black + 2000, "Maintain shows no black bars"
+        keys(hwnd, "ctrl+s")
+        time.sleep(1.5)
+        name = b"Native Sky.png"
+        image = bytes([1, 3, len(name)]) + name + sky_hash + bytes([0])
+        slides, master = backgrounds(library)
+        assert slides == [(0, image)], slides
+
+        # Edit Slide Layouts focuses Fill ▾ for the master (None, Color
+        # Fill, ...); slide 2 has no background, so its thumbnail follows.
+        keys(hwnd, "tab", "enter")
+        time.sleep(0.5)
+        keys(hwnd, "enter", "down", "enter", "tab", "enter", "ctrl+a")
+        write(hwnd, "#2040A0")
+        keys(hwnd, "enter")
+        width, height, bgra = capture("20-layouts-master")
+        navy = ink(width, height, bgra, scale, (0x20, 0x40, 0xA0))
+        print(f"master preview samples: {navy}")
+        assert navy > 2000, "the Layouts preview did not show the master"
+        nw.click(hwnd, int(89 * scale), int(113 * scale))
+        time.sleep(1.5)
+        width, height, bgra = capture("21-master-on-slide-2")
+        navy = ink(width, height, bgra, scale, (0x20, 0x40, 0xA0), thumbnails=True)
+        print(f"master thumbnail samples: {navy}")
+        assert navy > 300, "slide 2's thumbnail does not follow the master"
+        keys(hwnd, "ctrl+s")
+        time.sleep(1.5)
+        slides, master = backgrounds(library)
+        assert slides == [(0, image)], slides
+        assert master == [bytes([1, 1, 0x20, 0x40, 0xA0, 2])], master
 
         # Double click on the preview returns to Words with the caret in
         # slide 1; typing over Ctrl+A leaves one unlabeled slide.
@@ -283,6 +411,7 @@ def main() -> int:
         replaced = ["Native Hymn", "", "", "", "", "Hallelujah"]
         assert payloads(library) == [replaced], payloads(library)
         assert formats(library) == [stored[0]], formats(library)
+        assert backgrounds(library) == (slides, master), backgrounds(library)
         keys(hwnd, "ctrl+q")
         code = app.wait_exit()
         assert code == 0, code

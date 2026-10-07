@@ -326,7 +326,7 @@ EW behavior in EW8-OBS-037–043.
   that only the background render tasks take. The caption shows the
   substitution warning, joined with a font fallback warning when both apply.
 
-Not yet matched: editing (h3), gradient fills, opacity/rotate/flip and video
+Not yet matched: editing (h3, below), gradient fills, opacity/rotate/flip and video
 backgrounds (new tickets), EW's Auto aspect toggle, rendered image
 backgrounds in the operator's text-only tiles. The cue frame is still
 encoded on the UI thread by `output::Supervisor::send`, which copies the
@@ -342,6 +342,78 @@ and `editor_backdrops_keep_at_most_four_fitted_images`; operator GPUI test
 `Compositor::check_readback` now compares `blend_over` with the GPU readback
 over a fitted image (DX12 and Vulkan pass). `scripts/live-output-windows.py`
 adds a third operator phase on `seed_library --background-song`.
+
+## M1-05h3 — Slide pane backgrounds
+
+Implemented-unqualified (slice h3 of M1-05h). EW behavior in
+EW8-OBS-027, 032, 035, 037–043.
+
+- **Tabs.** The Format pane has a **Slide** tab beside **Text**
+  (EW8-OBS-027); it opens on Text, as before, and keeps the last tab while
+  closed. Ctrl+A turns it to the Slide tab, as EW shows (EW8-OBS-035). Sela
+  keeps the Text tab reachable during Ctrl+A so text formats still apply to
+  every slide (owner-reported); EW hides it. This deviation awaits owner
+  confirmation.
+- **Background section.** Slide Layout shows the one layout, Master, with
+  the master's color (EW8-OBS-037). **Fill ▾** lists Master, None, Color
+  Fill, Gradient Fill (listed, unavailable: M1-05p) and Media Fill. Master
+  is Sela's row for "no background of its own", since EW has no reset
+  (EW8-OBS-041); the pane then names what the master shows. A new Color Fill
+  starts blue `#0000FF` and a new Media Fill starts without an image, as in
+  EW (EW8-OBS-038); switching back keeps the current color or image. The
+  color uses the text color's swatch popover and hex field. Media Fill shows
+  the image thumbnail and name, **Select Media…** and **Aspect Ratio ▾**
+  (Maintain, Stretch, Zoom; EW's Auto toggle is not built). Choosing an
+  image resets the aspect to Zoom (the owner's default; EW resets to Auto +
+  Stretch, EW8-OBS-040). Theme Elements, Media Usage, Repeating, Rotate,
+  flip, Volume and Opacity are not built (M1-05q, M1-05r).
+- **Select Media…** opens a popover with the profile's images as a grid of
+  thumbnails named without extensions (EW8-OBS-039), and **Import…** below
+  it (Sela's; EW's picker has none). Listing and thumbnails (96×54, Zoom,
+  the first 256 images) run on the background executor, one job at a time;
+  the grid is a `uniform_list` of rows. One click, or Enter on the
+  highlighted item, chooses an image and closes the popover; the image's
+  current bytes are hashed off the UI thread before the choice lands
+  (`images::image_ref`). Import… asks for a PNG or JPEG
+  (`cx.prompt_for_paths`), copies it into the profile through
+  `images::import` (the function behind the Media tab's `Job::Import`) and
+  sets it. The editor has no images worker; background tasks call the same
+  functions.
+- **Targets.** A change applies to the caret slide, or to every slide during
+  Ctrl+A (EW8-OBS-042), as one undo step (`apply_background`, the
+  background twin of `apply_format`). When the selected slides differ, Fill
+  shows blank and no detail rows, as EW shows blank values; choosing a fill
+  then gives every slide the same background. The aspect change keeps each
+  slide's own image.
+- **Master.** **Edit Slide Layouts** opens a **Layouts ⊗** tab beside Words
+  and Slides (EW8-OBS-043): one "Master" card, a preview of Sela's sample
+  text over the master, and the Slide pane alone, editing `Song.master`
+  (Fill without the Master row; None means no master). Fill ▾ takes the
+  focus there, so keys continue in the pane and Undo and Save still reach
+  the editor. ⊗, Words or Slides closes it and the caret returns to its
+  slide. Slides without their own background follow the master everywhere
+  (preview, thumbnails, live), per the owner's decision; EW's equivalent
+  was not observed. The song master stands in for EW's theme Master layout
+  until themes exist (M1-08).
+- Cancel guards unsaved background edits like any other edit; nothing
+  reaches the library until Save.
+
+GPUI references (pin `a84689073d`): `crates/gpui/src/app.rs`
+(`prompt_for_paths`), `crates/gpui/src/platform/test/platform.rs` and
+`app/test_context.rs` (`simulate_path_prompt_response`,
+`did_prompt_for_paths`), `crates/gpui/src/elements/uniform_list.rs`.
+
+Checks: unit test
+`picker_pins_the_current_bytes_and_thumbnails_cover_the_extent`; editor
+GPUI tests `slide_tab_sets_color_image_and_aspect_as_undo_steps` (fill
+rows, blue first color, hex, Media Fill without image, listing and
+thumbnail, one-click choice, aspect, Zoom reset, undo/redo, Import…, save
+round trip), `ctrl_a_and_the_master_reach_slides_and_cancel_discards`
+(blank when mixed, one step for all, Layouts tab, master reaching only
+slides without their own, None clears the master, undo there, Words closes,
+Cancel guard), `a_changed_slide_image_previews_black_with_the_warning`, and
+the updated Ctrl+A test. `scripts/song-editor-windows.py` adds a keyboard
+backgrounds phase checked against preview and thumbnail pixels and SQLite.
 
 ## Ownership and reference patterns
 

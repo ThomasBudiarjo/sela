@@ -6,6 +6,15 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Slide backgrounds edited (M1-05h3, 2026-10-07):** the Format pane has a
+  Slide tab with the Background section (Fill ▾, color swatch, Select Media…
+  with thumbnails and Import…, Aspect Ratio ▾) and Edit Slide Layouts, a
+  Layouts tab that edits the song master. Changes apply to the caret slide
+  or to every slide after Ctrl+A, one undo step each. GPUI tests and the
+  Windows editor script pass. **M1-05h is implemented-unqualified**; open:
+  Linux/macOS, screen reader, EW confirmation of a Master edit reaching
+  slides and of the Ctrl+A Text-tab deviation. New tickets M1-05p–s and a
+  video-background item in M2-02. Next: M1-05i (operator song menu).
 - **Slide backgrounds render (M1-05h2, 2026-10-07):** color and image
   backgrounds reach the audience, the editor preview and thumbnails. Images
   are decoded, hash-checked and fitted (Zoom/Stretch/Maintain) off the UI
@@ -184,7 +193,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema 4 (backgrounds, M1-05h1) after schema 3 (formats, M1-05g1); schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h active (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check; h3 editing open), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), drag selection across cells, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h implemented-unqualified (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check, h3 Slide pane editing with the master's Layouts tab and Windows native check), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), M1-05p–s (gradient, opacity/rotate/flip, Theme Elements/layouts, Auto aspect and image tiles), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2780,3 +2789,58 @@ PY
   Select Media… with Import, Aspect), master editing, Ctrl+A, undo, GPUI
   tests, `song-editor-windows.py`; then the new tickets (gradient, opacity/
   rotate/flip, Theme Elements/Edit Slide Layouts, video backgrounds).
+
+### M1-05h3 — Slide pane backgrounds — 2026-10-07 (UTC+7)
+
+- State: h3 **implemented-unqualified**; **M1-05h implemented-unqualified**.
+  Behavior in [song library](song-library.md#m1-05h3--slide-pane-backgrounds).
+- Code: `format_pane.rs` gets `Tab` (Slide, Text), `FillChoice`, `Shown`
+  (blank when Ctrl+A slides differ), `Menu::{Fill, Aspect, Media}`,
+  `Pick::Background`, new `Ctl`s (tab order 990–996, before the Text tab's
+  controls), `Media` (listing and up to 256 thumbnails on the background
+  executor, one job at a time), `pane_background`, `apply_background`,
+  `color_of`, `choose_fill`, `choose_image`, `pick_media`, `import_media`,
+  `edit_layouts`, the Slide tab and media popover; the Text tab moved into
+  `text_tab` unchanged. `song_library.rs`: `layouts` state, Layouts ⊗ tab
+  (button 19) with the Master card and `LAYOUT_SAMPLE` preview, Words and
+  Slides close it, Ctrl+A turns the pane to the Slide tab, history bytes
+  count image names. `images.rs`: `image_ref` and `thumbnail`.
+- Decisions: Sela's "Master" fill row stands for "follows the master" (EW
+  has no reset, EW8-OBS-041); Ctrl+A shows the Slide tab like EW but keeps
+  the Text tab reachable (deviation from EW8-OBS-035, keeps the
+  owner-reported "every Format choice applies to all"; awaiting owner
+  confirmation); a fill chosen while slides differ gives all of them the
+  same background, while Aspect keeps each slide's image; Import… in the
+  picker is Sela's (EW has none) and calls `images::import` from a
+  background task, since the editor has no images worker; entering Layouts
+  focuses Fill ▾ (the Words cells are not rendered, and without a focused
+  element Ctrl+Z did nothing; the GPUI test caught it).
+- Checks (Windows 11, RTX 4060 Laptop): `cargo fmt --all -- --check`,
+  `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked
+  --all-targets` (lib 117, bin 86 + 2 ignored, other suites pass), `cargo
+  build --locked`, `python -m ruff check scripts`, `python -m ruff format
+  --check scripts/song-editor-windows.py`; `python
+  scripts/song-editor-windows.py --out
+  .amp\in\artifacts\song-editor-windows-m1-05h3` **PASS** (earlier samples
+  unchanged: preview black=38854/white=931, thumbnails 16784/74, red 4528;
+  new: orange Color Fill 69457, Zoom sky 69388 with black 0, Maintain black
+  41496, master in Layouts 67992, master on slide 2's thumbnail 8458; SQLite
+  rows match). Captures 17 (picker), 19 (Maintain) and 20 (Layouts)
+  inspected. Passed twice (before and after `cargo fmt` and the docs); one
+  run in between failed at the first save with the label stored as
+  " Verse 1" (a stray leading space, before any Format pane step); its
+  captures were overwritten by the next, passing run, so the cause is
+  unrecorded. Watch for it in later runs.
+- Not run: `scripts/live-output-windows.py` (operator code unchanged since
+  its h2 pass), Linux/macOS, screen reader, mouse-only use of the picker
+  (GPUI tests click it; the native run uses the keyboard), a profile with
+  many large images (thumbnail time unmeasured), EW confirmation of the
+  unobserved Master behavior.
+- GPUI references: pin `a84689073d`, `crates/gpui/src/app.rs`
+  (`prompt_for_paths`), `crates/gpui/src/platform/test/platform.rs`,
+  `crates/gpui/src/app/test_context.rs` (`simulate_path_prompt_response`),
+  `crates/gpui/src/elements/uniform_list.rs`.
+- Next: M1-05i, the operator Library right-click New Song…/Edit Song…/Delete
+  (EW8-OBS-021). Ask the owner about the Ctrl+A Text-tab deviation and, in
+  an EW session, whether a Master edit reaches slides without their own
+  background.
