@@ -17,7 +17,10 @@ clicking slide 1 selects it, the + appends an unlabeled "Slide 3" and Ctrl+Z
 removes it again. The toolbar Format toggle docks the Format pane; by Tab,
 Enter and a typed #FF0000 the text Color of slide 1 turns red in the preview,
 Tab Space turns Bold on, Ctrl+S stores exactly that format for slide 1 only.
-Unchanged after that, Ctrl+Q closes without a guard.
+Ctrl+A on slide 1's thumbnail selects the whole song; the same Color path
+then stores green for both slides. A double click on the preview returns to
+Words, where typing over Ctrl+A leaves one unlabeled slide with slide 1's
+format. Unchanged after saving that, Ctrl+Q closes without a guard.
 Requires exclusive use of the keyboard and mouse while it runs.
 """
 
@@ -248,10 +251,42 @@ def main() -> int:
         stored = formats(library)
         assert stored == [(0, bytes([1, 0x22, 0, 1, 0xFF, 0, 0]))], stored
         capture("12-format-saved")
+
+        # Whole-song selection (M1-05g3b): Ctrl+A on slide 1's thumbnail,
+        # then the same keyboard path makes every slide's text green.
+        nw.click(hwnd, int(140 * scale), int(210 * scale))
+        keys(hwnd, "ctrl+a")
+        capture("13-all-selected")
+        keys(hwnd, *["tab"] * 6, "enter", "ctrl+a")
+        write(hwnd, "#00FF00")
+        keys(hwnd, "enter", "ctrl+s")
+        time.sleep(1.5)
+        capture("14-all-green")
+        assert payloads(library) == [expected], payloads(library)
+        stored = formats(library)
+        assert stored == [
+            (0, bytes([1, 0x22, 0, 1, 0, 0xFF, 0])),
+            (1, bytes([1, 0x20, 0, 0, 0xFF, 0])),
+        ], stored
+
+        # Double click on the preview returns to Words with the caret in
+        # slide 1; typing over Ctrl+A leaves one unlabeled slide.
+        middle = (int(270 * scale) + width - int(290 * scale)) // 2
+        nw.click(hwnd, middle, height // 2)
+        nw.click(hwnd, middle, height // 2)
+        time.sleep(0.5)
+        keys(hwnd, "ctrl+a")
+        write(hwnd, "Hallelujah")
+        capture("15-typed-over")
+        keys(hwnd, "ctrl+s")
+        time.sleep(1.5)
+        replaced = ["Native Hymn", "", "", "", "", "Hallelujah"]
+        assert payloads(library) == [replaced], payloads(library)
+        assert formats(library) == [stored[0]], formats(library)
         keys(hwnd, "ctrl+q")
         code = app.wait_exit()
         assert code == 0, code
-        assert payloads(library) == [expected]
+        assert payloads(library) == [replaced]
         print(f"ok: {args.out}")
         return 0
     finally:

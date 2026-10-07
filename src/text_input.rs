@@ -251,6 +251,9 @@ impl Buffer {
 }
 
 type ContentObserver = Box<dyn FnMut(&str, &mut App)>;
+/// Typed or composed text, whether it is still composing, whether it would
+/// replace the whole text; `true` consumes it.
+type TypingHook = Box<dyn FnMut(&str, bool, bool, &mut Window, &mut App) -> bool>;
 
 /// Borderless cell of a larger document (the song editor's Words list).
 #[derive(Clone, Copy)]
@@ -262,6 +265,7 @@ pub struct TextInput {
     focus: FocusHandle,
     buffer: Buffer,
     document_edit: Option<ContentObserver>,
+    typing: Option<TypingHook>,
     flow: Option<Flow>,
     placeholder: Option<&'static str>,
     multiline: bool,
@@ -287,6 +291,7 @@ impl TextInput {
             focus: cx.focus_handle().tab_index(tab_index).tab_stop(true),
             buffer: Buffer::default(),
             document_edit: None,
+            typing: None,
             flow: None,
             placeholder: None,
             multiline,
@@ -345,6 +350,46 @@ impl TextInput {
     #[allow(dead_code)] // Standalone input_check has no document cells.
     pub fn set_flow(&mut self, bold: bool) {
         self.flow = Some(Flow { bold });
+    }
+    /// Platform text input (typing, IME) is offered to `hook` first; a
+    /// consumed change is not applied. The hook runs while this field is
+    /// borrowed, so it must defer any access to it. Key actions (Backspace,
+    /// Paste, …) are not offered: owners capture those actions instead.
+    #[allow(dead_code)] // Standalone input_check has no owner.
+    pub fn intercept_typing(
+        &mut self,
+        hook: impl FnMut(&str, bool, bool, &mut Window, &mut App) -> bool + 'static,
+    ) {
+        self.typing = Some(Box::new(hook));
+    }
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.buffer.anchor = 0;
+        self.move_to(self.text().len(), true, cx);
+    }
+    fn offer_typing(
+        &mut self,
+        range: &Option<Range<usize>>,
+        text: &str,
+        composing: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.read_only {
+            return false;
+        }
+        let replaced = match range {
+            Some(r) => range16(self.text(), r.clone()).ok(),
+            None => Some(
+                self.buffer
+                    .marked
+                    .clone()
+                    .unwrap_or(self.buffer.selection()),
+            ),
+        };
+        let whole = replaced == Some(0..self.text().len());
+        self.typing
+            .as_mut()
+            .is_some_and(|hook| hook(text, composing, whole, window, cx))
     }
     /// Collapses the selection to `byte` (clamped, grapheme floor).
     #[allow(dead_code)] // Standalone input_check never moves the cursor itself.
@@ -504,9 +549,12 @@ impl EntityInputHandler for TextInput {
         &mut self,
         r: Option<Range<usize>>,
         text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.offer_typing(&r, text, false, window, cx) {
+            return;
+        }
         self.edit(r, text, None, cx);
     }
     fn replace_and_mark_text_in_range(
@@ -514,9 +562,12 @@ impl EntityInputHandler for TextInput {
         r: Option<Range<usize>>,
         text: &str,
         selection: Option<Range<usize>>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.offer_typing(&r, text, true, window, cx) {
+            return;
+        }
         self.edit(r, text, Some(selection), cx);
     }
     fn set_selected_text_range(&mut self, r: Range<usize>, _: &mut Window, cx: &mut Context<Self>) {
@@ -785,10 +836,7 @@ impl Render for TextInput {
                     .unwrap_or(0);
                 s.move_to(r[i].end, false, cx)
             }))
-            .on_action(cx.listener(|s, _: &SelectAll, _, cx| {
-                s.buffer.anchor = 0;
-                s.move_to(s.text().len(), true, cx)
-            }))
+            .on_action(cx.listener(|s, _: &SelectAll, _, cx| s.select_all(cx)))
             .on_action(cx.listener(|s, _: &Backspace, _, cx| {
                 if s.flow.is_some() && s.buffer.head == 0 && s.buffer.anchor == 0 {
                     cx.propagate();

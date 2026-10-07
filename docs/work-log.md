@@ -6,6 +6,14 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Whole-song selection (M1-05g3b, 2026-10-07):** Ctrl+A in Words or Slides
+  selects every slide; every Format pane change then applies to all slides
+  as one undo step; typing, Paste or Backspace over it replaces the song with
+  one slide (one undo step); Copy copies the whole text. GPUI tests and the
+  Windows native script pass. M1-05g is now **implemented-unqualified**
+  (IME, Linux/macOS and EW confirmation of the replace result open).
+  Deferred formatting work is ticketed as M1-05j–o. Next: M1-05h per-song
+  background, in the owner-approved order.
 - **Song Editor Format pane (M1-05g3a, 2026-10-07):** the toolbar Format
   toggle docks the Text › Style pane (font list with samples, size, colors,
   B/I/U, alignment, outline and shadow with sliders and an angle dial).
@@ -156,7 +164,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g active (g1 per-slide format storage and g2 styled rendering with the operator font gate done, Windows DX12 native check passed; g3a Format pane done with GPUI and Windows native checks; g3b Ctrl+A whole-song selection open). M1-05h–i (background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h–i (background, operator song menu), M1-05j–o (deferred format controls and tabs), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2602,3 +2610,45 @@ PY
   visual, exit on caret/click/tab/undo, replace-typing as one undo step
   (one unlabeled slide keeping slide 1's id and format, arrangements
   pruned), Copy of the whole text, tests, native script, deferred tickets.
+
+### M1-05g3b — Whole-song selection and replace-typing — 2026-10-07 (UTC+7)
+
+- State: g3b **implemented-unqualified**, so M1-05g moves to
+  **implemented-unqualified** (not done). Behavior and provenance are in
+  [song-library.md](song-library.md#m1-05g3b--whole-song-selection).
+- Code: `text_input.rs` gains `intercept_typing` (platform text and IME
+  input is offered to the owner first, with whether it replaces the whole
+  text) and a public `select_all`. `song_library.rs`: `SelectAllSlides`
+  bound to ctrl-a/cmd-a in `SongWords > SelaTextInput` and `SongWords`
+  (Words list and Slides list); `all`/`all_focus` state;
+  `select_all_slides`, `exit_all`, `song_text`, `replace_all`, `all_key`;
+  `whole_song_keys` captures the cell edit keys and the caret keys on the
+  Words list; render ends the mode when focus enters another cell; every
+  structure, history, tab and song-open path calls `exit_all`.
+  `format_pane.rs`: `format_targets` is every slide while `all`.
+- Sela choices (EW unobserved): the replacement is one unlabeled slide with
+  slide 1's id and format and arrangements pruned; Enter replaces with a
+  line break; Copy/Cut use label-above-lyrics text with blank lines between
+  slides; the Text pane stays available while all slides are selected (EW
+  shows only the Slide pane, EW8-OBS-035).
+- Fixed during the slice: the first native run stored only "H" of
+  "Hallelujah". The replacement removes the cell being typed in (slide 2),
+  and Windows keeps sending characters to that removed cell's input
+  handler until the next paint. A removed cell now forwards committed text
+  to the focused cell (outside the Library borrow, since that cell's own
+  hook reads the Library); a GPUI test drives the removed cell directly.
+- Checks (Windows 11): `cargo fmt --all -- --check`, `cargo clippy
+  --locked --all-targets -- -D warnings`, `cargo test --locked
+  --all-targets` (lib 99, bin 79 + 2 ignored, other suites pass), `cargo
+  build --locked`, `ruff check scripts`; `scripts/song-editor-windows.py`
+  **PASS** (earlier steps unchanged: preview black=38854/white=931,
+  thumbnails 16784/74, red 4528; then stored formats `01 22 00 01 00 FF 00`
+  and `01 20 00 00 FF 00` for both slides after Ctrl+A, and after typing
+  over Ctrl+A one slide "Hallelujah" with slide 1's format). Captures
+  `13-all-selected` (both thumbnails framed), `14-all-green` and
+  `15-typed-over` (one unlabeled slide, green bold preview) inspected.
+- Not run: Linux/macOS, IME composition over the selection, screen reader,
+  a native mouse click ending the selection (GPUI test covers caret keys
+  and focus change), EW confirmation of the replace result and undo.
+- Next: M1-05h per-song background (color or Media image), following the
+  RUN-W06G Slide pane observations (EW8-OBS-032).

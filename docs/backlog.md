@@ -512,8 +512,9 @@ bold label and lyrics cells, label-kind group colors, Up/Down/Enter across
 cells, Ctrl+Enter splitting into an unlabeled slide, Backspace joining an
 unlabeled slide (provisional), `+` appending, the footer Apply/OK/Cancel, and a
 real slide preview rendered off the UI thread with the audience text raster.
-Native Windows replay: `scripts/song-editor-windows.py`. Open: cross-cell
-selection (EW Ctrl+A selects the whole document), the Apply-to-schedule option,
+Native Windows replay: `scripts/song-editor-windows.py`. Open: drag
+selection across cells (Ctrl+A whole-song selection landed in M1-05g3b), the
+Apply-to-schedule option,
 IME/accessibility, and installed-reference confirmation of unverified details.
 Follow-ups:
 
@@ -531,7 +532,7 @@ Follow-ups:
   decision 2026-10-06: per slide; Ctrl+A selects all slides so one change
   formats the whole song (observed in RUN-W06H, EW8-OBS-034–036), and
   typing then replaces the whole text like EW (owner-reported, unobserved).
-  **Active**, three slices:
+  **Implemented-unqualified** (2026-10-07), three slices:
   - [x] g1 per-slide `SlideFormat` model and schema 3 with a verified backup
     (implemented-unqualified, see [storage](storage.md)).
   - [x] g2 rendering core (g2a): installed-font catalog with bounds and LRU
@@ -562,11 +563,30 @@ Follow-ups:
     applies to the caret slide as one undo step (a whole drag included).
     **Implemented-unqualified**: GPUI tests and the native script pass
     (see [song library](song-library.md#m1-05g3a--format-pane)).
-  - [ ] g3b Ctrl+A whole-song selection (every format change applies to all
-    slides), replace-typing, Copy, exit rules, GPUI tests, native script.
-  - Deferred (record as tickets when g3 lands): superscript/subscript, indent,
-    bullets, margins, capitalization, word wrap, rotation, Center/Inner
-    outline, Style tab (fill/border/reflection), Arrange.
+  - [x] g3b whole-song selection (M1-05g3b, 2026-10-07): Ctrl+A in Words or
+    Slides selects every slide (EW8-OBS-034) and every format change then
+    applies to all of them as one undo step (EW8-OBS-035); typing, Paste,
+    Backspace/Delete, Cut or Enter replaces the song with one unlabeled
+    slide (slide 1's id and format, arrangements pruned, one undo step);
+    Copy copies the whole text; caret keys, a click, another cell, Words
+    tab (EW8-OBS-036), undo and structure edits end it.
+    **Implemented-unqualified**: GPUI tests and the native script pass (see
+    [song library](song-library.md#m1-05g3b--whole-song-selection)). Open:
+    EW confirmation of the replace result, undo and Copy format; IME
+    composition over the selection; EW's Slide-only pane while all slides
+    are selected (Sela keeps the Text pane).
+  - Open for the whole ticket: Linux/macOS native checks, IME and screen
+    reader qualification, mixed-value display (unobserved).
+- M1-05j Text › Style superscript/subscript and indent (EW8-OBS-028), and
+  bullets (EW8-OBS-029). Planned.
+- M1-05k Text › Layout: margins, auto sizing with normalize, word wrap,
+  capitalization and rotation (EW8-OBS-030). Planned.
+- M1-05l Center and Inner outline types and outline join (EW8-OBS-029).
+  Planned.
+- M1-05m Color popover Spectrum and Values tabs (EW8-OBS-028). Planned.
+- M1-05n Format Style tab: element fill, border and reflection
+  (EW8-OBS-031). Planned.
+- M1-05o Format Arrange tab (EW8-OBS-031). Planned.
 - M1-05h Per-song background (color or Media image) saved with the revision.
   Planned.
 - M1-05i Library right-click New Song…/Edit Song…/Delete in the operator

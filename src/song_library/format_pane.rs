@@ -534,8 +534,12 @@ impl Library {
             .unwrap_or_default()
     }
 
-    /// Slides a format change applies to.
+    /// Slides a format change applies to: every slide during a whole-song
+    /// selection (EW8-OBS-035), otherwise the caret slide.
     pub(super) fn format_targets(&self) -> Range<usize> {
+        if self.all {
+            return 0..self.draft.sections.len();
+        }
         let index = self
             .section
             .min(self.draft.sections.len().saturating_sub(1));

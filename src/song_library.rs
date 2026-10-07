@@ -12,10 +12,20 @@ use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Dura
 
 mod format_pane;
 
-actions!(song_library, [Save, SplitSection]);
+actions!(song_library, [Save, SplitSection, SelectAllSlides]);
 
+/// Call after `text_input::bind_keys`: at equal context depth the later
+/// binding wins, so Ctrl+A in a Words cell selects every slide
+/// (EW8-OBS-034) while other fields keep their own Select All.
 pub fn bind_keys(cx: &mut App) {
     format_pane::bind_keys(cx);
+    for modifier in ["ctrl", "cmd"] {
+        let keys = format!("{modifier}-a");
+        cx.bind_keys([
+            KeyBinding::new(&keys, SelectAllSlides, Some("SongWords > SelaTextInput")),
+            KeyBinding::new(&keys, SelectAllSlides, Some("SongWords")),
+        ]);
+    }
 }
 
 pub fn default_path() -> Option<PathBuf> {
@@ -344,6 +354,15 @@ fn image_from(bgra: &[u8], extent: Extent) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AllKey {
+    Copy,
+    Cut,
+    Paste,
+    Delete,
+    Enter,
+}
+
 #[derive(Clone, Copy)]
 enum Nav {
     Up,
@@ -407,6 +426,11 @@ struct Library {
     /// The toolbar's Format toggle docks the pane right of the preview.
     format: bool,
     pane: format_pane::Pane,
+    /// Ctrl+A whole-song selection: every cell's text is selected, format
+    /// changes apply to every slide and typing replaces the song text.
+    all: bool,
+    /// The cell holding the caret when `all` began; leaving it ends `all`.
+    all_focus: Option<(usize, usize)>,
 }
 
 impl Library {
@@ -480,6 +504,8 @@ impl Library {
             title: String::new(),
             format: false,
             pane: format_pane::Pane::new(cx),
+            all: false,
+            all_focus: None,
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
@@ -535,11 +561,61 @@ impl Library {
                 // EW8-OBS-022 placeholders.
                 input.set_placeholder(["label", "song"][part]);
                 input.set_read_only(locked);
+                let typing = owner.clone();
                 input.use_document_history(move |text, cx| {
                     let _ = owner.update(cx, |this, cx| {
                         this.cell_edit(index, part, text);
                         cx.notify();
                     });
+                });
+                // During a whole-song selection, typing over the selection
+                // replaces the song text (owner-reported EW behavior). The
+                // replacement reloads cells, so it runs after this one.
+                let me = cx.entity_id();
+                input.intercept_typing(move |text, composing, whole, window, cx| {
+                    let Some(this) = typing.upgrade() else {
+                        return false;
+                    };
+                    let (all, removed) = {
+                        let this = this.read(cx);
+                        let cells = this.cells.iter().flatten();
+                        (this.all, !cells.map(Entity::entity_id).any(|id| id == me))
+                    };
+                    if !all && !removed {
+                        return false;
+                    }
+                    let (owner, text) = (typing.clone(), text.to_owned());
+                    window.defer(cx, move |w, cx| {
+                        if removed {
+                            // The platform keeps sending keys to a removed
+                            // cell until the next paint; they belong to the
+                            // cell that has focus now. A composition restarts
+                            // there, so its updates are dropped.
+                            let target = owner.upgrade().filter(|_| !composing).and_then(|this| {
+                                let this = this.read(cx);
+                                let (i, p) = this.focused_cell(w, cx)?;
+                                Some(this.cells[i][p].clone())
+                            });
+                            if let Some(cell) = target {
+                                cell.update(cx, |c, cx| {
+                                    c.replace_text_in_range(None, &text, w, cx)
+                                });
+                            }
+                            return;
+                        }
+                        let _ = owner.update(cx, |this, cx| {
+                            if !whole {
+                                this.exit_all(cx);
+                            } else if composing {
+                                // The IME keeps composing into the emptied
+                                // first slide; its commit is the next step.
+                                this.replace_all("", w, cx);
+                            } else {
+                                this.replace_all(&text, w, cx);
+                            }
+                        });
+                    });
+                    removed || whole
                 });
                 input
             })
@@ -615,6 +691,7 @@ impl Library {
             return;
         }
         self.drag_end(cx);
+        self.exit_all(cx);
         self.record(self.current(cx));
         if let Some(next) = self.history.step(
             Document {
@@ -707,6 +784,7 @@ impl Library {
             .min(self.draft.sections.len().saturating_sub(1));
     }
     fn begin(&mut self, song: Song, version: Option<Version>, cx: &mut Context<Self>) {
+        self.exit_all(cx);
         self.pane.drag = None;
         self.pane.reload();
         self.draft = song.clone();
@@ -831,7 +909,11 @@ impl Library {
                     self.pane.menu = None;
                 }
             }
-            14 => self.slides = false,
+            // EW8-OBS-036: back to Words ends the whole-song selection.
+            14 => {
+                self.exit_all(cx);
+                self.slides = false;
+            }
             17 => self.slides = true,
             15 => {
                 self.action(1, window, cx);
@@ -911,6 +993,7 @@ impl Library {
     /// (EW8-OBS-023); `−` removes the current slide (Sela control, no EW
     /// counterpart observed). Atomic and one undo step.
     fn restructure(&mut self, add: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.exit_all(cx);
         let song = self.current(cx);
         let mut candidate = song.clone();
         let mut section = self.section;
@@ -962,6 +1045,7 @@ impl Library {
         if self.locked() {
             return;
         }
+        self.exit_all(cx);
         let Some(index) = self
             .focused_cell(window, cx)
             .filter(|(_, part)| *part == LYRICS && !self.slides)
@@ -1024,6 +1108,7 @@ impl Library {
     /// slide, the inverse of Ctrl+Enter. Provisional: EW's merge is unobserved.
     /// Its occurrences leave every arrangement; one undo step restores them.
     fn merge(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.exit_all(cx);
         let song = self.current(cx);
         self.record(song.clone());
         let mut candidate = song.clone();
@@ -1055,6 +1140,127 @@ impl Library {
         self.focus_cell(index - 1, LYRICS, caret, window, cx);
         self.status = "Slides joined · Undo restores them".into();
         cx.notify();
+    }
+
+    /// Ctrl+A in Words or Slides: every label and lyrics cell selected, the
+    /// caret at the end of the last slide (EW8-OBS-034); format changes then
+    /// apply to every slide (EW8-OBS-035).
+    fn select_all_slides(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.locked() || self.cells.is_empty() {
+            return;
+        }
+        let last = self.cells.len() - 1;
+        if !self.slides {
+            self.focus_cell(last, LYRICS, usize::MAX, window, cx);
+        }
+        for cell in self.cells.iter().flatten() {
+            cell.update(cx, |c, cx| c.select_all(cx));
+        }
+        self.all = true;
+        self.all_focus = (!self.slides).then_some((last, LYRICS));
+        self.status = "All slides selected · formatting applies to every slide".into();
+        cx.notify();
+    }
+
+    /// Ends the whole-song selection; cells still wholly selected collapse
+    /// to their end, a cell the operator already moved in keeps its caret.
+    fn exit_all(&mut self, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.all) {
+            return;
+        }
+        self.all_focus = None;
+        for cell in self.cells.iter().flatten() {
+            let (selection, len) = {
+                let c = cell.read(cx);
+                (c.selection(), c.text().len())
+            };
+            if len > 0 && selection == (0..len) {
+                cell.update(cx, |c, cx| c.set_cursor(len, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// The song as plain text: each slide's label line (if any) above its
+    /// lyrics, slides separated by a blank line.
+    fn song_text(&self, cx: &App) -> String {
+        self.current(cx)
+            .sections
+            .iter()
+            .map(|s| match s.label.as_str() {
+                "" => s.lyrics.clone(),
+                label => format!("{label}\n{}", s.lyrics),
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    /// Typing, pasting or deleting over the whole-song selection: the song
+    /// becomes one unlabeled slide holding `text`, keeping slide 1's
+    /// identity and format; arrangements keep only that slide. One undo
+    /// step restores the original. EW's exact result is unobserved.
+    fn replace_all(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.locked() || !self.all {
+            return;
+        }
+        self.exit_all(cx);
+        let song = self.current(cx);
+        let (id, format) = song.sections.first().map_or_else(
+            || (SectionId::allocate(), Default::default()),
+            |s| (s.id, s.format.clone()),
+        );
+        let mut candidate = song.clone();
+        candidate.sections = vec![Section {
+            id,
+            label: String::new(),
+            lyrics: text.into(),
+            format,
+        }];
+        for variant in &mut candidate.variants {
+            variant.occurrences.retain(|o| o.section == id);
+        }
+        if !valid_draft(&candidate) || !editable(&candidate) {
+            self.status = "That text does not fit in one slide. Song unchanged.".into();
+            cx.notify();
+            return;
+        }
+        self.history.record(Document {
+            song,
+            section: self.section,
+        });
+        self.confirm_delete = false;
+        self.draft = candidate;
+        self.section = 0;
+        self.load_fields(cx);
+        self.pane.reload();
+        self.focus_cell(0, LYRICS, usize::MAX, window, cx);
+        self.status = "Song text replaced · Undo restores it".into();
+        cx.notify();
+    }
+
+    /// Key edits a cell would apply to its own selection apply to the whole
+    /// song instead while it is selected; otherwise they reach the cell.
+    fn all_key(&mut self, edit: AllKey, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.all || self.locked() {
+            return;
+        }
+        cx.stop_propagation();
+        let text = match edit {
+            AllKey::Copy | AllKey::Cut => {
+                cx.write_to_clipboard(ClipboardItem::new_string(self.song_text(cx)));
+                if edit == AllKey::Copy {
+                    return;
+                }
+                String::new()
+            }
+            AllKey::Delete => String::new(),
+            AllKey::Enter => "\n".into(),
+            AllKey::Paste => match cx.read_from_clipboard().and_then(|c| c.text()) {
+                Some(text) => text,
+                None => return,
+            },
+        };
+        self.replace_all(&text, window, cx);
     }
 
     /// Cell-to-cell movement for keys the cell did not consume. Down/Up cross
@@ -1127,6 +1333,7 @@ impl Library {
         if self.locked() || index >= self.draft.sections.len() {
             return;
         }
+        self.exit_all(cx);
         if self.slides {
             self.section = index;
             cx.notify();
@@ -1255,7 +1462,7 @@ impl Library {
 
     fn thumbnail_row(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let section = &self.draft.sections[index];
-        let selected = index == self.section;
+        let selected = self.all || index == self.section;
         let labeled = !section.label.is_empty();
         let kind = kind(&section.label);
         let thumbnail = self
@@ -1408,8 +1615,41 @@ impl Library {
             .child(self.control(index, label, enabled, cx))
     }
 
+    /// During a whole-song selection, cell edit keys act on the song (they
+    /// are captured before the focused cell sees them) and caret movement or
+    /// a click ends the selection.
+    fn whole_song_keys(&self, list: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
+        fn edit<A: Action>(
+            list: Stateful<Div>,
+            key: AllKey,
+            cx: &mut Context<Library>,
+        ) -> Stateful<Div> {
+            list.capture_action(cx.listener(move |s, _: &A, w, cx| s.all_key(key, w, cx)))
+        }
+        fn exit<A: Action>(list: Stateful<Div>, cx: &mut Context<Library>) -> Stateful<Div> {
+            list.capture_action(cx.listener(|s, _: &A, _, cx| s.exit_all(cx)))
+        }
+        let list = edit::<text_input::Copy>(list, AllKey::Copy, cx);
+        let list = edit::<text_input::Cut>(list, AllKey::Cut, cx);
+        let list = edit::<text_input::Paste>(list, AllKey::Paste, cx);
+        let list = edit::<text_input::Delete>(list, AllKey::Delete, cx);
+        let list = edit::<text_input::Backspace>(list, AllKey::Delete, cx);
+        let list = edit::<text_input::Enter>(list, AllKey::Enter, cx);
+        let list = exit::<text_input::Left>(list, cx);
+        let list = exit::<text_input::Right>(list, cx);
+        let list = exit::<text_input::Up>(list, cx);
+        let list = exit::<text_input::Down>(list, cx);
+        let list = exit::<text_input::SelectLeft>(list, cx);
+        let list = exit::<text_input::SelectRight>(list, cx);
+        let list = exit::<text_input::SelectUp>(list, cx);
+        let list = exit::<text_input::SelectDown>(list, cx);
+        let list = exit::<text_input::Home>(list, cx);
+        let list = exit::<text_input::End>(list, cx);
+        list.capture_any_mouse_down(cx.listener(|s, _, _, cx| s.exit_all(cx)))
+    }
+
     fn slide_row(&self, index: usize, kind: Kind, cx: &mut Context<Self>) -> Div {
-        let selected = index == self.section;
+        let selected = self.all || index == self.section;
         let labeled = !self.cells[index][LABEL].read(cx).text().is_empty();
         let nav = |part: usize, cx: &mut Context<Self>| {
             div()
@@ -1533,8 +1773,13 @@ impl Render for Library {
         if self.committed_close {
             window.remove_window();
         }
-        if let Some((index, _)) = self.focused_cell(window, cx).filter(|_| !self.slides) {
-            self.section = index;
+        if let Some(cell) = self.focused_cell(window, cx).filter(|_| !self.slides) {
+            self.section = cell.0;
+            // Moving into another cell ends the whole-song selection; focus
+            // leaving the cells (the Format pane) keeps it.
+            if self.all && Some(cell) != self.all_focus {
+                self.exit_all(cx);
+            }
         }
         let title = self.fields[0].read(cx).text().to_owned();
         if title != self.title {
@@ -1581,6 +1826,7 @@ impl Render for Library {
             .on_action(cx.listener(|s, _: &SplitSection, w, cx| s.split_section(w, cx)))
             .on_action(cx.listener(|s, _: &Undo, w, cx| s.history(false, w, cx)))
             .on_action(cx.listener(|s, _: &Redo, w, cx| s.history(true, w, cx)))
+            .on_action(cx.listener(|s, _: &SelectAllSlides, w, cx| s.select_all_slides(w, cx)))
             // A slider or dial drag follows the pointer anywhere in the
             // window and ends on release, even outside it.
             .on_mouse_move(cx.listener(|s, e: &MouseMoveEvent, _, cx| {
@@ -1813,6 +2059,7 @@ impl Render for Library {
                             } else if self.slides {
                                 div()
                                     .id("slide-list")
+                                    .key_context("SongWords")
                                     .flex_1()
                                     .min_h_0()
                                     .overflow_y_scroll()
@@ -1826,8 +2073,7 @@ impl Render for Library {
                                     )
                                     .into_any_element()
                             } else {
-                                div()
-                                    .id("words")
+                                self.whole_song_keys(div().id("words").key_context("SongWords"), cx)
                                     .track_scroll(&self.words_scroll)
                                     .flex_1()
                                     .min_h_0()
@@ -1902,6 +2148,7 @@ impl Render for Library {
                                                     .on_click(cx.listener(|s, e: &ClickEvent, w, cx| {
                                                         if e.click_count() == 2 {
                                                             // No canvas editing yet: edit in Words.
+                                                            s.exit_all(cx);
                                                             s.slides = false;
                                                             let index = s.section;
                                                             s.focus_cell(index, LYRICS, usize::MAX, w, cx);
@@ -3357,5 +3604,161 @@ mod tests {
             formats(&cx, &view)
         );
         assert_eq!(saved.sections[1].format, Default::default());
+    }
+
+    fn all(cx: &VisualTestContext, view: &Entity<Library>) -> bool {
+        view.read_with(cx, |v, _| v.all)
+    }
+    fn lyrics(cx: &VisualTestContext, view: &Entity<Library>) -> Vec<(String, String)> {
+        view.read_with(cx, |v, cx| {
+            v.current(cx)
+                .sections
+                .into_iter()
+                .map(|s| (s.label, s.lyrics))
+                .collect()
+        })
+    }
+    fn wholly_selected(cx: &VisualTestContext, view: &Entity<Library>) -> bool {
+        view.read_with(cx, |v, cx| {
+            v.cells.iter().flatten().all(|c| {
+                let c = c.read(cx);
+                c.selection() == (0..c.text().len())
+            })
+        })
+    }
+
+    #[gpui::test]
+    fn ctrl_a_selects_every_slide_and_formats_apply_to_all_in_one_step(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = format_fixture(cx, dir.path().join("library.sqlite"));
+        // In a metadata field Ctrl+A stays a field selection.
+        field(&mut cx, &view, 0, "Formatted");
+        cx.simulate_keystrokes("ctrl-a");
+        assert!(!all(&cx, &view));
+        caret(&mut cx, &view, 0, LYRICS, 0);
+
+        cx.simulate_keystrokes("ctrl-a");
+        cx.run_until_parked();
+        assert!(all(&cx, &view));
+        assert!(wholly_selected(&cx, &view));
+        // EW8-OBS-034: the caret ends in the last slide.
+        assert_eq!(focused(&mut cx, &view), Some((1, LYRICS)));
+        let count = undo_len(&cx, &view);
+        click(&mut cx, "format-Bold");
+        let f = formats(&cx, &view);
+        assert_eq!((f[0].bold, f[1].bold), (Some(true), Some(true)));
+        assert_eq!(undo_len(&cx, &view), count + 1);
+        assert!(all(&cx, &view), "pane clicks keep the selection");
+        assert_eq!(lyrics(&cx, &view).len(), 2);
+        cx.simulate_keystrokes("ctrl-z");
+        let f = formats(&cx, &view);
+        assert_eq!((f[0].bold, f[1].bold), (None, None));
+        assert!(!all(&cx, &view));
+
+        // Slides tab: the thumbnail list takes Ctrl+A too; Words ends it
+        // (EW8-OBS-036).
+        action(&mut cx, &view, 17);
+        let thumbnail = view.read_with(&cx, |v, _| v.section_focus[0].clone());
+        cx.update(|w, cx| thumbnail.focus(w, cx));
+        cx.simulate_keystrokes("ctrl-a");
+        assert!(all(&cx, &view));
+        click(&mut cx, "format-Italic");
+        let f = formats(&cx, &view);
+        assert_eq!((f[0].italic, f[1].italic), (Some(true), Some(true)));
+        action(&mut cx, &view, 14);
+        assert!(!all(&cx, &view));
+        click(&mut cx, "format-Underline");
+        let f = formats(&cx, &view);
+        assert_eq!(
+            f.iter().filter(|f| f.underline == Some(true)).count(),
+            1,
+            "only the caret slide again"
+        );
+    }
+
+    #[gpui::test]
+    fn typing_over_the_whole_song_replaces_it_as_one_undo_step(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = format_fixture(cx, dir.path().join("library.sqlite"));
+        type_cell(&mut cx, &view, 0, LABEL, "Verse 1");
+        caret(&mut cx, &view, 0, LYRICS, 0);
+        click(&mut cx, "format-Bold");
+        let original = lyrics(&cx, &view);
+        let first = view.read_with(&cx, |v, _| v.draft.sections[0].id);
+
+        cx.simulate_keystrokes("ctrl-a ctrl-c");
+        assert!(all(&cx, &view), "Copy keeps the selection");
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|c| c.text())),
+            Some("Verse 1\nOne\n\nTwo".to_owned())
+        );
+        assert_eq!(lyrics(&cx, &view), original);
+
+        let count = undo_len(&cx, &view);
+        cx.simulate_input("N");
+        cx.run_until_parked();
+        assert_eq!(lyrics(&cx, &view), [(String::new(), "N".to_owned())]);
+        view.read_with(&cx, |v, _| {
+            assert_eq!(v.draft.sections[0].id, first);
+            assert_eq!(v.draft.sections[0].format.bold, Some(true));
+        });
+        assert!(!all(&cx, &view));
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        assert_eq!(undo_len(&cx, &view), count + 1);
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(lyrics(&cx, &view), original);
+        cx.simulate_keystrokes("ctrl-shift-z");
+        cx.simulate_input("e");
+        assert_eq!(lyrics(&cx, &view)[0].1, "Ne", "typing continues normally");
+        // Keys the platform still sends to slide 2's removed cell before
+        // the next paint reach the focused cell.
+        cx.simulate_keystrokes("ctrl-z ctrl-z ctrl-a");
+        let removed = cell(&cx, &view, 1, LYRICS);
+        for text in ["N", "ew"] {
+            cx.update(|w, cx| {
+                removed.update(cx, |c, cx| c.replace_text_in_range(None, text, w, cx))
+            });
+        }
+        cx.run_until_parked();
+        assert_eq!(lyrics(&cx, &view), [(String::new(), "New".to_owned())]);
+        for _ in 0..4 {
+            if lyrics(&cx, &view).len() == 1 {
+                cx.simulate_keystrokes("ctrl-z");
+            }
+        }
+        assert_eq!(lyrics(&cx, &view), original);
+
+        cx.simulate_keystrokes("ctrl-a backspace");
+        cx.run_until_parked();
+        assert_eq!(lyrics(&cx, &view), [(String::new(), String::new())]);
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(lyrics(&cx, &view), original);
+
+        cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("A\nB".into())));
+        cx.simulate_keystrokes("ctrl-a ctrl-v");
+        cx.run_until_parked();
+        assert_eq!(lyrics(&cx, &view), [(String::new(), "A\nB".to_owned())]);
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(lyrics(&cx, &view), original);
+
+        // Caret movement or another cell ends the selection without edits.
+        cx.simulate_keystrokes("ctrl-a left");
+        assert!(!all(&cx, &view));
+        assert!(!wholly_selected(&cx, &view));
+        cx.simulate_input("x");
+        assert_eq!(lyrics(&cx, &view).len(), 2);
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(lyrics(&cx, &view), original);
+        cx.simulate_keystrokes("ctrl-a");
+        caret(&mut cx, &view, 0, LYRICS, 0);
+        assert!(!all(&cx, &view));
+        cx.simulate_keystrokes("enter");
+        assert_eq!(lyrics(&cx, &view)[0].1, "\nOne");
+
+        // Nothing applies while storage work is pending.
+        cx.simulate_keystrokes("ctrl-z ctrl-a");
+        view.update(&mut cx, |v, _| v.pending = Some(Pending::Catalog));
+        cx.update(|w, cx| view.update(cx, |v, cx| v.replace_all("gone", w, cx)));
+        assert_eq!(lyrics(&cx, &view), original);
     }
 }

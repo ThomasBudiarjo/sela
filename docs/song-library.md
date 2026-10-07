@@ -104,8 +104,8 @@ finish. Original GPUI code; no EasyWorship code or assets.
 - Library (Sela) keeps the saved-song list with Duplicate, Delete, Discard
   edits and paging.
 
-Not yet matched: EW's Ctrl+A selecting the whole Words document (Sela selects
-within one cell), drag selection across cells, typing-group undo (Sela undoes
+Not yet matched: drag selection across cells (Ctrl+A selects the whole
+document since M1-05g3b, below), typing-group undo (Sela undoes
 per native edit), canvas text-box editing
 and its context menu (EW8-OBS-025), and the zoom slider.
 
@@ -205,9 +205,9 @@ EW8-OBS-033 (RUN-W06G); code in `src/song_library/format_pane.rs`.
   click outside closes a menu and restores the previous focus, and a click
   that dismisses a menu on its own trigger does not reopen it.
 
-Not yet matched: Ctrl+A whole-song formatting (g3b, EW8-OBS-034–036), the
-deferred Text › Style/Layout controls listed in the backlog, the Style and
-Arrange tabs, and what the pane shows when slides disagree (unobserved).
+Not yet matched: the deferred Text › Style/Layout controls (M1-05j–m), the
+Style and Arrange tabs (M1-05n–o), and what the pane shows when slides
+disagree (unobserved). Ctrl+A whole-song formatting is in M1-05g3b below.
 
 Checks: GPUI tests `format_pane_applies_to_the_caret_slide_as_one_undo_step`,
 `menus_open_by_keyboard_and_a_dismissing_click_does_not_reopen`,
@@ -230,6 +230,61 @@ precedence for `SelaMenu`/`SelaSlider` bindings over the root),
 `elements/uniform_list.rs` (font list and `scroll_to_item`) and
 `elements/canvas.rs` (slider and dial bounds from prepaint). Zed's GPL
 `font_picker` was read for names only; no code was copied.
+
+## M1-05g3b — Whole-song selection
+
+Implemented-unqualified. Selection and formatting follow EW8-OBS-034–036
+(RUN-W06H); replacing the text follows the owner's report of EW behavior.
+
+- **Ctrl+A** (Cmd+A on macOS) in a Words cell or on a Slides thumbnail
+  selects every slide: every label and lyrics cell shows its text selected,
+  every slide number and thumbnail shows the selected state, and in Words
+  the caret moves to the end of the last slide. Ctrl+A in the Title,
+  Inspector and Format pane fields still selects only that field's text.
+- While all slides are selected, **every Format pane change applies to
+  every slide** as one undo step (a whole slider drag included). The pane
+  shows the caret slide's values. Using the pane keeps the selection.
+- **Typing, Paste, Backspace, Delete, Cut or Enter** over the selection
+  replaces the song with one unlabeled slide holding the new text (empty for
+  Backspace/Delete/Cut, a line break for Enter). It keeps slide 1's id and
+  format; other slides leave the arrangements. That is one undo step, and
+  the caret is at the end of the new text. These are Sela choices: EW's
+  result, undo and labels after a replacement are unobserved.
+- **Copy** (and Cut) put the whole song on the clipboard as text: each
+  slide's label line, if any, above its lyrics, slides separated by a blank
+  line.
+- The selection ends on a caret key (arrows, Home/End and their Shift
+  forms), a mouse press in Words, focus moving into another cell, the
+  Words tab (EW8-OBS-036; Slides keeps it), a double click on the preview,
+  Undo/Redo, slide structure edits (+, −, Ctrl+Enter, joining, choosing a
+  slide) and opening another song. Wholly selected cells then collapse to
+  their end.
+- Keys that the platform still delivers to a removed cell before the next
+  paint (for example the rest of a fast typed word right after the
+  replacement) go to the focused cell instead of being lost.
+
+Not yet matched: EW shows only the Slide pane while all slides are selected
+(EW8-OBS-035), Sela keeps the Text pane so the change can be chosen. IME
+composition over the selection empties the song and composes into slide 1;
+it is unqualified, like IME in general. Mixed values across slides are not
+shown.
+
+Checks: GPUI tests
+`ctrl_a_selects_every_slide_and_formats_apply_to_all_in_one_step` and
+`typing_over_the_whole_song_replaces_it_as_one_undo_step`. The native
+replay above selects all on slide 1's thumbnail, sets every slide green by
+keyboard and decodes both stored formats, then double clicks the preview,
+types over Ctrl+A in Words and checks the saved song is one slide with
+slide 1's format (captures `13-all-selected` to `15-typed-over`).
+
+GPUI patterns inspected at `a84689073d296dfd39987bc7dd478e43ef76d83a`:
+`crates/gpui/src/keymap.rs` (a later binding wins at equal context depth,
+so `SongWords > SelaTextInput` Ctrl+A overrides the field's select-all),
+`elements/div.rs` (`capture_action` runs root-to-focus before the cell's
+own handlers and continues unless propagation stops;
+`capture_any_mouse_down`), `window.rs` (`defer` runs after the cell's
+update, so the replacement can reload cells) and `app/test_context.rs`
+(`simulate_input` sends one keystroke per character).
 
 ## Ownership and reference patterns
 
