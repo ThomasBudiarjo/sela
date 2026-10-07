@@ -958,8 +958,16 @@ mod tests {
                     };
                     let version = ContentVersion { id: 1, revision: 1 };
                     let resolved = sela::fonts::Resolved::bundled(&slide.format);
-                    let cue =
-                        sela::slides::cue(version, &slide, &resolved, extent, caps, None).unwrap();
+                    let cue = sela::slides::cue(
+                        version,
+                        &slide,
+                        &resolved,
+                        extent,
+                        caps,
+                        None,
+                        sela::slides::color_background([0, 0, 0]),
+                    )
+                    .unwrap();
                     text::layers(&cue)
                         .unwrap_or_else(|e| panic!("{width}x{height} {text:?}: {e:?}"));
                 }
@@ -991,8 +999,16 @@ mod tests {
                 };
                 let version = ContentVersion { id: 1, revision: 1 };
                 let resolved = sela::fonts::Resolved::bundled(&slide.format);
-                let cue =
-                    sela::slides::cue(version, &slide, &resolved, extent, caps, None).unwrap();
+                let cue = sela::slides::cue(
+                    version,
+                    &slide,
+                    &resolved,
+                    extent,
+                    caps,
+                    None,
+                    sela::slides::color_background([0, 0, 0]),
+                )
+                .unwrap();
                 let mut runs: Vec<Duration> = (0..20)
                     .map(|_| {
                         let start = Instant::now();

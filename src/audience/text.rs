@@ -959,7 +959,16 @@ mod tests {
             height: 1080,
         };
         let version = ContentVersion { id: 9, revision: 1 };
-        let cue = sela::slides::cue(version, &slide, &resolved, extent, CAPS, None).unwrap();
+        let cue = sela::slides::cue(
+            version,
+            &slide,
+            &resolved,
+            extent,
+            CAPS,
+            None,
+            sela::slides::color_background([0, 0, 0]),
+        )
+        .unwrap();
         let layers = layers(&cue).unwrap();
         let text = cue.text().unwrap();
         assert_eq!(text.style().color, [255, 128, 0]);

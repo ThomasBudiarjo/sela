@@ -1204,8 +1204,18 @@ mod tests {
             format,
             background: None,
         };
-        let cue =
-            Arc::new(crate::slides::cue(version, &slide, &resolved, extent, caps, None).unwrap());
+        let cue = Arc::new(
+            crate::slides::cue(
+                version,
+                &slide,
+                &resolved,
+                extent,
+                caps,
+                None,
+                crate::slides::color_background([0, 0, 0]),
+            )
+            .unwrap(),
+        );
         assert!(cue.text().is_some());
         let command = Command::from_wire(
             Stamp {

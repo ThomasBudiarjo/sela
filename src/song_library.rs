@@ -6,9 +6,17 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 use sela::arrangement::{Occurrence, OccurrenceId, SectionId};
+use sela::background::{Aspect, ImageRef, Plan, plan};
+use sela::images::Substitute;
 use sela::scene::{ContentVersion, Extent, PreparedBackground, RendererCapabilities};
 use sela::storage::{Command, Error, Id, Reply, Section, Song, Version, Worker};
-use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    ops::Range,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 mod format_pane;
 
@@ -268,23 +276,33 @@ fn groups<'a>(labels: impl IntoIterator<Item = &'a str>) -> Vec<Range<usize>> {
 /// audience would reject the text (overflow, missing glyph, unfittable fixed
 /// size); the warning is set when a named family fell back to the bundled
 /// face.
-fn render_preview(slide: &sela::slides::Slide) -> Preview {
+fn render_preview(slide: &sela::slides::Slide, backdrops: &Backdrops) -> Preview {
     let resolved = sela::fonts::shared().resolve(&slide.format);
-    let raster = pixels(slide, &resolved);
+    let (background, substituted) = backdrops.prepare(slide);
+    let raster = pixels(slide, &resolved, background);
+    let warning = [substituted.as_deref(), resolved.warning()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
     Preview {
         key: slide_key(slide),
         fitted: raster.as_ref().and_then(|(_, size)| *size),
         image: raster.and_then(|(bgra, _)| image_from(&bgra, PREVIEW)),
-        warning: resolved.warning().map(str::to_owned),
+        warning: (!warning.is_empty()).then_some(warning),
     }
 }
 
 /// The preview raster box-filtered down by `THUMBNAIL_SCALE`, so thumbnails
 /// keep the audience proportions (the text inset is fixed in pixels, so
 /// fitting at thumbnail size directly would lay out differently).
-fn render_thumbnail(slide: &sela::slides::Slide) -> Option<Arc<RenderImage>> {
+fn render_thumbnail(
+    slide: &sela::slides::Slide,
+    backdrops: &Backdrops,
+) -> Option<Arc<RenderImage>> {
     let resolved = sela::fonts::shared().resolve(&slide.format);
-    let (bgra, _) = pixels(slide, &resolved)?;
+    let (background, _) = backdrops.prepare(slide);
+    let (bgra, _) = pixels(slide, &resolved, background)?;
     let (scale, width) = (THUMBNAIL_SCALE as usize, PREVIEW.width as usize);
     let n = (scale * scale) as u32;
     let mut small = Vec::with_capacity(bgra.len() / (scale * scale));
@@ -305,13 +323,88 @@ fn render_thumbnail(slide: &sela::slides::Slide) -> Option<Arc<RenderImage>> {
     image_from(&small, THUMBNAIL)
 }
 
+/// Editor backgrounds fitted at `PREVIEW` size, by image and aspect. Four
+/// entries (about 14 MiB) cover a song alternating a few images without
+/// decoding again per thumbnail.
+const BACKDROPS: usize = 4;
+
+type Backdrop = ((ImageRef, Aspect), Arc<[u8]>);
+
+/// Background preparation for previews and thumbnails, shared by their
+/// background tasks; the UI thread never locks it.
+struct Backdrops {
+    profile: Option<PathBuf>,
+    /// Least recently fitted first.
+    fitted: Mutex<VecDeque<Backdrop>>,
+}
+
+impl Backdrops {
+    fn new(profile: Option<PathBuf>) -> Self {
+        Self {
+            profile,
+            fitted: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// The slide's prepared background, and the substitution warning when its
+    /// image cannot be shown (black, as the audience would). Reads and
+    /// decodes files: off the UI thread only.
+    fn prepare(&self, slide: &sela::slides::Slide) -> (PreparedBackground, Option<String>) {
+        let (image, aspect) = match plan(slide.background.as_ref()) {
+            Plan::Color(rgb) => return (sela::slides::color_background(rgb), None),
+            Plan::Image(image, aspect) => (image, aspect),
+        };
+        let key = (image.clone(), aspect);
+        let cached = {
+            let fitted = self.fitted.lock().unwrap_or_else(|e| e.into_inner());
+            fitted
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.clone())
+        };
+        let fitted = match cached {
+            Some(rgba) => Ok(rgba),
+            None => self
+                .profile
+                .as_deref()
+                .ok_or(Substitute::Missing)
+                .and_then(|profile| {
+                    sela::images::fitted_background(profile, image, aspect, PREVIEW)
+                })
+                .inspect(|rgba| {
+                    let mut fitted = self.fitted.lock().unwrap_or_else(|e| e.into_inner());
+                    fitted.retain(|(k, _)| *k != key);
+                    fitted.push_back((key.clone(), rgba.clone()));
+                    while fitted.len() > BACKDROPS {
+                        fitted.pop_front();
+                    }
+                }),
+        };
+        match fitted {
+            Ok(rgba) => (
+                PreparedBackground::Image {
+                    version: sela::images::background_version(image, aspect),
+                    extent: PREVIEW,
+                    rgba,
+                },
+                None,
+            ),
+            Err(why) => (
+                sela::slides::color_background(sela::background::BLACK),
+                Some(why.warning(&image.name)),
+            ),
+        }
+    }
+}
+
 /// One slide's preview pixels, as BGRA: the cue's fill, outline and shadow
-/// coverage layers blended in linear light over the background color, the
-/// CPU twin of the audience compositor's shader. Also returns the laid-out
-/// font size in 1080-reference px (`None` without text).
+/// coverage layers blended in linear light over the background color or
+/// fitted image, the CPU twin of the audience compositor's shader. Also
+/// returns the laid-out font size in 1080-reference px (`None` without text).
 fn pixels(
     slide: &sela::slides::Slide,
     resolved: &sela::fonts::Resolved,
+    background: PreparedBackground,
 ) -> Option<(Vec<u8>, Option<u16>)> {
     let cue = sela::slides::cue(
         ContentVersion { id: 0, revision: 0 },
@@ -322,6 +415,7 @@ fn pixels(
             max_texture_dimension: 4096,
         },
         None,
+        background,
     )
     .ok()?;
     let coverage = crate::audience::text::layers(&cue).ok()?.coverage();
@@ -340,8 +434,10 @@ fn pixels(
             crate::audience::compositor::blend_pixels(background, &coverage, &blend),
             size,
         )),
-        // Song slides are always color backgrounds today.
-        PreparedBackground::Image { .. } => None,
+        PreparedBackground::Image { ref rgba, .. } => Some((
+            crate::audience::compositor::blend_over(rgba, &coverage, &blend)?,
+            size,
+        )),
     }
 }
 
@@ -434,6 +530,8 @@ struct Library {
     thumbnails: HashMap<SlideKey, Option<Arc<RenderImage>>>,
     /// One thumbnail renders at a time, in slide order.
     thumbnail_task: Option<Task<()>>,
+    /// Slide background images from the library's profile folder.
+    backdrops: Arc<Backdrops>,
     title: String,
     /// The toolbar's Format toggle docks the pane right of the preview.
     format: bool,
@@ -472,6 +570,11 @@ impl Library {
                 input
             })
         });
+        // The profile is the library's folder, as for the operator.
+        let profile = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(PathBuf::from);
         let (worker, pending, status) = match Worker::open(path) {
             Ok(worker) => (Some(worker), Some(Pending::Open), "Opening library…".into()),
             Err(e) => (None, None, error_message(e).into()),
@@ -513,6 +616,7 @@ impl Library {
             preview_task: None,
             thumbnails: HashMap::new(),
             thumbnail_task: None,
+            backdrops: Arc::new(Backdrops::new(profile)),
             title: String::new(),
             format: false,
             pane: format_pane::Pane::new(cx),
@@ -1384,9 +1488,10 @@ impl Library {
         if self.preview_task.is_some() || self.preview.as_ref().is_some_and(|p| p.key == key) {
             return;
         }
+        let backdrops = self.backdrops.clone();
         let raster = cx
             .background_executor()
-            .spawn(async move { render_preview(&slide) });
+            .spawn(async move { render_preview(&slide, &backdrops) });
         self.preview_task = Some(cx.spawn(async move |this, cx| {
             let preview = raster.await;
             let _ = this.update(cx, |this, cx| {
@@ -1460,9 +1565,10 @@ impl Library {
             return;
         };
         let key = slide_key(&slide);
+        let backdrops = self.backdrops.clone();
         let raster = cx
             .background_executor()
-            .spawn(async move { render_thumbnail(&slide) });
+            .spawn(async move { render_thumbnail(&slide, &backdrops) });
         self.thumbnail_task = Some(cx.spawn(async move |this, cx| {
             let image = raster.await;
             let _ = this.update(cx, |this, cx| {
@@ -2684,9 +2790,11 @@ mod tests {
                 .filter(|p| p[channel] > 128)
                 .count()
         };
-        let blank = render_preview(&slide("")).image.unwrap();
+        let blank = render_preview(&slide(""), &Backdrops::new(None))
+            .image
+            .unwrap();
         assert_eq!(ink(&blank, 0), 0);
-        let text = render_preview(&slide("Amazing grace\nhow sweet"))
+        let text = render_preview(&slide("Amazing grace\nhow sweet"), &Backdrops::new(None))
             .image
             .unwrap();
         let size = text.size(0);
@@ -2702,17 +2810,24 @@ mod tests {
             },
             ..slide("Amazing grace\nhow sweet")
         };
-        let yellow = render_preview(&styled).image.unwrap();
+        let yellow = render_preview(&styled, &Backdrops::new(None))
+            .image
+            .unwrap();
         assert_eq!(ink(&yellow, 0), 0, "yellow fill has no blue");
         assert!(ink(&yellow, 1) > 1000, "yellow fill has green");
         assert!(
-            render_preview(&slide("\u{e000}")).image.is_none(),
+            render_preview(&slide("\u{e000}"), &Backdrops::new(None))
+                .image
+                .is_none(),
             "missing glyph"
         );
         // The fitted size is reported in 1080-reference px; a fixed size
         // round-trips through the 720-high preview.
-        assert_eq!(render_preview(&slide("")).fitted, None);
-        let fitted = render_preview(&slide("Amazing grace\nhow sweet"))
+        assert_eq!(
+            render_preview(&slide(""), &Backdrops::new(None)).fitted,
+            None
+        );
+        let fitted = render_preview(&slide("Amazing grace\nhow sweet"), &Backdrops::new(None))
             .fitted
             .unwrap();
         assert!(fitted > 40, "{fitted}");
@@ -2723,7 +2838,10 @@ mod tests {
             },
             ..slide("Amazing grace")
         };
-        assert_eq!(render_preview(&fixed).fitted, Some(78));
+        assert_eq!(
+            render_preview(&fixed, &Backdrops::new(None)).fitted,
+            Some(78)
+        );
     }
 
     #[gpui::test]
@@ -2803,12 +2921,115 @@ mod tests {
         }));
     }
 
+    /// A solid PNG in the profile's images folder, pinned by hash.
+    fn profile_image(
+        profile: &std::path::Path,
+        name: &str,
+        width: u32,
+        height: u32,
+        rgb: [u8; 3],
+    ) -> ImageRef {
+        use sha2::Digest;
+        let images = sela::images::images_dir(profile);
+        std::fs::create_dir_all(&images).unwrap();
+        let [r, g, b] = rgb;
+        image::RgbaImage::from_pixel(width, height, image::Rgba([r, g, b, 255]))
+            .save(images.join(name))
+            .unwrap();
+        let bytes = std::fs::read(images.join(name)).unwrap();
+        ImageRef {
+            name: name.into(),
+            sha256: sha2::Sha256::digest(&bytes).into(),
+        }
+    }
+
+    /// RGB at (x, y) of a BGRA preview raster.
+    fn rgb_at(image: &RenderImage, x: usize, y: usize) -> [u8; 3] {
+        let bytes = image.as_bytes(0).unwrap();
+        let at = (y * PREVIEW.width as usize + x) * 4;
+        [bytes[at + 2], bytes[at + 1], bytes[at]]
+    }
+
+    #[test]
+    fn preview_composites_over_the_fitted_image_or_substitutes_black() {
+        use sela::background::Background;
+        let dir = tempfile::tempdir().unwrap();
+        let blue = [30, 110, 210];
+        // 4:1, so Maintain letterboxes top and bottom on the 16:9 preview.
+        let wide = profile_image(dir.path(), "wide.png", 400, 100, blue);
+        let backdrops = Backdrops::new(Some(dir.path().into()));
+        let with = |background| sela::slides::Slide {
+            background: Some(background),
+            ..slide("Amazing grace")
+        };
+        let zoom = render_preview(&with(Background::image(wide.clone())), &backdrops);
+        assert_eq!(zoom.warning, None);
+        let image = zoom.image.unwrap();
+        assert_eq!(rgb_at(&image, 2, 2), blue, "Zoom covers the corner");
+        assert!(
+            image
+                .as_bytes(0)
+                .unwrap()
+                .chunks(4)
+                .any(|p| p[..3] == [255; 3]),
+            "white text over the image"
+        );
+        let maintain = Background {
+            aspect: Aspect::Maintain,
+            ..Background::image(wide.clone())
+        };
+        let image = render_preview(&with(maintain), &backdrops).image.unwrap();
+        assert_eq!(rgb_at(&image, 2, 2), [0; 3], "black bar");
+        assert_eq!(rgb_at(&image, 2, 360), blue, "image between the bars");
+        assert_eq!(backdrops.fitted.lock().unwrap().len(), 2);
+
+        let missing = ImageRef {
+            name: "gone.png".into(),
+            ..wide.clone()
+        };
+        let preview = render_preview(&with(Background::image(missing)), &backdrops);
+        assert_eq!(rgb_at(&preview.image.unwrap(), 2, 2), [0; 3]);
+        assert_eq!(
+            preview.warning.as_deref(),
+            Some("Background image ‘gone.png’ is missing; showing black")
+        );
+        let red = render_preview(&with(Background::color([200, 0, 0])), &backdrops);
+        assert_eq!(rgb_at(&red.image.unwrap(), 2, 2), [200, 0, 0]);
+        // Without a profile folder no image can be found.
+        let none = render_preview(&with(Background::image(wide)), &Backdrops::new(None));
+        assert!(none.warning.unwrap().contains("is missing"));
+        // Thumbnails composite over the same background.
+        let thumbnail = render_thumbnail(&with(Background::color(blue)), &backdrops).unwrap();
+        assert_eq!(
+            thumbnail.as_bytes(0).unwrap()[..3],
+            [blue[2], blue[1], blue[0]]
+        );
+    }
+
+    #[test]
+    fn editor_backdrops_keep_at_most_four_fitted_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let backdrops = Backdrops::new(Some(dir.path().into()));
+        for n in 0..6u8 {
+            let image = profile_image(dir.path(), &format!("{n}.png"), 16, 9, [n, n, n]);
+            let slide = sela::slides::Slide {
+                background: Some(sela::background::Background::image(image)),
+                ..slide("")
+            };
+            assert_eq!(backdrops.prepare(&slide).1, None);
+        }
+        let fitted = backdrops.fitted.lock().unwrap();
+        assert_eq!(fitted.len(), BACKDROPS);
+        assert_eq!(fitted.front().unwrap().0.0.name, "2.png", "oldest evicted");
+        assert!(fitted.iter().all(|(_, rgba)| rgba.len() == 1280 * 720 * 4));
+    }
+
     #[test]
     fn thumbnail_is_the_preview_box_filtered() {
         let text = slide("Amazing grace\nhow sweet the sound");
         let (full, small) = (
-            render_preview(&text).image.unwrap(),
-            render_thumbnail(&text).unwrap(),
+            render_preview(&text, &Backdrops::new(None)).image.unwrap(),
+            render_thumbnail(&text, &Backdrops::new(None)).unwrap(),
         );
         let size = small.size(0);
         assert_eq!((size.width.0, size.height.0), (320, 180));
@@ -2823,7 +3044,7 @@ mod tests {
         let (full, small) = (sum(&full), sum(&small) * 16);
         assert!(small > 0);
         assert!(full.abs_diff(small) * 200 < full, "{full} vs {small}");
-        assert!(render_thumbnail(&slide("\u{e000}")).is_none());
+        assert!(render_thumbnail(&slide("\u{e000}"), &Backdrops::new(None)).is_none());
     }
 
     #[gpui::test]

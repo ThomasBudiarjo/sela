@@ -600,8 +600,9 @@ Follow-ups:
   - [x] h0 RUN-W06I observation (EW8-OBS-037–043).
   - [x] h1 background model and schema 4 with a verified backup
     (implemented-unqualified, see [storage](storage.md#m1-05h1--slide-backgrounds--backed-up-schema-4)).
-  - [ ] h2 fit/decode worker, operator preparation gate and substitution,
-    editor preview and thumbnails.
+  - [x] h2 fit/decode worker, operator preparation gate and substitution,
+    editor preview and thumbnails (implemented-unqualified, see
+    [song library](song-library.md#m1-05h2--slide-backgrounds-render)).
   - [ ] h3 Slide pane Background section, Select Media…, aspect, Layouts
     tab for the master, Ctrl+A, undo, native script.
 - M1-05i Library right-click New Song…/Edit Song…/Delete in the operator

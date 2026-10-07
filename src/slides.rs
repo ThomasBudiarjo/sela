@@ -19,7 +19,6 @@ use crate::{
 pub const REFERENCE_HEIGHT: u32 = 1080;
 /// Renderer text inset on each side, matching the audience preparer.
 const INSET: u32 = 32;
-const BACKGROUND: [u8; 4] = [0, 0, 0, 255];
 const SLIDE_BITS: u32 = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,10 +113,12 @@ pub fn slide_index(song: Version, version: ContentVersion) -> Option<usize> {
     (slide_version(song, index)? == version).then_some(index)
 }
 
-/// Black background with the slide's formatted text: the resolved face, a
-/// fitted or fixed size, and the style `fit_size` keeps inside the inset.
+/// The slide's formatted text over a prepared background: the resolved face,
+/// a fitted or fixed size, and the style `fit_size` keeps inside the inset.
 /// `resolved` must come from the same `SlideFormat` (bundled resolution for
-/// the default look, `fonts::Fonts` for an installed family).
+/// the default look, `fonts::Fonts` for an installed family). An image
+/// background must already be fitted to `extent` (`background::fit`) so the
+/// renderer composites it 1:1.
 pub fn cue(
     version: ContentVersion,
     slide: &Slide,
@@ -125,7 +126,13 @@ pub fn cue(
     extent: Extent,
     caps: RendererCapabilities,
     cap: Option<u16>,
+    background: PreparedBackground,
 ) -> Result<PreparedCue, PrepareError> {
+    if let PreparedBackground::Image { extent: image, .. } = &background
+        && *image != extent
+    {
+        return Err(PrepareError::InvalidImage);
+    }
     let text = if slide.text.is_empty() {
         None
     } else {
@@ -157,13 +164,13 @@ pub fn cue(
             style: style_of(&slide.format, resolved),
         })
     };
-    PreparedCue::from_owned(
-        version,
-        extent,
-        PreparedBackground::Color(BACKGROUND),
-        text,
-        caps,
-    )
+    PreparedCue::from_owned(version, extent, background, text, caps)
+}
+
+/// A color plan's opaque cue background; image plans are prepared by the
+/// image worker.
+pub fn color_background(rgb: [u8; 3]) -> PreparedBackground {
+    PreparedBackground::Color([rgb[0], rgb[1], rgb[2], 255])
 }
 
 /// Format plus resolution folded into the cue's style. `None` format fields
@@ -277,6 +284,9 @@ mod tests {
             master: None,
         }
     }
+    fn black() -> PreparedBackground {
+        color_background(background::BLACK)
+    }
     fn resolved(slides: &[Slide]) -> Vec<Resolved> {
         slides
             .iter()
@@ -372,7 +382,7 @@ mod tests {
         };
         let version = ContentVersion { id: 9, revision: 1 };
         let resolved = Resolved::bundled(&slide.format);
-        let basic = cue(version, &slide, &resolved, EXTENT, CAPS, None).unwrap();
+        let basic = cue(version, &slide, &resolved, EXTENT, CAPS, None, black()).unwrap();
         assert_eq!(basic.extent(), EXTENT);
         assert_eq!(basic.version(), version);
         let text = basic.text().unwrap();
@@ -400,9 +410,53 @@ mod tests {
             EXTENT,
             CAPS,
             None,
+            black(),
         )
         .unwrap();
         assert_eq!(bold_cue.text().unwrap().font(), fonts::BUNDLED_BOLD);
+        // A fitted image passes through; any other size would be rescaled
+        // by the renderer, so it is refused.
+        let image = |extent: Extent| PreparedBackground::Image {
+            version,
+            extent,
+            rgba: vec![7; extent.width as usize * extent.height as usize * 4].into(),
+        };
+        let over = cue(
+            version,
+            &slide,
+            &resolved,
+            EXTENT,
+            CAPS,
+            None,
+            image(EXTENT),
+        )
+        .unwrap();
+        assert!(matches!(
+            over.background(),
+            PreparedBackground::Image { extent, .. } if *extent == EXTENT
+        ));
+        let small = Extent {
+            width: 960,
+            height: 540,
+        };
+        assert_eq!(
+            cue(version, &slide, &resolved, EXTENT, CAPS, None, image(small)).err(),
+            Some(PrepareError::InvalidImage)
+        );
+        let blue = cue(
+            version,
+            &slide,
+            &resolved,
+            EXTENT,
+            CAPS,
+            None,
+            color_background([0, 0, 255]),
+        )
+        .unwrap();
+        assert!(matches!(
+            blue.background(),
+            PreparedBackground::Color([0, 0, 255, 255])
+        ));
     }
 
     #[test]
@@ -416,7 +470,7 @@ mod tests {
         };
         let resolved = Resolved::bundled(&format);
         let version = ContentVersion { id: 9, revision: 4 };
-        let styled = cue(version, &slide, &resolved, EXTENT, CAPS, None).unwrap();
+        let styled = cue(version, &slide, &resolved, EXTENT, CAPS, None, black()).unwrap();
         let text = styled.text().unwrap();
         // The fixture asks for bold, and a real bundled Bold face exists.
         assert_eq!(text.font(), fonts::BUNDLED_BOLD);
@@ -464,6 +518,7 @@ mod tests {
             EXTENT,
             CAPS,
             None,
+            black(),
         )
         .unwrap();
         assert_eq!(cue.text().unwrap().style().shadow, None);
@@ -489,7 +544,7 @@ mod tests {
             ..slide.clone()
         };
         assert_eq!(
-            cue(version, &unshowable, &resolved, EXTENT, CAPS, None).err(),
+            cue(version, &unshowable, &resolved, EXTENT, CAPS, None, black()).err(),
             Some(PrepareError::InvalidScene)
         );
         // Shorter text fits, and the size scales with the output height.
@@ -502,7 +557,7 @@ mod tests {
                 width: 1920,
                 height,
             };
-            let cue = cue(version, &fits, &resolved, extent, CAPS, None).unwrap();
+            let cue = cue(version, &fits, &resolved, extent, CAPS, None, black()).unwrap();
             assert_eq!(cue.text().unwrap().font_size(), expected, "{height}");
         }
         // The Auto fit keeps using the resolved face and the cap.
@@ -511,7 +566,16 @@ mod tests {
             ..slide
         };
         let auto_resolved = Resolved::bundled(&auto.format);
-        let cue = cue(version, &auto, &auto_resolved, EXTENT, CAPS, Some(60)).unwrap();
+        let cue = cue(
+            version,
+            &auto,
+            &auto_resolved,
+            EXTENT,
+            CAPS,
+            Some(60),
+            black(),
+        )
+        .unwrap();
         assert_eq!(cue.text().unwrap().font_size(), 60);
     }
 
@@ -601,7 +665,8 @@ mod tests {
                 &Resolved::bundled(&blank.format),
                 EXTENT,
                 CAPS,
-                Some(40)
+                Some(40),
+                black()
             )
             .unwrap()
             .text()
@@ -624,7 +689,8 @@ mod tests {
                 &Resolved::bundled(&words.format),
                 tiny,
                 CAPS,
-                Some(40)
+                Some(40),
+                black()
             )
             .err(),
             Some(PrepareError::InvalidScene)
@@ -696,9 +762,18 @@ mod tests {
                     id: 9,
                     revision: i as u64,
                 };
-                let per_slide = cue(version, s, &base_resolved[i], EXTENT, CAPS, None).unwrap();
-                let normalized =
-                    cue(version, s, &base_resolved[i], EXTENT, CAPS, Some(cap)).unwrap();
+                let per_slide =
+                    cue(version, s, &base_resolved[i], EXTENT, CAPS, None, black()).unwrap();
+                let normalized = cue(
+                    version,
+                    s,
+                    &base_resolved[i],
+                    EXTENT,
+                    CAPS,
+                    Some(cap),
+                    black(),
+                )
+                .unwrap();
                 assert!(
                     normalized.text().unwrap().font_size() <= per_slide.text().unwrap().font_size()
                 );
@@ -749,6 +824,7 @@ mod tests {
             EXTENT,
             CAPS,
             Some(cap.min(1)),
+            black(),
         )
         .unwrap();
         assert_eq!(fixed_cue.text().unwrap().font_size(), 20);

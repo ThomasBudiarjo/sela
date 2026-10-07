@@ -646,6 +646,135 @@ fn go_live_defers_until_fonts_resolve_then_retries(cx: &mut TestAppContext) {
     assert_eq!(operator.read_with(&cx, |o, _| o.live_message.clone()), None);
 }
 
+/// Verse 1 shows a profile image, Chorus a missing one, Bridge the song
+/// master's color.
+fn library_with_background_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    use sela::background::{Background, ImageRef};
+    use sha2::Digest;
+    let images = sela::images::images_dir(dir.path());
+    std::fs::create_dir_all(&images).unwrap();
+    image::RgbaImage::from_pixel(64, 36, image::Rgba([30, 110, 210, 255]))
+        .save(images.join("backdrop.png"))
+        .unwrap();
+    let bytes = std::fs::read(images.join("backdrop.png")).unwrap();
+    let image = |name: &str, sha256| {
+        Some(Background::image(ImageRef {
+            name: name.into(),
+            sha256,
+        }))
+    };
+    let path = dir.path().join("library.sqlite");
+    let section = |label: &str, background| Section {
+        id: SectionId::allocate(),
+        label: label.into(),
+        lyrics: format!("{label} original line"),
+        format: Default::default(),
+        background,
+    };
+    Repository::open(&path)
+        .unwrap()
+        .save_song(
+            None,
+            Song {
+                title: "Backdrop Hymn".into(),
+                authors: String::new(),
+                copyright: String::new(),
+                license: String::new(),
+                variants: Vec::new(),
+                sections: vec![
+                    section(
+                        "Verse 1",
+                        image("backdrop.png", sha2::Sha256::digest(&bytes).into()),
+                    ),
+                    section("Chorus", image("gone.png", [1; 32])),
+                    section("Bridge", None),
+                ],
+                master: Some(Background::color([0, 0, 90])),
+            },
+        )
+        .unwrap();
+    path
+}
+
+#[gpui::test]
+fn image_backgrounds_gate_the_cue_and_missing_ones_show_black_with_a_warning(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_background_song(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "faces resolved", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.slides.len() == 3 && p.resolved.is_some())
+    });
+    // Preview and its neighbour prefetch at the nominal size while output
+    // is off; the missing image already warns before anything goes live.
+    settle(&mut cx, &operator, "nominal prefetch", |o| {
+        o.background_job.is_none() && o.backgrounds.len() == 2
+    });
+    assert_eq!(operator.read_with(&cx, |o, _| o.preview_warning()), None);
+    click(&mut cx, "preview-slide-1");
+    let missing = "Background image ‘gone.png’ is missing; showing black";
+    assert_eq!(
+        operator
+            .read_with(&cx, |o, _| o.preview_warning())
+            .as_deref(),
+        Some(missing)
+    );
+    assert!(cx.debug_bounds("Preview-status").is_some());
+    click(&mut cx, "preview-slide-0");
+    assert!(cx.debug_bounds("Preview-status").is_none());
+
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    settle(&mut cx, &operator, "output-size prefetch", |o| {
+        o.background_job.is_none() && o.backgrounds.len() == 4
+    });
+    // Evict everything, as if the decode were still running: Go Live keeps
+    // the current scene and waits instead of sending.
+    cx.update(|_, cx| {
+        operator.update(cx, |o, _| {
+            o.backgrounds = sela::images::BackgroundCache::new(sela::images::BACKGROUND_BUDGET);
+        })
+    });
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+    click(&mut cx, "go-live");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(submitted(o), sent, "no cue before the background lands");
+        assert_eq!(o.live_message.as_deref(), Some("Preparing background…"));
+        assert_eq!(o.on_screen(), None);
+    });
+    // The decode lands: the deferred cue retries and is acknowledged.
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Backdrop Hymn · Verse 1")
+    });
+    assert_eq!(operator.read_with(&cx, |o, _| o.live_message.clone()), None);
+
+    // A missing image goes live as black with the warning, never refused.
+    settle(&mut cx, &operator, "neighbour prefetch", |o| {
+        o.background_job.is_none() && o.backgrounds.len() >= 2
+    });
+    click(&mut cx, "live-next");
+    settle(&mut cx, &operator, "chorus on screen", |o| {
+        o.on_screen() == Some("Backdrop Hymn · Chorus")
+    });
+    assert_eq!(
+        operator
+            .read_with(&cx, |o, _| o.live_message.clone())
+            .as_deref(),
+        Some(missing)
+    );
+    // The master's color needs no preparation and clears the warning.
+    click(&mut cx, "live-next");
+    settle(&mut cx, &operator, "bridge on screen", |o| {
+        o.on_screen() == Some("Backdrop Hymn · Bridge")
+    });
+    assert_eq!(operator.read_with(&cx, |o, _| o.live_message.clone()), None);
+}
+
 #[gpui::test]
 fn rejected_or_lost_output_is_never_shown_as_live(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();

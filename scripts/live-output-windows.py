@@ -15,8 +15,13 @@ the slide; a Logo mask survives Live off/on; Live off ends the child; Ctrl+Q
 exits cleanly and ends the child. Then a second operator on a formatted-song
 library (M1-05g2): Go Live shows the bold gold right/bottom-aligned slide,
 Next shows the italic underlined centered slide and the installed-Arial slide,
-Next stops at the last slide, and Ctrl+Q exits cleanly. Requires exclusive use
-of the keyboard and an unobstructed audience monitor while it runs.
+Next stops at the last slide, and Ctrl+Q exits cleanly. Then a third operator
+on a background-song library (M1-05h): Go Live shows the 4:1 band image with
+Zoom (the green center band covers the corners), Next shows it with Maintain
+(black bars, red and blue bands at the edges), Next shows black for the missing
+image (with the warning in the operator's Live status, captured for review),
+and Next shows the song master's color. Requires exclusive use of the keyboard
+and an unobstructed audience monitor while it runs.
 """
 
 from __future__ import annotations
@@ -49,6 +54,10 @@ LOGO_RGB = (30, 110, 210)
 GOLD_RGB = (255, 210, 0)
 # Operator `MASK_ON` fill of an acknowledged mask button, as BGR.
 MASK_ON_BGR = (0xDC, 0xDF, 0xF6)
+# `seed_library --background-song`: the image's red, green and blue bands
+# and the song master's color.
+BANDS_RGB = ((200, 40, 40), (40, 160, 60), (40, 60, 200))
+MASTER_RGB = (20, 30, 90)
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -302,6 +311,28 @@ def is_cleared(name: str, width: int, height: int, bgra: bytes) -> None:
         raise nw.Failure(f"{name}: slide text is still visible")
 
 
+def at(width: int, bgra: bytes, x: int, y: int) -> tuple[int, int, int]:
+    i = (y * width + x) * 4
+    return bgra[i + 2], bgra[i + 1], bgra[i]
+
+
+def backdrop(name: str, width: int, height: int, bgra: bytes, expected: dict) -> dict:
+    """Check sample points inside the 32 px text inset against colors."""
+    seen = {}
+    for label, (x, y) in {
+        "top_left": (10, 10),
+        "bottom_right": (width - 10, height - 10),
+        "middle_left": (10, height // 2),
+        "middle_right": (width - 10, height // 2),
+    }.items():
+        seen[label] = at(width, bgra, x, y)
+        if label in expected and not near(seen[label], expected[label], 16):
+            raise nw.Failure(f"{name}: {label} is {seen[label]}, not {expected[label]}")
+    if ink_box(width, height, bgra) is None:
+        raise nw.Failure(f"{name}: no text over the background")
+    return seen
+
+
 def is_logo(name: str, width: int, height: int, bgra: bytes) -> None:
     seen = center(width, height, bgra)
     if not near(seen, LOGO_RGB):
@@ -518,7 +549,9 @@ def main() -> int:
             run2.keys("enter")
             time.sleep(1.0)
             if digest(screen2) != arial:
-                raise nw.Failure("Next past the last formatted slide changed the output")
+                raise nw.Failure(
+                    "Next past the last formatted slide changed the output"
+                )
 
             run2.keys("ctrl+q")
             summary["formatted_operator_exit"] = second.wait_exit()
@@ -534,13 +567,94 @@ def main() -> int:
                 if alive(pid):
                     kill(pid)
 
+        # Third operator on a background-song library (M1-05h): image fits,
+        # a missing image substituted by black, and the master's color.
+        backdrop_library = data / "backdrop" / "library.sqlite"
+        backdrop_library.parent.mkdir()
+        subprocess.run(
+            [str(args.seed), str(backdrop_library), "--background-song"], check=True
+        )
+        third_app = nw.App(args.binary, ["--operator-library", str(backdrop_library)])
+        spawned_third: set[int] = set()
+        try:
+            operator3 = third_app.window()
+            nw.activate(operator3)
+            time.sleep(1.0)
+            run3 = Run(operator3, args.out, summary)
+            run3.keys(*["tab"] * TABS_TO_FIRST_SONG, "enter", "tab", "enter")
+            time.sleep(0.3)
+            run3.save(operator3, "backdrop-preview")
+            run3.keys(*["shift+tab"] * 15, "enter")
+            found = audience(third_app.process.pid, 15)
+            if not found:
+                raise nw.Failure(f"no backdrop audience window: {third_app.log()}")
+            pid3, screen3 = found
+            spawned_third.add(pid3)
+            time.sleep(1.0)
+            red, green, blue = BANDS_RGB
+            black = (0, 0, 0)
+            steps = [
+                (
+                    "pagedown",
+                    "backdrop-zoom",
+                    {"top_left": green, "bottom_right": green},
+                ),
+                (
+                    "enter",
+                    "backdrop-maintain",
+                    {"top_left": black, "middle_left": red, "middle_right": blue},
+                ),
+                (
+                    "enter",
+                    "backdrop-missing",
+                    {"top_left": black, "middle_left": black},
+                ),
+                (
+                    "enter",
+                    "backdrop-master",
+                    {"top_left": MASTER_RGB, "middle_right": MASTER_RGB},
+                ),
+            ]
+            frame = digest(screen3)
+            for index, (keys, name, expected) in enumerate(steps):
+                sent = time.monotonic()
+                run3.keys(keys)
+                while digest(screen3) == frame:
+                    if time.monotonic() - sent > 5.0:
+                        raise nw.Failure(f"{name}: the audience output did not change")
+                    time.sleep(0.02)
+                summary[f"{name}_observed_ms"] = round((time.monotonic() - sent) * 1000)
+                time.sleep(0.3)
+                width, height, pixels = run3.save(screen3, name)
+                summary[name] = backdrop(name, width, height, pixels, expected)
+                frame = digest(screen3)
+                # The missing image's warning shows in the Live status.
+                run3.save(operator3, f"operator-{name}")
+                if index == 0:
+                    run3.keys("tab", "tab", "tab")  # Next
+
+            run3.keys("ctrl+q")
+            summary["backdrop_operator_exit"] = third_app.wait_exit()
+            if summary["backdrop_operator_exit"] != 0:
+                raise nw.Failure(
+                    f"backdrop operator exit status {summary['backdrop_operator_exit']}"
+                )
+            if not wait_dead(pid3, 5):
+                raise nw.Failure("the backdrop operator left its audience running")
+        finally:
+            third_app.close()
+            for pid in spawned_third:
+                if alive(pid):
+                    kill(pid)
+
         summary["status"] = "PASS"
         print(
             "PASS: Live on spawns a non-activating audience, Go Live/Next/Previous change it, "
             "Next stops at the end, Black/Clear/Logo show and restore with lit buttons, "
             "Logo survives Live off/on, new sessions replay no slide, Live off and "
             "Ctrl+Q end it; the formatted song shows gold right/bottom, italic centered "
-            "underlined and installed Arial slides"
+            "underlined and installed Arial slides; the background song shows Zoom, "
+            "Maintain bars, black for a missing image and the master color"
         )
         return 0
     except (nw.Failure, AssertionError) as error:

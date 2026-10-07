@@ -96,9 +96,33 @@ pub fn blend_pixels(background: [u8; 4], coverage: &[u8], blend: &Blend) -> Vec<
         linear(background[1]),
         linear(background[2]),
     ];
+    blend_with(coverage, blend, |_| base)
+}
+
+/// `blend_pixels` over a background image already fitted to the output size,
+/// as the shader samples it 1:1: straight alpha composites over black. `None`
+/// when the image and coverage sizes differ.
+pub fn blend_over(background: &[u8], coverage: &[u8], blend: &Blend) -> Option<Vec<u8>> {
+    if background.len() != coverage.len() {
+        return None;
+    }
+    let lut: [f32; 256] = std::array::from_fn(|value| linear(value as u8));
+    let pixels = background.as_chunks::<4>().0;
+    Some(blend_with(coverage, blend, |index| {
+        let [r, g, b, a] = pixels[index];
+        let alpha = f32::from(a) / 255.;
+        [
+            lut[usize::from(r)] * alpha,
+            lut[usize::from(g)] * alpha,
+            lut[usize::from(b)] * alpha,
+        ]
+    }))
+}
+
+fn blend_with(coverage: &[u8], blend: &Blend, base: impl Fn(usize) -> [f32; 3]) -> Vec<u8> {
     let mut pixels = Vec::with_capacity(coverage.len());
-    for pixel in coverage.as_chunks::<4>().0 {
-        let mut rgb = base;
+    for (index, pixel) in coverage.as_chunks::<4>().0.iter().enumerate() {
+        let mut rgb = base(index);
         for (mask, layer) in [
             (pixel[2], &blend.shadow),
             (pixel[1], &blend.outline),
@@ -680,7 +704,7 @@ impl Compositor {
             Fit::Cover,
         )?;
         for (pixel, expected) in [
-            (0, [0, 0, 255, 255]),
+            (0, [0, 0, 0, 255]),
             (1, [255, 0, 0, 255]),
             (3, [0, 0, 255, 255]),
         ] {
@@ -691,6 +715,36 @@ impl Compositor {
         // Shadow at half opacity over black is half linear green.
         if rgba[8] != 0 || !(187..=189).contains(&rgba[9]) || rgba[10] != 0 || rgba[11] != 255 {
             return Err("colored layer opacity check failed".into());
+        }
+        // A slide background fitted to the output composites 1:1, and the
+        // editor's CPU twin matches it: varied colors, straight alpha and
+        // partial coverage of every layer.
+        let fitted = [
+            200, 30, 90, 255, 12, 180, 240, 128, 255, 255, 255, 255, 60, 60, 60, 255, 0, 120, 30,
+            0, 250, 200, 10, 255,
+        ];
+        let coverage = [
+            0, 0, 0, 255, 128, 0, 0, 255, 0, 200, 0, 255, 0, 0, 90, 255, 64, 64, 64, 255, 255, 0,
+            0, 255,
+        ];
+        let gpu = self.render(
+            size,
+            Image {
+                width: 3,
+                height: 2,
+                rgba: &fitted,
+            },
+            &coverage,
+            &colored,
+            Fit::Contain,
+        )?;
+        let cpu = blend_over(&fitted, &coverage, &colored).ok_or("blend_over sizes")?;
+        // The CPU twin returns BGRA for GPUI images.
+        for (gpu, cpu) in gpu.as_chunks::<4>().0.iter().zip(cpu.as_chunks::<4>().0) {
+            let cpu = [cpu[2], cpu[1], cpu[0], cpu[3]];
+            if gpu.iter().zip(cpu).any(|(a, b)| a.abs_diff(b) > 1) {
+                return Err(format!("CPU blend over image {cpu:?} != GPU {gpu:?}").into());
+            }
         }
         let white = [255, 255, 255, 128];
         let rgba = self.render(
@@ -931,6 +985,23 @@ mod tests {
             .unwrap(),
             MAX_SCENE_BYTES
         );
+    }
+
+    #[test]
+    fn blend_over_matches_a_uniform_color_and_composites_alpha_over_black() {
+        let coverage = [0, 0, 0, 255, 128, 0, 0, 255, 255, 255, 255, 255];
+        let plain = Blend::plain();
+        let color = [128, 64, 32, 255];
+        assert_eq!(
+            blend_over(&color.repeat(3), &coverage, &plain).unwrap(),
+            blend_pixels(color, &coverage, &plain)
+        );
+        let clear = [255, 255, 255, 0].repeat(3);
+        let over = blend_over(&clear, &coverage, &plain).unwrap();
+        assert_eq!(over[..4], [0, 0, 0, 255]);
+        let half = blend_over(&[255, 255, 255, 128], &[0; 4], &plain).unwrap();
+        assert!((187..=189).contains(&half[0]), "{half:?}");
+        assert!(blend_over(&[0; 8], &coverage, &plain).is_none());
     }
 
     #[test]

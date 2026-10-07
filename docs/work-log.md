@@ -6,6 +6,14 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Slide backgrounds render (M1-05h2, 2026-10-07):** color and image
+  backgrounds reach the audience, the editor preview and thumbnails. Images
+  are decoded, hash-checked and fitted (Zoom/Stretch/Maintain) off the UI
+  thread and cached in the operator (96 MiB, at least 3); a cue waits with
+  "Preparing background…" until its image is ready; a missing or changed
+  image shows black with a warning in Live and Preview. GPUI tests, the
+  DX12/Vulkan readback check and the Windows live-output script pass.
+  M1-05h stays **active**; next: h3, the Slide pane editing UI.
 - **Slide background model (M1-05h1, 2026-10-07):** `background::Background`
   (None/Color/Media fill, Maintain/Stretch/Zoom), `Section.background`,
   `Song.master` and schema 4 behind a verified `.schema3-backup`; slides
@@ -176,7 +184,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema 4 (backgrounds, M1-05h1) after schema 3 (formats, M1-05g1); schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h active (h0 RUN-W06I observed, h1 model and schema 4; h2–h3 rendering and editing open), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), drag selection across cells, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h active (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check; h3 editing open), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2726,3 +2734,49 @@ PY
   operator, a "Preparing background…" gate, black plus a Preview warning for
   a missing or changed image, editor preview/thumbnail compositing over the
   fitted image, the native live-output check.
+
+### M1-05h2 — Slide backgrounds render — 2026-10-07 (UTC+7)
+
+- State: h2 **implemented-unqualified**; M1-05h stays active. Behavior in
+  [song library](song-library.md#m1-05h2--slide-backgrounds-render).
+- Code: `background.rs` `plan` (black for none, no fill or an empty Media
+  Fill) and `fit` (Zoom crop, Stretch, Maintain on black bars; `image`
+  Triangle resize, exact copy at equal size). `scene.rs` shares the bounded
+  PNG/JPEG decode (`decode_image`) and `PreparedBackground::Image.rgba` is
+  `Arc<[u8]>`. `images.rs`: `Substitute`, `decode_background` (hash pinned,
+  16384-edge/64 MiB source budget), `fitted_background`,
+  `background_version`, `BackgroundCache` (96 MiB, minimum 3, LRU,
+  substitutes free), `Job::Background`/`Reply::Background`. `slides::cue`
+  takes the prepared background and refuses an image of another size;
+  `slides::color_background`. `operator.rs`: prefetch (deferred, live,
+  preview, ±1; output size or 1920×1080 while off; capped at cache
+  capacity), one background job at a time, the "Preparing background…"
+  gate retried on landing, black plus warning in Live status and the
+  Preview pane, substitutes forgotten on a rescan, color fills in tiles.
+  `song_library.rs`: `Backdrops` (profile folder, four fitted 1280×720
+  images) for the preview and thumbnails, caption warning.
+  `compositor.rs`: `blend_over`, and `check_readback` compares it with the
+  GPU over a fitted image. The existing "colored layer blend order" check
+  expected blue for an uncovered pixel over black since g2a (never run
+  since); it now expects black. `seed_library --background-song`;
+  `live-output-windows.py` third phase (and `ruff format` of the file).
+- Checks (Windows 11, RTX 4060 Laptop): `cargo fmt --check`, `cargo clippy
+  --locked --all-targets -- -D warnings`, `cargo test --locked --all-targets`
+  (lib 116, bin 83 + 2 ignored, other suites pass), `cargo build --locked`,
+  `ruff check scripts`, `ruff format --check scripts/live-output-windows.py`;
+  `target/debug/examples/composition_spike <out> vulkan` and `dx12` **PASS**;
+  `python scripts/live-output-windows.py --out
+  .amp\in\artifacts\live-output-windows-m1-05h2` **PASS** on a 2560×1600
+  audience (Zoom corners green, Maintain bars black with red/blue edges,
+  missing image black with the warning visible in `operator-backdrop-missing`,
+  master color; observed 829/391/469/485 ms in a debug build, comparable to
+  text slides); `python scripts/song-editor-windows.py --out
+  .amp\in\artifacts\song-editor-windows-m1-05h2` **PASS** (samples unchanged).
+- Not run: Linux/macOS, a 4K output (cache minimum path is unit-tested only),
+  a separate timing of the UI-thread frame encode of the fitted image, the
+  editor with an image background natively (needs h3's UI or a seeded song
+  opened in the editor; unit and GPUI tests cover it).
+- Next: h3. Format pane Slide tab with the Background section (Fill, color,
+  Select Media… with Import, Aspect), master editing, Ctrl+A, undo, GPUI
+  tests, `song-editor-windows.py`; then the new tickets (gradient, opacity/
+  rotate/flip, Theme Elements/Edit Slide Layouts, video backgrounds).

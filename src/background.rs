@@ -4,7 +4,8 @@
 //! song's master, and a song without a master renders black. EasyWorship's
 //! master is its theme's Master layout; until themes exist (M1-08) the song
 //! master stands in for it.
-use crate::images;
+use crate::{images, scene::Extent};
+use image::{GenericImage, GenericImageView, ImageBuffer, Rgba, RgbaImage, imageops};
 
 /// Encoded size bound, checked by storage before decoding.
 pub const MAX_ENCODED: usize = 320;
@@ -142,6 +143,85 @@ pub fn resolve<'a>(
     slide.or(master)
 }
 
+pub const BLACK: [u8; 3] = [0, 0, 0];
+
+/// What a resolved background needs before it can become cue pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plan<'a> {
+    Color([u8; 3]),
+    /// A profile image, decoded and fitted off the UI thread.
+    Image(&'a ImageRef, Aspect),
+}
+
+/// No background, no fill and an empty Media Fill are all black.
+pub fn plan(background: Option<&Background>) -> Plan<'_> {
+    match background {
+        Some(Background {
+            fill: Fill::Color(rgb),
+            ..
+        }) => Plan::Color(*rgb),
+        Some(Background {
+            fill: Fill::Media(Some(image)),
+            aspect,
+        }) => Plan::Image(image, *aspect),
+        _ => Plan::Color(BLACK),
+    }
+}
+
+/// Straight RGBA `src` of `from` pixels fitted to exactly `to` pixels, so the
+/// renderer composites it 1:1. Zoom covers `to` and crops the overflow evenly;
+/// Stretch scales each axis independently; Maintain shows the whole image
+/// centered on opaque black bars. `None` for empty extents or a length that
+/// does not match `from`.
+pub fn fit(src: &[u8], from: Extent, to: Extent, aspect: Aspect) -> Option<Vec<u8>> {
+    if [from.width, from.height, to.width, to.height].contains(&0)
+        || src.len() as u64 != u64::from(from.width) * u64::from(from.height) * 4
+    {
+        return None;
+    }
+    let source = ImageBuffer::<Rgba<u8>, &[u8]>::from_raw(from.width, from.height, src)?;
+    let (fw, fh) = (f64::from(from.width), f64::from(from.height));
+    let (tw, th) = (f64::from(to.width), f64::from(to.height));
+    let fitted = match aspect {
+        Aspect::Stretch => scaled(&source, to.width, to.height),
+        Aspect::Zoom => {
+            let scale = (tw / fw).max(th / fh);
+            let w = ((tw / scale).round() as u32).clamp(1, from.width);
+            let h = ((th / scale).round() as u32).clamp(1, from.height);
+            let crop =
+                imageops::crop_imm(&source, (from.width - w) / 2, (from.height - h) / 2, w, h);
+            scaled(&*crop, to.width, to.height)
+        }
+        Aspect::Maintain => {
+            let scale = (tw / fw).min(th / fh);
+            let w = ((fw * scale).round() as u32).clamp(1, to.width);
+            let h = ((fh * scale).round() as u32).clamp(1, to.height);
+            let inner = scaled(&source, w, h);
+            let mut out = RgbaImage::from_pixel(to.width, to.height, Rgba([0, 0, 0, 255]));
+            imageops::replace(
+                &mut out,
+                &inner,
+                i64::from((to.width - w) / 2),
+                i64::from((to.height - h) / 2),
+            );
+            out
+        }
+    };
+    Some(fitted.into_raw())
+}
+
+/// A filtered resize, or an exact copy at the same size.
+fn scaled<I: GenericImageView<Pixel = Rgba<u8>>>(view: &I, width: u32, height: u32) -> RgbaImage {
+    if view.dimensions() == (width, height) {
+        let mut out = RgbaImage::new(width, height);
+        out.copy_from(view, 0, 0)
+            .expect("same-size copy is in bounds");
+        out
+    } else {
+        imageops::resize(view, width, height, imageops::FilterType::Triangle)
+    }
+}
+
 struct Reader<'a>(&'a [u8]);
 
 impl Reader<'_> {
@@ -215,6 +295,105 @@ pub(crate) mod tests {
             assert!(!bad.is_valid(), "{name}");
             assert_eq!(Background::decode(&bad.encode()), None, "{name}");
         }
+    }
+
+    const R: [u8; 4] = [255, 0, 0, 255];
+    const G: [u8; 4] = [0, 255, 0, 255];
+    const B: [u8; 4] = [0, 0, 255, 255];
+    const K: [u8; 4] = [0, 0, 0, 255];
+
+    fn extent(width: u32, height: u32) -> Extent {
+        Extent { width, height }
+    }
+
+    fn raster(rows: &[&[[u8; 4]]]) -> Vec<u8> {
+        rows.iter().flat_map(|row| row.concat()).collect()
+    }
+
+    fn pixel(rgba: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
+        let at = ((y * width + x) * 4) as usize;
+        rgba[at..at + 4].try_into().unwrap()
+    }
+
+    #[test]
+    fn zoom_crops_the_center_evenly_on_either_axis() {
+        let wide = raster(&[&[R, G, G, B], &[R, G, G, B]]);
+        assert_eq!(
+            fit(&wide, extent(4, 2), extent(2, 2), Aspect::Zoom).unwrap(),
+            raster(&[&[G, G], &[G, G]])
+        );
+        // Tall source, square output: the outer rows are cropped and the
+        // uniform center scales up without bleeding.
+        let tall = raster(&[&[R, R], &[G, G], &[G, G], &[B, B]]);
+        let zoom = fit(&tall, extent(2, 4), extent(4, 4), Aspect::Zoom).unwrap();
+        assert!(zoom.as_chunks::<4>().0.iter().all(|p| *p == G));
+    }
+
+    #[test]
+    fn stretch_fills_the_output_and_distorts() {
+        let half = [R, R, R, R, B, B, B, B];
+        let src = raster(&[&half, &half]);
+        let out = fit(&src, extent(8, 2), extent(16, 8), Aspect::Stretch).unwrap();
+        assert_eq!(out.len(), 16 * 8 * 4);
+        for y in [0, 7] {
+            for x in [0, 1] {
+                assert_eq!(pixel(&out, 16, x, y), R, "{x},{y}");
+                assert_eq!(pixel(&out, 16, 15 - x, y), B, "{x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn maintain_shows_the_whole_image_between_black_bars() {
+        let wide = raster(&[&[R, G, G, B], &[R, G, G, B]]);
+        assert_eq!(
+            fit(&wide, extent(4, 2), extent(4, 4), Aspect::Maintain).unwrap(),
+            raster(&[&[K; 4], &[R, G, G, B], &[R, G, G, B], &[K; 4]])
+        );
+        let tall = raster(&[&[R, B], &[R, B], &[R, B], &[R, B]]);
+        let row = [K, K, K, R, B, K, K, K];
+        assert_eq!(
+            fit(&tall, extent(2, 4), extent(8, 4), Aspect::Maintain).unwrap(),
+            raster(&[&row, &row, &row, &row])
+        );
+        // Straight alpha passes through; the renderer composites it over black.
+        let clear = [9, 9, 9, 0];
+        assert_eq!(
+            fit(&clear, extent(1, 1), extent(1, 1), Aspect::Maintain).unwrap(),
+            clear
+        );
+    }
+
+    #[test]
+    fn fit_rejects_empty_extents_and_wrong_lengths() {
+        assert_eq!(fit(&[], extent(0, 1), extent(1, 1), Aspect::Zoom), None);
+        assert_eq!(fit(&R, extent(1, 1), extent(1, 0), Aspect::Zoom), None);
+        assert_eq!(fit(&R, extent(2, 1), extent(1, 1), Aspect::Stretch), None);
+        assert_eq!(
+            fit(&[R, R].concat(), extent(1, 1), extent(1, 1), Aspect::Zoom),
+            None
+        );
+    }
+
+    #[test]
+    fn plan_maps_absent_and_empty_fills_to_black() {
+        let image = image("a.png");
+        assert_eq!(plan(None), Plan::Color(BLACK));
+        assert_eq!(
+            plan(Some(&Background::color([1, 2, 3]))),
+            Plan::Color([1, 2, 3])
+        );
+        for fill in [Fill::None, Fill::Media(None)] {
+            let background = Background {
+                fill,
+                aspect: Aspect::Zoom,
+            };
+            assert_eq!(plan(Some(&background)), Plan::Color(BLACK));
+        }
+        assert_eq!(
+            plan(Some(&image)),
+            Plan::Image(image.image_ref().unwrap(), Aspect::Maintain)
+        );
     }
 
     #[test]

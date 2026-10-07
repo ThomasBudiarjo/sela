@@ -5,12 +5,13 @@ use gpui::{
     Point, SharedString, Subscription, Task,
 };
 use sela::{
+    background::{self, Plan},
     delivery::{Epoch, LiveState},
     fonts, images,
     masks::{Layer, Mask, Masks},
     output::{Launch, Refusal, Status, Supervisor},
     preparation::{PreparationEvent, Preparer},
-    scene::{ContentVersion, Extent, PrepareError, RendererCapabilities},
+    scene::{ContentVersion, Extent, PrepareError, PreparedBackground, RendererCapabilities},
     schedule::{EntryId, Schedule},
     slides::{self, Sizing, Slide},
     storage::{self, MAX_ITEMS, Reply, Version, Worker},
@@ -75,6 +76,13 @@ const POLL: Duration = Duration::from_millis(16);
 const LABELS: usize = 8;
 const LOGO_TIMEOUT: Duration = Duration::from_secs(5);
 const NO_LOGO: &str = "No logo set · Media → select an image → Use As Logo Background";
+/// Background prefetch size while Live output is off, so Preview can warn
+/// about a missing image before anything goes live.
+const NOMINAL_EXTENT: Extent = Extent {
+    width: 1920,
+    height: 1080,
+};
+const PREPARING_BACKGROUND: &str = "Preparing background…";
 
 /// Show-control button state. Lit only once the renderer acknowledged it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,8 +254,14 @@ pub(super) struct Operator {
     font_job: Option<Version>,
     /// The in-flight resolution task; cleared when its result lands.
     font_task: Option<Task<()>>,
-    /// A Go Live/Next/Previous cue deferred until the live item's fonts land.
+    /// A Go Live/Next/Previous cue deferred until the live item's fonts or
+    /// its slide background land.
     deferred_send: Option<usize>,
+    /// Slide backgrounds fitted to the output extent (M1-05h).
+    pub(super) backgrounds: images::BackgroundCache,
+    /// At most one background job with the image worker, so an import still
+    /// finds a free slot in its two-job queue.
+    pub(super) background_job: Option<images::BackgroundKey>,
     /// One background catalog scan feeding the shared font store.
     _font_scan: Option<Task<()>>,
     _poller: Option<Task<()>>,
@@ -370,6 +384,8 @@ impl Operator {
             font_job: None,
             font_task: None,
             deferred_send: None,
+            backgrounds: images::BackgroundCache::new(images::BACKGROUND_BUDGET),
+            background_job: None,
             _font_scan: font_scan,
             _poller: Some(poller),
         }
@@ -727,9 +743,89 @@ impl Operator {
                 changed = true;
             }
         }
+        self.prefetch_backgrounds();
         changed |= self.sync_show(Instant::now());
         if changed {
             cx.notify();
+        }
+    }
+
+    fn background_extent(&self) -> Extent {
+        self.output_extent.unwrap_or(NOMINAL_EXTENT)
+    }
+
+    /// Backgrounds wanted soon, most urgent first: a deferred cue, the live
+    /// slide, the previewed slide, then both neighbours of each. Capped at
+    /// what the cache holds for this extent, so prefetching never evicts its
+    /// own work.
+    fn wanted_backgrounds(&self) -> Vec<images::BackgroundKey> {
+        let extent = self.background_extent();
+        let mut centers: Vec<(&Item, usize)> = Vec::new();
+        if let Some(live) = &self.live {
+            centers.extend(self.deferred_send.map(|index| (live, index)));
+            centers.extend(self.live_slide.map(|index| (live, index)));
+        }
+        if let Some(preview) = &self.preview {
+            centers.push((preview, self.preview_slide));
+        }
+        let mut wanted = Vec::new();
+        for offset in [0, 1, -1] {
+            for (item, index) in &centers {
+                let Some(slide) = index
+                    .checked_add_signed(offset)
+                    .and_then(|i| item.slides.get(i))
+                else {
+                    continue;
+                };
+                if let Plan::Image(image, aspect) = background::plan(slide.background.as_ref()) {
+                    let key = (image.clone(), aspect, extent);
+                    if !wanted.contains(&key) {
+                        wanted.push(key);
+                    }
+                }
+            }
+        }
+        wanted.truncate(self.backgrounds.capacity(extent));
+        wanted
+    }
+
+    /// Hands the most urgent missing background to the image worker. Wanted
+    /// entries are refreshed least urgent first, so eviction spares them.
+    fn prefetch_backgrounds(&mut self) {
+        if self.background_job.is_some() || self.image_worker.is_none() {
+            return;
+        }
+        let mut missing = None;
+        for key in self.wanted_backgrounds().into_iter().rev() {
+            if self.backgrounds.get(&key).is_none() {
+                missing = Some(key);
+            }
+        }
+        let (Some(key), Some(worker)) = (missing, &self.image_worker) else {
+            return;
+        };
+        // A full queue (an import is running) is retried on the next poll.
+        if worker.submit(images::Job::Background(key.clone())).is_ok() {
+            self.background_job = Some(key);
+        }
+    }
+
+    /// The previewed slide's background substitution, if its image could
+    /// not be prepared (owner rule: black plus this warning).
+    pub(super) fn preview_warning(&self) -> Option<String> {
+        let slide = self.preview.as_ref()?.slides.get(self.preview_slide)?;
+        let Plan::Image(image, aspect) = background::plan(slide.background.as_ref()) else {
+            return None;
+        };
+        if self.image_worker.is_none() {
+            return Some(images::Substitute::Missing.warning(&image.name));
+        }
+        match self
+            .backgrounds
+            .peek(&(image.clone(), aspect, self.background_extent()))
+        {
+            Some(Err(why)) => Some(why.warning(&image.name)),
+            _ => None,
         }
     }
 
@@ -746,6 +842,7 @@ impl Operator {
     fn poll_images(&mut self) -> bool {
         let mut changed = false;
         let mut rescan = false;
+        let mut retry = false;
         // Two replies are buffered at most; bound the loop anyway.
         for _ in 0..4 {
             let Some(reply) = self.image_worker.as_ref().and_then(images::Worker::poll) else {
@@ -756,8 +853,21 @@ impl Operator {
                 Err(error) => {
                     self.media_message = Some(error.to_string());
                     self.image_worker = None;
+                    // Waiting cues now substitute black instead.
+                    self.background_job = None;
+                    retry = true;
+                    break;
+                }
+                Ok(images::Reply::Background(key, fitted)) => {
+                    if self.background_job.as_ref() == Some(&key) {
+                        self.background_job = None;
+                    }
+                    self.backgrounds.insert(key, fitted);
+                    retry = true;
                 }
                 Ok(images::Reply::Images(Ok(names))) => {
+                    // The folder changed: a missing image may be back.
+                    self.backgrounds.forget_substitutes();
                     if self
                         .selected_image
                         .as_ref()
@@ -792,6 +902,9 @@ impl Operator {
         }
         if rescan {
             self.submit_image_job(images::Job::Scan);
+        }
+        if retry && let Some(index) = self.deferred_send.take() {
+            self.send(index);
         }
         changed
     }
@@ -1315,6 +1428,38 @@ impl Operator {
             self.live_message = Some("Resolving fonts…".into());
             return;
         };
+        // Image backgrounds are fitted by the image worker; until this one
+        // lands the current scene stays and the cue is retried on landing.
+        // An image that cannot be prepared is shown as black, with a warning.
+        let (background, warning) = match background::plan(slide.background.as_ref()) {
+            Plan::Color(rgb) => (slides::color_background(rgb), None),
+            Plan::Image(image, aspect) => {
+                let fitted = if self.image_worker.is_none() {
+                    Some(Err(images::Substitute::Missing))
+                } else {
+                    self.backgrounds.get(&(image.clone(), aspect, extent))
+                };
+                match fitted {
+                    Some(Ok(rgba)) => (
+                        PreparedBackground::Image {
+                            version: images::background_version(image, aspect),
+                            extent,
+                            rgba,
+                        },
+                        None,
+                    ),
+                    Some(Err(why)) => (
+                        slides::color_background(background::BLACK),
+                        Some(why.warning(&image.name)),
+                    ),
+                    None => {
+                        self.deferred_send = Some(index);
+                        self.live_message = Some(PREPARING_BACKGROUND.into());
+                        return;
+                    }
+                }
+            }
+        };
         let cap = match self.size_cap {
             Some((v, e, s, cap)) if (v, e, s) == (item.version, extent, self.sizing) => cap,
             _ => {
@@ -1323,16 +1468,24 @@ impl Operator {
                 cap
             }
         };
-        let result = slides::cue(version, slide, &resolved[index], extent, caps, cap)
-            .map_err(|error| error.to_string())
-            .and_then(|cue| {
-                output
-                    .present(Arc::new(cue), Instant::now())
-                    .map_err(|refusal| match refusal {
-                        Refusal::NotConnected => "Live output is not connected".into(),
-                        Refusal::WrongExtent => "Output size changed; try again".into(),
-                    })
-            });
+        let result = slides::cue(
+            version,
+            slide,
+            &resolved[index],
+            extent,
+            caps,
+            cap,
+            background,
+        )
+        .map_err(|error| error.to_string())
+        .and_then(|cue| {
+            output
+                .present(Arc::new(cue), Instant::now())
+                .map_err(|refusal| match refusal {
+                    Refusal::NotConnected => "Live output is not connected".into(),
+                    Refusal::WrongExtent => "Output size changed; try again".into(),
+                })
+        });
         match result {
             Ok(()) => {
                 let label = format!("{} · {}", item.title, slide_name(index, slide));
@@ -1342,7 +1495,7 @@ impl Operator {
                 self.labels.retain(|(v, _)| *v != version);
                 self.labels.push_back((version, label));
                 self.live_slide = Some(index);
-                self.live_message = None;
+                self.live_message = warning;
             }
             Err(message) => self.live_message = Some(message),
         }
@@ -1550,7 +1703,8 @@ impl Operator {
                 })
                 .collect::<Vec<_>>()
         });
-        slide_pane("Preview", width, footer, None, tiles)
+        let warning = self.preview_warning().map(|w| vec![(w, DARK_ERROR)]);
+        slide_pane("Preview", width, footer, warning, tiles)
     }
 
     /// Live pane status, top to bottom. Mask lines reflect acknowledged state.
@@ -2278,8 +2432,13 @@ fn empty_detail(title: impl Into<SharedString>, text: &'static str) -> gpui::Any
         .into_any_element()
 }
 
-/// Text-only slide thumbnail; not a rendered audience frame.
+/// Text-only slide thumbnail over the slide's fill color (image fills show
+/// black); not a rendered audience frame.
 fn tile(slide: &Slide, index: usize, border: u32) -> gpui::Div {
+    let fill = match background::plan(slide.background.as_ref()) {
+        Plan::Color([r, g, b]) => u32::from_be_bytes([0, r, g, b]),
+        Plan::Image(..) => 0x000000,
+    };
     div()
         .w(px(168.))
         .flex_shrink_0()
@@ -2294,7 +2453,7 @@ fn tile(slide: &Slide, index: usize, border: u32) -> gpui::Div {
                 .rounded(px(3.))
                 .border_2()
                 .border_color(rgb(border))
-                .bg(rgb(0x000000))
+                .bg(rgb(fill))
                 .flex()
                 .flex_col()
                 .items_center()

@@ -286,6 +286,63 @@ own handlers and continues unless propagation stops;
 update, so the replacement can reload cells) and `app/test_context.rs`
 (`simulate_input` sends one keystroke per character).
 
+## M1-05h2 — Slide backgrounds render
+
+Implemented-unqualified (slice h2 of M1-05h; editing is h3). Model and
+storage are in [storage](storage.md#m1-05h1--slide-backgrounds--backed-up-schema-4);
+EW behavior in EW8-OBS-037–043.
+
+- A slide shows its own background, else the song master, else black. A
+  color fill is the cue's solid background. An image (`Fill::Media`) is read
+  from `<profile>/Resources/Images/`, checked against the SHA-256 pinned when
+  it was chosen, decoded within the 8 MiB file / 64 MiB pixel budgets and
+  fitted on the CPU to exactly the output size (`background::fit`): **Zoom**
+  covers and crops the overflow evenly, **Stretch** fills and distorts,
+  **Maintain** shows the whole image between opaque black bars. The renderer
+  then composites it 1:1, so the audience protocol and shader are unchanged;
+  `PreparedBackground::Image.rgba` is shared (`Arc`) so a cached background
+  is not copied per cue.
+- **Operator.** The image worker gets `Job::Background(image, aspect,
+  extent)` and replies with the fitted pixels or a `Substitute` (missing,
+  changed, too large, unreadable). The operator keeps at most one such job
+  queued (so an import still fits the two-job queue) and caches fitted
+  backgrounds (96 MiB, never fewer than 3 entries, least recently used
+  evicted). Each poll prefetches, most urgent first: a deferred cue, the
+  live slide, the previewed slide, then both neighbours; at the output size
+  when Live output is on, else at 1920×1080 so Preview can warn early.
+  Prefetching stops at what the cache holds for that size, so it never
+  evicts its own work. A Go Live, Next or Previous whose image is not ready
+  shows "Preparing background…", keeps the current scene, and is sent when
+  the decode lands (the same deferral as the font gate). A substituted image
+  goes live as **black** with the warning in the Live status, and the
+  Preview pane shows the same warning for the previewed slide, for example
+  "Background image ‘x.png’ is missing; showing black". Substitutes are
+  forgotten when the images folder is rescanned. Preview and Live tiles show
+  a color fill behind their text; image fills still show black there.
+- **Song Editor.** The preview and Slides-tab thumbnails composite text over
+  the same background through `compositor::blend_over`, the CPU twin of the
+  shader (linear light, straight alpha over black). Fitted 1280×720 images
+  are cached by image and aspect, four at most (about 14 MiB), behind a mutex
+  that only the background render tasks take. The caption shows the
+  substitution warning, joined with a font fallback warning when both apply.
+
+Not yet matched: editing (h3), gradient fills, opacity/rotate/flip and video
+backgrounds (new tickets), EW's Auto aspect toggle, rendered image
+backgrounds in the operator's text-only tiles. The cue frame is still
+encoded on the UI thread by `output::Supervisor::send`, which copies the
+fitted image once (16 MiB at 2560×1600); this was not measured separately.
+
+Checks: unit tests for the three fits (exact crop, stretch edges, bars both
+ways, alpha passthrough), `plan`, decode substitution (missing, changed,
+corrupt, GIF, unsafe name, oversize output), the cache budget and minimum,
+worker replies, `slides::cue` image passthrough and wrong-size refusal,
+`blend_over`; editor tests `preview_composites_over_the_fitted_image_or_substitutes_black`
+and `editor_backdrops_keep_at_most_four_fitted_images`; operator GPUI test
+`image_backgrounds_gate_the_cue_and_missing_ones_show_black_with_a_warning`.
+`Compositor::check_readback` now compares `blend_over` with the GPU readback
+over a fitted image (DX12 and Vulkan pass). `scripts/live-output-windows.py`
+adds a third operator phase on `seed_library --background-song`.
+
 ## Ownership and reference patterns
 
 `src/song_library.rs` owns retained field entities, dirty/close state and one

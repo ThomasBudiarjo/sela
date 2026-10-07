@@ -105,8 +105,10 @@ and the compositor blends them shadow under outline under fill, in linear
 light, with each layer's color and opacity. Point-valued effects (outline
 size, shadow offset/blur) scale by the 1080-line reference height, so the
 audience and the 1280x720 editor preview/thumbnails agree. A WGSL shader does
-the audience blend; `compositor::blend_pixels` is its exact CPU twin for the
-editor's off-thread renders.
+the audience blend; `compositor::blend_pixels` (over a color) and
+`blend_over` (over a slide background image fitted to the output size,
+M1-05h2) are its CPU twins for the editor's off-thread renders;
+`check_readback` compares `blend_over` with the GPU result.
 
 ### Face resolution and the live gate
 

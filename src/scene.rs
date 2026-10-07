@@ -148,10 +148,11 @@ pub struct SceneSpec {
 // font bytes, pixels or filesystem paths. Public access is read-only.
 pub enum PreparedBackground {
     Color([u8; 4]),
+    /// Shared so a cached, fitted slide background is not copied per cue.
     Image {
         version: ContentVersion,
         extent: Extent,
-        rgba: Box<[u8]>,
+        rgba: Arc<[u8]>,
     },
 }
 
@@ -409,6 +410,48 @@ fn read_resource(resource: &ResourceRef, cancel: &AtomicBool) -> Result<Vec<u8>,
     Ok(bytes)
 }
 
+/// Bounded static PNG/JPEG decode to straight RGBA: dimensions are checked
+/// against `caps` and the decoded bytes against `budget` before decoding.
+pub(crate) fn decode_image(
+    source: &[u8],
+    caps: RendererCapabilities,
+    budget: usize,
+    cancel: &AtomicBool,
+) -> Result<(Extent, Vec<u8>), PrepareError> {
+    let format = image::guess_format(source).map_err(|_| PrepareError::UnsupportedImage)?;
+    if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
+        return Err(PrepareError::UnsupportedImage);
+    }
+    let (width, height) = image::ImageReader::with_format(Cursor::new(source), format)
+        .into_dimensions()
+        .map_err(|_| PrepareError::InvalidImage)?;
+    let extent = Extent { width, height };
+    check_extent(extent, caps)?;
+    if width as usize * height as usize * 4 > budget {
+        return Err(PrepareError::TooLarge);
+    }
+    cancelled(cancel)?;
+    let mut reader = image::ImageReader::with_format(Cursor::new(source), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(caps.max_texture_dimension);
+    limits.max_image_height = Some(caps.max_texture_dimension);
+    limits.max_alloc = Some(MAX_SCENE_BYTES as u64);
+    if format == image::ImageFormat::Png {
+        let png = image::codecs::png::PngDecoder::with_limits(Cursor::new(source), limits.clone())
+            .map_err(|_| PrepareError::InvalidImage)?;
+        if png.is_apng().map_err(|_| PrepareError::InvalidImage)? {
+            return Err(PrepareError::UnsupportedImage);
+        }
+    }
+    reader.limits(limits);
+    let rgba = reader
+        .decode()
+        .map_err(|_| PrepareError::InvalidImage)?
+        .into_rgba8()
+        .into_raw();
+    Ok((extent, rgba))
+}
+
 pub(crate) fn prepare(
     spec: SceneSpec,
     caps: RendererCapabilities,
@@ -433,51 +476,17 @@ pub(crate) fn prepare(
             })
         })
         .transpose()?;
-    let mut bytes = text.as_ref().map_or(0, |t| t.content.len() + t.font.len());
+    let bytes = text.as_ref().map_or(0, |t| t.content.len() + t.font.len());
     let background = match spec.background {
         BackgroundSpec::Color(color) => PreparedBackground::Color(color),
         BackgroundSpec::Image(resource) => {
             let source = read_resource(&resource, cancel)?;
-            let format =
-                image::guess_format(&source).map_err(|_| PrepareError::UnsupportedImage)?;
-            if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
-                return Err(PrepareError::UnsupportedImage);
-            }
-            let (width, height) = image::ImageReader::with_format(Cursor::new(&source), format)
-                .into_dimensions()
-                .map_err(|_| PrepareError::InvalidImage)?;
-            let extent = Extent { width, height };
-            check_extent(extent, caps)?;
-            bytes += width as usize * height as usize * 4;
-            if bytes > MAX_SCENE_BYTES {
-                return Err(PrepareError::TooLarge);
-            }
-            cancelled(cancel)?;
-            let mut reader = image::ImageReader::with_format(Cursor::new(&source), format);
-            let mut limits = image::Limits::default();
-            limits.max_image_width = Some(caps.max_texture_dimension);
-            limits.max_image_height = Some(caps.max_texture_dimension);
-            limits.max_alloc = Some(MAX_SCENE_BYTES as u64);
-            if format == image::ImageFormat::Png {
-                let png = image::codecs::png::PngDecoder::with_limits(
-                    Cursor::new(&source),
-                    limits.clone(),
-                )
-                .map_err(|_| PrepareError::InvalidImage)?;
-                if png.is_apng().map_err(|_| PrepareError::InvalidImage)? {
-                    return Err(PrepareError::UnsupportedImage);
-                }
-            }
-            reader.limits(limits);
-            let rgba = reader
-                .decode()
-                .map_err(|_| PrepareError::InvalidImage)?
-                .into_rgba8()
-                .into_raw();
+            let (extent, rgba) =
+                decode_image(&source, caps, MAX_SCENE_BYTES.saturating_sub(bytes), cancel)?;
             PreparedBackground::Image {
                 version: resource.version,
                 extent,
-                rgba: rgba.into_boxed_slice(),
+                rgba: rgba.into(),
             }
         }
     };

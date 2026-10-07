@@ -2,15 +2,24 @@
 //!
 //! Images live in `<profile>/Resources/Images/`; the logo choice is the image's
 //! file name in `<profile>/logo.txt`. All file work runs on the `Worker` thread.
-use crate::scene::{
-    BackgroundSpec, ContentVersion, Extent, MAX_SOURCE_BYTES, ResourceRef, SceneSpec,
+use crate::{
+    background::{self, Aspect, ImageRef},
+    scene::{
+        self, BackgroundSpec, ContentVersion, Extent, MAX_SCENE_BYTES, MAX_SOURCE_BYTES,
+        PrepareError, RendererCapabilities, ResourceRef, SceneSpec,
+    },
 };
 use sha2::{Digest, Sha256};
 use std::{
+    collections::VecDeque,
     fs::{self, File, OpenOptions},
     io::{self, Cursor, Read, Write},
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
+    sync::{
+        Arc,
+        atomic::AtomicBool,
+        mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
+    },
 };
 
 pub const IMAGES: &str = "Resources/Images";
@@ -269,6 +278,159 @@ pub fn logo_spec(logo: &Logo, extent: Extent) -> SceneSpec {
     }
 }
 
+/// Why a slide background image shows black instead: the owner's rule for a
+/// missing or changed image (M1-05h), also used for unreadable files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Substitute {
+    Missing,
+    Changed,
+    TooLarge,
+    Invalid,
+}
+
+impl Substitute {
+    pub fn warning(self, name: &str) -> String {
+        let why = match self {
+            Self::Missing => "is missing",
+            Self::Changed => "changed since it was chosen",
+            Self::TooLarge => "is too large",
+            Self::Invalid => "cannot be read",
+        };
+        format!("Background image ‘{name}’ {why}; showing black")
+    }
+}
+
+/// Source images may exceed the output texture because they are fitted on
+/// the CPU; the decoded size stays within the 64 MiB scene budget.
+const SOURCE_CAPS: RendererCapabilities = RendererCapabilities {
+    max_texture_dimension: 16384,
+};
+
+/// A background image's straight RGBA pixels, only if its bytes still match
+/// the hash pinned when it was chosen.
+pub fn decode_background(
+    profile: &Path,
+    image: &ImageRef,
+) -> Result<(Extent, Vec<u8>), Substitute> {
+    if !valid_name(&image.name) {
+        return Err(Substitute::Invalid);
+    }
+    let bytes =
+        read_bounded(&images_dir(profile).join(&image.name)).map_err(|error| match error {
+            Error::Missing => Substitute::Missing,
+            Error::TooLarge => Substitute::TooLarge,
+            _ => Substitute::Invalid,
+        })?;
+    if <[u8; 32]>::from(Sha256::digest(&bytes)) != image.sha256 {
+        return Err(Substitute::Changed);
+    }
+    scene::decode_image(
+        &bytes,
+        SOURCE_CAPS,
+        MAX_SCENE_BYTES,
+        &AtomicBool::new(false),
+    )
+    .map_err(|error| match error {
+        PrepareError::TooLarge => Substitute::TooLarge,
+        _ => Substitute::Invalid,
+    })
+}
+
+/// A background image decoded and fitted to exactly `extent`.
+pub fn fitted_background(
+    profile: &Path,
+    image: &ImageRef,
+    aspect: Aspect,
+    extent: Extent,
+) -> Fitted {
+    if u64::from(extent.width) * u64::from(extent.height) * 4 > MAX_SCENE_BYTES as u64 {
+        return Err(Substitute::TooLarge);
+    }
+    let (from, rgba) = decode_background(profile, image)?;
+    background::fit(&rgba, from, extent, aspect)
+        .map(Into::into)
+        .ok_or(Substitute::Invalid)
+}
+
+/// Prepared-background identity: the image content and its fit.
+pub fn background_version(image: &ImageRef, aspect: Aspect) -> ContentVersion {
+    ContentVersion {
+        id: u128::from_le_bytes(image.sha256[..16].try_into().unwrap()),
+        revision: aspect as u64,
+    }
+}
+
+pub type BackgroundKey = (ImageRef, Aspect, Extent);
+pub type Fitted = Result<Arc<[u8]>, Substitute>;
+/// About eleven 1080p backgrounds.
+pub const BACKGROUND_BUDGET: usize = 96 * 1024 * 1024;
+/// Kept even over budget (4K): the live slide and both neighbours.
+pub const MIN_BACKGROUNDS: usize = 3;
+
+/// Fitted backgrounds, least recently used first. Substitutes cost no bytes.
+/// A dozen entries at most, so lookups are linear.
+pub struct BackgroundCache {
+    entries: VecDeque<(BackgroundKey, Fitted)>,
+    budget: usize,
+}
+
+impl BackgroundCache {
+    pub fn new(budget: usize) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            budget,
+        }
+    }
+
+    /// Looks up and marks the entry as most recently used.
+    pub fn get(&mut self, key: &BackgroundKey) -> Option<Fitted> {
+        let at = self.entries.iter().position(|(k, _)| k == key)?;
+        let entry = self.entries.remove(at)?;
+        let value = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(value)
+    }
+
+    pub fn peek(&self, key: &BackgroundKey) -> Option<&Fitted> {
+        self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    pub fn insert(&mut self, key: BackgroundKey, value: Fitted) {
+        self.entries.retain(|(k, _)| *k != key);
+        self.entries.push_back((key, value));
+        while self.bytes() > self.budget && self.entries.len() > MIN_BACKGROUNDS {
+            self.entries.pop_front();
+        }
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|(_, v)| v.as_ref().map_or(0, |rgba| rgba.len()))
+            .sum()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// How many backgrounds of `extent` fit the budget, never below the minimum;
+    /// prefetching more than this would evict its own entries.
+    pub fn capacity(&self, extent: Extent) -> usize {
+        let each = (extent.width as usize * extent.height as usize * 4).max(1);
+        (self.budget / each).max(MIN_BACKGROUNDS)
+    }
+
+    /// A substitute may be stale once the profile's images change.
+    pub fn forget_substitutes(&mut self) {
+        self.entries.retain(|(_, v)| v.is_ok());
+    }
+}
+
 pub enum Job {
     Scan,
     Import(PathBuf),
@@ -276,12 +438,15 @@ pub enum Job {
     UseAsLogo(String),
     /// Read `logo.txt` and hash the image it names.
     LoadLogo,
+    /// Decode, verify and fit a slide background for one output extent.
+    Background(BackgroundKey),
 }
 
 pub enum Reply {
     Images(Result<Vec<String>, Error>),
     Imported(Result<String, Error>),
     Logo(Result<Option<Logo>, Error>),
+    Background(BackgroundKey, Fitted),
 }
 
 /// One thread, two queued jobs and two buffered replies; never blocks the caller.
@@ -310,6 +475,10 @@ impl Worker {
                             read_logo(&profile)
                                 .and_then(|name| name.map(|n| load(&profile, n)).transpose()),
                         ),
+                        Job::Background(key) => {
+                            let fitted = fitted_background(&profile, &key.0, key.1, key.2);
+                            Reply::Background(key, fitted)
+                        }
                     };
                     if outgoing.send(reply).is_err() {
                         break;
@@ -451,6 +620,160 @@ mod tests {
         assert_eq!(spec.extent, small);
         assert!(spec.text.is_none());
         assert!(matches!(spec.background, BackgroundSpec::Image(_)));
+    }
+
+    fn pinned(profile: &Path, name: &str, bytes: &[u8]) -> ImageRef {
+        let images = images_dir(profile);
+        fs::create_dir_all(&images).unwrap();
+        fs::write(images.join(name), bytes).unwrap();
+        ImageRef {
+            name: name.into(),
+            sha256: Sha256::digest(bytes).into(),
+        }
+    }
+
+    #[test]
+    fn background_decode_substitutes_missing_changed_and_corrupt_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path();
+        let good = pinned(profile, "wide.png", &png(4, 2));
+        let (extent, rgba) = decode_background(profile, &good).unwrap();
+        assert_eq!((extent.width, extent.height, rgba.len()), (4, 2, 32));
+        let out = Extent {
+            width: 6,
+            height: 6,
+        };
+        let fitted = fitted_background(profile, &good, Aspect::Maintain, out).unwrap();
+        assert_eq!(fitted.len(), 6 * 6 * 4);
+        assert_eq!(fitted[..4], [0, 0, 0, 255], "letterbox bar");
+
+        let missing = ImageRef {
+            name: "gone.png".into(),
+            ..good.clone()
+        };
+        assert_eq!(
+            decode_background(profile, &missing).err(),
+            Some(Substitute::Missing)
+        );
+        fs::write(images_dir(profile).join("wide.png"), png(2, 2)).unwrap();
+        assert_eq!(
+            decode_background(profile, &good).err(),
+            Some(Substitute::Changed)
+        );
+        // Hash-pinned garbage and a GIF named .png are unreadable, not shown.
+        let corrupt = pinned(profile, "corrupt.png", b"\x89PNG\r\n\x1a\nnot really");
+        assert_eq!(
+            decode_background(profile, &corrupt).err(),
+            Some(Substitute::Invalid)
+        );
+        let gif = pinned(profile, "anim.png", b"GIF89a\x01\x00\x01\x00\x00\x00\x00;");
+        assert_eq!(
+            fitted_background(profile, &gif, Aspect::Zoom, out).err(),
+            Some(Substitute::Invalid)
+        );
+        let unsafe_name = ImageRef {
+            name: "../wide.png".into(),
+            ..good.clone()
+        };
+        assert_eq!(
+            decode_background(profile, &unsafe_name).err(),
+            Some(Substitute::Invalid)
+        );
+        let huge = Extent {
+            width: 8192,
+            height: 8192,
+        };
+        assert_eq!(
+            fitted_background(profile, &corrupt, Aspect::Zoom, huge).err(),
+            Some(Substitute::TooLarge)
+        );
+        assert_eq!(
+            Substitute::Missing.warning("Sunrise.jpg"),
+            "Background image ‘Sunrise.jpg’ is missing; showing black"
+        );
+    }
+
+    #[test]
+    fn background_cache_keeps_the_budget_but_never_fewer_than_three() {
+        let key = |n: u8, w: u32| {
+            (
+                ImageRef {
+                    name: format!("{n}.png"),
+                    sha256: [n; 32],
+                },
+                Aspect::Zoom,
+                Extent {
+                    width: w,
+                    height: 1,
+                },
+            )
+        };
+        let rgba = |len: usize| -> Fitted { Ok(vec![0; len].into()) };
+        let mut cache = BackgroundCache::new(100);
+        for n in 0..4 {
+            cache.insert(key(n, 10), rgba(40));
+        }
+        // 160 bytes over a 100-byte budget: only the oldest goes.
+        assert_eq!((cache.len(), cache.bytes()), (3, 120));
+        assert!(cache.peek(&key(0, 10)).is_none());
+        // A lookup refreshes recency, so 2 is evicted next instead of 1.
+        assert!(cache.get(&key(1, 10)).is_some());
+        cache.insert(key(4, 10), rgba(40));
+        assert!(cache.peek(&key(1, 10)).is_some());
+        assert!(cache.peek(&key(2, 10)).is_none());
+        // Same image at another extent is a different entry. Substitutes cost
+        // nothing, so the budget alone keeps four entries.
+        cache.insert(key(1, 20), Err(Substitute::Missing));
+        assert_eq!((cache.len(), cache.bytes()), (3, 80));
+        cache.insert(key(5, 10), rgba(10));
+        assert_eq!((cache.len(), cache.bytes()), (4, 90));
+        cache.forget_substitutes();
+        assert!(cache.peek(&key(1, 20)).is_none());
+        let hd = Extent {
+            width: 1920,
+            height: 1080,
+        };
+        let uhd = Extent {
+            width: 3840,
+            height: 2160,
+        };
+        let real = BackgroundCache::new(BACKGROUND_BUDGET);
+        assert_eq!(real.capacity(hd), 12);
+        assert_eq!(real.capacity(uhd), MIN_BACKGROUNDS);
+    }
+
+    #[test]
+    fn worker_fits_backgrounds_and_reports_substitutes() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = pinned(dir.path(), "a.png", &png(2, 2));
+        let worker = Worker::start(dir.path().to_path_buf()).unwrap();
+        let out = Extent {
+            width: 3,
+            height: 2,
+        };
+        let missing = ImageRef {
+            name: "b.png".into(),
+            ..good.clone()
+        };
+        worker
+            .submit(Job::Background((good.clone(), Aspect::Stretch, out)))
+            .unwrap();
+        worker
+            .submit(Job::Background((missing.clone(), Aspect::Zoom, out)))
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        let mut replies = Vec::new();
+        while replies.len() < 2 {
+            if let Some(reply) = worker.poll() {
+                replies.push(reply.unwrap());
+            }
+            assert!(Instant::now() < end, "bounded wait");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(matches!(&replies[0],
+            Reply::Background((image, Aspect::Stretch, _), Ok(rgba)) if *image == good && rgba.len() == 24));
+        assert!(matches!(&replies[1],
+            Reply::Background((image, _, _), Err(Substitute::Missing)) if *image == missing));
     }
 
     #[test]
