@@ -5,7 +5,7 @@ Usage: python scripts/operator-menu-windows.py [--binary sela.exe]
 
 Seeds a new library with two original fixture songs and launches the operator
 with a private profile (Live output stays off). With the first Songs row
-focused: Shift+F10 opens the menu and Escape closes it, leaving the operator
+focused and selected (Space): Shift+F10 opens the menu and Escape closes it, leaving the operator
 exactly as before; Shift+F10, Down, Enter (Edit Song…) opens the Song Editor
 on that song, checked by its window title; a real right-click on the focused
 row opens the menu at the pointer and a left click on its second item (Edit
@@ -174,7 +174,10 @@ def main() -> int:
         nw.activate(operator)
         time.sleep(1.0)  # storage worker loads the catalog off the UI thread
         keys(operator, *["tab"] * lo.TABS_TO_FIRST_SONG)
-        time.sleep(0.3)
+        # Opening the menu selects its row, so select it first: the baseline
+        # then already shows the song in Preview and only the menu differs.
+        keys(operator, "space")
+        time.sleep(0.8)
         before = save(operator, "00-row-focused")
 
         # Shift+F10 opens the menu; Escape closes it and nothing else changed.

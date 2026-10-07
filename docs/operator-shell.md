@@ -439,7 +439,7 @@ insertion and delete confirmation; Linux/macOS native runs; UIA names.
 
 ## M1-05i — Operator song menu
 
-Implemented-unqualified on branch `ticket/m1-05i-song-menu`. Ticket M1-05i of
+Implemented-unqualified; merged into local `main` in parallel wave 1. Ticket M1-05i of
 [M1-05](backlog.md#m1-05--song-model-and-editor); item order from
 EW8-OBS-021.
 
@@ -497,10 +497,17 @@ GPUI tests: `song_menu_items_order_disabled_items_and_dismissal`,
 
 Native: `scripts/operator-menu-windows.py` (Shift+F10 and Escape, keyboard
 Edit Song…, a real right-click, Menu key Delete → Keep, then Delete with the
-SQLite row checked and a schedule save keeping the pinned item) is written
-but **not run** yet. The EasyWorship observation of the unobserved items was
-skipped by owner decision for this ticket.
+SQLite row checked and a schedule save keeping the pinned item) **PASS** on
+Windows 11 after the wave-1 merge (`python scripts/operator-menu-windows.py
+--out .amp\in\artifacts\operator-menu-windows-m1-05i`: menu 64,794 changed
+pixels, Escape residue 0, Keep kept the song, Delete deleted it, the saved
+schedule still pins it, exit 0). The script first selects the row with
+Space, because opening the menu selects its row; the first run, without
+that step, failed on a Preview change, not a menu defect. The confirmation
+appears at the operator's top left, over the Schedule pane and the Preview
+header, like the other operator confirmations. The EasyWorship observation
+of the unobserved items was skipped by owner decision for this ticket.
 
-Open: running the native script on Windows; EW observation of keyboard access,
+Open: EW observation of keyboard access,
 Delete confirmation and the two disabled items; Linux/macOS native runs; UIA
 names.

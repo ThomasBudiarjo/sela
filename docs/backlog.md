@@ -625,8 +625,9 @@ Follow-ups:
   (EW8-OBS-021); Delete confirms and keeps schedule snapshots and Live,
   Refresh and editor saves reload Songs off the UI thread
   (implemented-unqualified, see
-  [operator shell](operator-shell.md#m1-05i--operator-song-menu)). Open:
-  running `scripts/operator-menu-windows.py`, EW observation of menu
+  [operator shell](operator-shell.md#m1-05i--operator-song-menu)); the
+  Windows native `scripts/operator-menu-windows.py` passes. Open: EW
+  observation of menu
   keyboard access and the Delete confirmation, Update items in Schedule
   and Sort by ▸ (shown disabled), multi-song delete.
 

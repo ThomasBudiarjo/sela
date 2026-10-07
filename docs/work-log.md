@@ -6,6 +6,22 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Parallel wave 1 merged (2026-10-07):** three worktrees merged into
+  local `main` with their slice commits:
+  - M1-05i: the operator Songs row menu (New Song…, Edit Song…, Delete with
+    confirmation, Refresh; Songs reload after editor saves).
+  - M1-07a: the schema 5 FTS5 search index with a 20k database benchmark.
+    There is no search UI yet.
+  - M1-11a: hardened still-image import (size, dimension and decoded-memory
+    caps, Exif orientation, cancellable copy) and the `preflight` API
+    (missing or changed images and fonts, hash-checked relink). There is no
+    operator UI yet.
+
+  Combined checks and all four Windows native scripts pass (operator menu,
+  Song Editor, live output, schedule). All three slices are
+  **implemented-unqualified**; M1-07 and M1-11 stay **active**. Next:
+  M1-11b preflight UI, the M1-07 search box after a W04 EW search
+  observation, or another wave (see the wave-1 integration record).
 - **Slide backgrounds edited (M1-05h3, 2026-10-07):** the Format pane has a
   Slide tab with the Background section (Fill ▾, color swatch, Select Media…
   with thumbnails and Import…, Aspect Ratio ▾) and Edit Slide Layouts, a
@@ -193,7 +209,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema 5 (search index, M1-07a) after schema 4 (backgrounds, M1-05h1) and schema 3 (formats, M1-05g1); schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h implemented-unqualified (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check, h3 Slide pane editing with the master's Layouts tab and Windows native check), M1-05i implemented-unqualified (operator song menu, GPUI tests; native script unrun), M1-05j–o (deferred format controls and tabs), M1-05p–s (gradient, opacity/rotate/flip, Theme Elements/layouts, Auto aspect and image tiles), drag selection across cells, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h implemented-unqualified (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check, h3 Slide pane editing with the master's Layouts tab and Windows native check), M1-05i implemented-unqualified (operator song menu, GPUI tests and Windows native script), M1-05j–o (deferred format controls and tabs), M1-05p–s (gradient, opacity/rotate/flip, Theme Elements/layouts, Auto aspect and image tiles), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-07 | active | M1-07a implemented-unqualified: schema 5 FTS5 index maintained in the song transaction, escaped prefix queries, bm25 ranking with deterministic ties, generation-tagged search, repair/rebuild, 20k database benchmark (pooled p95 75.9 ms; one-letter prefix p95 109 ms). Search UI, EW search observation (W04), end-to-end latency open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
@@ -3027,4 +3043,88 @@ PY
   .amp\in\artifacts\operator-menu-windows-m1-05i` on Windows and rerun
   `scripts/live-output-windows.py` and `scripts/schedule-windows.py`; in an
   EW session, observe menu keyboard access, the Delete confirmation, Update
-  items in Schedule and Sort by ▸.
+  items in Schedule and Sort by ▸. (Native runs done in the wave-1
+  integration record below.)
+
+### Parallel wave 1 — Parent integration — 2026-10-07 (UTC+7)
+
+- Scope: the owner-approved wave
+  (`C:\Users\thoma\.factory\specs\2026-10-07-parallel-wave-1-m1-05i-m1-07-search-backend-m1-11-images-and-preflight.md`).
+  - Worktrees under `D:\Projects\sela-wt\`, all based on `527030a`:
+    - `m1-05i` (`ticket/m1-05i-song-menu`)
+    - `m1-07` (`ticket/m1-07-search`)
+    - `m1-11` (`ticket/m1-11-images`)
+  - Each worktree used its own `target\`, so no build output was shared.
+  - One background worker per stream. The parent merged and ran the native
+    checks. EW observation was skipped by owner decision.
+- Workers:
+  - A (M1-05i) committed `4f3ff30`.
+  - E (M1-11a) committed `65581f5`. It also edited `scene::decode_image`
+    (orientation), outside its listed files; no other stream touched it.
+  - B (M1-07a) was interrupted, then stalled for about 100 minutes with
+    nothing committed. The parent stopped it and finished the slice from
+    its code as `3cf8130` (see the M1-07a record).
+- Merges (`--no-ff`, order B, E, A):
+  - `a393301` M1-07a, clean.
+  - `61515e2` M1-11a.
+  - `f1245d4` M1-05i.
+
+  The only conflicts were the appended session records at the end of this
+  file, and both merges kept every record. The parent also set the M1-07
+  status row to `active` (backend slice only). The first A merge commit
+  was made with conflict markers still in this file (an edit failed and a
+  commit in the same batch ran anyway); it was amended locally before any
+  check or push.
+- Checks on merged `main` (Windows 11, i7-14650HX, RTX 4060 Laptop):
+  - `cargo fmt --all -- --check` and `cargo clippy --locked --all-targets
+    -- -D warnings` pass.
+  - `cargo test --locked --all-targets` passes:
+    - lib 147 + 1 ignored (117 before the wave, plus B's 17 and E's 13;
+      the ignored one is E's Windows permission test);
+    - bin 90 + 2 ignored (A's 4 new);
+    - output_process 9 + 1, transport_process 4 + 1, composition_spike 11,
+      input_check 9, native_cues 17 + 1, output_spike 1, video_spike 12.
+
+    The counts equal the branch sums, so no stale artifact was reused.
+  - `cargo build --locked` and `cargo build --locked --example
+    seed_library` pass.
+  - `python -m ruff check scripts` and `git diff --check 527030a HEAD`
+    pass.
+- Native checks, run serially with the owner's keyboard and mouse idle:
+  - `python scripts/operator-menu-windows.py --out
+    .amp\in\artifacts\operator-menu-windows-m1-05i` **PASS** on the second
+    run. The first run failed "Escape left the operator different from
+    before the menu": opening the menu selects its row (the designed
+    behavior), and the script's baseline had only focused the row, so
+    Preview changed. The script now presses Space before the baseline.
+    Second run: menu 64,794 pixels, Escape residue 0, Keep kept, Delete
+    deleted, the saved schedule pins the deleted song, exit 0. Captures 00–08
+    inspected: the confirmation names the song and says schedules keep
+    their copy and live output does not change, with Keep focused; after
+    the delete the schedule keeps the song and the footer confirms.
+  - `python scripts/song-editor-windows.py --out
+    .amp\in\artifacts\song-editor-windows-wave1` **PASS**. Every sample is
+    identical to the M1-05h3 run.
+  - `python scripts/live-output-windows.py --out
+    .amp\in\artifacts\live-output-windows-wave1` **PASS** (masks, logo,
+    formatted and background songs).
+  - `python scripts/schedule-windows.py --out
+    .amp\in\artifacts\schedule-windows-wave1` **PASS**.
+- Lessons for the next wave:
+  - Give workers long command timeouts for release benchmarks.
+  - Have them commit a `wip` checkpoint before long runs.
+  - In the parent, do not batch a commit after edits that might fail.
+  - Use absolute paths in .NET file calls. `[IO.File]` resolves relative
+    paths against the process directory, and one such call wrote an empty
+    `src/search.rs` into the main checkout; it was found and removed before
+    any commit.
+- Not run: Linux/macOS, screen reader, EW observation (menu keys, Delete
+  confirmation, search behavior, media import), the M1-15 rehearsal laptop.
+- Worktrees and branches are kept for reference. Nothing is pushed.
+- Next:
+  - M1-11b: operator preflight report, Locate…, import Cancel.
+  - M1-07b: Library search box. It needs the W04 EW search observation
+    first.
+  - Or a second wave pairing M1-11b with an independent backend ticket
+    (for example M1-14 OpenLyrics core). M1-11b and the search box both
+    touch `operator.rs`, so they should not run in parallel.
