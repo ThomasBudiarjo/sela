@@ -196,6 +196,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h implemented-unqualified (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check, h3 Slide pane editing with the master's Layouts tab and Windows native check), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), M1-05p–s (gradient, opacity/rotate/flip, Theme Elements/layouts, Auto aspect and image tiles), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
+| M1-11 | active | M1-11a implemented-unqualified: hardened PNG/JPEG import (8 MiB, 16384 px, 64 MiB decoded, header bomb guard, Exif orientation applied in the shared decoder, ICC ignored, APNG refused, identical re-import reused, same name different bytes numbered, cancellable temporary-and-link copy, side-specific errors), `preflight::check`/`Worker` (missing/changed images, missing fonts, logo) and hash-checked `images::relink`. Open: M1-11b operator UI, thumbnails pipeline, EW media observation, Linux/macOS and native checks. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
 
 ## Session records
@@ -2844,3 +2845,63 @@ PY
   (EW8-OBS-021). Ask the owner about the Ctrl+A Text-tab deviation and, in
   an EW session, whether a Master edit reaches slides without their own
   background.
+
+### M1-11a — Image import hardening and preflight API — 2026-10-07
+
+- State: M1-11a **implemented-unqualified**; M1-11 **active** (M1-11b
+  operator UI next). Owner-approved parallel wave, branch
+  `ticket/m1-11-images` from `527030a`. Design, limits and decisions in
+  [images](images.md#m1-11a--import-hardening-and-preflight-api). No schema
+  change, no operator or editor code change.
+- Code: `images.rs` gets `MAX_FILE_BYTES`, `MAX_EDGE`, `MAX_DECODED_BYTES`,
+  new `Error` variants (`SourceMissing`, `Dimensions`, `Animated`,
+  `Corrupt`, `ReadDenied`, `ProfileDenied`, `DiskFull`, `Cancelled`,
+  `Mismatch`, `NameTaken`) with recovery messages, header `inspect`
+  (`PngDecoder::with_limits`, APNG, orientation, ICC), `import_checked`
+  returning `Imported`, the temporary-and-hard-link copy (`link_new`, with a
+  placeholder-and-rename fallback), `relink`/`Relinked`, `content_hash` and
+  `Worker::cancel_imports`. `import(profile, source) -> Result<String, Error>`
+  keeps its signature. `scene::decode_image` applies the Exif orientation
+  (returns the displayed extent) and bounds the decoder buffer itself
+  (`TooLarge`), since it now uses `into_decoder`. New `preflight.rs`:
+  `check`, `Report`/`ItemReport`/`ImageIssue`/`FontIssue`/`LogoIssue`/`Use`
+  and `Worker` (check generations, relink requests).
+- Decisions: managed copies only; identical bytes under the same name (or a
+  numbered variant) are reused instead of copied, other names are copied
+  again; same name with different bytes gets " (N)"; APNG refused rather
+  than first frame (EW unobserved); ICC ignored and sRGB assumed; Exif
+  orientation applied everywhere the shared decoder is used (backgrounds,
+  thumbnails, editor preview, logo); a relink never replaces a different
+  file under the pinned name (`NameTaken`); the logo is not pinned, so
+  preflight reports it only when unreadable; fonts unchecked (not missing)
+  until the catalog is scanned.
+- Checks (Windows 11): `cargo fmt --all -- --check` pass; `cargo clippy
+  --locked --all-targets -j 6 -- -D warnings` pass; `cargo test --locked
+  --all-targets -j 6` pass (lib 130 + 1 ignored, bin 86 + 2 ignored,
+  output_process 9 + 1 ignored, transport_process 4 + 1 ignored, examples
+  pass); `cargo build --locked -j 6 --example seed_library` pass. New tests
+  present in the output: `images::tests::{import_reuses_identical_bytes_and_keeps_each_version_of_a_name,
+  import_refuses_oversized_files_and_decompression_bombs,
+  import_refuses_animated_png, import_and_decode_apply_exif_orientation,
+  cancelled_import_leaves_no_file_even_mid_copy,
+  worker_cancels_submitted_imports_only,
+  relink_restores_only_the_pinned_bytes,
+  io_failures_name_the_side_and_the_recovery}` and
+  `preflight::tests::{preflight_reports_missing_and_changed_images_and_missing_fonts,
+  preflight_reports_the_logo_and_unscanned_fonts,
+  preflight_reports_a_catalogued_font_whose_file_is_gone,
+  preflight_work_is_bounded, worker_checks_then_relinks_only_a_matching_file}`.
+  `cargo test --locked --lib -j 6 -- images::tests::permission --ignored`
+  pass (`icacls` deny write on the images folder gives `ProfileDenied` with
+  no file left; deny read on the source gives `ReadDenied`). With the
+  `apply_orientation` call removed, the orientation test failed (extent
+  2×1 instead of 1×2), so it checks the behavior.
+- Not run: the `cfg(unix)` `chmod` permission test (Windows host);
+  Linux/macOS; native scripts (no operator change; the parent runs them at
+  the wave merge); a large real camera photo or wide-gamut image; FAT/exFAT
+  volume for the link fallback (only the hard-link path ran); decode time
+  and memory measurement of a 64 MiB import.
+- Next: M1-11b. Operator preflight when a schedule opens and before Live,
+  the report view, Locate… (file prompt, `preflight::Request::Relink`),
+  import Cancel (`Worker::cancel_imports`) and `Imported` notes; then the
+  thumbnail pipeline item and an EW media-import observation.

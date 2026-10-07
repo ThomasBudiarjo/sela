@@ -749,14 +749,27 @@ Note: M1-10c added only a minimal profile `Resources/Images/` folder (PNG/JPEG
 copy-import on a bounded worker, 8 MiB cap, SHA-256 identity) to source the
 logo. Nothing below is done by it; thumbnails, metadata and preflight remain.
 
-- [ ] Import supported still-image formats on bounded workers; document supported
+Progress: M1-11a (import hardening, `preflight::check`/`Worker` and the
+hash-checked relink API, no operator UI) is **implemented-unqualified**; see
+[images](images.md#m1-11a--import-hardening-and-preflight-api). PNG/JPEG only,
+managed copies, 8 MiB / 16384 px / 64 MiB decoded, Exif orientation applied,
+ICC ignored (sRGB), APNG refused, identical re-import reused, cancellable
+atomic copy. Next: M1-11b, the operator preflight report, Locate…/relink and
+import cancel UI.
+
+- [x] Import supported still-image formats on bounded workers; document supported
   dimensions, byte limits, orientation, color handling and animated-file policy.
-- [ ] Store media outside SQLite with stable identity and managed/reference policy.
+  (PNG/JPEG; other formats unsupported and EW's format list unobserved.)
+- [x] Store media outside SQLite with stable identity and managed/reference policy.
+  (Managed copies only, pinned by name and SHA-256; no reference mode.)
 - [ ] Add original thumbnail pipeline and lazy loading without decoding in frames.
 - [ ] Preflight a schedule for missing/corrupt files and fonts; provide locate/repair
   actions without silently replacing unrelated assets.
-- [ ] Test moved files, same-name different bytes, decompression bombs, permission
+  (M1-11a: report and relink APIs on a worker; operator UI is M1-11b.)
+- [x] Test moved files, same-name different bytes, decompression bombs, permission
   denied, metadata rotation and cancellation mid-import.
+  (Permission denial ran on Windows through an ignored `icacls` test; the
+  `chmod` variant is `cfg(unix)` and not yet run.)
 
 Acceptance: failed imports/preflight preserve current library and live scene.
 
