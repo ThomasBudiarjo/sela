@@ -115,11 +115,26 @@ fn with_library(
     library: Option<std::path::PathBuf>,
     mode: &'static str,
 ) -> (VisualTestContext, Entity<Operator>, Rc<Cell<usize>>) {
+    with_settings(
+        cx,
+        library,
+        mode,
+        crate::operator::SettingsConfig::default(),
+    )
+}
+
+fn with_settings(
+    cx: &mut TestAppContext,
+    library: Option<std::path::PathBuf>,
+    mode: &'static str,
+    config: crate::operator::SettingsConfig,
+) -> (VisualTestContext, Entity<Operator>, Rc<Cell<usize>>) {
     let seen = Rc::new(Cell::new(0));
     let window = cx.update(|cx| {
         bind_operator_keys(cx);
         cx.open_window(Default::default(), |window, cx| {
-            let operator = cx.new(|cx| Operator::new(library, fake_launcher(mode), cx));
+            let operator =
+                cx.new(|cx| Operator::with_settings(library, fake_launcher(mode), config, cx));
             operator.read(cx).focus.clone().focus(window, cx);
             cx.new(|_| DispatchProbe {
                 operator,
@@ -329,6 +344,7 @@ fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
         Control::Normalize,
         Control::OpenSchedule,
         Control::SaveSchedule,
+        Control::Options,
         Control::AddToSchedule,
         Control::MoveUp,
         Control::MoveDown,
@@ -427,8 +443,8 @@ fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
     cx.simulate_click(b.center(), Default::default());
     assert_control(&mut cx, &operator, Control::CollapseResources);
     // 2 → 9 → Live output, Go Live, Previous, Next → Logo, Black, Clear →
-    // Open, Save → schedule Up, Down, Remove → 0.
-    cx.simulate_keystrokes("tab tab tab tab tab tab tab tab tab tab tab tab tab tab enter");
+    // Open, Save, Options → schedule Up, Down, Remove → 0.
+    cx.simulate_keystrokes("tab tab tab tab tab tab tab tab tab tab tab tab tab tab tab enter");
     assert_control(&mut cx, &operator, Control::ResetLayout);
     assert!(!operator.read_with(&cx, |o, _| o.collapsed));
     assert!(operator.read_with(&cx, |o, _| o.output.is_none()));
@@ -2152,4 +2168,190 @@ fn a_failed_delete_shows_why_and_keeps_the_row(cx: &mut TestAppContext) {
     });
     let catalog = Repository::open(&path).unwrap().catalog(None).unwrap();
     assert!(catalog.contains(&(head, "Signal Hymn".to_string())));
+}
+
+mod settings_ui {
+    use super::*;
+    use crate::operator::{Dialog, MonitorSlot, SettingsConfig};
+    use sela::settings::{self, MonitorInfo};
+
+    fn monitor(name: &str, primary: bool) -> MonitorInfo {
+        MonitorInfo {
+            name: name.into(),
+            width: 1920,
+            height: 1080,
+            x: 0,
+            y: 0,
+            primary,
+        }
+    }
+
+    fn config(writer: settings::Writer) -> (SettingsConfig, Arc<MonitorSlot>) {
+        let slot = Arc::new(MonitorSlot::default());
+        let config = SettingsConfig {
+            slot: slot.clone(),
+            list_monitors: Arc::new(|| {
+                vec![
+                    monitor(r"\\.\DISPLAY5", true),
+                    monitor(r"\\.\DISPLAY6", false),
+                ]
+            }),
+            writer,
+        };
+        (config, slot)
+    }
+
+    fn start(
+        cx: &mut TestAppContext,
+        dir: &tempfile::TempDir,
+        writer: settings::Writer,
+    ) -> (VisualTestContext, Entity<Operator>, Arc<MonitorSlot>) {
+        let (config, slot) = config(writer);
+        let (mut cx, operator, _) =
+            with_settings(cx, Some(library_with_song(dir)), "apply", config);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "monitors", |o| {
+            o.settings.monitors.is_some()
+        });
+        (cx, operator, slot)
+    }
+
+    fn file(dir: &tempfile::TempDir) -> Option<String> {
+        std::fs::read_to_string(settings::path_in(dir.path())).ok()
+    }
+
+    #[gpui::test]
+    fn ok_applies_and_persists_the_output_monitor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vcx, operator, slot) = start(cx, &dir, settings::default_writer());
+        assert_eq!(slot.get(), "secondary");
+        click(&mut vcx, "options");
+        assert_eq!(
+            operator.read_with(&vcx, |o, _| o.dialog),
+            Some(Dialog::Options)
+        );
+        for section in [
+            "Main Output",
+            "Alternate Output",
+            "Foldback",
+            "Service Intervals",
+            "Slide Labels",
+            "Advanced",
+        ] {
+            assert!(
+                vcx.debug_bounds(Box::leak(
+                    format!("options-section-{section}").into_boxed_str()
+                ))
+                .is_some(),
+                "{section}"
+            );
+        }
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
+        assert_eq!(slot.get(), r"name:\\.\DISPLAY6");
+        settle(&mut vcx, &operator, "file written", |_| {
+            file(&dir).is_some()
+        });
+        assert_eq!(
+            file(&dir).unwrap(),
+            "sela-settings 1\noutput_monitor=\\\\.\\DISPLAY6\n"
+        );
+        drop(vcx);
+
+        // A restart with the same profile restores the choice.
+        let (mut vcx, operator, slot) = start(cx, &dir, settings::default_writer());
+        settle(&mut vcx, &operator, "loaded", |o| {
+            o.settings.current.output_monitor.is_some()
+        });
+        assert_eq!(slot.get(), r"name:\\.\DISPLAY6");
+        click(&mut vcx, "options");
+        assert_eq!(
+            operator.read_with(&vcx, |o, _| o.settings.draft.clone()),
+            Some(Some(r"\\.\DISPLAY6".to_string()))
+        );
+    }
+
+    #[gpui::test]
+    fn cancel_discards_and_leaves_the_file_alone(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vcx, operator, slot) = start(cx, &dir, settings::default_writer());
+        click(&mut vcx, "options");
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-cancel");
+        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
+        assert_eq!(slot.get(), "secondary");
+        assert!(operator.read_with(&vcx, |o, _| o.settings.current.output_monitor.is_none()));
+        vcx.run_until_parked();
+        assert_eq!(file(&dir), None);
+    }
+
+    #[gpui::test]
+    fn missing_saved_monitor_falls_back_with_a_note_and_no_rewrite(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = "sela-settings 1\noutput_monitor=\\\\.\\DISPLAY9\n";
+        std::fs::write(settings::path_in(dir.path()), saved).unwrap();
+        let (mut vcx, operator, slot) = start(cx, &dir, settings::default_writer());
+        settle(&mut vcx, &operator, "loaded", |o| {
+            o.settings_note().is_some()
+        });
+        assert_eq!(slot.get(), "secondary");
+        assert!(operator.read_with(&vcx, |o, _| o.settings_note().unwrap().contains("DISPLAY9")));
+        assert!(vcx.debug_bounds("settings-note").is_some());
+        click(&mut vcx, "options");
+        assert!(vcx.debug_bounds("options-missing").is_some());
+        click(&mut vcx, "dialog-confirm");
+        vcx.run_until_parked();
+        assert_eq!(
+            file(&dir).as_deref(),
+            Some(saved),
+            "unchanged OK never rewrites"
+        );
+        click(&mut vcx, "options");
+        click(&mut vcx, "options-monitor-0");
+        click(&mut vcx, "dialog-confirm");
+        settle(&mut vcx, &operator, "rewritten", |_| {
+            file(&dir).as_deref() == Some("sela-settings 1\n")
+        });
+        assert_eq!(operator.read_with(&vcx, |o, _| o.settings_note()), None);
+    }
+
+    #[gpui::test]
+    fn corrupt_settings_start_with_defaults_and_keep_a_backup(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(settings::path_in(dir.path()), "sela-settings 1\nout").unwrap();
+        let (mut vcx, operator, slot) = start(cx, &dir, settings::default_writer());
+        settle(&mut vcx, &operator, "note", |o| o.settings_note().is_some());
+        assert_eq!(slot.get(), "secondary");
+        assert!(dir.path().join("settings.txt.bad").exists());
+        assert!(vcx.debug_bounds("settings-note").is_some());
+    }
+
+    #[gpui::test]
+    fn saving_does_not_wait_for_a_slow_writer(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let writer: settings::Writer = Arc::new(|path, settings| {
+            std::thread::sleep(Duration::from_secs(2));
+            settings::save(path, settings)
+        });
+        let (mut vcx, operator, slot) = start(cx, &dir, writer);
+        click(&mut vcx, "options");
+        click(&mut vcx, "options-monitor-2");
+        let started = Instant::now();
+        click(&mut vcx, "dialog-confirm");
+        assert!(
+            started.elapsed() < Duration::from_millis(1000),
+            "OK waited for the write"
+        );
+        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
+        assert_eq!(slot.get(), r"name:\\.\DISPLAY6");
+        // The UI still takes input and paints while the write is pending.
+        click(&mut vcx, "options");
+        assert!(vcx.debug_bounds("options-dialog").is_some());
+        click(&mut vcx, "dialog-cancel");
+        assert!(file(&dir).is_none(), "the write is still running");
+        settle(&mut vcx, &operator, "file written", |_| {
+            file(&dir).is_some()
+        });
+    }
 }

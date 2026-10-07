@@ -216,7 +216,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-09 | active | M1-09a implemented-unqualified: framework-free `schedule` (session-local entry IDs pinning song revisions, 32-item cap, move/remove/neighbor, dirty tracking), Schedule pane with drag/drop, save/open dialogs and unsaved guard, Live identity by entry, renderer-acknowledged Live marker; Windows native check passed. Open: EW schedule observation, schedule item types beyond songs, persisted item IDs, multi-select, qualification. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. M1-10c (with M0-08a): operator Logo/Black/Clear toggles with acknowledged indicators, picture logo from the profile image folder, show-control key context, Windows native checks passed. M1-09a schedule items now exist. Open: preparation off the UI thread, reference-observed behavior (EW8-OBS-020), hotplug, latency, physical qualification. |
 | M1-11 | active | M1-11a implemented-unqualified: hardened PNG/JPEG import (8 MiB, 16384 px, 64 MiB decoded, header bomb guard, Exif orientation applied in the shared decoder, ICC ignored, APNG refused, identical re-import reused, same name different bytes numbered, cancellable temporary-and-link copy, side-specific errors), `preflight::check`/`Worker` (missing/changed images, missing fonts, logo) and hash-checked `images::relink`. Open: M1-11b operator UI, thumbnails pipeline, EW media observation, Linux/macOS and native checks. |
-| M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
+| M1-16 | implemented-unqualified | Developer-local Linux install prerequisite; settings slice (versioned store + Options dialog with Output monitor) implemented-unqualified; Windows installer/accessibility and dependency gates remain open. |
 
 ## Session records
 
@@ -3182,3 +3182,56 @@ PY
   pixel table across song editor/Options (no Options dialog yet) is left to the
   validator.
 - Next: later features add tokens to `ui/theme.rs` instead of inline `rgb()`.
+### Foundation / settings-store-options-dialog — M1-16 settings slice — 2026-10-08
+
+- State: implemented-unqualified (settings slice of M1-16 only).
+- Scope: `src/settings.rs` (lib, framework-free): `Settings { output_monitor }`,
+  text format `sela-settings 1` + `key=value`, unknown keys ignored, newer
+  version or any parse error = unreadable. `load` returns defaults silently for
+  a missing file; for an unreadable one it renames the file to
+  `settings.txt.bad[N]` (never deleted) and returns one note. `save_with` writes
+  `settings.tmp`, `sync_all`, then replaces via an injectable rename hook, so a
+  failure before rename keeps the old file. `Worker` owns a thread with a
+  bounded queue (8) and a polled reply channel; the writer is injectable.
+  `MonitorInfo` + `monitor_arg`/`monitor_missing` map the saved device name to
+  the `--audience` argument. Binary: `sela --list-monitors` (winit, run on a
+  background executor thread from the operator) prints name/size/position/
+  primary; `audience::Monitor::Named` resolves a device name and falls back to
+  the first non-primary monitor when it is gone (never the primary).
+  `src/operator/options.rs`: `SettingsState`, `MonitorSlot` (read by the
+  launcher at spawn, `SELA_AUDIENCE_MONITOR` still wins), `poll_settings`,
+  the Options overlay (sections Main Output, Alternate Output, Foldback,
+  Service Intervals, Slide Labels, Advanced from EW8-OBS-054; only Main Output ›
+  General with the monitor list is live, the rest are dimmed and labelled "not
+  available"; tabs Song..Alerts likewise) using `ui/theme.rs` tokens only. New
+  `Control::Options` (top-bar "Options…", tab stop after Save). OK applies the
+  draft, queues the save on the worker, updates the slot and, if Live output is
+  on, restarts it so the audience moves; Cancel discards. Saved monitor missing
+  from the list: status-bar note, fallback to the default non-primary monitor,
+  file not rewritten until OK with a changed choice.
+- Decisions: hand-written line format instead of a new serde/toml crate (one
+  key today); monitors identified by winit device name (`\\.\DISPLAYn`);
+  Options is a top-bar button because the operator has no menu bar yet (EW has
+  Edit › Options, EW8-OBS-053). Language setting waits for i18n.
+- Upstream zed/gpui paths consulted: none new (existing overlay/focus patterns).
+- Checks (all exit 0): `cargo fmt --all -- --check`; `cargo clippy --locked
+  --all-targets -- -D warnings`; `cargo test --locked --all-targets --
+  --test-threads=12` (lib 158, bin 99 incl. 5 `settings_ui` tests, 11 settings
+  unit tests); `python -m ruff check scripts`. Native, one at a time:
+  `scripts/options-windows.py` PASS (audience default on DISPLAY1; Options
+  pick DISPLAY6 + OK moves the audience to DISPLAY6 and writes
+  `output_monitor=\\.\DISPLAY6`; restart opens the audience on DISPLAY6;
+  Cancel leaves settings.txt byte-identical; missing `DISPLAY99` shows the note,
+  audience on DISPLAY1, file unchanged; truncated file starts with defaults and
+  keeps `settings.txt.bad`); `live-output`, `schedule`, `operator-menu`,
+  `song-editor` PASS. The new top-bar stop shifted tab counts: live-output
+  `TABS_TO_FIRST_SONG` 25→26 and shift-tab 15→16, schedule shift-tab 11→12; tab
+  order tests updated. Evidence: `.amp/in/artifacts/options-windows/`
+  (`summary.json`, `01-options-open.png` … `06-corrupt-note.png`).
+- Unexecuted: VAL-SHELL-007 pixel table comparing the song editor, main window
+  and Options at fixed positions (`summary.json` only records that the border,
+  chrome, selected-row and focus tokens appear in the Options capture; all use
+  the shared tokens); screen-reader exposure; Indonesian strings (i18n not
+  landed).
+- Next: i18n language selector in Options, remaining Main Output tabs, Reassign
+  on the output warning, menu-bar placement.

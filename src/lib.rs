@@ -12,6 +12,7 @@ pub mod preparation;
 pub mod scene;
 pub mod schedule;
 pub mod search;
+pub mod settings;
 pub mod slides;
 pub mod storage;
 pub mod transport;

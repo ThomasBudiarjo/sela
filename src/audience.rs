@@ -29,14 +29,18 @@ use winit::{
     window::{Window, WindowId},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Monitor {
     Index(usize),
+    /// A device name such as `\\.\DISPLAY6`. A name that is no longer
+    /// connected behaves like `FirstSecondary`, so an unplugged saved monitor
+    /// never lands the audience on the operator's primary monitor.
+    Named(String),
     /// First monitor that is not the primary one; never falls back to primary.
     FirstSecondary,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Placement {
     Window { width: u32, height: u32 },
     Fullscreen(Monitor),
@@ -313,20 +317,28 @@ impl Audience {
         String,
     > {
         let attributes = Window::default_attributes().with_title(self.config.title);
-        Ok(match self.config.placement {
+        Ok(match &self.config.placement {
             Placement::Window { width, height } => (
-                attributes.with_inner_size(winit::dpi::PhysicalSize::new(width, height)),
+                attributes.with_inner_size(winit::dpi::PhysicalSize::new(*width, *height)),
                 None,
             ),
             Placement::Fullscreen(monitor) => {
                 let monitors: Vec<_> = el.available_monitors().collect();
                 let primary = el.primary_monitor();
-                let target = match monitor {
-                    Monitor::Index(index) => monitors.get(index).cloned(),
-                    Monitor::FirstSecondary => monitors
+                let first_secondary = || {
+                    monitors
                         .iter()
                         .find(|m| primary.as_ref() != Some(*m))
-                        .cloned(),
+                        .cloned()
+                };
+                let target = match monitor {
+                    Monitor::Index(index) => monitors.get(*index).cloned(),
+                    Monitor::Named(name) => monitors
+                        .iter()
+                        .find(|m| m.name().as_deref() == Some(name.as_str()))
+                        .cloned()
+                        .or_else(first_secondary),
+                    Monitor::FirstSecondary => first_secondary(),
                 }
                 .ok_or_else(|| match monitor {
                     Monitor::Index(index) => {
@@ -335,7 +347,9 @@ impl Audience {
                             monitors.len()
                         )
                     }
-                    Monitor::FirstSecondary => "no secondary audience monitor".into(),
+                    Monitor::Named(_) | Monitor::FirstSecondary => {
+                        "no secondary audience monitor".into()
+                    }
                 })?;
                 // Startup-only provenance on stderr; stdout stays binary.
                 eprintln!(
@@ -728,6 +742,39 @@ impl Audience {
         }
         Ok(())
     }
+}
+
+struct Lister(Vec<sela::settings::MonitorInfo>);
+
+impl ApplicationHandler for Lister {
+    fn resumed(&mut self, el: &ActiveEventLoop) {
+        let primary = el.primary_monitor();
+        self.0 = el
+            .available_monitors()
+            .filter_map(|m| {
+                let size = m.size();
+                let position = m.position();
+                Some(sela::settings::MonitorInfo {
+                    name: m.name()?,
+                    width: size.width,
+                    height: size.height,
+                    x: position.x,
+                    y: position.y,
+                    primary: primary.as_ref() == Some(&m),
+                })
+            })
+            .collect();
+        el.exit();
+    }
+
+    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+}
+
+/// Connected monitors, for `sela --list-monitors`.
+pub fn list_monitors() -> Result<Vec<sela::settings::MonitorInfo>, Box<dyn std::error::Error>> {
+    let mut lister = Lister(Vec::new());
+    EventLoop::new()?.run_app(&mut lister)?;
+    Ok(lister.0)
 }
 
 pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {

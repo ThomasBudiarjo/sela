@@ -16,6 +16,8 @@ pub(crate) enum Dialog {
     Remove(EntryId),
     /// Delete a library song (Songs menu → Delete).
     DeleteSong(Version),
+    /// Options (Edit › Options in EW8-OBS-053); drawn by `options_overlay`.
+    Options,
 }
 
 impl Operator {
@@ -53,6 +55,7 @@ impl Operator {
     pub(crate) fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dialog = None;
         self.dialog_message = None;
+        self.settings.draft = None;
         match self.dialog_return.take() {
             Some(handle) => handle.focus(window, cx),
             None => self.focus.focus(window, cx),
@@ -102,6 +105,7 @@ impl Operator {
                 Some(entry) => format!("Remove “{}” from the schedule?", entry.title),
                 None => "Remove this item from the schedule?".into(),
             },
+            Dialog::Options => return None,
             Dialog::DeleteSong(version) => match self.catalog.iter().find(|(v, _)| *v == version) {
                 Some((_, title)) => {
                     format!("Delete “{}” from the song library?", shown_title(title))
@@ -115,6 +119,7 @@ impl Operator {
             Dialog::Unsaved(_) => Some("Discard changes"),
             Dialog::Remove(_) => Some("Remove"),
             Dialog::DeleteSong(_) => Some("Delete"),
+            Dialog::Options => None,
         };
         let body = match dialog {
             Dialog::SaveAs => self.title_input.clone().map(IntoElement::into_any_element),

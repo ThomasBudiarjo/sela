@@ -891,6 +891,15 @@ instructions and the work log for precise evidence and limits.
   dependencies and profile/data locations; no publishing/signing secret required.
 - [ ] Add observed core settings and output selection, persistence, validation and
   cancel/reset behavior without exposing unsupported features as functional.
+  Slice **M1-16-settings** (implemented-unqualified, 2026-10-08): versioned
+  per-profile `settings.txt` (atomic temp+rename, corrupt file kept as
+  `settings.txt.bad` with defaults and one note, worker thread), Options dialog
+  (Options… button; EW section list with only Main Output › General built;
+  Output monitor choice persists and drives `sela --audience name:DEVICE`;
+  `SELA_AUDIENCE_MONITOR` still overrides). Open: language, Song/Scripture/
+  Presentations/Transitions/Alerts, Alternate Output, Foldback, Service
+  Intervals, Slide Labels, Advanced; menu-bar placement (EW Edit › Options);
+  Reassign action on the output warning; reset-to-defaults.
 - [ ] Verify clean install, offline launch, standard-user permissions and safe
   uninstall that preserves user data unless explicitly requested otherwise.
 - [ ] Label controls, expose focus/state where GPUI/platform supports it, and test

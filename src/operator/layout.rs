@@ -187,6 +187,7 @@ impl Render for Operator {
                     .child(self.button(Control::NewMenu, "new-menu", "New ▾", cx))
                     .child(self.button(Control::OpenSchedule, "open-schedule", "Open", cx))
                     .child(self.button(Control::SaveSchedule, "save-schedule", "Save", cx))
+                    .child(self.button(Control::Options, "options", "Options…", cx))
                     .children(
                         ["Web", "Remote"]
                             .map(|label| div().px_1().text_color(rgb(INACTIVE)).child(label)),
@@ -276,7 +277,17 @@ impl Render for Operator {
                             .text_size(px(TEXT_CAPTION))
                             .text_color(rgb(MUTED))
                             .child(self.output_line()),
-                    ),
+                    )
+                    .children(self.settings_note().map(|note| {
+                        div()
+                            .debug_selector(|| "settings-note".into())
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(TEXT_CAPTION))
+                            .text_color(rgb(SENDING))
+                            .child(note)
+                    })),
             )
             .when(!self.collapsed, |d| {
                 let detail = self.resource_detail(cx);
@@ -525,5 +536,6 @@ impl Render for Operator {
             })
             .children(self.song_menu_overlay(cx))
             .children(self.dialog_overlay(cx))
+            .children(self.options_overlay(cx))
     }
 }

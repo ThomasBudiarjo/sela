@@ -2,7 +2,7 @@ use super::*;
 
 impl Operator {
     pub(crate) fn poll(&mut self, cx: &mut Context<Self>) {
-        let mut changed = self.poll_library(cx) | self.poll_images();
+        let mut changed = self.poll_library(cx) | self.poll_images() | self.poll_settings();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());
             if let Status::Connected { extent, .. } = output.status()

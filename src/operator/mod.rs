@@ -30,6 +30,7 @@ mod controls;
 mod dialogs;
 mod layout;
 mod menus;
+mod options;
 mod polling;
 mod preview_live;
 mod resources;
@@ -44,6 +45,8 @@ pub(super) use dialogs::{Dialog, Then};
 use menus::{MenuConfirm, MenuDismiss, MenuNext, MenuPrevious, OpenSongMenu, SongMenu};
 #[cfg(test)]
 pub(super) use menus::{SONG_MENU, SongItem};
+use options::SettingsState;
+pub(super) use options::{MonitorSlot, SettingsConfig};
 use resources::TABS;
 
 const POLL: Duration = Duration::from_millis(16);
@@ -173,13 +176,14 @@ pub(super) struct Operator {
     logo_sent: Option<ContentVersion>,
     pub(super) logo_error: Option<String>,
     profile: Option<PathBuf>,
+    pub(super) settings: SettingsState,
     image_worker: Option<images::Worker>,
     pub(super) images: Vec<String>,
     image_rows: Vec<FocusHandle>,
     pub(super) selected_image: Option<String>,
     image_menu: Option<Point<Pixels>>,
     pub(super) media_message: Option<String>,
-    /// Not persisted; Sela has no settings store yet.
+    /// Not persisted yet.
     pub(super) sizing: Sizing,
     pub(super) size_cap: Option<(Version, Extent, Sizing, Option<u16>)>,
     pub(super) schedule: Schedule,
@@ -224,9 +228,10 @@ pub(super) struct Operator {
 }
 
 impl Operator {
-    pub(super) fn new(
+    pub(super) fn with_settings(
         library: Option<PathBuf>,
         launcher: Launcher,
+        config: SettingsConfig,
         cx: &mut Context<Self>,
     ) -> Self {
         let (worker, request, library_error) = match library.clone().map(Worker::open) {
@@ -294,6 +299,7 @@ impl Operator {
                 }
             }
         });
+        let settings = SettingsState::start(profile.as_deref(), config, cx);
         Self {
             focus: cx.focus_handle(),
             controls: ControlSet::new(cx),
@@ -330,6 +336,7 @@ impl Operator {
             logo_sent: None,
             logo_error: None,
             profile,
+            settings,
             image_worker,
             images: Vec::new(),
             image_rows: Vec::new(),

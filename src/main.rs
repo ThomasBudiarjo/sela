@@ -77,13 +77,16 @@ fn audience_main(args: &[std::ffi::OsString]) -> ! {
                 width: 960,
                 height: 540,
             },
+            name if name.starts_with("name:") => audience::Placement::Fullscreen(
+                audience::Monitor::Named(name["name:".len()..].to_owned()),
+            ),
             index => audience::Placement::Fullscreen(audience::Monitor::Index(index.parse().ok()?)),
         };
         Some((epoch, placement, audience::parse_backend(backend)?))
     })();
     let Some((epoch, placement, backend)) = parsed else {
         eprintln!(
-            "usage: sela --audience EPOCH_HEX <INDEX|secondary|window> [dx12|vulkan|metal|gl]"
+            "usage: sela --audience EPOCH_HEX <INDEX|secondary|window|name:DEVICE> [dx12|vulkan|metal|gl]"
         );
         std::process::exit(2);
     };
@@ -105,17 +108,18 @@ fn audience_main(args: &[std::ffi::OsString]) -> ! {
     }
 }
 
-/// Child command for one audience session. `SELA_AUDIENCE_MONITOR` selects a
-/// monitor index, `secondary` (default) or `window`; `SELA_AUDIENCE_BACKEND`
+/// Child command for one audience session. The monitor comes from the saved
+/// Options choice; `SELA_AUDIENCE_MONITOR` (a monitor index, `secondary` or
+/// `window`) overrides it for development, and `SELA_AUDIENCE_BACKEND`
 /// overrides the graphics backend.
-fn audience_launcher() -> operator::Launcher {
-    std::sync::Arc::new(|epoch| {
+fn audience_launcher(slot: std::sync::Arc<operator::MonitorSlot>) -> operator::Launcher {
+    std::sync::Arc::new(move |epoch| {
         let program = std::env::current_exe().unwrap_or_default();
         let mut command = std::process::Command::new(program);
         command
             .arg("--audience")
             .arg(format!("{:x}", epoch.0))
-            .arg(std::env::var_os("SELA_AUDIENCE_MONITOR").unwrap_or_else(|| "secondary".into()));
+            .arg(std::env::var_os("SELA_AUDIENCE_MONITOR").unwrap_or_else(|| slot.get().into()));
         if let Some(backend) = std::env::var_os("SELA_AUDIENCE_BACKEND") {
             command.arg(backend);
         }
@@ -124,6 +128,27 @@ fn audience_launcher() -> operator::Launcher {
             frames: sela::output::Stream::Stdout,
         }
     })
+}
+
+/// Runs `sela --list-monitors` and parses its output; called off the UI thread.
+fn list_monitors() -> Vec<sela::settings::MonitorInfo> {
+    let Ok(program) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    std::process::Command::new(program)
+        .arg("--list-monitors")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(sela::settings::MonitorInfo::from_line)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 enum Mode {
@@ -139,6 +164,20 @@ fn main() {
     }
     if args.first().is_some_and(|a| a == "--audience") {
         audience_main(&args[1..]);
+    }
+    if args.len() == 1 && args[0] == "--list-monitors" {
+        match audience::list_monitors() {
+            Ok(monitors) => {
+                for monitor in monitors {
+                    println!("{}", monitor.to_line());
+                }
+                return;
+            }
+            Err(error) => {
+                eprintln!("list monitors: {error}");
+                std::process::exit(1);
+            }
+        }
     }
     let mode = match args.as_slice() {
         [] => Mode::Operator(song_library::default_path()),
@@ -184,7 +223,15 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                let operator = cx.new(|cx| Operator::new(library, audience_launcher(), cx));
+                let slot = std::sync::Arc::new(operator::MonitorSlot::default());
+                let config = operator::SettingsConfig {
+                    slot: slot.clone(),
+                    list_monitors: std::sync::Arc::new(list_monitors),
+                    writer: sela::settings::default_writer(),
+                };
+                let operator = cx.new(|cx| {
+                    Operator::with_settings(library, audience_launcher(slot), config, cx)
+                });
                 let weak = operator.downgrade();
                 window.on_window_should_close(cx, move |window, cx| {
                     weak.update(cx, |operator, cx| operator.may_close(window, cx))

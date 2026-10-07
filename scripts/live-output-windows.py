@@ -47,7 +47,7 @@ OPERATOR_TITLE = "Sela — Technical preview"
 # Operator tab order: controls 0-9, Live output, Go Live, Previous, Next,
 # Logo, Black, Clear, Normalize text size (Songs tab), Open, Save, Add to
 # Schedule, schedule Up/Down/Remove, songs, schedule items, slides.
-TABS_TO_FIRST_SONG = 25
+TABS_TO_FIRST_SONG = 26
 # Original fixture logo: one opaque color, neither black nor text white.
 LOGO_RGB = (30, 110, 210)
 # Formatted song slide 1: bold gold fill, right/bottom aligned.
@@ -392,7 +392,7 @@ def main() -> int:
 
         # Slide 0 -> song 0 -> Remove, Down, Up, Add, Save, Open -> Normalize ->
         # Clear, Black, Logo -> Next -> Previous -> Go Live -> Live output.
-        run.keys(*["shift+tab"] * 15, "enter")
+        run.keys(*["shift+tab"] * 16, "enter")
         started = time.monotonic()
         found = audience(app.process.pid, 15)
         if not found:
@@ -488,7 +488,7 @@ def main() -> int:
             run2.keys(*["tab"] * TABS_TO_FIRST_SONG, "enter", "tab", "enter")
             time.sleep(0.3)
             run2.save(operator2, "formatted-preview")
-            run2.keys(*["shift+tab"] * 15, "enter")
+            run2.keys(*["shift+tab"] * 16, "enter")
             found = audience(second.process.pid, 15)
             if not found:
                 raise nw.Failure(f"no formatted audience window: {second.log()}")
@@ -584,7 +584,7 @@ def main() -> int:
             run3.keys(*["tab"] * TABS_TO_FIRST_SONG, "enter", "tab", "enter")
             time.sleep(0.3)
             run3.save(operator3, "backdrop-preview")
-            run3.keys(*["shift+tab"] * 15, "enter")
+            run3.keys(*["shift+tab"] * 16, "enter")
             found = audience(third_app.process.pid, 15)
             if not found:
                 raise nw.Failure(f"no backdrop audience window: {third_app.log()}")
