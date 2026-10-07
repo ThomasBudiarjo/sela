@@ -3,3 +3,5 @@
 /.amp/install/
 /.amp/in/
 __pycache__/
+/.amp/mission-planning/
+/dist/

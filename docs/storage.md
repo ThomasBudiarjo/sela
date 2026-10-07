@@ -46,14 +46,14 @@ neither paths nor SQLite messages nor lyric payloads; don't log Commands/Replies
 
 ## Schema and durable meaning
 
-Current schema 4 uses `application_id=0x53454c41`, `user_version=4`, foreign keys on,
+Current schema 5 uses `application_id=0x53454c41`, `user_version=5`, foreign keys on,
 default rollback journal and synchronous FULL. `songs` tracks head/tombstone;
 `song_revisions` stores immutable original UTF-8 payloads. Encoding is repeated
 little-endian u32 byte-length + UTF-8: title, authors, copyright, license, then
 label/lyrics pairs until EOF. No normalization, line-break conversion, splitting,
 wrapping or provider assumptions. Empty sections and zero sections are preserved;
 blank title is invalid. The original schema-1 text codec remains unchanged in
-schemas 2 to 4; explicit identities, arrangements (schema 2), per-slide
+schemas 2 to 5; explicit identities, arrangements (schema 2), per-slide
 formats (schema 3, `section_formats`) and backgrounds (schema 4,
 `song_backgrounds`, `section_backgrounds`) live in revision-keyed tables.
 
@@ -67,7 +67,7 @@ No automatic garbage collection, library-refresh or cascade deletion exists.
 Snapshot occurrence identity currently is `(schedule ID, revision, position)`;
 stable cross-edit/live selection identity belongs to M1-09, not this storage slice.
 
-Fresh schema 0 initializes schema 4. Existing schema 1, 2 or 3 upgrades only after
+Fresh schema 0 initializes schema 5. Existing schema 1, 2, 3 or 4 upgrades only after
 the verified backup gate documented below (`<profile>.schema1-backup`,
 `<profile>.schema2-backup` or `<profile>.schema3-backup`; every older schema
 goes straight to 4 with one backup). A schema-0 database

@@ -683,6 +683,10 @@ benchmark (pooled p50 18.1 ms, p95 75.9 ms; one-letter prefix p95 109 ms
 misses the ceiling). Open: the operator search box, EW search behavior
 (W04, unobserved), end-to-end latency, short-prefix cost, Linux/macOS.
 
+M1-07b (**planned**): operator library search box. Searching starts at 2
+characters, typing never triggers live shortcuts, stale results are dropped
+by generation, and Esc/clear restore the full list.
+
 - [ ] Add indexed/FTS search for observed title/lyrics/metadata queries and filters.
   (Index and query over title, lyrics and metadata done in M1-07a; EW's
   searched fields and filters are unobserved, and there is no UI yet.)
@@ -777,6 +781,9 @@ managed copies, 8 MiB / 16384 px / 64 MiB decoded, Exif orientation applied,
 ICC ignored (sRGB), APNG refused, identical re-import reused, cancellable
 atomic copy. Next: M1-11b, the operator preflight report, Locate…/relink and
 import cancel UI.
+
+M1-11b (**planned**): operator preflight UI (missing-file report, Locate…,
+Cancel) and downscaling of large photos at import.
 
 - [x] Import supported still-image formats on bounded workers; document supported
   dimensions, byte limits, orientation, color handling and animated-file policy.

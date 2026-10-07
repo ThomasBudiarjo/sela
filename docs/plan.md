@@ -122,3 +122,28 @@ Diagnostics should expose adapter, outputs, decoder, frame timings, dropped
 frames, and cache memory. Support bundles omit lyrics and private content by
 default. No mandatory telemetry. Remote access is disabled by default and must
 use explicit pairing and role-scoped authorization when introduced.
+
+## Mission 2026-10 plan
+
+Owner scope decisions for the 2026-10 finishing mission (M1 to M5, agent-doable
+parts), recorded from its approved proposal:
+
+- In scope: rest of M1, importers (OpenLyrics, OpenSong, ChordPro, own
+  EasyWorship library, PowerPoint via installed PowerPoint), M2 media, M3
+  outputs and stage display, M4-03/04 scripture, agent-doable M5 release work.
+- Out of scope: PDF import, web pages, the full presentation/announcement
+  editor, clocks and timers (except the stage clock), usage reports and
+  SongSelect, remote control and any network listener, MIDI and Stream Deck,
+  NDI, camera capture, macOS/Linux qualification.
+- Media: bundle an LGPL FFmpeg 8.1 shared build with notices and a source
+  pointer; audio through `cpal`.
+- Scripture: bundled public-domain KJV and WEB; user OSIS, Zefania or USFX
+  import.
+- Languages: English and Indonesian.
+- No network listeners.
+- Library search starts at 2 characters; typing never triggers live shortcuts.
+- Large photos are downscaled at import.
+- Release artifact: an unsigned, per-user Inno Setup installer built locally;
+  nothing is pushed or published.
+- Open and documented, not faked: older integrated-GPU 90-minute rehearsal,
+  physical monitor hotplug, code-signing and publishing, volunteer rehearsals.
