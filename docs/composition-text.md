@@ -97,28 +97,28 @@ remains active/qualification-open; no backlog boxes are closed by this slice.
 ## M1-05g2 — styled layers and colored blend (2026-10-06)
 
 The M0-07a single-mask diagnostic grew into the product text path. One path
-now carries the whole per-slide SlideFormat: slides::cue resolves the
+now carries the whole per-slide `SlideFormat`: `slides::cue` resolves the
 format (face, synth flags, fitted or fixed size, alignment), then
-udience::text::layers renders three RGBA coverage channels (fill incl.
+`audience::text::layers` renders three RGBA coverage channels (fill incl.
 underline, Outer outline by chamfer dilation, shadow by offset + box blur)
 and the compositor blends them shadow under outline under fill, in linear
 light, with each layer's color and opacity. Point-valued effects (outline
 size, shadow offset/blur) scale by the 1080-line reference height, so the
 audience and the 1280x720 editor preview/thumbnails agree. A WGSL shader does
-the audience blend; compositor::blend_pixels is its exact CPU twin for the
+the audience blend; `compositor::blend_pixels` is its exact CPU twin for the
 editor's off-thread renders.
 
 ### Face resolution and the live gate
 
-onts::shared() holds one catalog and face cache for the process. Whoever
+`fonts::shared()` holds one catalog and face cache for the process. Whoever
 opens first (operator or song editor) scans the system font directories off
 the UI thread; resolution can read files, so it runs only on background
 threads. The operator resolves a previewed song's formats as one background
 job and attaches them to the item: a Go Live/Next/Previous that races the
-resolver keeps the current live scene, shows Resolving fonts…, and retries
+resolver keeps the current live scene, shows `Resolving fonts…`, and retries
 when the faces land (unit-tested by stripping the attachment and driving
 the landing callback). A late catalog scan re-resolves items that named a
-family and refreshed the live cue, since their earlier resolution was the
+family and refreshes the live cue, since their earlier resolution was the
 bundled fallback.
 
 ### Bounds and overflow authority
@@ -127,11 +127,11 @@ Every logical line's advance and accumulated line height are validated
 before drawing, not only viewport-filtered runs. Fake-italic shear and
 negative left bearings clip at the area edge like other fringe ink (EW
 parity unobserved; recorded as a Sela decision); oversized logical lines
-still fail with Overflow. Fixed sizes that do not fit are refused like
+still fail with `Overflow`. Fixed sizes that do not fit are refused like
 other unshowable text, and a failed preparation never replaces the live
 scene.
 
-### Measured preparation (ignored test large_text_preparation_time)
+### Measured preparation (ignored test `large_text_preparation_time`)
 
 Windows 11, 2560x1600 and 3840x2160, bundled DejaVu Sans, 20 runs:
 2560x1600: 1 line 256px p50 5.5 ms (max 6.8), 2 lines 241px p50 14.7
@@ -142,7 +142,7 @@ UI thread.
 
 ### Native Windows checks (2026-10-06)
 
-scripts/live-output-windows.py PASS on the secondary monitor
+`scripts/live-output-windows.py` PASS on the secondary monitor
 (2560x1600): the formatted song's Go Live shows the bold gold right/bottom
 slide (color box 590,1378-2512,1514; margins 48 right, 86 bottom vs 590
 left, 1378 top), Next shows the synth-italic underlined centered slide and
@@ -150,5 +150,5 @@ the installed-Arial slide, Next stops at the last slide, masks and sessions
 behave as before, both operators exit 0 and end their audience children.
 Alignment is asserted by margin comparison because auto-fit fills the area
 width; the gold slide uses a fixed size so its placement is visible.
-scripts/song-editor-windows.py PASS: preview and thumbnails render on the
+`scripts/song-editor-windows.py` PASS: preview and thumbnails render on the
 same path with the scan running.

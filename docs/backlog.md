@@ -549,7 +549,7 @@ Follow-ups:
     current scene stays, `Resolving fonts…`, retry on landing; a late scan
     re-resolves named-family items and refreshes the live cue); editor
     preview/thumbnails resolve the same way and the caption warns on
-    bundled fallback; seed `--formatted-song`; native DX2 check extended and
+    bundled fallback; seed `--formatted-song`; native DX12 check extended and
     **PASS** (gold right/bottom, italic centered underlined, installed
     Arial; margins compared because auto-fit fills the area width, the
     gold slide uses a fixed size). Rendering is qualified for this

@@ -6,12 +6,20 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
-- **Per-slide formats stored (M1-05g1, 2026-10-06):** M1-05g is **active**.
-  Slice 1 adds `format::SlideFormat` on every `storage::Section` and schema 3
-  (`section_formats`) behind a verified `.schema2-backup`. Nothing renders or
-  edits formats yet. Next: slice g2 (cue/wire format and renderer: installed
-  fonts, B/I/U, color, alignment, outline, shadow, fixed size), then g3 (Format
-  pane, Ctrl+A whole song).
+- **Styled slides render (M1-05g2, 2026-10-06):** M1-05g stays **active**;
+  g1 and g2 are done, g3 is next. Every per-slide `SlideFormat` field stored
+  in g1 now renders on one shared path (audience, editor preview, Slides
+  thumbnails): installed fonts through the shared off-thread catalog
+  (`fonts::shared()`) with bundled DejaVu fallback and an editor warning,
+  B/I/U (real or synthesized), color, H/V alignment, auto or fixed size,
+  Outer outline and shadow. The operator gates Go Live/Next/Previous on
+  background font resolution without replacing the live scene. Windows DX12
+  native checks pass. Next: g3, the Song Editor Format pane (Text › Style
+  subset), per-slide apply, Ctrl+A whole-song selection with replace-typing,
+  undo, GPUI tests and native script.
+- **Per-slide formats stored (M1-05g1, 2026-10-06):** slice 1 adds
+  `format::SlideFormat` on every `storage::Section` and schema 3
+  (`section_formats`) behind a verified `.schema2-backup`.
 - **EasyWorship Format pane observed (RUN-W06G, 2026-10-06):** the owner's
   restarted 8.0.49 accepted toolbar clicks, so the Format inspector was recorded
   (EW8-OBS-027–033, superseding unverified EW8-OBS-026): Text › Style (font,
@@ -138,7 +146,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g active (g1 per-slide format storage done, g2 rendering and g3 Format pane open). M1-05h–i (background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g active (g1 per-slide format storage and g2 styled rendering with the operator font gate done, Windows DX12 native check passed; g3 Format pane open). M1-05h–i (background, operator song menu), cross-cell selection, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2408,38 +2416,38 @@ PY
 ### M1-05g2a — Styled slide rendering core — 2026-10-06 (UTC+7)
 
 - State: **implemented-unqualified**; M1-05g stays **active** (g2b, g3 open).
-- One rendering path for the whole SlideFormat: audience frame, editor
-  preview and Slides thumbnails all go through slides::cue →
-  udience::text::layers → blend (GPU shader or CPU twin). Point-valued
+- One rendering path for the whole `SlideFormat`: audience frame, editor
+  preview and Slides thumbnails all go through `slides::cue` →
+  `audience::text::layers` → blend (GPU shader or CPU twin). Point-valued
   effects (outline size, shadow offset/blur) scale by the 1080-line reference
   height so the audience and previews agree at any extent.
-- src/fonts.rs (new, no GPUI): installed-font Catalog::scan with bounds
+- `src/fonts.rs` (new, no GPUI): installed-font `Catalog::scan` with bounds
   (8 MiB files, 64-face collections, 8192 faces, 32 MiB loaded-face cache),
-  SHA-256-tracked faces, Resolved (bundled DejaVu Sans regular + Bold from
-  dejavu-fonts 2.37, license note in 	ests/fixtures/README.md).
-  Resolved::bundled resolves without I/O; scanning stays off the UI thread.
-- src/scene.rs: OwnedText/TextStyle/OutlineStyle/ShadowStyle with
-  strict bounds; PreparedCue::from_owned validates face index and style.
-- src/slides.rs: format-aware cue (Bold → bundled Bold face, else synth
+  SHA-256-tracked faces, `Resolved` (bundled DejaVu Sans regular + Bold from
+  dejavu-fonts 2.37, license note in `tests/fixtures/README.md`).
+  `Resolved::bundled` resolves without I/O; scanning stays off the UI thread.
+- `src/scene.rs`: `OwnedText`/`TextStyle`/`OutlineStyle`/`ShadowStyle` with
+  strict bounds; `PreparedCue::from_owned` validates face index and style.
+- `src/slides.rs`: format-aware cue (Bold → bundled Bold face, else synth
   margins 1/24 em; Italic 0.25 em shear margin; underline; color; H/V
-  alignment); auto-size fit and Fixed refuse-if-unshowable; size_cap
+  alignment); auto-size fit and `Fixed` refuse-if-unshowable; `size_cap`
   resolves the worst-case size across slides for scrolling checks.
-- src/transport.rs: text wire tag 2 carries the resolved format (face
+- `src/transport.rs`: text wire tag 2 carries the resolved format (face
   index, size, color, align, valign, B/I/U flags, outline, shadow); tag 1
   rejected with a compatible-version error.
-- src/audience/text.rs: layers renders fill/outline/shadow coverage
-  (RGBA, Rgba8Unorm) via cosmic-text: per-line advance/line-height overflow
+- `src/audience/text.rs`: `layers` renders fill/outline/shadow coverage
+  (RGBA, `Rgba8Unorm`) via cosmic-text: per-line advance/line-height overflow
   authority, alignment, synth B/I (shear, stroke double), underline through
   cosmic decorations, chamfer dilate (outline, units are 12ths of a pixel),
   axis-generic box blur (shadow), ink clipped only at the canvas edge.
-- src/audience/compositor.rs: three-channel WGSL blend (shadow → outline →
+- `src/audience/compositor.rs`: three-channel WGSL blend (shadow → outline →
   fill in linear light), 64-byte uniform, colored readback checks; exact CPU
-  twin lend_pixels for the editor preview/thumbnails.
-- src/song_library.rs: preview and thumbnails render via the same layers +
-  CPU blend, cache key is now (text, format); the thumbnail box filter
+  twin `blend_pixels` for the editor preview/thumbnails.
+- `src/song_library.rs`: preview and thumbnails render via the same `layers` +
+  CPU blend, cache key is now `(text, format)`; the thumbnail box filter
   averages all 16 preview pixels per output pixel (the old filter sampled
-  one). src/audience.rs prepares frames from coverage + Blend; text work
-  stays on the worker. src/operator.rs resolves bundled faces per send;
+  one). `src/audience.rs` prepares frames from coverage + `Blend`; text work
+  stays on the worker. `src/operator.rs` resolves bundled faces per send;
   installed-family resolution is deferred to g2b.
 - Decisions: fake-italic shear and negative left bearings clip at the area
   edge like other effects (the advance-fit authority rejects oversized
@@ -2450,68 +2458,74 @@ PY
   B/I/U, clip-vs-overflow, whole-format 1920×1080 render); compositor colored
   readback (fill blue / outline red / 50% green shadow, half-linear green
   187–189); song library styled preview/thumbnail ink.
-- Checks (Windows 11): cargo fmt --all -- --check,
-  cargo clippy --locked --all-targets -- -D warnings,
-  cargo test --locked --all-targets (lib 99, bin 65 + 2 ignored, output
-  9 + 1 ignored, transport 4 + 1 ignored), cargo build --locked.
-- Not run: native DX2 audience-window E2E with a styled cue (g2b, needs the
+- Checks (Windows 11): `cargo fmt --all -- --check`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets` (lib 99, bin 65 + 2 ignored, output
+  9 + 1 ignored, transport 4 + 1 ignored), `cargo build --locked`.
+- Not run: native DX12 audience-window E2E with a styled cue (g2b, needs the
   operator format-resolution slice), installed-font scan against a real
   Windows font directory (g2b), Linux/macOS.
 - Next: g2b. Operator resolves installed families via the catalog with a
   loading gate, seed one formatted song, extend the song-editor and
   live-output native scripts, run the Windows DX12 audience check, measure
-  layer preparation timing, update docs/composition-text.md, backlog and
+  layer preparation timing, update `docs/composition-text.md`, backlog and
   work log, commit.
 
-### M1-05g2b — Installed-font gate, native DX2 qualification — 2026-10-06 (UTC+7)
+### M1-05g2b — Installed-font gate, native DX12 qualification — 2026-10-06 (UTC+7)
 
 - State: M1-05g **g2 done** (g2a core + g2b integration); g3 (Format pane)
   stays open, so the ticket stays active.
-- One shared font store: onts::shared() (catalog + bounded face cache).
+- One shared font store: `fonts::shared()` (catalog + bounded face cache).
   Whichever window opens first (operator or song editor) scans the system
   font directories off the UI thread and installs the catalog; resolution
   can read files and stays on background threads.
 - Operator gate: a previewed song's formats resolve as one background job
-  (Item.resolved, live item first). A Go Live/Next/Previous that races the
-  resolver keeps the current live scene, shows Resolving fonts… and
-  retries when the faces land; a late catalog scan resets items that named
-  a family (their earlier resolution was the bundled fallback), re-resolves
-  and refreshes the live cue, and drops the stale size cap. send never
+  (`Item.resolved`, live item first). A Go Live/Next/Previous that races the
+  resolver keeps the current live scene, shows `Resolving fonts…` and
+  retries when the faces land; a late catalog scan resets items that named a
+  family (their earlier resolution was the bundled fallback), re-resolves
+  and refreshes the live cue, and drops the stale size cap. `send` never
   resolves on the UI thread.
-- Song editor: pixels resolves through the shared store (off the UI
+- Song editor: `pixels` resolves through the shared store (off the UI
   thread), preview and thumbnails agree with the audience, and the preview
-  caption shows the fallback warning (Font "X" unavailable · showing
-  DejaVu Sans, amber) while still rendering the bundled fallback.
-- Seed: seed_library --formatted-song now seeds a single-song library
+  caption shows the fallback warning (`Font "X" unavailable · showing
+  DejaVu Sans`, amber) while still rendering the bundled fallback.
+- Seed: `seed_library --formatted-song` now seeds a single-song library
   with three styled slides (bold gold right/bottom + Outer outline +
   shadow at a fixed size, synth italic + underline centered, installed
   Arial bold italic) for the native check.
-- Native scripts: live-output-windows.py gains a second operator phase
+- Native scripts: `live-output-windows.py` gains a second operator phase
   on the formatted library — color-aware checks (gold pixels, margin-based
   right/bottom assertion, centered ink box), Next-stops-at-end, clean
-  exit. song-editor-windows.py unchanged and re-run (regression with the
+  exit. `song-editor-windows.py` unchanged and re-run (regression with the
   editor scan).
 - Checks (Windows 11, secondary monitor 2560x1600):
-  cargo fmt --all -- --check, cargo clippy --locked --all-targets --
-  -D warnings, cargo test --locked --all-targets (lib 99, bin 67 + 2
-  ignored, other suites pass), cargo build --locked, uff check
-  scripts; scripts/live-output-windows.py **PASS** (both phases, gold
+  `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets --
+  -D warnings`, `cargo test --locked --all-targets` (lib 99, bin 67 + 2
+  ignored, other suites pass), `cargo build --locked`, `ruff check
+  scripts`; `scripts/live-output-windows.py` **PASS** (both phases, gold
   box 590,1378-2512,1514, margins 48/86 vs 590/1378; italic centered;
   Arial visible; both operators exit 0 and end their children);
-  scripts/song-editor-windows.py **PASS** (preview black=38854/white=931,
+  `scripts/song-editor-windows.py` **PASS** (preview black=38854/white=931,
   thumbnails black=16784/white=74).
 - Two native iterations before PASS, both check-bound, not render bugs:
   auto-fit fills the area width, so Right alignment is invisible with a
-  fitted line — the gold slide uses Fixed(120) — and the "pushed right"
+  fitted line — the gold slide uses `Fixed(120)` — and the "pushed right"
   assertion became a margin comparison (right/bottom margins smaller than
   left/top) instead of assuming a narrow block.
-- Measured (large_text_preparation_time, ignored): 2560x1600 1/2/4
+- Measured (`large_text_preparation_time`, ignored): 2560x1600 1/2/4
   lines p50 5.5/14.7/26.4 ms (max 6.8/15.7/28.4); 3840x2160 p50
   7.7/20.5/34.5 ms (max 8.4/21.7/36.2). Recorded in
-  docs/composition-text.md.
+  `docs/composition-text.md`.
 - Not run: Linux/macOS, physical-projector/output-device checks beyond the
   secondary monitor, a real owner profile with installed-family formats.
 - Next: g3. Enable the toolbar Format toggle as a right pane (Text › Style
   subset), apply to the caret/selected slide, Ctrl+A whole-song selection
   with replace-typing, whole-document history, GPUI tests, extend the
   native script.
+- Docs fix (2026-10-06, follow-up commit): these two entries and the
+  M1-05g2 section of `docs/composition-text.md` were first written through
+  PowerShell double-quoted strings, which consumed every inline-code
+  backtick (and turned some following letters into control characters).
+  Restored from the source; write docs with the file tools or .NET
+  `File.WriteAllText`, never through PowerShell string interpolation.
