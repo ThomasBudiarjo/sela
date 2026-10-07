@@ -2,7 +2,7 @@ use super::*;
 use crate::text_input::{self, TextInput};
 use gpui::{
     CursorStyle, Empty, Entity, Focusable, FontWeight, MouseButton, PathPromptOptions, Pixels,
-    Point, SharedString, Subscription, Task,
+    Point, SharedString, Subscription, Task, anchored, deferred, point,
 };
 use sela::{
     background::{self, Plan},
@@ -17,11 +17,82 @@ use sela::{
     storage::{self, MAX_ITEMS, Reply, Version, Worker},
 };
 use std::{
+    cell::RefCell,
     collections::VecDeque,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+actions!(
+    operator,
+    [
+        OpenSongMenu,
+        MenuNext,
+        MenuPrevious,
+        MenuConfirm,
+        MenuDismiss
+    ]
+);
+
+/// Songs row context menu entries, in the EW8-OBS-021 order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SongItem {
+    NewSong,
+    EditSong,
+    Delete,
+    UpdateSchedule,
+    SortBy,
+    Refresh,
+}
+
+pub(super) const SONG_MENU: [SongItem; 6] = [
+    SongItem::NewSong,
+    SongItem::EditSong,
+    SongItem::Delete,
+    SongItem::UpdateSchedule,
+    SongItem::SortBy,
+    SongItem::Refresh,
+];
+
+impl SongItem {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::NewSong => "New Song…",
+            Self::EditSong => "Edit Song…",
+            Self::Delete => "Delete",
+            Self::UpdateSchedule => "Update items in Schedule",
+            Self::SortBy => "Sort by ▸",
+            Self::Refresh => "Refresh",
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::NewSong => "song-menu-new",
+            Self::EditSong => "song-menu-edit",
+            Self::Delete => "song-menu-delete",
+            Self::UpdateSchedule => "song-menu-update",
+            Self::SortBy => "song-menu-sort",
+            Self::Refresh => "song-menu-refresh",
+        }
+    }
+
+    /// Shown but inert: what Update items in Schedule does is unobserved,
+    /// and the Sort by options belong to library sorting (not built).
+    pub(super) fn enabled(self) -> bool {
+        !matches!(self, Self::UpdateSchedule | Self::SortBy)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SongMenu {
+    pub(super) version: Version,
+    position: Point<Pixels>,
+    /// Keyboard highlight; the pointer uses hover styling only.
+    pub(super) highlight: Option<usize>,
+}
 
 const TABS: [&str; 5] = ["Songs", "Scriptures", "Media", "Presentations", "Themes"];
 
@@ -174,12 +245,15 @@ pub(super) enum Dialog {
     Open,
     Unsaved(Then),
     Remove(EntryId),
+    /// Delete a library song (Songs menu → Delete).
+    DeleteSong(Version),
 }
 
 enum Request {
     Open,
     Catalog,
     Song(Version),
+    DeleteSong(Version, String),
     SaveSchedule(storage::Schedule),
     ScheduleCatalog,
     OpenSchedule(Version),
@@ -193,14 +267,14 @@ pub(super) struct Operator {
     pub(super) tab: usize,
     drag: Option<(usize, Point<gpui::Pixels>, f32)>,
     activation: Option<Subscription>,
-    library_error: Option<String>,
+    pub(super) library_error: Option<String>,
     new_menu: bool,
     library: Option<PathBuf>,
     worker: Option<Worker>,
     request: Option<Request>,
     catalog_stale: bool,
     pub(super) catalog: Vec<(Version, String)>,
-    song_rows: Vec<FocusHandle>,
+    pub(super) song_rows: Vec<FocusHandle>,
     slide_rows: Vec<FocusHandle>,
     pub(super) selected_song: Option<Version>,
     pub(super) preview: Option<Item>,
@@ -248,6 +322,13 @@ pub(super) struct Operator {
     pub(super) dialog_message: Option<String>,
     pub(super) title_input: Option<Entity<TextInput>>,
     item_menu: Option<(EntryId, Point<Pixels>)>,
+    pub(super) song_menu: Option<SongMenu>,
+    song_menu_focus: FocusHandle,
+    /// Song row bounds from the last prepaint; a keyboard-opened menu is
+    /// placed under its row.
+    song_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
+    /// Songs footer status: text and whether it reports a failure.
+    pub(super) song_message: Option<(String, bool)>,
     /// A library double-click waiting for its song to load.
     live_on_load: Option<Version>,
     /// Song version whose face resolution is running on a background thread.
@@ -264,6 +345,7 @@ pub(super) struct Operator {
     pub(super) background_job: Option<images::BackgroundKey>,
     /// One background catalog scan feeding the shared font store.
     _font_scan: Option<Task<()>>,
+    _library_changed: Subscription,
     _poller: Option<Task<()>>,
 }
 
@@ -311,6 +393,24 @@ impl Operator {
         } else {
             None
         };
+        // Song row and Songs menu keys, deeper than the `SelaShow` bindings
+        // so Up/Down move the menu highlight instead of the schedule.
+        cx.bind_keys([
+            KeyBinding::new("shift-f10", OpenSongMenu, Some("SelaSongRow")),
+            KeyBinding::new("menu", OpenSongMenu, Some("SelaSongRow")),
+            KeyBinding::new("down", MenuNext, Some("SelaSongMenu")),
+            KeyBinding::new("up", MenuPrevious, Some("SelaSongMenu")),
+            KeyBinding::new("enter", MenuConfirm, Some("SelaSongMenu")),
+            KeyBinding::new("space", MenuConfirm, Some("SelaSongMenu")),
+            KeyBinding::new("escape", MenuDismiss, Some("SelaSongMenu")),
+        ]);
+        // An editor window saved or deleted a song: reload Songs off the UI
+        // thread through the storage worker.
+        let library_changed =
+            cx.observe_global::<crate::song_library::LibraryChanged>(|this, cx| {
+                this.catalog_stale = true;
+                cx.notify();
+            });
         let executor = cx.background_executor().clone();
         let poller = cx.spawn(async move |this, cx| {
             loop {
@@ -380,6 +480,10 @@ impl Operator {
             dialog_message: None,
             title_input: None,
             item_menu: None,
+            song_menu: None,
+            song_menu_focus: cx.focus_handle(),
+            song_bounds: Rc::default(),
+            song_message: None,
             live_on_load: None,
             font_job: None,
             font_task: None,
@@ -387,6 +491,7 @@ impl Operator {
             backgrounds: images::BackgroundCache::new(images::BACKGROUND_BUDGET),
             background_job: None,
             _font_scan: font_scan,
+            _library_changed: library_changed,
             _poller: Some(poller),
         }
     }
@@ -421,15 +526,7 @@ impl Operator {
                 if index == 10 {
                     self.controls[9].focus(window, cx);
                 }
-                self.library_error = self
-                    .library
-                    .clone()
-                    .or_else(crate::song_library::default_path)
-                    .ok_or_else(|| {
-                        "No user data directory. Launch with --library DATABASE_PATH.".to_string()
-                    })
-                    .and_then(|path| crate::song_library::open(path, cx))
-                    .err();
+                self.open_editor(None, cx);
             }
             LIVE_OUTPUT => self.toggle_output(),
             GO_LIVE => self.go_live(),
@@ -510,6 +607,10 @@ impl Operator {
                     self.close_dialog(window, cx);
                     self.remove_entry(id);
                 }
+                Some(Dialog::DeleteSong(version)) => {
+                    self.close_dialog(window, cx);
+                    self.queue_delete(version);
+                }
                 Some(Dialog::Unsaved(then)) => {
                     self.close_dialog(window, cx);
                     self.proceed(then, window, cx);
@@ -520,6 +621,141 @@ impl Operator {
             _ => return,
         }
         cx.notify();
+    }
+
+    /// Opens a Song Editor window: a new song, or the given saved revision.
+    fn open_editor(&mut self, version: Option<Version>, cx: &mut Context<Self>) {
+        self.library_error = self
+            .library
+            .clone()
+            .or_else(crate::song_library::default_path)
+            .ok_or_else(|| {
+                "No user data directory. Launch with --library DATABASE_PATH.".to_string()
+            })
+            .and_then(|path| crate::song_library::open_song(path, version, cx))
+            .err();
+    }
+
+    /// Right-click (`position`) or Shift+F10 / Menu key (`None`) on a Songs
+    /// row: selects the row like a click and opens its context menu.
+    fn open_song_menu(
+        &mut self,
+        index: usize,
+        position: Option<Point<Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog.is_some() {
+            return;
+        }
+        let Some((version, _)) = self.catalog.get(index).cloned() else {
+            return;
+        };
+        self.select_song(index, cx);
+        let keyboard = position.is_none();
+        let position = position.unwrap_or_else(|| {
+            self.song_bounds
+                .borrow()
+                .get(index)
+                .map(|row| row.bottom_left() + point(px(16.), px(0.)))
+                .unwrap_or_default()
+        });
+        self.new_menu = false;
+        self.item_menu = None;
+        self.image_menu = None;
+        self.song_message = None;
+        self.song_menu = Some(SongMenu {
+            version,
+            position,
+            highlight: keyboard.then_some(0),
+        });
+        self.song_menu_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Closes the Songs menu; keyboard focus returns to the song's row.
+    fn dismiss_song_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.song_menu.take() else {
+            return;
+        };
+        if self.song_menu_focus.is_focused(window) {
+            match self
+                .catalog
+                .iter()
+                .position(|(v, _)| *v == menu.version)
+                .and_then(|index| self.song_rows.get(index))
+            {
+                Some(row) => row.focus(window, cx),
+                None => self.focus.focus(window, cx),
+            }
+        }
+        cx.notify();
+    }
+
+    /// Up/Down (and Tab) move the highlight over enabled items, wrapping.
+    fn move_song_highlight(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(menu) = &mut self.song_menu else {
+            return;
+        };
+        let count = SONG_MENU.len();
+        let mut next = menu.highlight;
+        for _ in 0..count {
+            let index = match next {
+                None if forward => 0,
+                None => count - 1,
+                Some(index) if forward => (index + 1) % count,
+                Some(index) => (index + count - 1) % count,
+            };
+            next = Some(index);
+            if SONG_MENU[index].enabled() {
+                break;
+            }
+        }
+        menu.highlight = next;
+        cx.notify();
+    }
+
+    fn choose_song_item(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(menu), Some(item)) = (self.song_menu, SONG_MENU.get(index).copied()) else {
+            return;
+        };
+        if !item.enabled() {
+            return;
+        }
+        self.dismiss_song_menu(window, cx);
+        match item {
+            SongItem::NewSong => self.open_editor(None, cx),
+            SongItem::EditSong => self.open_editor(Some(menu.version), cx),
+            SongItem::Delete => self.open_dialog(Dialog::DeleteSong(menu.version), window, cx),
+            SongItem::Refresh => self.catalog_stale = true,
+            SongItem::UpdateSchedule | SongItem::SortBy => {}
+        }
+        cx.notify();
+    }
+
+    /// Deletes through the storage worker. Schedules keep their pinned
+    /// revisions and nothing is sent to the audience.
+    fn queue_delete(&mut self, version: Version) {
+        let title = self
+            .catalog
+            .iter()
+            .find(|(v, _)| *v == version)
+            .map(|(_, title)| title.clone())
+            .unwrap_or_default();
+        self.song_message = Some(if self.worker.is_none() {
+            ("No song library open".into(), true)
+        } else if self.queued.is_some() || matches!(self.request, Some(Request::DeleteSong(..))) {
+            (
+                "Not deleted: wait for the library to finish the previous change".into(),
+                true,
+            )
+        } else {
+            self.queued = Some((
+                storage::Command::DeleteSong(version),
+                Request::DeleteSong(version, title),
+            ));
+            ("Deleting…".into(), false)
+        });
     }
 
     fn add_entry(&mut self, at: usize, version: Version, title: String) {
@@ -570,6 +806,7 @@ impl Operator {
         self.dialog = Some(dialog);
         self.dialog_message = None;
         self.item_menu = None;
+        self.song_menu = None;
         self.new_menu = false;
         if dialog == Dialog::SaveAs {
             let input = self.title_input.get_or_insert_with(|| {
@@ -1098,8 +1335,42 @@ impl Operator {
             match (self.request.take(), reply) {
                 (Some(Request::Open), Ok(Reply::Opened)) => self.catalog_stale = true,
                 (Some(Request::Catalog), Ok(Reply::Catalog(catalog))) => {
+                    // A library selection follows its song to a revision saved
+                    // since, so Preview shows the edit; Live keeps its item.
+                    if self.selected_entry.is_none()
+                        && let Some(selected) = self.selected_song
+                        && let Some((head, _)) = catalog
+                            .iter()
+                            .find(|(v, _)| v.id == selected.id && *v != selected)
+                    {
+                        self.selected_song = Some(*head);
+                    }
                     self.catalog = catalog;
                     self.library_error = None;
+                }
+                (Some(Request::DeleteSong(version, title)), Ok(Reply::Deleted)) => {
+                    self.catalog.retain(|(v, _)| *v != version);
+                    // Preview keeps the slides it already prepared (provisional).
+                    if self.selected_song == Some(version) && self.selected_entry.is_none() {
+                        self.selected_song = None;
+                    }
+                    self.song_message = Some((format!("Deleted “{}”", shown_title(&title)), false));
+                    self.catalog_stale = true;
+                }
+                (Some(Request::DeleteSong(_, title)), Err(error)) => {
+                    let title = shown_title(&title);
+                    self.song_message = Some((
+                        match error {
+                            storage::Error::Conflict => {
+                                format!("Not deleted: “{title}” was changed or deleted elsewhere")
+                            }
+                            error => format!(
+                                "Not deleted: “{title}” · song library storage failed ({error:?})"
+                            ),
+                        },
+                        true,
+                    ));
+                    self.catalog_stale = true;
                 }
                 (Some(Request::Song(version)), Ok(Reply::Song(song)))
                     if self.selected_song == Some(version) =>
@@ -1185,6 +1456,11 @@ impl Operator {
                 );
                 match worker.submit(command) {
                     Ok(_) => self.request = Some(request),
+                    Err(error) if matches!(request, Request::DeleteSong(..)) => {
+                        self.song_message =
+                            Some((format!("Not deleted: song library busy ({error:?})"), true));
+                        changed = true;
+                    }
                     Err(error) if schedule => {
                         self.schedule_message =
                             Some(format!("Schedule storage failed ({error:?})"));
@@ -1510,6 +1786,12 @@ impl Operator {
             .iter()
             .find(|(v, _)| *v == version)
             .map(|(_, label)| label.as_str())
+    }
+
+    /// A Songs reload is wanted or in flight.
+    #[cfg(test)]
+    pub(super) fn catalog_refresh_pending(&self) -> bool {
+        self.catalog_stale || matches!(self.request, Some(Request::Catalog))
     }
 
     fn live_index(&self, version: Option<ContentVersion>) -> Option<usize> {
@@ -1854,7 +2136,9 @@ impl Operator {
                 "No songs yet. Use + New Song to create one.",
             );
         }
+        let bounds = self.song_bounds.clone();
         div()
+            .on_children_prepainted(move |rows, _, _| *bounds.borrow_mut() = rows)
             .id("song-list")
             .size_full()
             .overflow_y_scroll()
@@ -1875,7 +2159,7 @@ impl Operator {
                             .id(("song", index))
                             .debug_selector(move || format!("song-{index}"))
                             .track_focus(&self.song_rows[index])
-                            .key_context("SelaControl")
+                            .key_context("SelaControl SelaSongRow")
                             .flex_shrink_0()
                             .h(px(28.))
                             .px_3()
@@ -1891,9 +2175,29 @@ impl Operator {
                                 window.prevent_default();
                                 this.select_song(index, cx);
                             }))
+                            .on_action(cx.listener(move |this, _: &OpenSongMenu, window, cx| {
+                                this.open_song_menu(index, None, window, cx);
+                            }))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(
+                                    move |this, event: &gpui::MouseDownEvent, window, cx| {
+                                        // The menu takes focus, not the row.
+                                        window.prevent_default();
+                                        this.open_song_menu(
+                                            index,
+                                            Some(event.position),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                ),
+                            )
                             .on_click(cx.listener(
                                 move |this, event: &gpui::ClickEvent, window, cx| {
-                                    if matches!(event, gpui::ClickEvent::Keyboard(_)) {
+                                    if matches!(event, gpui::ClickEvent::Keyboard(_))
+                                        || event.is_right_click()
+                                    {
                                         return;
                                     }
                                     this.song_rows[index].focus(window, cx);
@@ -2146,16 +2450,30 @@ impl Operator {
                 Some(entry) => format!("Remove “{}” from the schedule?", entry.title),
                 None => "Remove this item from the schedule?".into(),
             },
+            Dialog::DeleteSong(version) => match self.catalog.iter().find(|(v, _)| *v == version) {
+                Some((_, title)) => {
+                    format!("Delete “{}” from the song library?", shown_title(title))
+                }
+                None => "Delete this song from the song library?".into(),
+            },
         };
         let confirm = match dialog {
             Dialog::SaveAs => Some("Save"),
             Dialog::Open => None,
             Dialog::Unsaved(_) => Some("Discard changes"),
             Dialog::Remove(_) => Some("Remove"),
+            Dialog::DeleteSong(_) => Some("Delete"),
         };
         let body = match dialog {
             Dialog::SaveAs => self.title_input.clone().map(IntoElement::into_any_element),
             Dialog::Open => Some(self.saved_list(cx)),
+            Dialog::DeleteSong(_) => Some(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child("Schedules that use this song keep their copy. Live output does not change.")
+                    .into_any_element(),
+            ),
             _ => None,
         };
         Some(
@@ -2202,7 +2520,7 @@ impl Operator {
                         .child(self.button(
                             DIALOG_CANCEL,
                             "dialog-cancel",
-                            if matches!(dialog, Dialog::Remove(_)) {
+                            if matches!(dialog, Dialog::Remove(_) | Dialog::DeleteSong(_)) {
                                 "Keep"
                             } else {
                                 "Cancel"
@@ -2211,6 +2529,94 @@ impl Operator {
                         )),
                 )
                 .into_any_element(),
+        )
+    }
+
+    /// The Songs row context menu, drawn above the panes and kept inside the
+    /// window (`deferred` + `anchored`, as in GPUI's popover example).
+    fn song_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let menu = self
+            .song_menu
+            .filter(|_| self.tab == 0 && !self.collapsed)?;
+        let items = SONG_MENU
+            .iter()
+            .enumerate()
+            .map(|(index, &item)| {
+                let enabled = item.enabled();
+                div()
+                    .id(item.id())
+                    .debug_selector(move || item.id().into())
+                    .h(px(26.))
+                    .mx_1()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .rounded(px(4.))
+                    .text_color(rgb(if enabled { TEXT } else { DISABLED }))
+                    .when(enabled, |d| {
+                        d.cursor_pointer()
+                            .hover(|d| d.bg(rgb(HOVER)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.choose_song_item(index, window, cx);
+                            }))
+                    })
+                    .when(menu.highlight == Some(index), |d| {
+                        d.bg(rgb(0xdce3fa)).text_color(rgb(0x253c91))
+                    })
+                    .child(item.label())
+            })
+            .collect::<Vec<_>>();
+        Some(
+            deferred(
+                anchored()
+                    .position(menu.position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(
+                        div()
+                            .id("song-menu")
+                            .debug_selector(|| "song-menu".into())
+                            .track_focus(&self.song_menu_focus)
+                            .key_context("SelaSongMenu")
+                            .occlude()
+                            .min_w(px(220.))
+                            .py_1()
+                            .flex()
+                            .flex_col()
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(SURFACE))
+                            .shadow_md()
+                            .text_size(px(13.))
+                            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                                this.dismiss_song_menu(window, cx);
+                            }))
+                            .on_action(cx.listener(|this, _: &MenuNext, _, cx| {
+                                this.move_song_highlight(true, cx);
+                            }))
+                            .on_action(cx.listener(|this, _: &MenuPrevious, _, cx| {
+                                this.move_song_highlight(false, cx);
+                            }))
+                            // Tab stays inside the open menu.
+                            .on_action(cx.listener(|this, _: &FocusNext, _, cx| {
+                                this.move_song_highlight(true, cx);
+                            }))
+                            .on_action(cx.listener(|this, _: &FocusPrevious, _, cx| {
+                                this.move_song_highlight(false, cx);
+                            }))
+                            .on_action(cx.listener(|this, _: &MenuConfirm, window, cx| {
+                                if let Some(index) = this.song_menu.and_then(|m| m.highlight) {
+                                    this.choose_song_item(index, window, cx);
+                                }
+                            }))
+                            .on_action(cx.listener(|this, _: &MenuDismiss, window, cx| {
+                                this.dismiss_song_menu(window, cx);
+                            }))
+                            .children(items),
+                    ),
+            )
+            .with_priority(1)
+            .into_any_element(),
         )
     }
 
@@ -2388,6 +2794,14 @@ impl Operator {
 
 fn storage_message(error: storage::Error) -> String {
     format!("Song library unavailable ({error:?})")
+}
+
+fn shown_title(title: &str) -> &str {
+    if title.trim().is_empty() {
+        "Untitled"
+    } else {
+        title
+    }
 }
 
 fn slide_name(index: usize, slide: &Slide) -> String {
@@ -2847,6 +3261,16 @@ impl Render for Operator {
                                     |d| d.text_color(rgb(DISABLED)),
                                 ),
                             )
+                            .children(self.song_message.clone().map(|(message, failed)| {
+                                div()
+                                    .debug_selector(|| "song-message".into())
+                                    .px_2()
+                                    .min_w_0()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(if failed { ERROR } else { MUTED }))
+                                    .truncate()
+                                    .child(message)
+                            }))
                             .child(div().flex_1())
                             .child(
                                 self.button(
@@ -2969,6 +3393,7 @@ impl Render for Operator {
                         )),
                 )
             })
+            .children(self.song_menu_overlay(cx))
             .children(self.dialog_overlay(cx))
     }
 }

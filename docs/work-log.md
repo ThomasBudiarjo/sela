@@ -193,7 +193,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-01 | implemented-unqualified | Schema 4 (backgrounds, M1-05h1) after schema 3 (formats, M1-05g1); schema-2 section/arrangement persistence, verified backup-gated migration/fresh restore and process-abort tests; remaining schemas, destructive migrations/recovery UI and power-loss qualification open. |
 | M1-02 | implemented-unqualified | Separate-pane contemporary shell and documented-reference toolbar correction; persistence/modes/installed-reference/DPI checks open. |
 | M1-03 | implemented-unqualified | Contextual keyboard access to shell with native checks; text-entry/modal/selection/live command ownership open. |
-| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h implemented-unqualified (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check, h3 Slide pane editing with the master's Layouts tab and Windows native check), M1-05i (operator song menu), M1-05j–o (deferred format controls and tabs), M1-05p–s (gradient, opacity/rotate/flip, Theme Elements/layouts, Auto aspect and image tiles), drag selection across cells, IME/accessibility qualification open. |
+| M1-05 | implemented-unqualified | Persistent metadata/section authoring, full document undo/redo, receipt-gated OK; M1-05e EW-observed Words layout with off-thread rendered preview; M1-05f rendered Slides thumbnails (Windows native check); M1-05g implemented-unqualified (g1 per-slide format storage, g2 styled rendering with the operator font gate, Windows DX12 native check passed; g3a Format pane and g3b Ctrl+A whole-song selection with replace-typing, GPUI and Windows native checks). M1-05h implemented-unqualified (h0 RUN-W06I observed, h1 model and schema 4, h2 rendering with the operator background gate and Windows native check, h3 Slide pane editing with the master's Layouts tab and Windows native check), M1-05i implemented-unqualified (operator song menu, GPUI tests; native script unrun), M1-05j–o (deferred format controls and tabs), M1-05p–s (gradient, opacity/rotate/flip, Theme Elements/layouts, Auto aspect and image tiles), drag selection across cells, IME/accessibility qualification open. |
 | M1-06 | implemented-unqualified | Stable section/variant/occurrence IDs, immutable domain, backed-up migration and editor data/undo persistence; arrangement controls/reference repair and pagination open. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. No checklist box closed: masks, schedule items, preparation off the UI thread, reference-observed behavior and latency remain open. |
 | M1-16 | implemented-unqualified | Developer-local Linux install prerequisite only; Windows installer/settings/accessibility and dependency gates remain open. |
@@ -2844,3 +2844,56 @@ PY
   (EW8-OBS-021). Ask the owner about the Ctrl+A Text-tab deviation and, in
   an EW session, whether a Master edit reaches slides without their own
   background.
+
+### M1-05i — Operator song menu — 2026-10-07
+
+- State: M1-05i **implemented-unqualified** on branch
+  `ticket/m1-05i-song-menu` (base `527030a`). Behavior in
+  [operator shell](operator-shell.md#m1-05i--operator-song-menu).
+- Code: `operator.rs` adds `SongItem`/`SONG_MENU` (EW8-OBS-021 order; Update
+  items in Schedule and Sort by ▸ disabled), `SongMenu`, the
+  `deferred(anchored())` menu overlay with its own focus handle and
+  `SelaSongMenu` key context, actions `OpenSongMenu`, `MenuNext`,
+  `MenuPrevious`, `MenuConfirm`, `MenuDismiss` (bound in `Operator::new`;
+  `main.rs` unchanged), `Dialog::DeleteSong`, `Request::DeleteSong` through
+  the existing single storage job slot, a red/neutral `song-message` in the
+  Songs footer, row bounds from `on_children_prepainted` for keyboard
+  placement, and an observer of the new `LibraryChanged` global that marks
+  Songs stale. `song_library.rs` adds `LibraryChanged` (bumped on editor
+  save and delete), `open_song(path, Option<Version>, cx)` (`open` keeps its
+  signature) and `open_version` (selected when the editor's catalog
+  arrives), plus test-only probes.
+- Decisions: Delete asks first with Keep focused (EW wording unobserved);
+  the storage soft delete keeps schedule snapshots, and nothing is sent to
+  the audience; Preview keeps a deleted song's slides; one delete at a time
+  (a second one is refused with a message, not queued); Shift+F10 and the
+  Menu key open the menu below the focused row with the first item
+  highlighted, and the highlight wraps over enabled items. The EW
+  observation was skipped by owner decision; these are provisional.
+- Checks (Windows 11): `cargo fmt --all -- --check` OK; `cargo clippy
+  --locked --all-targets -j 6 -- -D warnings` OK; `cargo test --locked
+  --all-targets -j 6` OK (lib 117; bin 90 + 2 ignored, including the new
+  `song_menu_items_order_disabled_items_and_dismissal`,
+  `edit_song_opens_that_song_new_song_a_blank_one_and_a_save_refreshes_songs`,
+  `deleting_a_scheduled_live_song_keeps_snapshots_and_the_live_scene`,
+  `a_failed_delete_shows_why_and_keeps_the_row`; output_process 9 + 1,
+  transport_process 4 + 1, composition_spike 11, input_check 9,
+  native_cues 17 + 1, output_spike 1, video_spike 12); `cargo build
+  --locked -j 6 --example seed_library` OK; `python -m ruff check scripts`
+  OK; `python -m ruff format --check scripts/operator-menu-windows.py` OK
+  (four older scripts fail `ruff format --check scripts`, unchanged).
+- Not run: `scripts/operator-menu-windows.py` (written for this ticket, not
+  executed in this session), `scripts/live-output-windows.py` and
+  `scripts/schedule-windows.py` after the operator changes, Linux/macOS,
+  screen reader, EW observation.
+- GPUI references: pin `a84689073d`, `crates/gpui/src/elements/anchored.rs`,
+  `crates/gpui/src/elements/deferred.rs`, `crates/gpui/examples/popover.rs`,
+  `crates/gpui/src/elements/div.rs`, `crates/gpui/src/app.rs`,
+  `crates/gpui/src/app/context.rs`, `crates/gpui/src/keymap/context.rs`,
+  `crates/gpui/src/window.rs`, `crates/gpui_windows/src/events.rs` (VK_APPS
+  is the `menu` key).
+- Next: run `python scripts/operator-menu-windows.py --out
+  .amp\in\artifacts\operator-menu-windows-m1-05i` on Windows and rerun
+  `scripts/live-output-windows.py` and `scripts/schedule-windows.py`; in an
+  EW session, observe menu keyboard access, the Delete confirmation, Update
+  items in Schedule and Sort by ▸.

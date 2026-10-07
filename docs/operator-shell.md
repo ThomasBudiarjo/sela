@@ -436,3 +436,71 @@ Mouse drag and drop is covered by GPUI tests only.
 
 Open: installed observation of schedule shortcuts, context menu, drag/drop
 insertion and delete confirmation; Linux/macOS native runs; UIA names.
+
+## M1-05i — Operator song menu
+
+Implemented-unqualified on branch `ticket/m1-05i-song-menu`. Ticket M1-05i of
+[M1-05](backlog.md#m1-05--song-model-and-editor); item order from
+EW8-OBS-021.
+
+- **Menu**: right-clicking a Songs row selects it like a click (Preview shows
+  its slides) and opens a menu at the pointer with, in order, **New Song…**, **Edit Song…**, **Delete**,
+  **Update items in Schedule**, **Sort by ▸** and **Refresh**. Update items in
+  Schedule and Sort by ▸ are shown disabled (their behavior is unobserved).
+  With a Songs row focused, Shift+F10 or the Menu (Apps) key opens it below the
+  row with New Song… highlighted. Down/Up (and Tab/Shift+Tab) move the
+  highlight, skip disabled items and wrap; Enter or Space chooses; Escape or a
+  click outside closes it and focus returns to the row. These are GPUI actions
+  (`OpenSongMenu` in the `SelaSongRow` context; `MenuNext`, `MenuPrevious`,
+  `MenuConfirm`, `MenuDismiss` in `SelaSongMenu`), bound in `Operator::new`.
+  The menu blocks clicks to the panes behind it, like the other operator menus.
+- **New Song…** opens a blank song editor window; **Edit Song…** opens the
+  editor on that song (the editor selects the revision once its catalog
+  arrives; `song_library::open_song`).
+- **Delete** asks "Delete “title” from the song library?" with the note
+  "Schedules that use this song keep their copy. Live output does not change."
+  Focus starts on **Keep**; **Delete** confirms. The delete goes through the
+  operator's storage worker (one job at a time; a second delete while one is
+  queued says "Not deleted: wait for the library to finish the previous
+  change"). Storage soft-deletes the song, so schedule items keep their pinned
+  revisions, and nothing is sent to the audience. On success the row leaves
+  Songs, the library selection clears (Preview keeps the slides it shows) and
+  the Songs footer says "Deleted “title”". If the song changed or was deleted
+  elsewhere first, the footer says "Not deleted: “title” was changed or
+  deleted elsewhere" in red and the row stays; other storage failures say so
+  with the error.
+- **Refresh** and editor changes: Refresh marks Songs stale and the catalog is
+  reloaded through the storage worker, not the UI thread. An editor window
+  bumps the `LibraryChanged` GPUI global after each save or delete; the
+  operator observes it and reloads Songs the same way. A library selection
+  follows its song to the newer revision after a reload.
+
+Provisional (not observed in EasyWorship 8.0.49): keyboard access to the menu
+(Shift+F10/Menu key, highlight, wrap), the Delete wording and Keep as the
+default button, Preview keeping a deleted song's slides, and the message
+texts. Not implemented: Update items in Schedule, Sort by options, deleting
+several selected songs at once.
+
+GPUI references (pin `a84689073d`): `crates/gpui/src/elements/anchored.rs`,
+`crates/gpui/src/elements/deferred.rs`, `crates/gpui/examples/popover.rs`
+(deferred + anchored + `on_mouse_down_out`), `crates/gpui/src/elements/div.rs`
+(`on_mouse_down_out`, `on_children_prepainted`, focus on mouse down),
+`crates/gpui/src/app.rs` and `crates/gpui/src/app/context.rs`
+(`set_global`, `observe_global`), `crates/gpui/src/keymap/context.rs`,
+`crates/gpui/src/window.rs` (action dispatch), and
+`crates/gpui_windows/src/events.rs` (VK_APPS maps to the `menu` key).
+
+GPUI tests: `song_menu_items_order_disabled_items_and_dismissal`,
+`edit_song_opens_that_song_new_song_a_blank_one_and_a_save_refreshes_songs`,
+`deleting_a_scheduled_live_song_keeps_snapshots_and_the_live_scene`,
+`a_failed_delete_shows_why_and_keeps_the_row`.
+
+Native: `scripts/operator-menu-windows.py` (Shift+F10 and Escape, keyboard
+Edit Song…, a real right-click, Menu key Delete → Keep, then Delete with the
+SQLite row checked and a schedule save keeping the pinned item) is written
+but **not run** yet. The EasyWorship observation of the unobserved items was
+skipped by owner decision for this ticket.
+
+Open: running the native script on Windows; EW observation of keyboard access,
+Delete confirmation and the two disabled items; Linux/macOS native runs; UIA
+names.
