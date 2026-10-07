@@ -5,6 +5,7 @@
 //! whole slider or dial drag included. Original GPUI code on GPUI primitives
 //! only.
 use super::*;
+use crate::ui::theme::{self, ACCENT, BORDER, FAINT};
 use sela::background::{Background, Fill};
 use sela::format::{
     Align, MAX_FIXED_SIZE, MAX_OPACITY, MAX_OUTLINE_SIZE, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET,
@@ -45,9 +46,6 @@ const MEDIA_THUMB: Extent = Extent {
     height: 54,
 };
 const MEDIA_THUMBS: usize = 256;
-const BORDER: u32 = 0xcbd0d6;
-const ACCENT: u32 = 0x536aca;
-const MUTED: u32 = 0xa5a9af;
 
 actions!(
     format_pane,
@@ -600,7 +598,7 @@ pub(super) fn font_label(
 fn label(text: &'static str) -> Div {
     div()
         .text_size(px(12.))
-        .text_color(rgb(0x646971))
+        .text_color(rgb(theme::MUTED))
         .child(text)
 }
 
@@ -613,7 +611,7 @@ fn section(title: &'static str) -> Div {
         .border_color(rgb(0xe4e5e3))
         .text_size(px(11.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(0x646971))
+        .text_color(rgb(theme::MUTED))
         .child(title)
 }
 
@@ -630,7 +628,7 @@ fn inert_box(content: impl IntoElement) -> Div {
         .border_1()
         .border_color(rgb(0xe1e3e5))
         .text_size(px(12.))
-        .text_color(rgb(MUTED))
+        .text_color(rgb(FAINT))
         .child(content)
 }
 
@@ -1481,7 +1479,7 @@ impl Library {
         if !enabled {
             return base
                 .border_color(rgb(0xe1e3e5))
-                .text_color(rgb(MUTED))
+                .text_color(rgb(FAINT))
                 .opacity(0.6)
                 .child(content);
         }
@@ -1615,7 +1613,7 @@ impl Library {
                 .gap_2()
                 .rounded(px(4.))
                 .when(i == highlight && enabled, |d| d.bg(rgb(0xe8ecfb)))
-                .text_color(rgb(if enabled { 0x292c30 } else { MUTED }))
+                .text_color(rgb(if enabled { 0x292c30 } else { FAINT }))
                 .child(div().w(px(10.)).child(if checked { "●" } else { "" }))
                 .child(text)
                 .when(enabled, |d| {
@@ -1712,7 +1710,7 @@ impl Library {
                         .py_1()
                         .text_size(px(11.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(0x646971))
+                        .text_color(rgb(theme::MUTED))
                         .child("Auto Sizing"),
                 )
             })
@@ -1746,8 +1744,8 @@ impl Library {
                             .border_color(rgb(ACCENT))
                             .child("Swatches"),
                     )
-                    .child(div().text_color(rgb(MUTED)).child("Spectrum"))
-                    .child(div().text_color(rgb(MUTED)).child("Values")),
+                    .child(div().text_color(rgb(FAINT)).child("Spectrum"))
+                    .child(div().text_color(rgb(FAINT)).child("Values")),
             )
             .children(palette().into_iter().enumerate().map(|(r, row)| {
                 div()
@@ -2051,7 +2049,7 @@ impl Library {
             .flex_col()
             .bg(rgb(0xfbfbfa))
             .border_l_1()
-            .border_color(rgb(0xdcdedc))
+            .border_color(rgb(theme::BORDER))
             // EW8-OBS-027: the Slide pane with a Text tab beside it; the
             // Layouts tab edits the master in a Slide pane alone
             // (EW8-OBS-043).
@@ -2063,7 +2061,7 @@ impl Library {
                     .pt_1()
                     .gap_1()
                     .border_b_1()
-                    .border_color(rgb(0xdcdedc))
+                    .border_color(rgb(theme::BORDER))
                     .text_size(px(12.))
                     .child(self.tab_button(Ctl::TabSlide, Tab::Slide, tab, cx))
                     .when(!self.layouts, |d| {
@@ -2112,7 +2110,7 @@ impl Library {
             .border_b_2()
             .border_color(rgb(if value == active { ACCENT } else { 0xfbfbfa }))
             .text_color(rgb(if value == active { 0x292c30 } else { 0x7a7f86 }))
-            .hover(|d| d.text_color(rgb(0x292c30)))
+            .hover(|d| d.text_color(rgb(theme::TEXT)))
             .focus(|d| d.bg(rgb(0xeef1fb)))
             .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
             .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
@@ -2187,7 +2185,7 @@ impl Library {
                         .debug_selector(|| "format-master-note".into())
                         .mt_1()
                         .text_size(px(11.))
-                        .text_color(rgb(0x646971))
+                        .text_color(rgb(theme::MUTED))
                         .child(format!(
                             "Follows the song master: {}",
                             describe(self.draft.master.as_ref())
@@ -2287,9 +2285,9 @@ impl Library {
                 .into_any_element()
         };
         let body = match &self.pane.media.names {
-            None => status("Loading images…".into(), MUTED),
+            None => status("Loading images…".into(), FAINT),
             Some(Err(e)) => status(e.clone(), 0xb36b00),
-            Some(Ok(_)) if count == 0 => status("No images yet. Import one.".into(), MUTED),
+            Some(Ok(_)) if count == 0 => status("No images yet. Import one.".into(), FAINT),
             Some(Ok(_)) => div()
                 .h(px(260.))
                 .child(
@@ -2376,7 +2374,7 @@ impl Library {
                     .py_1()
                     .text_size(px(11.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(0x646971))
+                    .text_color(rgb(theme::MUTED))
                     .child("Images"),
             )
             .child(body)
@@ -2396,7 +2394,7 @@ impl Library {
                     .when(highlight == count && import_enabled, |d| {
                         d.bg(rgb(0xe8ecfb))
                     })
-                    .text_color(rgb(if import_enabled { 0x292c30 } else { MUTED }))
+                    .text_color(rgb(if import_enabled { 0x292c30 } else { FAINT }))
                     .child("Import…")
                     .when(import_enabled, |d| {
                         d.cursor_pointer().hover(|d| d.bg(rgb(0xeef0f3))).on_click(
@@ -2494,7 +2492,7 @@ impl Library {
                             .py(px(3.))
                             .flex()
                             .justify_center()
-                            .bg(rgb(0xdce3fa))
+                            .bg(rgb(theme::FOCUS_BG))
                             .text_color(rgb(0x2f4f99))
                             .child("Style"),
                     )
@@ -2504,7 +2502,7 @@ impl Library {
                             .py(px(3.))
                             .flex()
                             .justify_center()
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(FAINT))
                             .child("Layout"),
                     ),
             )

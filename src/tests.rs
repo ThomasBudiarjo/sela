@@ -1,7 +1,5 @@
 use super::*;
-use crate::operator::{
-    CLEAR, Indicator, LIVE_OUTPUT, LOGO, Launcher, NEXT, NORMALIZE, OPEN_SCHEDULE, REMOVE_ITEM,
-};
+use crate::operator::{Control, Indicator, Launcher};
 use gpui::{Entity, Focusable, TestAppContext, VisualTestContext};
 use sela::{
     arrangement::SectionId,
@@ -211,7 +209,7 @@ fn shell_controls_and_resize(cx: &mut TestAppContext) {
         assert!(b.right() <= px(720.) && b.bottom() <= px(440.));
     }
     cx.update(|window, cx| {
-        assert!(operator.read(cx).controls[2].is_focused(window));
+        assert!(operator.read(cx).controls[Control::CollapseResources].is_focused(window));
         assert!(operator.read(cx).focus.contains_focused(window, cx));
     });
 }
@@ -256,7 +254,9 @@ fn splitters_bound_release_and_reset(cx: &mut TestAppContext) {
     assert_ne!(operator.read_with(&cx, |o, _| o.ratios), [0.24, 0.62, 0.62]);
     let b = cx.debug_bounds("reset-layout").unwrap();
     cx.simulate_click(b.center(), Default::default());
-    cx.update(|window, cx| assert!(operator.read(cx).controls[0].is_focused(window)));
+    cx.update(|window, cx| {
+        assert!(operator.read(cx).controls[Control::ResetLayout].is_focused(window))
+    });
     assert_eq!(operator.read_with(&cx, |o, _| o.ratios), [0.24, 0.62, 0.62]);
     for (selector, dimension, minimum) in [
         ("split-schedule", 0, 150.),
@@ -283,7 +283,7 @@ fn splitters_bound_release_and_reset(cx: &mut TestAppContext) {
         let d = operator.read_with(&cx, |o, _| o.dimensions(1280., 800.));
         assert!((d[dimension] - minimum).abs() < 0.01);
         cx.update(|window, cx| {
-            assert!(operator.read(cx).controls[0].is_focused(window));
+            assert!(operator.read(cx).controls[Control::ResetLayout].is_focused(window));
             assert!(operator.read(cx).focus.contains_focused(window, cx));
         });
     }
@@ -294,11 +294,11 @@ fn splitters_bound_release_and_reset(cx: &mut TestAppContext) {
     }
 }
 
-fn assert_control(cx: &mut VisualTestContext, operator: &Entity<Operator>, index: usize) {
+fn assert_control(cx: &mut VisualTestContext, operator: &Entity<Operator>, control: Control) {
     cx.update(|window, cx| {
         assert!(
-            operator.read(cx).controls[index].is_focused(window),
-            "control {index}"
+            operator.read(cx).controls[control].is_focused(window),
+            "control {control:?}"
         );
         assert!(operator.read(cx).focus.contains_focused(window, cx));
     });
@@ -307,26 +307,46 @@ fn assert_control(cx: &mut VisualTestContext, operator: &Entity<Operator>, index
 #[gpui::test]
 fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
     let (mut cx, operator, seen) = fixture(cx);
-    // Control 10 exists only while the New menu is open.
-    let order: Vec<usize> = (0..10)
-        .chain(LIVE_OUTPUT..=NEXT)
-        .chain(LOGO..=CLEAR)
-        .chain([NORMALIZE])
-        .chain(OPEN_SCHEDULE..=REMOVE_ITEM)
-        .collect();
+    // NewSongItem exists only while the New menu is open.
+    let order = [
+        Control::ResetLayout,
+        Control::Quit,
+        Control::CollapseResources,
+        Control::TabSongs,
+        Control::TabScriptures,
+        Control::TabMedia,
+        Control::TabPresentations,
+        Control::TabThemes,
+        Control::NewSongButton,
+        Control::NewMenu,
+        Control::LiveOutput,
+        Control::GoLive,
+        Control::Previous,
+        Control::Next,
+        Control::Logo,
+        Control::Black,
+        Control::Clear,
+        Control::Normalize,
+        Control::OpenSchedule,
+        Control::SaveSchedule,
+        Control::AddToSchedule,
+        Control::MoveUp,
+        Control::MoveDown,
+        Control::RemoveItem,
+    ];
     for index in order.iter().copied() {
         cx.simulate_keystrokes("tab");
         assert_control(&mut cx, &operator, index);
         assert_eq!(operator.read_with(&cx, |o, _| o.tab), 0);
     }
     cx.simulate_keystrokes("tab");
-    assert_control(&mut cx, &operator, 0);
+    assert_control(&mut cx, &operator, Control::ResetLayout);
     for index in order.iter().copied().rev() {
         cx.simulate_keystrokes("shift-tab");
         assert_control(&mut cx, &operator, index);
     }
     cx.simulate_keystrokes("tab tab tab tab");
-    assert_control(&mut cx, &operator, 4);
+    assert_control(&mut cx, &operator, Control::TabScriptures);
     cx.simulate_keystrokes("enter");
     assert_eq!(operator.read_with(&cx, |o, _| o.tab), 1);
     cx.simulate_keystrokes("tab space");
@@ -334,14 +354,14 @@ fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
     let schedule = cx.debug_bounds("Schedule").unwrap();
     let ratios = operator.read_with(&cx, |o, _| o.ratios);
     cx.simulate_keystrokes("ctrl-j down left shift-enter shift-space");
-    assert_control(&mut cx, &operator, 5);
+    assert_control(&mut cx, &operator, Control::TabMedia);
     assert_eq!(operator.read_with(&cx, |o, _| o.tab), 2);
     assert_eq!(operator.read_with(&cx, |o, _| o.ratios), ratios);
     assert_eq!(cx.debug_bounds("Schedule").unwrap(), schedule);
     cx.simulate_keystrokes("ctrl-q");
     assert_eq!(seen.get(), 1, "root Quit routes from a child context");
     cx.simulate_keystrokes("shift-tab shift-tab shift-tab shift-tab enter space");
-    assert_control(&mut cx, &operator, 1);
+    assert_control(&mut cx, &operator, Control::Quit);
     assert_eq!(
         seen.get(),
         3,
@@ -349,7 +369,7 @@ fn keyboard_traversal_and_activation(cx: &mut TestAppContext) {
     );
     cx.update(|_, cx| cx.clear_key_bindings());
     cx.simulate_keystrokes("enter space tab ctrl-q");
-    assert_control(&mut cx, &operator, 1);
+    assert_control(&mut cx, &operator, Control::Quit);
     assert_eq!(
         seen.get(),
         3,
@@ -363,15 +383,19 @@ fn new_menu_is_keyboard_accessible_without_reflowing_panes(cx: &mut TestAppConte
     cx.simulate_resize(size(px(1280.), px(800.)));
     let schedule = cx.debug_bounds("Schedule").unwrap();
     let live = cx.debug_bounds("Live").unwrap();
-    cx.update(|w, cx| operator.read(cx).controls[9].clone().focus(w, cx));
+    cx.update(|w, cx| {
+        operator.read(cx).controls[Control::NewMenu]
+            .clone()
+            .focus(w, cx)
+    });
     cx.simulate_keystrokes("enter");
     assert!(cx.debug_bounds("new-song-menu").is_some());
     assert_eq!(cx.debug_bounds("Schedule").unwrap(), schedule);
     assert_eq!(cx.debug_bounds("Live").unwrap(), live);
     cx.simulate_keystrokes("tab");
-    assert_control(&mut cx, &operator, 10);
+    assert_control(&mut cx, &operator, Control::NewSongItem);
     cx.simulate_keystrokes("shift-tab space");
-    assert_control(&mut cx, &operator, 9);
+    assert_control(&mut cx, &operator, Control::NewMenu);
     assert!(cx.debug_bounds("new-song-menu").is_none());
     assert_eq!(cx.debug_bounds("Schedule").unwrap(), schedule);
 }
@@ -388,24 +412,24 @@ fn collapsed_traversal_reset_and_rejection(cx: &mut TestAppContext) {
     );
     cx.simulate_keystrokes("tab tab tab enter");
     assert!(operator.read_with(&cx, |o, _| o.collapsed));
-    assert_control(&mut cx, &operator, 2);
+    assert_control(&mut cx, &operator, Control::CollapseResources);
     assert!(cx.debug_bounds("Songs").is_none());
     cx.simulate_keystrokes("tab");
-    assert_control(&mut cx, &operator, 9);
+    assert_control(&mut cx, &operator, Control::NewMenu);
     cx.simulate_keystrokes("tab");
-    assert_control(&mut cx, &operator, LIVE_OUTPUT);
+    assert_control(&mut cx, &operator, Control::LiveOutput);
     cx.simulate_keystrokes("shift-tab shift-tab space");
-    assert_control(&mut cx, &operator, 2);
+    assert_control(&mut cx, &operator, Control::CollapseResources);
     assert!(!operator.read_with(&cx, |o, _| o.collapsed));
     cx.simulate_keystrokes("tab");
-    assert_control(&mut cx, &operator, 3);
+    assert_control(&mut cx, &operator, Control::TabSongs);
     let b = cx.debug_bounds("collapse-resources").unwrap();
     cx.simulate_click(b.center(), Default::default());
-    assert_control(&mut cx, &operator, 2);
+    assert_control(&mut cx, &operator, Control::CollapseResources);
     // 2 → 9 → Live output, Go Live, Previous, Next → Logo, Black, Clear →
     // Open, Save → schedule Up, Down, Remove → 0.
     cx.simulate_keystrokes("tab tab tab tab tab tab tab tab tab tab tab tab tab tab enter");
-    assert_control(&mut cx, &operator, 0);
+    assert_control(&mut cx, &operator, Control::ResetLayout);
     assert!(!operator.read_with(&cx, |o, _| o.collapsed));
     assert!(operator.read_with(&cx, |o, _| o.output.is_none()));
     cx.update(|window, cx| window.blur(cx));
@@ -507,7 +531,7 @@ fn go_live_requires_preview_and_output(cx: &mut TestAppContext) {
     let (mut cx, operator, _) = fixture(cx);
     cx.simulate_resize(size(px(1280.), px(800.)));
     click(&mut cx, "go-live");
-    assert_control(&mut cx, &operator, crate::operator::GO_LIVE);
+    assert_control(&mut cx, &operator, Control::GoLive);
     assert_eq!(
         operator.read_with(&cx, |o, _| o.live_message.clone()),
         Some("Select a song to preview first".into())
@@ -1020,7 +1044,7 @@ fn normalize_text_size_applies_to_the_live_slide(cx: &mut TestAppContext) {
     click(&mut cx, "collapse-resources");
     assert!(cx.debug_bounds("normalize-text").is_none());
     cx.update(|window, cx| {
-        operator.read(cx).controls[NORMALIZE]
+        operator.read(cx).controls[Control::Normalize]
             .clone()
             .focus(window, cx)
     });
@@ -1300,9 +1324,9 @@ fn schedule_add_reorder_select_navigate_and_remove(cx: &mut TestAppContext) {
         operator.read_with(&cx, |o, _| o.dialog),
         Some(Dialog::Remove(ids[1]))
     );
-    assert_control(&mut cx, &operator, crate::operator::DIALOG_CANCEL);
+    assert_control(&mut cx, &operator, Control::DialogCancel);
     cx.simulate_keystrokes("enter");
-    assert_control(&mut cx, &operator, REMOVE_ITEM);
+    assert_control(&mut cx, &operator, Control::RemoveItem);
     assert_eq!(
         operator.read_with(&cx, |o, _| o.schedule.entries().len()),
         3
@@ -1498,7 +1522,7 @@ fn save_and_reopen_pin_revisions_behind_an_unsaved_guard(cx: &mut TestAppContext
     cx.update(|_, cx| input.update(cx, |i, cx| i.set_text("Sunday", cx).unwrap()));
     cx.simulate_keystrokes("enter");
     assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
-    assert_control(&mut cx, &operator, crate::operator::ADD_TO_SCHEDULE);
+    assert_control(&mut cx, &operator, Control::AddToSchedule);
     settle(&mut cx, &operator, "saved", |o| {
         o.schedule.saved().is_some() && !o.schedule.is_dirty()
     });
@@ -1978,7 +2002,7 @@ fn edit_song_opens_that_song_new_song_a_blank_one_and_a_save_refreshes_songs(
 
 #[gpui::test]
 fn deleting_a_scheduled_live_song_keeps_snapshots_and_the_live_scene(cx: &mut TestAppContext) {
-    use crate::operator::{DIALOG_CANCEL, Dialog};
+    use crate::operator::Dialog;
     let dir = tempfile::tempdir().unwrap();
     let path = library_with_songs(&dir);
     let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
@@ -2006,7 +2030,7 @@ fn deleting_a_scheduled_live_song_keeps_snapshots_and_the_live_scene(cx: &mut Te
         operator.read_with(&cx, |o, _| o.dialog),
         Some(Dialog::DeleteSong(pinned))
     );
-    assert_control(&mut cx, &operator, DIALOG_CANCEL);
+    assert_control(&mut cx, &operator, Control::DialogCancel);
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     operator.read_with(&cx, |o, _| {

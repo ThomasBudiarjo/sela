@@ -3147,3 +3147,38 @@ PY
   unsaved-schedule prompt was answered No; nothing saved.
 - Next: consume the records in M1-07b (search), M1-02/M1-03 (keys), M5-06
   (Options).
+
+### Foundation / operator-module-split-tokens — Operator module split and design tokens — 2026-10-08
+
+- State: implemented-unqualified (refactor only, no behavior change intended).
+- Scope: `src/operator.rs` (3399 lines) became `src/operator/` with `mod.rs`
+  (struct, state, `new`), `controls.rs` (typed `Control` enum, `ControlSet`
+  index-by-`Control`, `tab_position`, `activate`, `button`/`mask_button`),
+  `layout.rs` (root `Render`, dimensions, splitters), `schedule.rs`,
+  `preview_live.rs`, `polling.rs`, `menus.rs`, `dialogs/mod.rs`, and
+  `resources/{mod,songs,media,scriptures,presentations,themes}.rs` (the last
+  three are placeholders that render the existing empty state). Largest file
+  is `preview_live.rs` at ~800 lines. New `src/ui/theme.rs` holds colors,
+  type sizes, bar heights and radii; `operator/` has no `rgb(0x…)` literals
+  (enforced by a unit test). `song_library.rs` and `format_pane.rs` use the
+  same tokens for chrome; the Format pane's border moved from `0xcbd0d6` to
+  the shared `BORDER` `0xdcdedc` (intentional, one-step lighter) and its muted
+  text is `FAINT`.
+- Decisions: methods moved as `impl Operator` blocks with `pub(crate)`
+  visibility; fields stay private/`pub(super)` on the struct in `mod.rs` so
+  children read them. `src/tests.rs` changed only to use `Control` instead of
+  bare indices; no assertion changed.
+- Upstream zed paths consulted: none new (no new GPUI patterns; module and
+  token layout only). Pinned rev stays `a84689073d296dfd39987bc7dd478e43ef76d83a`.
+- Checks: `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets
+  -- -D warnings`, `cargo test --locked --all-targets -- --test-threads=12` all
+  exit 0 (bin 94 passed incl. 4 new `ui::theme` tests). Native, one at a time:
+  `live-output`, `schedule`, `song-editor`, `operator-menu` scripts all exit 0
+  with PASS/ok. Before/after: 13 `operator-*.png` captures from
+  `live-output-windows.py` are byte-identical (SHA-256) between
+  `.amp/in/artifacts/split-before` and `split-after/live-output`; the song
+  editor Format pane capture was viewed and looks correct.
+- Unexecuted: `ruff` not rerun on scripts (none changed); VAL-SHELL-007 sampled
+  pixel table across song editor/Options (no Options dialog yet) is left to the
+  validator.
+- Next: later features add tokens to `ui/theme.rs` instead of inline `rgb()`.

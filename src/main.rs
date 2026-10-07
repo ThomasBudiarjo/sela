@@ -58,6 +58,7 @@ mod audience;
 mod operator;
 mod song_library;
 mod text_input;
+mod ui;
 use operator::Operator;
 
 /// Internal child mode: `sela --audience EPOCH_HEX MONITOR [BACKEND]`, where

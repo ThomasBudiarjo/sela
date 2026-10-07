@@ -1,0 +1,796 @@
+use super::*;
+
+/// Text-only slide thumbnail over the slide's fill color (image fills show
+/// black); not a rendered audience frame.
+pub(crate) fn tile(slide: &Slide, index: usize, border: u32) -> gpui::Div {
+    let fill = match background::plan(slide.background.as_ref()) {
+        Plan::Color([r, g, b]) => u32::from_be_bytes([0, r, g, b]),
+        Plan::Image(..) => BLACK,
+    };
+    div()
+        .w(px(168.))
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .p_1()
+        .rounded(px(RADIUS))
+        .child(
+            div()
+                .h(px(94.))
+                .rounded(px(RADIUS_SMALL))
+                .border_2()
+                .border_color(rgb(border))
+                .bg(rgb(fill))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .overflow_hidden()
+                .px_1()
+                .text_size(px(TEXT_TILE))
+                .text_color(rgb(DARK_TEXT))
+                .children(
+                    slide
+                        .text
+                        .lines()
+                        .take(6)
+                        .map(|line| div().text_center().child(line.to_owned())),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(TEXT_CAPTION))
+                .text_color(rgb(CANVAS_TEXT))
+                .truncate()
+                .child(format!("{} · {}", index + 1, slide_name(index, slide))),
+        )
+}
+
+pub(crate) fn slide_pane(
+    title: &'static str,
+    width: f32,
+    footer: String,
+    status: Option<Vec<(String, u32)>>,
+    tiles: Option<Vec<gpui::Stateful<gpui::Div>>>,
+) -> impl IntoElement {
+    let empty = tiles.as_ref().is_none_or(Vec::is_empty);
+    div()
+        .debug_selector(|| title.into())
+        .w(px(width))
+        .h_full()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .child(
+            div()
+                .h(px(PANE_HEADER_H))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .px_3()
+                .font_weight(FontWeight::MEDIUM)
+                .border_b_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(CHROME))
+                .child(title),
+        )
+        .children(status.map(|lines| {
+            div()
+                .debug_selector(move || format!("{title}-status"))
+                .flex_shrink_0()
+                .px_3()
+                .py_1()
+                .bg(rgb(CANVAS))
+                .border_b_1()
+                .border_color(rgb(CANVAS_BORDER))
+                .text_size(px(TEXT_SMALL))
+                .children(
+                    lines
+                        .into_iter()
+                        .map(|(line, color)| div().truncate().text_color(rgb(color)).child(line)),
+                )
+        }))
+        .child(
+            div()
+                .id(title)
+                .flex_1()
+                .min_h_0()
+                .p_2()
+                .overflow_y_scroll()
+                .bg(rgb(CANVAS))
+                .text_size(px(TEXT_BASE))
+                .text_color(rgb(CANVAS_TEXT))
+                .when(empty, |d| {
+                    d.flex()
+                        .items_center()
+                        .justify_center()
+                        .child(if title == "Live" {
+                            "Nothing live"
+                        } else {
+                            "Nothing selected"
+                        })
+                })
+                .when_some(tiles.filter(|t| !t.is_empty()), |d, tiles| {
+                    d.flex().flex_wrap().gap_2().children(tiles)
+                }),
+        )
+        .child(
+            div()
+                .h(px(PANE_FOOTER_H))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .px_3()
+                .border_t_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(CHROME))
+                .text_size(px(TEXT_CAPTION))
+                .text_color(rgb(MUTED))
+                .truncate()
+                .child(footer),
+        )
+}
+
+impl Operator {
+    /// Double-click in Songs goes straight to Live (documented), from the
+    /// first slide (provisional).
+    pub(crate) fn song_to_live(&mut self, index: usize) {
+        let Some((version, _)) = self.catalog.get(index).cloned() else {
+            return;
+        };
+        self.selected_song = Some(version);
+        self.selected_entry = None;
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.version == version && p.entry.is_none())
+        {
+            self.live_on_load = None;
+            self.preview_slide = 0;
+            self.go_live();
+        } else {
+            self.live_on_load = Some(version);
+        }
+    }
+
+    pub(crate) fn background_extent(&self) -> Extent {
+        self.output_extent.unwrap_or(NOMINAL_EXTENT)
+    }
+
+    /// Backgrounds wanted soon, most urgent first: a deferred cue, the live
+    /// slide, the previewed slide, then both neighbours of each. Capped at
+    /// what the cache holds for this extent, so prefetching never evicts its
+    /// own work.
+    pub(crate) fn wanted_backgrounds(&self) -> Vec<images::BackgroundKey> {
+        let extent = self.background_extent();
+        let mut centers: Vec<(&Item, usize)> = Vec::new();
+        if let Some(live) = &self.live {
+            centers.extend(self.deferred_send.map(|index| (live, index)));
+            centers.extend(self.live_slide.map(|index| (live, index)));
+        }
+        if let Some(preview) = &self.preview {
+            centers.push((preview, self.preview_slide));
+        }
+        let mut wanted = Vec::new();
+        for offset in [0, 1, -1] {
+            for (item, index) in &centers {
+                let Some(slide) = index
+                    .checked_add_signed(offset)
+                    .and_then(|i| item.slides.get(i))
+                else {
+                    continue;
+                };
+                if let Plan::Image(image, aspect) = background::plan(slide.background.as_ref()) {
+                    let key = (image.clone(), aspect, extent);
+                    if !wanted.contains(&key) {
+                        wanted.push(key);
+                    }
+                }
+            }
+        }
+        wanted.truncate(self.backgrounds.capacity(extent));
+        wanted
+    }
+
+    /// Hands the most urgent missing background to the image worker. Wanted
+    /// entries are refreshed least urgent first, so eviction spares them.
+    pub(crate) fn prefetch_backgrounds(&mut self) {
+        if self.background_job.is_some() || self.image_worker.is_none() {
+            return;
+        }
+        let mut missing = None;
+        for key in self.wanted_backgrounds().into_iter().rev() {
+            if self.backgrounds.get(&key).is_none() {
+                missing = Some(key);
+            }
+        }
+        let (Some(key), Some(worker)) = (missing, &self.image_worker) else {
+            return;
+        };
+        // A full queue (an import is running) is retried on the next poll.
+        if worker.submit(images::Job::Background(key.clone())).is_ok() {
+            self.background_job = Some(key);
+        }
+    }
+
+    /// The previewed slide's background substitution, if its image could
+    /// not be prepared (owner rule: black plus this warning).
+    pub(crate) fn preview_warning(&self) -> Option<String> {
+        let slide = self.preview.as_ref()?.slides.get(self.preview_slide)?;
+        let Plan::Image(image, aspect) = background::plan(slide.background.as_ref()) else {
+            return None;
+        };
+        if self.image_worker.is_none() {
+            return Some(images::Substitute::Missing.warning(&image.name));
+        }
+        match self
+            .backgrounds
+            .peek(&(image.clone(), aspect, self.background_extent()))
+        {
+            Some(Err(why)) => Some(why.warning(&image.name)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn toggle_mask(&mut self, mask: Mask) {
+        if mask == Mask::Logo && !self.masks.is_on(Mask::Logo) && self.logo.is_none() {
+            self.live_message = Some(NO_LOGO.into());
+            return;
+        }
+        self.masks.toggle(mask);
+        self.unmask_after_cue = false;
+        self.live_message = None;
+        self.sync_show(Instant::now());
+    }
+
+    /// EW8-OBS-014: a single click on a Live slide applies it. EW8-OBS-016: a
+    /// double-click also turns a single mask off; clearing combined masks is
+    /// provisional (EW8-OBS-020), as is keeping a mask on a single click.
+    pub(crate) fn click_live(&mut self, index: usize, double: bool) {
+        if double && self.masks.any() {
+            self.masks.live_double_click();
+            self.unmask_after_cue = true;
+        }
+        // The first click of a double-click already sent this slide.
+        if !(double && self.live_slide == Some(index)) {
+            self.send(index);
+        }
+        self.sync_show(Instant::now());
+    }
+
+    pub(crate) fn logo_ready(&self) -> bool {
+        let (Some(output), Some(logo)) = (&self.output, &self.logo) else {
+            return false;
+        };
+        let Status::Connected { extent, .. } = output.status() else {
+            return false;
+        };
+        let version = images::logo_version(logo.resource.version, extent);
+        self.logo_sent == Some(version)
+            && (output.logo() == Some(version) || output.logo_pending() == Some(version))
+    }
+
+    /// The layer to send. A Logo intent covers with Black until the logo for
+    /// this surface is with the renderer, so text never shows in between.
+    pub(crate) fn wire_layer(&self) -> Layer {
+        match self.masks.layer() {
+            Layer::Logo if !self.logo_ready() => Layer::Black,
+            layer => layer,
+        }
+    }
+
+    pub(crate) fn indicator(&self, mask: Mask) -> Indicator {
+        let output = self.output.as_ref();
+        let confirmed = output.and_then(Supervisor::mask);
+        let synced = confirmed == Some(self.masks.layer())
+            && output.is_some_and(|o| o.mask_pending().is_none());
+        let layer = match mask {
+            Mask::Black => Layer::Black,
+            Mask::Clear => Layer::Clear,
+            Mask::Logo => Layer::Logo,
+        };
+        match (self.masks.is_on(mask), synced) {
+            (true, true) => Indicator::On,
+            (true, false) => Indicator::Pending,
+            (false, false) if confirmed == Some(layer) && self.wire_layer() != layer => {
+                Indicator::Pending
+            }
+            _ => Indicator::Off,
+        }
+    }
+
+    /// The next item wanting face resolution: the live item first, then the
+    /// preview item. Items are resolved whole, one job at a time.
+    pub(crate) fn unresolved(&self) -> Option<Version> {
+        let wants = |item: &Item| item.resolved.is_none().then_some(item.version);
+        self.live
+            .as_ref()
+            .and_then(wants)
+            .or(self.preview.as_ref().and_then(wants))
+    }
+
+    /// Resolve the unresolved item's formats off the UI thread. The landing
+    /// callback re-derives the next want, so a busy job is simply skipped.
+    pub(crate) fn resolve_fonts(&mut self, cx: &mut Context<Self>) {
+        let Some(version) = self.unresolved() else {
+            return;
+        };
+        if self.font_job.is_some() {
+            return;
+        }
+        let formats: Vec<_> = self
+            .preview
+            .iter()
+            .chain(self.live.iter())
+            .find(|item| item.version == version)
+            .map(|item| {
+                item.slides
+                    .iter()
+                    .map(|slide| slide.format.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if formats.is_empty() {
+            return;
+        }
+        self.font_job = Some(version);
+        let executor = cx.background_executor().clone();
+        self.font_task = Some(cx.spawn(async move |this, cx| {
+            let resolved = executor
+                .spawn(async move {
+                    let fonts = fonts::shared();
+                    formats
+                        .iter()
+                        .map(|format| fonts.resolve(format))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |operator, cx| {
+                operator.fonts_resolved(version, resolved, cx)
+            });
+        }));
+    }
+
+    /// A background resolution landed: attach by version, retry the deferred
+    /// cue, then derive the next wanting item. `pub(super)` for the
+    /// late-landing transition test in `tests`.
+    pub(crate) fn fonts_resolved(
+        &mut self,
+        version: Version,
+        resolved: Vec<fonts::Resolved>,
+        cx: &mut Context<Self>,
+    ) {
+        self.font_job = None;
+        self.font_task = None;
+        let resolved: Arc<[fonts::Resolved]> = resolved.into();
+        let mut replaced = false;
+        for item in [&mut self.live, &mut self.preview].into_iter().flatten() {
+            if item.version == version {
+                replaced = item.resolved.is_some();
+                item.resolved = Some(resolved.clone());
+            }
+        }
+        if replaced {
+            // Improved resolution (the catalog landed after a bundled
+            // fallback): sizes re-fit, so drop the cap and refresh the cue.
+            self.size_cap = None;
+            if let Some(index) = self.live_slide {
+                self.send(index);
+            }
+        } else if let Some(index) = self.deferred_send.take() {
+            self.send(index);
+        }
+        self.resolve_fonts(cx);
+        cx.notify();
+    }
+
+    /// The background catalog scan landed: formats that named a family fell
+    /// back to bundled before the catalog existed, so resolve them again.
+    pub(crate) fn fonts_scanned(&mut self, cx: &mut Context<Self>) {
+        let named = |item: &Item| {
+            item.slides.iter().any(|slide| {
+                slide
+                    .format
+                    .font
+                    .as_deref()
+                    .is_some_and(|name| !name.trim().is_empty())
+            })
+        };
+        for item in [&mut self.live, &mut self.preview].into_iter().flatten() {
+            if named(item) {
+                item.resolved = None;
+            }
+        }
+        self.resolve_fonts(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn select_slide(&mut self, index: usize, go_live: bool, cx: &mut Context<Self>) {
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|item| index < item.slides.len())
+        {
+            self.preview_slide = index;
+            if go_live {
+                self.go_live();
+            }
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn toggle_output(&mut self) {
+        if self.output.take().is_some() {
+            self.live_message = Some("Live output is off".into());
+        } else {
+            let launcher = self.launcher.clone();
+            self.output = Some(Supervisor::start(
+                move |epoch| launcher(epoch),
+                Instant::now(),
+            ));
+            self.live_message = None;
+        }
+        // A new session never replays earlier intent; Go Live must be repeated.
+        self.output_extent = None;
+        self.live_slide = None;
+        // Masks do carry over (EW8-OBS-017); a fresh renderer starts unmasked.
+        self.sent_mask = self.output.as_ref().map(|_| Layer::None);
+        self.unmask_after_cue = false;
+        self.logo_requested = None;
+        self.logo_sent = None;
+        self.sync_show(Instant::now());
+    }
+
+    pub(crate) fn go_live(&mut self) {
+        let Some(item) = self.preview.clone() else {
+            self.live_message = Some("Select a song to preview first".into());
+            return;
+        };
+        if item.slides.is_empty() {
+            self.live_message = Some("The previewed song has no slides".into());
+            return;
+        }
+        let index = self.preview_slide.min(item.slides.len() - 1);
+        if self.ready_for_cue() {
+            self.live = Some(item);
+            self.send(index);
+        }
+    }
+
+    pub(crate) fn step_live(&mut self, forward: bool) {
+        let (Some(count), Some(index)) = (
+            self.live.as_ref().map(|item| item.slides.len()),
+            self.live_slide,
+        ) else {
+            self.live_message = Some("Nothing is live".into());
+            return;
+        };
+        let target = if forward {
+            index + 1
+        } else {
+            index.wrapping_sub(1)
+        };
+        // Boundary behavior across schedule items is unobserved; stop here.
+        if target < count {
+            self.send(target);
+        }
+    }
+
+    pub(crate) fn ready_for_cue(&mut self) -> bool {
+        let message = match self.output.as_ref().map(Supervisor::status) {
+            None => "Turn on Live output first",
+            Some(Status::Starting) => "Live output is still starting",
+            Some(Status::Lost(_)) => "Output state unknown · turn Live off and on",
+            Some(Status::Connected { .. }) => return true,
+        };
+        self.live_message = Some(message.into());
+        false
+    }
+
+    pub(crate) fn send(&mut self, index: usize) {
+        if !self.ready_for_cue() {
+            return;
+        }
+        let (Some(output), Some(item)) = (&mut self.output, &self.live) else {
+            return;
+        };
+        let Status::Connected { extent, caps } = output.status() else {
+            return;
+        };
+        let Some((slide, version)) = item
+            .slides
+            .get(index)
+            .zip(slides::slide_version(item.version, index))
+        else {
+            return;
+        };
+        // Installed faces resolve off the UI thread. Until they land, the
+        // current live scene stays; the deferred cue is retried by
+        // `fonts_resolved` (M1-05g2b).
+        let Some(resolved) = item.resolved.clone() else {
+            self.deferred_send = Some(index);
+            self.live_message = Some("Resolving fonts…".into());
+            return;
+        };
+        // Image backgrounds are fitted by the image worker; until this one
+        // lands the current scene stays and the cue is retried on landing.
+        // An image that cannot be prepared is shown as black, with a warning.
+        let (background, warning) = match background::plan(slide.background.as_ref()) {
+            Plan::Color(rgb) => (slides::color_background(rgb), None),
+            Plan::Image(image, aspect) => {
+                let fitted = if self.image_worker.is_none() {
+                    Some(Err(images::Substitute::Missing))
+                } else {
+                    self.backgrounds.get(&(image.clone(), aspect, extent))
+                };
+                match fitted {
+                    Some(Ok(rgba)) => (
+                        PreparedBackground::Image {
+                            version: images::background_version(image, aspect),
+                            extent,
+                            rgba,
+                        },
+                        None,
+                    ),
+                    Some(Err(why)) => (
+                        slides::color_background(background::BLACK),
+                        Some(why.warning(&image.name)),
+                    ),
+                    None => {
+                        self.deferred_send = Some(index);
+                        self.live_message = Some(PREPARING_BACKGROUND.into());
+                        return;
+                    }
+                }
+            }
+        };
+        let cap = match self.size_cap {
+            Some((v, e, s, cap)) if (v, e, s) == (item.version, extent, self.sizing) => cap,
+            _ => {
+                let cap = slides::size_cap(&item.slides, &resolved, extent, self.sizing);
+                self.size_cap = Some((item.version, extent, self.sizing, cap));
+                cap
+            }
+        };
+        let result = slides::cue(
+            version,
+            slide,
+            &resolved[index],
+            extent,
+            caps,
+            cap,
+            background,
+        )
+        .map_err(|error| error.to_string())
+        .and_then(|cue| {
+            output
+                .present(Arc::new(cue), Instant::now())
+                .map_err(|refusal| match refusal {
+                    Refusal::NotConnected => "Live output is not connected".into(),
+                    Refusal::WrongExtent => "Output size changed; try again".into(),
+                })
+        });
+        match result {
+            Ok(()) => {
+                let label = format!("{} · {}", item.title, slide_name(index, slide));
+                if self.labels.len() == LABELS {
+                    self.labels.pop_front();
+                }
+                self.labels.retain(|(v, _)| *v != version);
+                self.labels.push_back((version, label));
+                self.live_slide = Some(index);
+                self.live_message = warning;
+            }
+            Err(message) => self.live_message = Some(message),
+        }
+    }
+
+    /// What the renderer has acknowledged, by label, if anything.
+    pub(crate) fn on_screen(&self) -> Option<&str> {
+        let LiveState::Confirmed(version) = self.output.as_ref()?.live() else {
+            return None;
+        };
+        self.labels
+            .iter()
+            .find(|(v, _)| *v == version)
+            .map(|(_, label)| label.as_str())
+    }
+
+    pub(crate) fn live_index(&self, version: Option<ContentVersion>) -> Option<usize> {
+        slides::slide_index(self.live.as_ref()?.version, version?)
+    }
+
+    pub(crate) fn output_line(&self) -> String {
+        match self.output.as_ref().map(Supervisor::status) {
+            None => "Live output off".into(),
+            Some(Status::Starting) => "Starting live output…".into(),
+            Some(Status::Connected { extent, .. }) => {
+                format!("Live output {}×{}", extent.width, extent.height)
+            }
+            Some(Status::Lost(loss)) => {
+                format!("{loss} · output state unknown · turn Live off and on")
+            }
+        }
+    }
+
+    pub(crate) fn preview_pane(&mut self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let count = self.preview.as_ref().map_or(0, |item| item.slides.len());
+        while self.slide_rows.len() < count {
+            let index = self.slide_rows.len() as isize;
+            self.slide_rows.push(
+                cx.focus_handle()
+                    .tab_index(SLIDE_TAB_INDEX + index)
+                    .tab_stop(true),
+            );
+        }
+        let footer = match &self.preview {
+            Some(item) if count > 0 => format!(
+                "{} · Slide {} of {count}",
+                item.title,
+                self.preview_slide + 1
+            ),
+            Some(item) => format!("{} · no slides", item.title),
+            None => "Nothing selected".into(),
+        };
+        let tiles = self.preview.as_ref().map(|item| {
+            item.slides
+                .iter()
+                .enumerate()
+                .map(|(index, slide)| {
+                    let selected = index == self.preview_slide;
+                    tile(slide, index, if selected { ACCENT } else { CANVAS })
+                        .id(("preview-slide", index))
+                        .debug_selector(move || format!("preview-slide-{index}"))
+                        .track_focus(&self.slide_rows[index])
+                        .key_context("SelaControl")
+                        .focus(|d| d.bg(rgb(CANVAS_FOCUS)))
+                        .cursor_pointer()
+                        .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
+                            window.prevent_default();
+                            this.select_slide(index, false, cx);
+                        }))
+                        .on_click(
+                            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                if matches!(event, gpui::ClickEvent::Keyboard(_)) {
+                                    return;
+                                }
+                                this.slide_rows[index].focus(window, cx);
+                                // Documented (EasyWorship 7 guide): double-click sends to output.
+                                this.select_slide(index, event.click_count() >= 2, cx);
+                            }),
+                        )
+                })
+                .collect::<Vec<_>>()
+        });
+        let warning = self.preview_warning().map(|w| vec![(w, DARK_ERROR)]);
+        slide_pane("Preview", width, footer, warning, tiles)
+    }
+
+    /// Live pane status, top to bottom. Mask lines reflect acknowledged state.
+    pub(crate) fn live_lines(&self) -> Vec<(String, u32)> {
+        let output = self.output.as_ref();
+        let connected = matches!(
+            output.map(Supervisor::status),
+            Some(Status::Connected { .. })
+        );
+        let sending = self.live_index(output.and_then(|o| o.wanted().or(o.in_flight())));
+        let mut lines = vec![(self.output_line(), DARK_MUTED)];
+        let slide = match self.on_screen() {
+            Some(label) => label.to_owned(),
+            None if connected => "nothing confirmed".into(),
+            None => "unknown".into(),
+        };
+        match output.and_then(Supervisor::mask) {
+            Some(layer) if layer != Layer::None => {
+                lines.push((format!("Mask: {}", layer_name(layer)), DARK_TEXT));
+                lines.push((format!("Under mask: {slide}"), DARK_MUTED));
+            }
+            _ => {
+                let color = if self.on_screen().is_some() {
+                    DARK_TEXT
+                } else {
+                    DARK_MUTED
+                };
+                lines.push((format!("On screen: {slide}"), color));
+            }
+        }
+        if self
+            .live
+            .as_ref()
+            .and_then(|item| item.entry)
+            .is_some_and(|id| self.schedule.get(id).is_none())
+        {
+            lines.push(("Live item is no longer in the schedule".into(), DARK_MUTED));
+        }
+        if let Some(layer) = output.and_then(Supervisor::mask_pending) {
+            lines.push((format!("Sending mask: {}…", layer_name(layer)), SENDING));
+        }
+        if self.masks.any() && output.is_none() {
+            lines.push((
+                format!(
+                    "Mask armed: {} · shown when Live output is on",
+                    layer_name(self.masks.layer())
+                ),
+                DARK_MUTED,
+            ));
+        }
+        if self.masks.is_on(Mask::Logo) {
+            if let Some(error) = &self.logo_error {
+                lines.push((error.clone(), DARK_ERROR));
+            } else if connected && !self.logo_ready() {
+                lines.push(("Preparing logo · covering with Black".into(), SENDING));
+            }
+        }
+        if sending.is_some() {
+            lines.push(("Sending…".into(), SENDING));
+        }
+        if let Some((_, error)) = output.and_then(|o| o.rejected()) {
+            lines.push((format!("Last cue not shown: {error}"), DARK_ERROR));
+        }
+        if let Some((layer, error)) = output.and_then(|o| o.mask_rejected()) {
+            lines.push((
+                format!("Mask {} not shown: {error}", layer_name(layer)),
+                DARK_ERROR,
+            ));
+        }
+        if let Some((_, error)) = output.and_then(|o| o.logo_rejected()) {
+            lines.push((format!("Logo not shown: {error}"), DARK_ERROR));
+        }
+        if let Some(message) = &self.live_message {
+            lines.push((message.clone(), DARK_ERROR));
+        }
+        lines
+    }
+
+    pub(crate) fn live_pane(&mut self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let output = self.output.as_ref();
+        let confirmed = output.and_then(|o| match o.live() {
+            LiveState::Confirmed(version) => Some(version),
+            LiveState::Unknown => None,
+        });
+        let confirmed = self.live_index(confirmed);
+        let sending = self.live_index(output.and_then(|o| o.wanted().or(o.in_flight())));
+        let lines = self.live_lines();
+        let footer = match (&self.live, self.live_slide) {
+            (Some(item), Some(index)) => format!(
+                "{} · Slide {} of {}",
+                item.title,
+                index + 1,
+                item.slides.len()
+            ),
+            (Some(item), None) => format!("{} · not sent", item.title),
+            _ => "Nothing live".into(),
+        };
+        let tiles = self.live.as_ref().map(|item| {
+            item.slides
+                .iter()
+                .enumerate()
+                .map(|(index, slide)| {
+                    let border = if Some(index) == confirmed {
+                        ON_SCREEN
+                    } else if Some(index) == sending {
+                        SENDING
+                    } else {
+                        CANVAS
+                    };
+                    tile(slide, index, border)
+                        .id(("live-slide", index))
+                        .debug_selector(move || format!("live-slide-{index}"))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                            if matches!(event, gpui::ClickEvent::Keyboard(_))
+                                || event.is_right_click()
+                            {
+                                return;
+                            }
+                            this.click_live(index, event.click_count() >= 2);
+                            cx.notify();
+                        }))
+                })
+                .collect::<Vec<_>>()
+        });
+        slide_pane("Live", width, footer, Some(lines), tiles)
+    }
+}

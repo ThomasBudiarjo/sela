@@ -1,5 +1,6 @@
 //! Provisional native authoring window. All durable I/O belongs to storage::Worker.
 //! Layout and Words behavior follow EW8-OBS-021..026; see docs/song-library.md.
+use crate::ui::theme;
 use crate::{
     ActivateControl, FocusNext, FocusPrevious, Quit,
     text_input::{self, Redo, TextInput, Undo},
@@ -1673,7 +1674,7 @@ impl Library {
                 div()
                     .px_1()
                     .text_size(px(12.))
-                    .text_color(rgb(0x646971))
+                    .text_color(rgb(theme::MUTED))
                     .child("Song master · until themes exist"),
             )
             .child(
@@ -1683,7 +1684,7 @@ impl Library {
                     .rounded(px(4.))
                     .overflow_hidden()
                     .border_2()
-                    .border_color(rgb(0x536aca))
+                    .border_color(rgb(theme::ACCENT))
                     .child(
                         div()
                             .h(px(THUMBNAIL_WIDTH * 9. / 16.))
@@ -1697,7 +1698,7 @@ impl Library {
                             .flex()
                             .items_center()
                             .text_size(px(12.))
-                            .bg(rgb(0xdce3fa))
+                            .bg(rgb(theme::FOCUS_BG))
                             .text_color(rgb(0x2f4f99))
                             .child("Master"),
                     ),
@@ -1724,7 +1725,7 @@ impl Library {
             .border_2()
             .rounded(px(6.))
             .border_color(rgb(if selected { 0x536aca } else { 0xfbfbfa }))
-            .when(selected, |d| d.bg(rgb(0xdce3fa)))
+            .when(selected, |d| d.bg(rgb(theme::FOCUS_BG)))
             .focus(|d| d.border_color(rgb(0x8fa1e0)))
             .cursor_pointer()
             .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
@@ -1828,8 +1829,8 @@ impl Library {
             .rounded(px(4.))
             .text_size(px(12.))
             .cursor_pointer()
-            .hover(|d| d.bg(rgb(0xe8e9e7)))
-            .focus(|d| d.bg(rgb(0xdce3fa)))
+            .hover(|d| d.bg(rgb(theme::HOVER)))
+            .focus(|d| d.bg(rgb(theme::FOCUS_BG)))
             .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
                 w.prevent_default();
                 s.action(index, w, cx);
@@ -1980,7 +1981,7 @@ fn inert(label: &str) -> Div {
         .px_2()
         .py_1()
         .text_size(px(12.))
-        .text_color(rgb(0xa5a9af))
+        .text_color(rgb(theme::FAINT))
         .child(label.to_owned())
 }
 
@@ -2105,8 +2106,8 @@ impl Render for Library {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0xf4f4f3))
-            .text_color(rgb(0x292c30))
+            .bg(rgb(theme::CHROME))
+            .text_color(rgb(theme::TEXT))
             .font_family("DejaVu Sans")
             .text_size(px(13.))
             // EW8-OBS-021 toolbar: Title and document tools at left, insert
@@ -2122,7 +2123,7 @@ impl Render for Library {
                     .items_center()
                     .gap_1()
                     .border_b_1()
-                    .border_color(rgb(0xdcdedc))
+                    .border_color(rgb(theme::BORDER))
                     .child(
                         div()
                             .w(px(250.))
@@ -2141,7 +2142,7 @@ impl Render for Library {
                                     }),
                             ),
                     )
-                    .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(0xdcdedc)))
+                    .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(theme::BORDER)))
                     .children(["Text", "Scripture", "Shape", "Media"].map(inert))
                     .child(div().flex_1())
                     .child(if busy {
@@ -2154,7 +2155,7 @@ impl Render for Library {
                             .into_any_element()
                     })
                     .children(["Animate", "Presentation"].map(inert))
-                    .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(0xdcdedc)))
+                    .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(theme::BORDER)))
                     .when(!busy, |d| {
                         d.child(self.button(13, "Library", cx))
                             .child(self.button(12, "Inspector", cx))
@@ -2165,7 +2166,7 @@ impl Render for Library {
                     .px_3()
                     .py_1()
                     .text_size(px(12.))
-                    .text_color(rgb(0x646971))
+                    .text_color(rgb(theme::MUTED))
                     .child(format!(
                         "{} · {}",
                         if dirty { "Unsaved" } else { "Unchanged" },
@@ -2192,20 +2193,20 @@ impl Render for Library {
                     .min_h_0()
                     .flex()
                     .border_t_1()
-                    .border_color(rgb(0xdcdedc))
+                    .border_color(rgb(theme::BORDER))
                     .when(self.show_catalog, |d| {
                         d.child(
                             div()
                                 .w(px(catalog_width))
                                 .flex_shrink_0()
                                 .border_r_1()
-                                .border_color(rgb(0xdcdedc))
+                                .border_color(rgb(theme::BORDER))
                                 .flex()
                                 .flex_col()
                                 .child(
                                     div()
                                         .p_3()
-                                        .text_color(rgb(0x646971))
+                                        .text_color(rgb(theme::MUTED))
                                         .child("Saved songs · ID order"),
                                 )
                                 .when(!busy, |d| {
@@ -2248,8 +2249,8 @@ impl Render for Library {
                                                     } else {
                                                         0xf4f4f3
                                                     }))
-                                                    .hover(|d| d.bg(rgb(0xe8e9e7)))
-                                                    .focus(|d| d.bg(rgb(0xdce3fa)))
+                                                    .hover(|d| d.bg(rgb(theme::HOVER)))
+                                                    .focus(|d| d.bg(rgb(theme::FOCUS_BG)))
                                                     .on_action(cx.listener(
                                                         move |s, _: &ActivateControl, w, cx| {
                                                             w.prevent_default();
@@ -2300,7 +2301,7 @@ impl Render for Library {
                                     .px_2()
                                     .pt_1()
                                     .border_b_1()
-                                    .border_color(rgb(0xdcdedc))
+                                    .border_color(rgb(theme::BORDER))
                                     .children([(14, "Words", !self.slides && !self.layouts), (17, "Slides", self.slides && !self.layouts)].map(
                                         |(index, label, active)| {
                                             div()
@@ -2320,7 +2321,7 @@ impl Render for Library {
                                                 .flex()
                                                 .items_center()
                                                 .border_b_2()
-                                                .border_color(rgb(0x536aca))
+                                                .border_color(rgb(theme::ACCENT))
                                                 .child(div().px_2().text_size(px(12.)).child("Layouts"))
                                                 .child(self.button(19, "⊗", cx)),
                                         )
@@ -2388,7 +2389,7 @@ impl Render for Library {
                                     .flex()
                                     .items_center()
                                     .border_t_1()
-                                    .border_color(rgb(0xdcdedc))
+                                    .border_color(rgb(theme::BORDER))
                                     .when(!busy, |d| {
                                         d.child(self.button(7, "+", cx))
                                             .child(self.button(8, "−", cx))
@@ -2405,7 +2406,7 @@ impl Render for Library {
                                 .flex_col()
                                 .bg(rgb(0xebebe9))
                                 .border_l_1()
-                                .border_color(rgb(0xdcdedc))
+                                .border_color(rgb(theme::BORDER))
                                 .when(!self.inspector, |d| {
                                     d.child(
                                         div()
@@ -2463,7 +2464,7 @@ impl Render for Library {
                                             .flex()
                                             .items_center()
                                             .text_size(px(11.))
-                                            .text_color(rgb(0x646971))
+                                            .text_color(rgb(theme::MUTED))
                                             .gap_1()
                                             .child(if self.layouts {
                                                 "Master layout · audience layout preview".to_owned()
@@ -2518,20 +2519,20 @@ impl Render for Library {
                         .gap_2()
                         .px_3()
                         .border_t_1()
-                        .border_color(rgb(0xdcdedc))
+                        .border_color(rgb(theme::BORDER))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap_2()
                                 .text_size(px(12.))
-                                .text_color(rgb(0xa5a9af))
+                                .text_color(rgb(theme::FAINT))
                                 .child(
                                     div()
                                         .size(px(13.))
                                         .border_1()
                                         .rounded(px(2.))
-                                        .border_color(rgb(0xcbd0d6)),
+                                        .border_color(rgb(theme::BORDER)),
                                 )
                                 .child("Apply changes to items in schedule"),
                         )

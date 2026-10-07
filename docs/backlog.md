@@ -688,6 +688,14 @@ benchmark (pooled p50 18.1 ms, p95 75.9 ms; one-letter prefix p95 109 ms
 misses the ceiling). Open: the operator search box, EW search behavior
 (W04, unobserved), end-to-end latency, short-prefix cost, Linux/macOS.
 
+Foundation / operator-module-split-tokens (**implemented-unqualified**,
+2026-10-08): `src/operator.rs` is split into `src/operator/` modules with a
+typed `Control` registry, and `src/ui/theme.rs` holds the chrome design tokens
+(the song editor's Format pane now shares the operator `BORDER`). Behavior is
+unchanged: GPUI tests plus the four native scripts pass, and the 13 live-output
+operator captures are byte-identical before and after. Windows qualification
+beyond those scripts stays open.
+
 M1-07b (**planned**): operator library search box. Searching starts at 2
 characters, typing never triggers live shortcuts, stale results are dropped
 by generation, and Esc/clear restore the full list.
