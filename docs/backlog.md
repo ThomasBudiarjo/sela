@@ -896,8 +896,14 @@ instructions and the work log for precise evidence and limits.
   `settings.txt.bad` with defaults and one note, worker thread), Options dialog
   (Options… button; EW section list with only Main Output › General built;
   Output monitor choice persists and drives `sela --audience name:DEVICE`;
-  `SELA_AUDIENCE_MONITOR` still overrides). Open: language, Song/Scripture/
-  Presentations/Transitions/Alerts, Alternate Output, Foldback, Service
+  `SELA_AUDIENCE_MONITOR` still overrides). Slice **M1-16-language**
+  (implemented-unqualified, 2026-10-08): `src/i18n.rs` compile-time `Msg`
+  enum with exhaustive English + Indonesian tables, English fallback and
+  `{name}` placeholders; every operator, menu, dialog and Song Editor string
+  migrated; Options › Main Output › General language radio switches the UI
+  at runtime and persists (`language=id` in settings.txt); song content and
+  live output untouched (native check). Open: Song/Scripture/
+  Presentations/Transitions/Alerts tabs, Alternate Output, Foldback, Service
   Intervals, Slide Labels, Advanced; menu-bar placement (EW Edit › Options);
   Reassign action on the output warning; reset-to-defaults.
 - [ ] Verify clean install, offline launch, standard-user permissions and safe
@@ -1400,6 +1406,9 @@ Depends on: M1-16, M4-01, M4-04. Tests: U, R, N, H.
   classify GPUI/platform limitations and implement feasible remedies.
 - [ ] Externalize operator strings; confirm the initial language set (proposed:
   Indonesian/English) with plural/date/number handling and fallback.
+  (Strings externalized with English + Indonesian tables in the M1-16
+  language slice, 2026-10-08; plural/date/number rules and the fallback
+  review remain.)
 - [ ] Test long translated labels, Unicode input/IME, font fallback and RTL content;
   ensure localization does not alter semantic action bindings unexpectedly.
 - [ ] Inspect each affected non-default UI state and rerun reference workflow checks.

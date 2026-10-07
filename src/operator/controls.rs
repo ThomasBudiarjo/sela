@@ -266,18 +266,18 @@ impl Operator {
                     .and_then(|v| self.catalog.iter().find(|(c, _)| *c == v).cloned())
                 {
                     Some((version, title)) => self.add_entry(usize::MAX, version, title),
-                    None => self.schedule_message = Some("Select a song in Songs first".into()),
+                    None => self.schedule_message = Some(t!(Msg::SelectSongFirst).into()),
                 }
             }
             Control::MoveUp | Control::MoveDown => match self.selected_entry {
                 Some(id) => {
                     self.schedule.move_by(id, control == Control::MoveUp);
                 }
-                None => self.schedule_message = Some("Select a schedule item first".into()),
+                None => self.schedule_message = Some(t!(Msg::SelectScheduleItem).into()),
             },
             Control::RemoveItem => match self.selected_entry {
                 Some(id) => self.open_dialog(Dialog::Remove(id), window, cx),
-                None => self.schedule_message = Some("Select a schedule item first".into()),
+                None => self.schedule_message = Some(t!(Msg::SelectScheduleItem).into()),
             },
             Control::ItemMenuRemove => {
                 if let Some((id, _)) = self.item_menu.take() {
@@ -297,7 +297,7 @@ impl Operator {
                         .map(|input| input.read(cx).text().trim().to_owned())
                         .unwrap_or_default();
                     if title.is_empty() {
-                        self.dialog_message = Some("Enter a title for the schedule".into());
+                        self.dialog_message = Some(t!(Msg::EnterScheduleTitle).into());
                     } else if self.queue_save(title) {
                         self.close_dialog(window, cx);
                     }
@@ -315,7 +315,7 @@ impl Operator {
                     self.proceed(then, window, cx);
                 }
                 Some(Dialog::Options) => {
-                    self.apply_options();
+                    self.apply_options(cx);
                     self.close_dialog(window, cx);
                 }
                 Some(Dialog::Open) | None => return,

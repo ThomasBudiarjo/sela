@@ -102,13 +102,13 @@ impl Num {
     }
     fn label(self) -> &'static str {
         match self {
-            Num::Size => "Size",
-            Num::OutlineSize => "Outline size",
-            Num::OutlineOpacity => "Outline opacity",
-            Num::Angle => "Shadow angle",
-            Num::Offset => "Shadow offset",
-            Num::Blur => "Shadow blur",
-            Num::ShadowOpacity => "Shadow opacity",
+            Num::Size => t!(Msg::NumSize),
+            Num::OutlineSize => t!(Msg::NumOutlineSize),
+            Num::OutlineOpacity => t!(Msg::NumOutlineOpacity),
+            Num::Angle => t!(Msg::NumShadowAngle),
+            Num::Offset => t!(Msg::NumShadowOffset),
+            Num::Blur => t!(Msg::NumShadowBlur),
+            Num::ShadowOpacity => t!(Msg::NumShadowOpacity),
         }
     }
     /// The shown value: the slide's own, else what the setting would turn on
@@ -277,11 +277,11 @@ impl FillChoice {
     }
     fn label(self) -> &'static str {
         match self {
-            FillChoice::Master => "Master",
-            FillChoice::None => "None",
-            FillChoice::Color => "Color Fill",
-            FillChoice::Gradient => "Gradient Fill",
-            FillChoice::Media => "Media Fill",
+            FillChoice::Master => t!(Msg::SongMaster),
+            FillChoice::None => t!(Msg::FillNone),
+            FillChoice::Color => t!(Msg::FillColor),
+            FillChoice::Gradient => t!(Msg::FillGradient),
+            FillChoice::Media => t!(Msg::FillMedia),
         }
     }
     /// What `shown` displays as; `None` when the targets differ.
@@ -333,9 +333,9 @@ pub(super) const ASPECTS: [Aspect; 3] = [Aspect::Maintain, Aspect::Stretch, Aspe
 
 fn aspect_label(aspect: Aspect) -> &'static str {
     match aspect {
-        Aspect::Maintain => "Maintain",
-        Aspect::Stretch => "Stretch",
-        Aspect::Zoom => "Zoom",
+        Aspect::Maintain => t!(Msg::AspectMaintain),
+        Aspect::Stretch => t!(Msg::AspectStretch),
+        Aspect::Zoom => t!(Msg::AspectZoom),
     }
 }
 
@@ -590,7 +590,7 @@ pub(super) fn font_label(
     f: &SlideFormat,
 ) -> (String, bool) {
     match catalog {
-        None => ("Loading fonts…".into(), false),
+        None => (t!(Msg::LoadingFonts).into(), false),
         Some(_) => (f.font.clone().unwrap_or_else(|| BUNDLED.into()), true),
     }
 }
@@ -718,13 +718,13 @@ impl Library {
         for index in self.format_targets() {
             change(&mut song.sections[index].format);
             if !song.sections[index].format.is_valid() {
-                self.status = "That format value is out of range. Slide unchanged.".into();
+                self.reject_status(t!(Msg::FormatOutOfRange));
                 cx.notify();
                 return false;
             }
         }
         if !valid_draft(&song) {
-            self.status = "The song would exceed its limits. Slide unchanged.".into();
+            self.reject_status(t!(Msg::SongWouldExceed));
             cx.notify();
             return false;
         }
@@ -771,7 +771,7 @@ impl Library {
             }
         }
         if !valid_draft(&song) {
-            self.status = "That background cannot be stored. Slide unchanged.".into();
+            self.reject_status(t!(Msg::BackgroundNotStored));
             cx.notify();
             return false;
         }
@@ -815,7 +815,7 @@ impl Library {
             return;
         }
         let Some(profile) = self.backdrops.profile.clone() else {
-            self.pane.media.names = Some(Err("No profile folder; images are unavailable".into()));
+            self.pane.media.names = Some(Err(t!(Msg::NoProfileImages).into()));
             return;
         };
         let names = cx
@@ -830,7 +830,8 @@ impl Library {
                         cx.drop_image(old, None);
                     }
                 }
-                this.pane.media.names = Some(names.map_err(|e| format!("Images unavailable: {e}")));
+                this.pane.media.names =
+                    Some(names.map_err(|e| t!(Msg::ImagesUnavailable, error = e)));
                 this.next_media_thumb(cx);
                 cx.notify();
             });
@@ -890,7 +891,7 @@ impl Library {
             let _ = this.update(cx, |this, cx| match pinned {
                 Ok(image) => this.choose_image(image, cx),
                 Err(e) => {
-                    this.status = format!("‘{name}’ cannot be used: {e}. Slide unchanged.");
+                    this.reject_status(t!(Msg::ImageUnusable, name = name, error = e));
                     cx.notify();
                 }
             });
@@ -903,7 +904,7 @@ impl Library {
     pub(super) fn import_media(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menu(window, cx);
         let Some(profile) = self.backdrops.profile.clone() else {
-            self.status = "No profile folder; images cannot be imported".into();
+            self.set_status(t!(Msg::NoProfileImport));
             cx.notify();
             return;
         };
@@ -911,7 +912,7 @@ impl Library {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import".into()),
+            prompt: Some(t!(Msg::ImportPrompt).into()),
         });
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
@@ -927,11 +928,11 @@ impl Library {
             let _ = this.update(cx, |this, cx| {
                 match imported {
                     Ok(name) => {
-                        this.status = format!("Imported ‘{name}’");
+                        this.set_status(t!(Msg::ImportedName, name = name));
                         this.pane.media.names = None;
                         this.pick_media(name, cx);
                     }
-                    Err(e) => this.status = format!("Import failed: {e}"),
+                    Err(e) => this.set_status(t!(Msg::ImportFailed, error = e)),
                 }
                 cx.notify();
             });
@@ -979,10 +980,12 @@ impl Library {
                 }
             }
             _ => {
-                self.status = format!(
-                    "{} must be a whole number from {lo} to {hi}. Slide unchanged.",
-                    num.label()
-                );
+                self.reject_status(t!(
+                    Msg::NumRangeInvalid,
+                    field = num.label(),
+                    lo = lo,
+                    hi = hi
+                ));
             }
         }
         self.pane.shown[i] = None;
@@ -1036,36 +1039,43 @@ impl Library {
         match menu {
             Menu::Font => {
                 let families = sela::fonts::shared().catalog();
-                std::iter::once((format!("{BUNDLED} (bundled)"), true, format.font.is_none()))
-                    .chain(families.iter().flat_map(|c| c.families()).map(|name| {
-                        (
-                            name.clone(),
-                            true,
-                            format.font.as_deref() == Some(name.as_str()),
-                        )
-                    }))
-                    .collect()
+                std::iter::once((
+                    t!(Msg::BundledFont, name = BUNDLED),
+                    true,
+                    format.font.is_none(),
+                ))
+                .chain(families.iter().flat_map(|c| c.families()).map(|name| {
+                    (
+                        name.clone(),
+                        true,
+                        format.font.as_deref() == Some(name.as_str()),
+                    )
+                }))
+                .collect()
             }
             Menu::Size => {
                 let fixed = matches!(format.size, Some(Size::Fixed(_)));
                 vec![
-                    ("Do not auto size text".into(), true, fixed),
-                    ("Resize text to fit element".into(), true, !fixed),
-                    ("Reset Size".into(), true, false),
+                    (t!(Msg::SizeFixed).into(), true, fixed),
+                    (t!(Msg::SizeAuto).into(), true, !fixed),
+                    (t!(Msg::SizeReset).into(), true, false),
                 ]
             }
             Menu::Outline => {
                 let on = format.outline.is_some_and(|o| o.enabled);
                 vec![
-                    ("None".into(), true, !on),
-                    ("Outer".into(), true, on),
-                    ("Center".into(), false, false),
-                    ("Inner".into(), false, false),
+                    (t!(Msg::FillNone).into(), true, !on),
+                    (t!(Msg::OutlineOuter).into(), true, on),
+                    (t!(Msg::OutlineCenter).into(), false, false),
+                    (t!(Msg::OutlineInner).into(), false, false),
                 ]
             }
             Menu::Shadow => {
                 let on = format.shadow.is_some_and(|s| s.enabled);
-                vec![("None".into(), true, !on), ("Enabled".into(), true, on)]
+                vec![
+                    (t!(Msg::FillNone).into(), true, !on),
+                    (t!(Msg::ShadowEnabled).into(), true, on),
+                ]
             }
             Menu::Fill => {
                 let shown = FillChoice::of(&self.pane_background(), self.layouts);
@@ -1103,7 +1113,7 @@ impl Library {
                     .iter()
                     .map(|n| (stem(n).to_owned(), true, chosen.as_ref() == Some(n)))
                     .chain(std::iter::once((
-                        "Import…".to_owned(),
+                        t!(Msg::ImportMenuItem).to_owned(),
                         self.backdrops.profile.is_some(),
                         false,
                     )))
@@ -1322,7 +1332,7 @@ impl Library {
         match parse_hex(&text) {
             Some(color) => self.pick_color(pick, color, window, cx),
             None => {
-                self.status = "Enter a color as #RRGGBB. Slide unchanged.".into();
+                self.reject_status(t!(Msg::HexInvalid));
                 self.pane.hex_shown = None;
                 cx.notify();
             }
@@ -1671,7 +1681,7 @@ impl Library {
                                                     .overflow_hidden()
                                                     .whitespace_nowrap()
                                                     .child(if i == 0 {
-                                                        format!("{BUNDLED} (bundled)")
+                                                        t!(Msg::BundledFont, name = BUNDLED)
                                                     } else {
                                                         name.clone()
                                                     }),
@@ -1711,7 +1721,7 @@ impl Library {
                         .text_size(px(11.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(theme::MUTED))
-                        .child("Auto Sizing"),
+                        .child(t!(Msg::AutoSizing)),
                 )
             })
             .children(rows.into_iter().enumerate().map(|(i, r)| {
@@ -1742,10 +1752,10 @@ impl Library {
                         div()
                             .border_b_2()
                             .border_color(rgb(ACCENT))
-                            .child("Swatches"),
+                            .child(t!(Msg::SwatchesTab)),
                     )
-                    .child(div().text_color(rgb(FAINT)).child("Spectrum"))
-                    .child(div().text_color(rgb(FAINT)).child("Values")),
+                    .child(div().text_color(rgb(FAINT)).child(t!(Msg::SpectrumTab)))
+                    .child(div().text_color(rgb(FAINT)).child(t!(Msg::ValuesTab))),
             )
             .children(palette().into_iter().enumerate().map(|(r, row)| {
                 div()
@@ -1772,7 +1782,7 @@ impl Library {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(label("Hex Value"))
+                    .child(label(t!(Msg::HexValueLabel)))
                     .child(
                         div()
                             .w(px(96.))
@@ -2009,10 +2019,10 @@ impl Library {
             .flex()
             .flex_col()
             .child(label(match num {
-                Num::OutlineSize => "Size",
-                Num::Offset => "Offset",
-                Num::Blur => "Blur",
-                _ => "Opacity",
+                Num::OutlineSize => t!(Msg::NumSize),
+                Num::Offset => t!(Msg::OffsetLabel),
+                Num::Blur => t!(Msg::BlurLabel),
+                _ => t!(Msg::OpacityLabel),
             }))
             .child(
                 div()
@@ -2119,8 +2129,8 @@ impl Library {
             }))
             .on_click(cx.listener(move |s, _, _, cx| select(s, cx)))
             .child(match value {
-                Tab::Slide => "Slide",
-                Tab::Text => "Text",
+                Tab::Slide => t!(Msg::SlideTab),
+                Tab::Text => t!(Msg::EditorText),
             })
     }
 
@@ -2146,7 +2156,7 @@ impl Library {
         div()
             .flex()
             .flex_col()
-            .child(section("SLIDE LAYOUT"))
+            .child(section(t!(Msg::SectionSlideLayout)))
             // EW8-OBS-037: one layout, the Master.
             .child(
                 div()
@@ -2165,9 +2175,9 @@ impl Library {
                                 Plan::Image(..) => [0x30, 0x34, 0x3a],
                             })),
                     )
-                    .child(div().text_size(px(12.)).child("Master")),
+                    .child(div().text_size(px(12.)).child(t!(Msg::SongMaster))),
             )
-            .child(section("BACKGROUND"))
+            .child(section(t!(Msg::SectionBackground)))
             .child(self.dropdown(
                 Menu::Fill,
                 self.trigger(
@@ -2186,9 +2196,9 @@ impl Library {
                         .mt_1()
                         .text_size(px(11.))
                         .text_color(rgb(theme::MUTED))
-                        .child(format!(
-                            "Follows the song master: {}",
-                            describe(self.draft.master.as_ref())
+                        .child(t!(
+                            Msg::FollowsMaster,
+                            description = describe(self.draft.master.as_ref())
                         )),
                 )
             })
@@ -2199,7 +2209,7 @@ impl Library {
                         .flex()
                         .items_center()
                         .gap_1()
-                        .child(div().w(px(40.)).child(label("Color")))
+                        .child(div().w(px(40.)).child(label(t!(Msg::ColorLabel))))
                         .child(self.color_dropdown(Ctl::BackgroundColor, Pick::Background, cx)),
                 )
             })
@@ -2229,14 +2239,19 @@ impl Library {
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_size(px(12.))
-                                .child(image.as_ref().map_or("None", |i| stem(&i.name)).to_owned()),
+                                .child(
+                                    image
+                                        .as_ref()
+                                        .map_or(t!(Msg::FillNone), |i| stem(&i.name))
+                                        .to_owned(),
+                                ),
                         ),
                 )
                 .child(div().mt_1().flex().child(self.dropdown(
                     Menu::Media,
                     self.pane_button(
                         Ctl::SelectMedia,
-                        "Select Media…",
+                        t!(Msg::SelectMedia),
                         false,
                         true,
                         cx,
@@ -2250,7 +2265,7 @@ impl Library {
                         .flex()
                         .items_center()
                         .gap_1()
-                        .child(div().w(px(80.)).child(label("Aspect Ratio")))
+                        .child(div().w(px(80.)).child(label(t!(Msg::AspectRatioLabel))))
                         .child(self.dropdown(
                             Menu::Aspect,
                             self.trigger(Ctl::Aspect, Menu::Aspect, aspect_label(aspect), true, cx),
@@ -2261,7 +2276,7 @@ impl Library {
             .when(!self.layouts, |d| {
                 d.child(div().mt_3().flex().child(self.pane_button(
                     Ctl::EditLayouts,
-                    "Edit Slide Layouts",
+                    t!(Msg::EditSlideLayouts),
                     false,
                     true,
                     cx,
@@ -2285,9 +2300,9 @@ impl Library {
                 .into_any_element()
         };
         let body = match &self.pane.media.names {
-            None => status("Loading images…".into(), FAINT),
+            None => status(t!(Msg::LoadingImages).into(), FAINT),
             Some(Err(e)) => status(e.clone(), 0xb36b00),
-            Some(Ok(_)) if count == 0 => status("No images yet. Import one.".into(), FAINT),
+            Some(Ok(_)) if count == 0 => status(t!(Msg::NoImagesYet).into(), FAINT),
             Some(Ok(_)) => div()
                 .h(px(260.))
                 .child(
@@ -2375,7 +2390,7 @@ impl Library {
                     .text_size(px(11.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(theme::MUTED))
-                    .child("Images"),
+                    .child(t!(Msg::ImagesHeader)),
             )
             .child(body)
             .child(
@@ -2395,7 +2410,7 @@ impl Library {
                         d.bg(rgb(0xe8ecfb))
                     })
                     .text_color(rgb(if import_enabled { 0x292c30 } else { FAINT }))
-                    .child("Import…")
+                    .child(t!(Msg::ImportMenuItem))
                     .when(import_enabled, |d| {
                         d.cursor_pointer().hover(|d| d.bg(rgb(0xeef0f3))).on_click(
                             cx.listener(move |s, _, w, cx| s.choose(Menu::Media, count, w, cx)),
@@ -2409,13 +2424,13 @@ impl Library {
 /// The master as the Slide pane names it for a slide that follows it.
 fn describe(master: Option<&Background>) -> String {
     match master.map(|b| &b.fill) {
-        None | Some(Fill::None) => "no fill (black)".into(),
-        Some(Fill::Color(rgb)) => format!("Color Fill {}", hex(*rgb)),
-        Some(Fill::Media(None)) => "Media Fill without an image (black)".into(),
-        Some(Fill::Media(Some(image))) => format!(
-            "{} ({})",
-            stem(&image.name),
-            aspect_label(master.map_or(Aspect::default(), |b| b.aspect))
+        None | Some(Fill::None) => t!(Msg::DescribeNoFill).into(),
+        Some(Fill::Color(rgb)) => t!(Msg::DescribeColorFill, hex = hex(*rgb)),
+        Some(Fill::Media(None)) => t!(Msg::DescribeMediaNoImage).into(),
+        Some(Fill::Media(Some(image))) => t!(
+            Msg::DescribeMedia,
+            name = stem(&image.name),
+            aspect = aspect_label(master.map_or(Aspect::default(), |b| b.aspect))
         ),
     }
 }
@@ -2471,7 +2486,7 @@ impl Library {
         } else {
             div().flex_1().flex().child(self.dropdown(
                 Menu::Size,
-                self.trigger(Ctl::Size, Menu::Size, "Auto", true, cx),
+                self.trigger(Ctl::Size, Menu::Size, t!(Msg::SizeAutoTrigger), true, cx),
                 cx,
             ))
         };
@@ -2494,7 +2509,7 @@ impl Library {
                             .justify_center()
                             .bg(rgb(theme::FOCUS_BG))
                             .text_color(rgb(0x2f4f99))
-                            .child("Style"),
+                            .child(t!(Msg::StyleTab)),
                     )
                     .child(
                         div()
@@ -2503,10 +2518,10 @@ impl Library {
                             .flex()
                             .justify_center()
                             .text_color(rgb(FAINT))
-                            .child("Layout"),
+                            .child(t!(Msg::LayoutTabInert)),
                     ),
             )
-            .child(section("FONT"))
+            .child(section(t!(Msg::SectionFont)))
             .child(self.dropdown(
                 Menu::Font,
                 self.trigger(Ctl::Font, Menu::Font, font, font_ready, cx),
@@ -2518,7 +2533,7 @@ impl Library {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(div().w(px(40.)).child(label("Size")))
+                    .child(div().w(px(40.)).child(label(t!(Msg::NumSize))))
                     .child(size_box)
                     .child(
                         self.pane_button(Ctl::SizeDown, "A▾", false, true, cx, |s, _, cx| {
@@ -2537,7 +2552,7 @@ impl Library {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(div().w(px(40.)).child(label("Color")))
+                    .child(div().w(px(40.)).child(label(t!(Msg::ColorLabel))))
                     .child(self.color_dropdown(Ctl::Color, Pick::Text, cx)),
             )
             .child(
@@ -2584,13 +2599,17 @@ impl Library {
                     .child(valign(Ctl::Middle, VAlign::Middle, cx))
                     .child(valign(Ctl::Bottom, VAlign::Bottom, cx)),
             )
-            .child(section("OUTLINE"))
+            .child(section(t!(Msg::SectionOutline)))
             .child(self.dropdown(
                 Menu::Outline,
                 self.trigger(
                     Ctl::OutlineType,
                     Menu::Outline,
-                    if outline { "Outer" } else { "None" },
+                    if outline {
+                        t!(Msg::OutlineOuter)
+                    } else {
+                        t!(Msg::FillNone)
+                    },
                     true,
                     cx,
                 ),
@@ -2603,17 +2622,21 @@ impl Library {
                     .items_center()
                     .gap_1()
                     .child(self.color_dropdown(Ctl::OutlineColor, Pick::Outline, cx))
-                    .child(inert_box("Round ▾").flex_1().justify_between()),
+                    .child(inert_box(t!(Msg::RoundInert)).flex_1().justify_between()),
             )
             .child(self.slider_row(Num::OutlineSize, outline, cx))
             .child(self.slider_row(Num::OutlineOpacity, outline, cx))
-            .child(section("SHADOW"))
+            .child(section(t!(Msg::SectionShadow)))
             .child(self.dropdown(
                 Menu::Shadow,
                 self.trigger(
                     Ctl::ShadowMode,
                     Menu::Shadow,
-                    if shadow { "Enabled" } else { "None" },
+                    if shadow {
+                        t!(Msg::ShadowEnabled)
+                    } else {
+                        t!(Msg::FillNone)
+                    },
                     true,
                     cx,
                 ),
@@ -2630,7 +2653,7 @@ impl Library {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().w(px(40.)).child(label("Angle")))
+                    .child(div().w(px(40.)).child(label(t!(Msg::AngleLabel))))
                     .child(self.dial(shadow, cx))
                     .child(self.number(Num::Angle, shadow, cx)),
             )

@@ -3,7 +3,7 @@ use super::*;
 impl Operator {
     pub(crate) fn submit_image_job(&mut self, job: images::Job) {
         let Some(worker) = &self.image_worker else {
-            self.media_message = Some("No profile folder; images are unavailable".into());
+            self.media_message = Some(t!(Msg::NoProfileImages).into());
             return;
         };
         if let Err(error) = worker.submit(job) {
@@ -13,14 +13,14 @@ impl Operator {
 
     pub(crate) fn prompt_import(&mut self, cx: &mut Context<Self>) {
         if self.image_worker.is_none() {
-            self.media_message = Some("No profile folder; images cannot be imported".into());
+            self.media_message = Some(t!(Msg::NoProfileImport).into());
             return;
         }
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import".into()),
+            prompt: Some(t!(Msg::ImportPrompt).into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
@@ -43,7 +43,7 @@ impl Operator {
                 self.media_message = None;
                 self.submit_image_job(images::Job::UseAsLogo(name));
             }
-            None => self.media_message = Some("Select an image first".into()),
+            None => self.media_message = Some(t!(Msg::SelectImageFirst).into()),
         }
     }
 
@@ -57,16 +57,10 @@ impl Operator {
             );
         }
         if self.profile.is_none() {
-            return empty_detail(
-                "Images · no profile",
-                "Launch Sela without arguments to use the default profile.",
-            );
+            return empty_detail(t!(Msg::ImagesNoProfile), t!(Msg::ImagesNoProfileHint));
         }
         if self.images.is_empty() {
-            return empty_detail(
-                "Images",
-                "No images yet. Use Import image… to add a PNG or JPEG.",
-            );
+            return empty_detail(t!(Msg::ImagesEmptyTitle), t!(Msg::ImagesEmptyHint));
         }
         let logo = self.logo.as_ref().map(|logo| logo.name.as_str());
         div()
@@ -78,7 +72,7 @@ impl Operator {
             .children(self.images.iter().enumerate().map(|(index, name)| {
                 let selected = self.selected_image.as_ref() == Some(name);
                 let label = if logo == Some(name.as_str()) {
-                    format!("{name} · Logo")
+                    t!(Msg::ImageLogoSuffix, name = name)
                 } else {
                     name.clone()
                 };

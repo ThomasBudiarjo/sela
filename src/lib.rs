@@ -4,6 +4,7 @@ pub mod background;
 pub mod delivery;
 pub mod fonts;
 pub mod format;
+pub mod i18n;
 pub mod images;
 pub mod masks;
 pub mod output;

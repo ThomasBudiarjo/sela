@@ -56,7 +56,10 @@ pub(crate) struct SettingsState {
     slot: Arc<MonitorSlot>,
     /// Output monitor being edited while Options is open (`None` = default).
     pub(crate) draft: Option<Option<String>>,
+    /// Language being edited while Options is open.
+    pub(crate) language_draft: Option<Language>,
     rows: Vec<FocusHandle>,
+    language_rows: Vec<FocusHandle>,
     _monitor_scan: Option<Task<()>>,
 }
 
@@ -89,7 +92,9 @@ impl SettingsState {
             monitors: None,
             slot: config.slot,
             draft: None,
+            language_draft: None,
             rows: Vec::new(),
+            language_rows: Vec::new(),
             _monitor_scan: Some(monitor_scan),
         };
         state.sync_slot();
@@ -111,25 +116,27 @@ impl SettingsState {
     }
 }
 
-const SECTIONS: [(&str, bool); 6] = [
-    ("Main Output", true),
-    ("Alternate Output", false),
-    ("Foldback", false),
-    ("Service Intervals", false),
-    ("Slide Labels", false),
-    ("Advanced", false),
+/// Section label, stable selector slug, built or not (EW8-OBS-054).
+const SECTIONS: [(Msg, &str, bool); 6] = [
+    (Msg::SectionMainOutput, "main-output", true),
+    (Msg::SectionAlternateOutput, "alternate-output", false),
+    (Msg::SectionFoldback, "foldback", false),
+    (Msg::SectionServiceIntervals, "service-intervals", false),
+    (Msg::SectionSlideLabels, "slide-labels", false),
+    (Msg::SectionAdvanced, "advanced", false),
 ];
 
-const MAIN_OUTPUT_TABS: [(&str, bool); 6] = [
-    ("General", true),
-    ("Song", false),
-    ("Scripture", false),
-    ("Presentations", false),
-    ("Transitions", false),
-    ("Alerts", false),
+const MAIN_OUTPUT_TABS: [(Msg, &str, bool); 6] = [
+    (Msg::OptionsTabGeneral, "general", true),
+    (Msg::OptionsTabSong, "song", false),
+    (Msg::OptionsTabScripture, "scripture", false),
+    (Msg::TabPresentations, "presentations", false),
+    (Msg::OptionsTabTransitions, "transitions", false),
+    (Msg::ToolbarAlerts, "alerts", false),
 ];
 
 const MONITOR_TAB_INDEX: isize = 800;
+const LANGUAGE_TAB_INDEX: isize = 780;
 
 impl Operator {
     pub(crate) fn poll_settings(&mut self) -> bool {
@@ -147,13 +154,14 @@ impl Operator {
             changed = true;
             match reply {
                 settings::Reply::Loaded(loaded) => {
+                    i18n::set_language(loaded.settings.language);
                     self.settings.current = loaded.settings;
                     self.settings.load_note = loaded.note;
                     self.settings.sync_slot();
                 }
                 settings::Reply::Saved(Ok(())) => self.settings.save_error = None,
                 settings::Reply::Saved(Err(error)) => {
-                    self.settings.save_error = Some(format!("Settings were not saved ({error})"));
+                    self.settings.save_error = Some(t!(Msg::SettingsSaveFailed, error = error));
                 }
             }
         }
@@ -165,9 +173,15 @@ impl Operator {
         let mut notes = Vec::new();
         notes.extend(self.settings.load_note.clone());
         if self.settings.monitor_missing() {
-            notes.push(format!(
-                "Saved output monitor {} was not found; using the default non-primary monitor. Choose one in Options.",
-                self.settings.current.output_monitor.as_deref().map(short).unwrap_or_default()
+            notes.push(t!(
+                Msg::MonitorMissingNote,
+                name = self
+                    .settings
+                    .current
+                    .output_monitor
+                    .as_deref()
+                    .map(short)
+                    .unwrap_or_default()
             ));
         }
         notes.extend(self.settings.save_error.clone());
@@ -179,29 +193,42 @@ impl Operator {
             return;
         }
         self.settings.draft = Some(self.settings.current.output_monitor.clone());
+        self.settings.language_draft = Some(self.settings.current.language);
         self.open_dialog(Dialog::Options, window, cx);
     }
 
-    /// OK: keeps the draft, persists it through the worker and moves the
-    /// audience window if Live output is on.
-    pub(crate) fn apply_options(&mut self) {
+    /// OK: keeps the drafts, persists them through the worker and moves the
+    /// audience window if Live output is on. A language change repaints every
+    /// window at once; song content and live output are untouched.
+    pub(crate) fn apply_options(&mut self, cx: &mut Context<Self>) {
         let Some(draft) = self.settings.draft.take() else {
             return;
         };
-        if draft == self.settings.current.output_monitor {
+        let language = self
+            .settings
+            .language_draft
+            .take()
+            .unwrap_or(self.settings.current.language);
+        let monitor_changed = draft != self.settings.current.output_monitor;
+        let language_changed = language != self.settings.current.language;
+        if !monitor_changed && !language_changed {
             return;
         }
         self.settings.current.output_monitor = draft;
+        self.settings.current.language = language;
         self.settings.sync_slot();
         if let Some(worker) = &self.settings.worker {
             if !worker.save(self.settings.current.clone()) {
-                self.settings.save_error = Some("Settings were not saved (queue full)".into());
+                self.settings.save_error = Some(t!(Msg::SettingsQueueFull).into());
             }
         } else {
-            self.settings.save_error =
-                Some("No profile folder; the choice lasts this session".into());
+            self.settings.save_error = Some(t!(Msg::SettingsNoProfile).into());
         }
-        if self.output.is_some() {
+        if language_changed {
+            i18n::set_language(language);
+            cx.refresh_windows();
+        }
+        if monitor_changed && self.output.is_some() {
             // A new session spawns the audience on the chosen monitor.
             self.toggle_output();
             self.toggle_output();
@@ -215,6 +242,12 @@ impl Operator {
             .map(|m| m.name.clone());
         if self.settings.draft.is_some() {
             self.settings.draft = Some(name);
+        }
+    }
+
+    fn choose_language(&mut self, language: Language) {
+        if self.settings.language_draft.is_some() {
+            self.settings.language_draft = Some(language);
         }
     }
 
@@ -235,9 +268,63 @@ impl Operator {
             );
         }
         let draft_missing = settings::monitor_missing(draft.as_deref(), monitors.as_deref());
-        let mut options = vec![("Default (first non-primary monitor)".to_string(), None)];
+        let language_draft = self.settings.language_draft.unwrap_or_default();
+        while self.settings.language_rows.len() < Language::ALL.len() {
+            let index = self.settings.language_rows.len() as isize;
+            self.settings.language_rows.push(
+                cx.focus_handle()
+                    .tab_index(LANGUAGE_TAB_INDEX + index)
+                    .tab_stop(true),
+            );
+        }
+        let language_rows = Language::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, language)| {
+                let selected = language_draft == language;
+                div()
+                    .id(("options-language", index))
+                    .debug_selector(move || format!("options-language-{}", language.code()))
+                    .track_focus(&self.settings.language_rows[index])
+                    .key_context("SelaControl")
+                    .h(px(CONTROL_H + 2.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(RADIUS))
+                    .cursor_pointer()
+                    .bg(rgb(if selected { SELECTED_ROW } else { SURFACE }))
+                    .hover(|d| d.bg(rgb(HOVER)))
+                    .focus(|d| d.bg(rgb(FOCUS_BG)))
+                    .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
+                        if this.settings.language_rows[index].is_focused(window) {
+                            window.prevent_default();
+                            this.choose_language(language);
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            if matches!(event, gpui::ClickEvent::Keyboard(_)) {
+                                return;
+                            }
+                            this.settings.language_rows[index].focus(window, cx);
+                            this.choose_language(language);
+                            cx.notify();
+                        }),
+                    )
+                    .child(div().w(px(14.)).child(if selected { "●" } else { "○" }))
+                    .child(div().flex_1().truncate().child(language.label()))
+            })
+            .collect::<Vec<_>>();
+        let mut options = vec![(t!(Msg::DefaultMonitor).to_string(), None)];
         for info in monitors.iter().flatten() {
-            let primary = if info.primary { " · primary" } else { "" };
+            let primary = if info.primary {
+                t!(Msg::PrimarySuffix)
+            } else {
+                ""
+            };
             options.push((
                 format!(
                     "{} · {}×{}{primary}",
@@ -289,26 +376,32 @@ impl Operator {
                     .child(div().flex_1().truncate().child(label))
             })
             .collect::<Vec<_>>();
-        let sections = SECTIONS.map(|(label, available)| {
+        let sections = SECTIONS.map(|(msg, slug, available)| {
             div()
-                .debug_selector(move || format!("options-section-{label}"))
+                .debug_selector(move || format!("options-section-{slug}"))
                 .h(px(CONTROL_H + 2.))
                 .px_3()
                 .flex()
                 .items_center()
                 .justify_between()
-                .when(label == "Main Output", |d| {
+                .when(msg == Msg::SectionMainOutput, |d| {
                     d.bg(rgb(SELECTED_ROW)).font_weight(FontWeight::MEDIUM)
                 })
                 .when(!available, |d| d.text_color(rgb(DISABLED)))
-                .child(label)
+                .child(div().flex_1().min_w_0().truncate().child(t!(msg)))
                 .when(!available, |d| {
-                    d.child(div().text_size(px(TEXT_TILE)).child("not available"))
+                    d.child(
+                        div()
+                            .flex_shrink_0()
+                            .pl_2()
+                            .text_size(px(TEXT_TILE))
+                            .child(t!(Msg::NotAvailable)),
+                    )
                 })
         });
-        let tabs = MAIN_OUTPUT_TABS.map(|(label, available)| {
+        let tabs = MAIN_OUTPUT_TABS.map(|(msg, slug, available)| {
             div()
-                .debug_selector(move || format!("options-tab-{label}"))
+                .debug_selector(move || format!("options-tab-{slug}"))
                 .h_full()
                 .px_2()
                 .flex()
@@ -319,7 +412,7 @@ impl Operator {
                     d.font_weight(FontWeight::MEDIUM).text_color(rgb(TEXT))
                 })
                 .when(!available, |d| d.text_color(rgb(DISABLED)))
-                .child(label)
+                .child(t!(msg))
         });
         let loading = monitors.is_none();
         Some(
@@ -336,7 +429,7 @@ impl Operator {
                         .debug_selector(|| "options-dialog".into())
                         .w(px(660.))
                         .max_w_full()
-                        .h(px(372.))
+                        .h(px(500.))
                         .flex()
                         .flex_col()
                         .overflow_hidden()
@@ -358,7 +451,7 @@ impl Operator {
                                 .border_color(rgb(BORDER))
                                 .bg(rgb(CHROME))
                                 .font_weight(FontWeight::MEDIUM)
-                                .child("Options"),
+                                .child(t!(Msg::OptionsTitle)),
                         )
                         .child(
                             div()
@@ -404,35 +497,53 @@ impl Operator {
                                                 .child(
                                                     div()
                                                         .font_weight(FontWeight::MEDIUM)
-                                                        .child("Output monitor"),
+                                                        .child(t!(Msg::LanguageHeading)),
                                                 )
                                                 .child(
                                                     div()
                                                         .text_size(px(TEXT_SMALL))
                                                         .text_color(rgb(MUTED))
-                                                        .child("The audience output opens on this monitor."),
+                                                        .child(t!(Msg::LanguageHint)),
                                                 )
-                                                .children(loading.then(|| {
-                                                    div()
-                                                        .text_size(px(TEXT_SMALL))
-                                                        .text_color(rgb(MUTED))
-                                                        .child("Detecting monitors…")
-                                                }))
                                                 .child(
                                                     div()
                                                         .flex()
                                                         .flex_col()
                                                         .gap_1()
-                                                        .children(rows),
+                                                        .children(language_rows),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .mt_2()
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .child(t!(Msg::MonitorHeading)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(TEXT_SMALL))
+                                                        .text_color(rgb(MUTED))
+                                                        .child(t!(Msg::MonitorHint)),
+                                                )
+                                                .children(loading.then(|| {
+                                                    div()
+                                                        .text_size(px(TEXT_SMALL))
+                                                        .text_color(rgb(MUTED))
+                                                        .child(t!(Msg::DetectingMonitors))
+                                                }))
+                                                .child(
+                                                    div().flex().flex_col().gap_1().children(rows),
                                                 )
                                                 .children(draft_missing.then(|| {
                                                     div()
                                                         .debug_selector(|| "options-missing".into())
                                                         .text_size(px(TEXT_SMALL))
                                                         .text_color(rgb(SENDING))
-                                                        .child(format!(
-                                                            "Saved monitor {} is not connected.",
-                                                            draft.as_deref().map(short).unwrap_or_default()
+                                                        .child(t!(
+                                                            Msg::MonitorMissingDialog,
+                                                            name = draft
+                                                                .as_deref()
+                                                                .map(short)
+                                                                .unwrap_or_default()
                                                         ))
                                                 })),
                                         ),
@@ -450,13 +561,18 @@ impl Operator {
                                 .border_t_1()
                                 .border_color(rgb(BORDER))
                                 .child(
-                                    self.button(Control::DialogConfirm, "dialog-confirm", "OK", cx)
-                                        .text_color(rgb(TEXT)),
+                                    self.button(
+                                        Control::DialogConfirm,
+                                        "dialog-confirm",
+                                        t!(Msg::ButtonOk),
+                                        cx,
+                                    )
+                                    .text_color(rgb(TEXT)),
                                 )
                                 .child(self.button(
                                     Control::DialogCancel,
                                     "dialog-cancel",
-                                    "Cancel",
+                                    t!(Msg::ButtonCancel),
                                     cx,
                                 )),
                         ),

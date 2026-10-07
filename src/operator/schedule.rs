@@ -4,7 +4,7 @@ impl Operator {
     pub(crate) fn add_entry(&mut self, at: usize, version: Version, title: String) {
         self.schedule_message = match self.schedule.insert(at, version, title) {
             Ok(_) => None,
-            Err(_) => Some(format!("The schedule is full ({MAX_ITEMS} items)")),
+            Err(_) => Some(t!(Msg::ScheduleFull, max = MAX_ITEMS)),
         };
     }
 
@@ -29,7 +29,7 @@ impl Operator {
         match self.schedule.neighbor(self.selected_entry, forward) {
             Some(id) => self.select_entry(id),
             None if self.schedule.entries().is_empty() => {
-                self.schedule_message = Some("The schedule is empty".into());
+                self.schedule_message = Some(t!(Msg::ScheduleEmpty).into());
             }
             None => {}
         }
@@ -38,7 +38,7 @@ impl Operator {
     pub(crate) fn remove_selected(&mut self) {
         match self.selected_entry {
             Some(id) => self.remove_entry(id),
-            None => self.schedule_message = Some("Select a schedule item first".into()),
+            None => self.schedule_message = Some(t!(Msg::SelectScheduleItem).into()),
         }
     }
 
@@ -47,15 +47,14 @@ impl Operator {
         let command = storage::Command::SaveSchedule(self.schedule.saved(), snapshot.clone());
         let queued = self.queue(command, Request::SaveSchedule(snapshot));
         if queued {
-            self.schedule_message = Some("Saving…".into());
+            self.schedule_message = Some(t!(Msg::Saving).into());
         }
         queued
     }
 
     pub(crate) fn queue(&mut self, command: storage::Command, request: Request) -> bool {
         if self.queued.is_some() || self.schedule_request() {
-            self.schedule_message =
-                Some("Wait for the schedule to finish saving or opening".into());
+            self.schedule_message = Some(t!(Msg::WaitScheduleBusy).into());
             return false;
         }
         self.queued = Some((command, request));
@@ -75,7 +74,7 @@ impl Operator {
 
     pub(crate) fn save_schedule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.worker.is_none() {
-            self.schedule_message = Some("No song library open".into());
+            self.schedule_message = Some(t!(Msg::NoLibraryOpen).into());
             return;
         }
         match self.schedule.title().map(str::to_owned) {
@@ -99,7 +98,7 @@ impl Operator {
             storage::Command::Schedule(version),
             Request::OpenSchedule(version),
         ) {
-            self.schedule_message = Some(format!("Opening “{title}”…"));
+            self.schedule_message = Some(t!(Msg::OpeningSchedule, title = title));
             self.close_dialog(window, cx);
         }
         cx.notify();
@@ -111,7 +110,7 @@ impl Operator {
         let saving = matches!(self.request, Some(Request::SaveSchedule(_)))
             || matches!(self.queued, Some((_, Request::SaveSchedule(_))));
         if saving {
-            self.schedule_message = Some("Saving the schedule… try again when it is saved".into());
+            self.schedule_message = Some(t!(Msg::SavingWaitDone).into());
         } else if self.schedule.is_dirty() {
             self.open_dialog(Dialog::Unsaved(Then::Quit), window, cx);
         } else {
@@ -141,8 +140,8 @@ impl Operator {
             .and(self.live.as_ref())
             .and_then(|item| item.entry);
         let header = match self.schedule.title() {
-            Some(title) => format!("Schedule · {title}"),
-            None => "Schedule".into(),
+            Some(title) => t!(Msg::ScheduleTitled, title = title),
+            None => t!(Msg::PaneSchedule).into(),
         };
         let idle = self.selected_entry.is_none();
         let rows = self
@@ -229,7 +228,7 @@ impl Operator {
                                 .flex_shrink_0()
                                 .text_size(px(TEXT_CAPTION))
                                 .text_color(rgb(ON_SCREEN))
-                                .child("● Live"),
+                                .child(t!(Msg::ScheduleLiveMarker)),
                         )
                     })
             })
@@ -266,7 +265,7 @@ impl Operator {
                                 .flex_shrink_0()
                                 .text_size(px(TEXT_CAPTION))
                                 .text_color(rgb(MUTED))
-                                .child("Unsaved"),
+                                .child(t!(Msg::ScheduleUnsaved)),
                         )
                     }),
             )
@@ -295,7 +294,7 @@ impl Operator {
                             .p_3()
                             .text_color(rgb(MUTED))
                             .text_center()
-                            .child("Drag songs here or use Add to Schedule")
+                            .child(t!(Msg::ScheduleEmptyHint))
                     })
                     .children(rows),
             )
@@ -325,9 +324,13 @@ impl Operator {
                     .bg(rgb(CHROME))
                     .children(
                         [
-                            (Control::MoveUp, "schedule-up", "Up"),
-                            (Control::MoveDown, "schedule-down", "Down"),
-                            (Control::RemoveItem, "schedule-remove", "Remove"),
+                            (Control::MoveUp, "schedule-up", t!(Msg::ButtonUp)),
+                            (Control::MoveDown, "schedule-down", t!(Msg::ButtonDown)),
+                            (
+                                Control::RemoveItem,
+                                "schedule-remove",
+                                t!(Msg::ButtonRemove),
+                            ),
                         ]
                         .map(|(index, id, label)| {
                             self.button(index, id, label, cx)
@@ -341,13 +344,13 @@ impl Operator {
         let Some(list) = &self.saved_schedules else {
             return div()
                 .text_color(rgb(MUTED))
-                .child("Loading saved schedules…")
+                .child(t!(Msg::LoadingSavedSchedules))
                 .into_any_element();
         };
         if list.is_empty() {
             return div()
                 .text_color(rgb(MUTED))
-                .child("No saved schedules")
+                .child(t!(Msg::NoSavedSchedules))
                 .into_any_element();
         }
         while self.saved_rows.len() < list.len() {

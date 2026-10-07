@@ -6,6 +6,17 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **UI language switch (M1-16 language slice, 2026-10-08):** `src/i18n.rs`
+  holds every operator, menu, dialog and Song Editor string as a `Msg` enum
+  with exhaustive English and Indonesian tables and `{name}` placeholders;
+  Options › Main Output › General has a Language radio (English / Bahasa
+  Indonesia) that repaints all windows at runtime and persists
+  (`language=id` in settings.txt, English is the omitted default). Song
+  content, schedule titles and the audience output never go through the
+  table. GPUI tests, the new `scripts/i18n-windows.py` and all four baseline
+  native scripts pass. **Implemented-unqualified** (screen reader and
+  full-UI Indonesian review remain, VAL-L10N-*). Next: remaining Options
+  tabs, M1-07 search box, M1-11b preflight UI.
 - **Parallel wave 1 merged (2026-10-07):** three worktrees merged into
   local `main` with their slice commits:
   - M1-05i: the operator Songs row menu (New Song…, Edit Song…, Delete with
@@ -216,7 +227,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-09 | active | M1-09a implemented-unqualified: framework-free `schedule` (session-local entry IDs pinning song revisions, 32-item cap, move/remove/neighbor, dirty tracking), Schedule pane with drag/drop, save/open dialogs and unsaved guard, Live identity by entry, renderer-acknowledged Live marker; Windows native check passed. Open: EW schedule observation, schedule item types beyond songs, persisted item IDs, multi-select, qualification. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. M1-10c (with M0-08a): operator Logo/Black/Clear toggles with acknowledged indicators, picture logo from the profile image folder, show-control key context, Windows native checks passed. M1-09a schedule items now exist. Open: preparation off the UI thread, reference-observed behavior (EW8-OBS-020), hotplug, latency, physical qualification. |
 | M1-11 | active | M1-11a implemented-unqualified: hardened PNG/JPEG import (8 MiB, 16384 px, 64 MiB decoded, header bomb guard, Exif orientation applied in the shared decoder, ICC ignored, APNG refused, identical re-import reused, same name different bytes numbered, cancellable temporary-and-link copy, side-specific errors), `preflight::check`/`Worker` (missing/changed images, missing fonts, logo) and hash-checked `images::relink`. Open: M1-11b operator UI, thumbnails pipeline, EW media observation, Linux/macOS and native checks. |
-| M1-16 | implemented-unqualified | Developer-local Linux install prerequisite; settings slice (versioned store + Options dialog with Output monitor) implemented-unqualified; Windows installer/accessibility and dependency gates remain open. |
+| M1-16 | implemented-unqualified | Developer-local Linux install prerequisite; settings slice (versioned store + Options dialog with Output monitor) implemented-unqualified; language slice (i18n tables, all operator/editor strings migrated, Options language radio, runtime switch + persistence, native check) implemented-unqualified; Windows installer/accessibility and dependency gates remain open. |
 
 ## Session records
 
@@ -3235,3 +3246,64 @@ PY
   landed).
 - Next: i18n language selector in Options, remaining Main Output tabs, Reassign
   on the output warning, menu-bar placement.
+
+### Foundation / i18n-infrastructure — M1-16 language slice — 2026-10-08
+
+- State: implemented-unqualified (language slice of M1-16 only).
+- Scope: `src/i18n.rs` (lib, framework-free): a compile-time `Msg` enum (327
+  messages) with exhaustive `english()`/`indonesian()` tables — key parity is
+  structural — a thread-local active `Language` (UI thread only; every test
+  thread defaults to English), `text()` falling back to English for an empty
+  translation (never a raw key or blank label), and a `t!` macro:
+  `t!(Msg::X)` for plain strings, `t!(Msg::X, name = value)` for `{name}`
+  placeholders. `settings.rs` gains `language` (`language=id` written only
+  when non-default; unknown codes ignored like unknown keys; file version
+  stays 1). All operator chrome (toolbar, mask buttons, pane headers, status
+  bar, resource tabs, context menus, schedule/song/Options dialogs, Live pane
+  status lines, background-substitution warnings) and all Song Editor strings
+  (window title, toolbar, tabs, placeholders, status messages, Format pane)
+  render through the table. The Options dialog (Main Output › General) has a
+  Language radio list (English / Bahasa Indonesia, labels constant across
+  languages) above the monitor list; OK applies the draft: on a language
+  change `i18n::set_language` + `cx.refresh_windows()` repaint every window
+  immediately, no restart, and the worker persists the choice. The monitor
+  restart-on-change path only runs when the monitor actually changed, so a
+  language-only switch never touches the audience (VAL-I18N-004). The editor
+  status `starts_with` rejection probe became a `status_is_rejection` flag so
+  no logic matches translated text. Element ids and debug selectors stay
+  static English (tests and scripts find controls in any language); the
+  slide_pane and Options section/tab selectors got explicit stable slugs.
+- Decisions: thread-local over a global atomic so parallel tests are isolated
+  and the audience child process (separate process, default English) can never
+  be affected; `Language::label()` is deliberately not translated; error
+  payload text from lib `Display` impls (storage/images/output refusals)
+  stays English inside `{error}` placeholders — full translation of those is
+  VAL-L10N-003 territory. Indonesian glossary per mission directive: Jadwal,
+  Pratinjau, Langsung, Lagu, Alkitab (tab) / Ayat (reference), Hitam/Kosong/
+  Logo masks, Tayangkan for Go Live. Options dialog height 372→500 px for the
+  new section; section labels truncate before touching the "not available"
+  tag.
+- Upstream zed/gpui paths consulted: none new (existing overlay/focus
+  patterns).
+- Checks (all exit 0): `cargo fmt --all -- --check`; `cargo clippy --locked
+  --all-targets -- -D warnings`; `cargo test --locked --all-targets --
+  --test-threads=12` (lib 164 incl. i18n parity/placeholder/fallback/
+  substitution/code tests and the settings language round-trip; bin 100
+  incl. `settings_ui::language_switches_at_runtime_and_persists`);
+  `python -m ruff check scripts`. Native, one at a time:
+  `scripts/i18n-windows.py` PASS (Go Live in English, switch to Indonesian
+  without restart: settings.txt gains `language=id`, audience same process
+  with byte-identical pixels; restart opens Indonesian with Bahasa Indonesia
+  selected in Options; switching back clears the key and the next restart
+  opens English; captures `01`–`10` viewed: all chrome Indonesian/English as
+  expected, song title and lyrics unchanged, no clipped or overlapped labels);
+  baselines `options-windows`, `live-output-windows`, `schedule-windows`,
+  `song-editor-windows`, `operator-menu-windows` all PASS. Evidence:
+  `.amp/in/artifacts/i18n-windows/` (`summary.json`, PNGs) and
+  `*-after-i18n/` for the baselines.
+- Unexecuted: Indonesian Song Editor native capture (editor strings are
+  migrated and unit-tested in English; full-UI Indonesian review is
+  VAL-L10N-002/004); screen-reader exposure of the new radio rows;
+  plural/date/number rules (none needed by current messages).
+- Next: remaining Main Output tabs, Reassign on the output warning, menu-bar
+  placement (EW Edit › Options), M1-07 search box.

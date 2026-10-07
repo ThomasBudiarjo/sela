@@ -1,0 +1,1641 @@
+//! Operator UI strings: one compile-time [`Msg`] per user-visible message,
+//! with exhaustive English and Indonesian tables. The active language is a
+//! thread-local (the UI runs on the main thread; tests each get English).
+//! An empty Indonesian entry falls back to English, never to a raw key or a
+//! blank label. Song content, schedule titles and live output never go
+//! through this table.
+//!
+//! Placeholders use `{name}` and are substituted by [`format`]; both tables
+//! must carry the same set per message (tested below).
+
+use std::cell::Cell;
+
+/// UI language. Persisted in the profile settings by its `code`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Language {
+    #[default]
+    English,
+    Indonesian,
+}
+
+impl Language {
+    pub const ALL: [Language; 2] = [Language::English, Language::Indonesian];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::Indonesian => "id",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "en" => Some(Self::English),
+            "id" => Some(Self::Indonesian),
+            _ => None,
+        }
+    }
+
+    /// Shown in the Options language list; the same in every language so the
+    /// choice is recognizable no matter what the UI currently speaks.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::Indonesian => "Bahasa Indonesia",
+        }
+    }
+}
+
+thread_local! {
+    static CURRENT: Cell<Language> = const { Cell::new(Language::English) };
+}
+
+pub fn language() -> Language {
+    CURRENT.with(|current| current.get())
+}
+
+pub fn set_language(language: Language) {
+    CURRENT.with(|current| current.set(language));
+}
+
+/// Every user-visible operator message. Add variants alphabetically within
+/// their group; both `english` and `indonesian` must cover each one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Msg {
+    // Toolbar and status bar.
+    ToolbarNewMenu,
+    ToolbarOpen,
+    ToolbarSave,
+    ToolbarOptions,
+    ToolbarWeb,
+    ToolbarRemote,
+    ToolbarGoLive,
+    ToolbarAlerts,
+    MaskLogo,
+    MaskBlack,
+    MaskClear,
+    LiveOn,
+    LiveOff,
+    ButtonPrevious,
+    ButtonNext,
+    ResourcesHeader,
+    CollapseResources,
+    RestoreResources,
+    ButtonQuit,
+    ResetLayout,
+    NewSongItem,
+    NewScheduleItem,
+    CollectionsHeader,
+    NoCollections,
+    NewSongButton,
+    AddToSchedule,
+    NormalizeOn,
+    NormalizeOff,
+    ImportImage,
+    UseAsLogo,
+    RemoveFromSchedule,
+    // Resource tabs.
+    TabSongs,
+    TabScriptures,
+    TabMedia,
+    TabPresentations,
+    TabThemes,
+    // Songs context menu (EW8-OBS-021 order).
+    MenuNewSong,
+    MenuEditSong,
+    MenuDelete,
+    MenuUpdateSchedule,
+    MenuSortBy,
+    MenuRefresh,
+    // Pane titles and shared labels.
+    PaneSchedule,
+    ScheduleTitled,
+    ScheduleUnsaved,
+    ScheduleEmptyHint,
+    ScheduleLiveMarker,
+    ButtonUp,
+    ButtonDown,
+    ButtonRemove,
+    LoadingSavedSchedules,
+    NoSavedSchedules,
+    PanePreview,
+    PaneLive,
+    NothingLive,
+    NothingSelected,
+    SlideN,
+    Untitled,
+    // Schedule and library status messages.
+    ScheduleFull,
+    ScheduleEmpty,
+    SelectScheduleItem,
+    Saving,
+    WaitScheduleBusy,
+    NoLibraryOpen,
+    OpeningSchedule,
+    SavingWaitDone,
+    SavedSchedule,
+    OpenedSchedule,
+    ScheduleUnreadable,
+    ScheduleConflict,
+    ScheduleStorageFailed,
+    SelectSongFirst,
+    DeletedSong,
+    DeleteConflict,
+    DeleteStorageFailed,
+    DeleteQueueFull,
+    LibraryUnavailable,
+    // Songs resource detail.
+    SongsNoLibrary,
+    SongsNoLibraryHint,
+    SongsEmptyTitle,
+    SongsEmptyHint,
+    NoUserDataDir,
+    DeleteBusy,
+    Deleting,
+    // Other resource tabs.
+    LibraryEmpty,
+    LibraryNotImplemented,
+    // Media tab.
+    NoProfileImages,
+    NoProfileImport,
+    SelectImageFirst,
+    ImagesNoProfile,
+    ImagesNoProfileHint,
+    ImagesEmptyTitle,
+    ImagesEmptyHint,
+    ImageLogoSuffix,
+    ImagesUnavailable,
+    ImportedImage,
+    ImportFailed,
+    LogoUnavailable,
+    LogoPrepFailed,
+    ImportPrompt,
+    ImageWorkerFailed,
+    // Preview/Live status.
+    PreviewFooter,
+    PreviewNoSlides,
+    LiveNotSent,
+    OutputOff,
+    OutputStarting,
+    OutputConnected,
+    OutputLost,
+    NothingConfirmed,
+    UnknownState,
+    MaskLine,
+    UnderMask,
+    OnScreen,
+    LiveItemGone,
+    SendingMask,
+    MaskArmed,
+    PreparingLogo,
+    Sending,
+    CueNotShown,
+    MaskNotShown,
+    LogoNotShown,
+    NoLogoSet,
+    PreparingBackground,
+    ResolvingFonts,
+    RefusalNotConnected,
+    RefusalWrongExtent,
+    LayerNone,
+    LayerClear,
+    LayerBlack,
+    LayerLogo,
+    // Dialogs.
+    DialogSaveAs,
+    DialogOpen,
+    DialogUnsavedOpen,
+    DialogUnsavedNew,
+    DialogUnsavedQuit,
+    DialogRemoveTitled,
+    DialogRemoveGeneric,
+    DialogDeleteTitled,
+    DialogDeleteGeneric,
+    DialogDeleteNote,
+    ConfirmSave,
+    ConfirmDiscard,
+    ConfirmRemove,
+    ConfirmDelete,
+    ButtonKeep,
+    ButtonCancel,
+    ButtonOk,
+    EnterScheduleTitle,
+    // Options dialog.
+    OptionsTitle,
+    SectionMainOutput,
+    SectionAlternateOutput,
+    SectionFoldback,
+    SectionServiceIntervals,
+    SectionSlideLabels,
+    SectionAdvanced,
+    OptionsTabGeneral,
+    OptionsTabSong,
+    OptionsTabScripture,
+    OptionsTabTransitions,
+    NotAvailable,
+    MonitorHeading,
+    MonitorHint,
+    DetectingMonitors,
+    DefaultMonitor,
+    PrimarySuffix,
+    MonitorMissingDialog,
+    MonitorMissingNote,
+    LanguageHeading,
+    LanguageHint,
+    SettingsSaveFailed,
+    SettingsQueueFull,
+    SettingsNoProfile,
+    // Background image substitution warnings (images.rs).
+    BgImageMissing,
+    BgImageChanged,
+    BgImageTooLarge,
+    BgImageUnreadable,
+    // Song editor window.
+    AllSlidesSelected,
+    ApplyToSchedule,
+    CannotBeShown,
+    CloseWithoutSaving,
+    ConfirmDeleteHint,
+    ContinueEditing,
+    CursorInLyrics,
+    DiscardAndClose,
+    DiscardEdits,
+    DocumentRedone,
+    DocumentUndone,
+    DraftChanged,
+    EditsDiscarded,
+    EditorAnimate,
+    EditorApply,
+    EditorCancel,
+    EditorConfirmDelete,
+    EditorDelete,
+    EditorDuplicate,
+    EditorFormat,
+    EditorInspector,
+    EditorLayouts,
+    EditorLibrary,
+    EditorMedia,
+    EditorNew,
+    EditorOk,
+    EditorPresentation,
+    EditorRedo,
+    EditorScripture,
+    EditorShape,
+    EditorSlides,
+    EditorText,
+    EditorUndo,
+    EditorUnsaved,
+    EditorWindowTitle,
+    EditorWords,
+    EmptySlideHint,
+    InputRejected,
+    InspectorAuthors,
+    InspectorCopyright,
+    InspectorHeader,
+    InspectorLicense,
+    JoinExceedsLimits,
+    KeepEditing,
+    LabelPlaceholder,
+    LayoutSample,
+    LibraryReady,
+    LoadedRevision,
+    LoadingOrSaving,
+    MasterLayoutFooter,
+    NewSongNotSaved,
+    NextPage,
+    OpeningLibrary,
+    RefreshFirstPage,
+    SaveBeforeDelete,
+    SaveOrDiscardSongs,
+    SavedEditsRemain,
+    SavedSongsHeader,
+    SlideFooter,
+    SlideInUse,
+    SlideRejectedNote,
+    SlideSplit,
+    SlidesJoined,
+    SongExceedsLimits,
+    SongMaster,
+    SongMasterNote,
+    SongPlaceholder,
+    SongTextReplaced,
+    SplitExceedsLimits,
+    StatusLine,
+    StorageConflict,
+    StorageCorrupt,
+    StorageExists,
+    StorageFull,
+    StorageInvalid,
+    StorageIo,
+    StorageLocked,
+    StorageMissing,
+    StorageUnavailable,
+    StorageUnsupported,
+    TextTooBig,
+    TitlePlaceholder,
+    TitleRequired,
+    TooManySlides,
+    UnchangedStatus,
+    UnexpectedReply,
+    UnsavedChanges,
+    WaitPendingClose,
+    WorkingStatus,
+    // Song editor Format pane.
+    AngleLabel,
+    AspectMaintain,
+    AspectRatioLabel,
+    AspectStretch,
+    AspectZoom,
+    AutoSizing,
+    BackgroundNotStored,
+    BlurLabel,
+    BundledFont,
+    ColorLabel,
+    DescribeColorFill,
+    DescribeMedia,
+    DescribeMediaNoImage,
+    DescribeNoFill,
+    EditSlideLayouts,
+    FillColor,
+    FillGradient,
+    FillMedia,
+    FillNone,
+    FollowsMaster,
+    FormatOutOfRange,
+    HexInvalid,
+    HexValueLabel,
+    ImageUnusable,
+    ImagesHeader,
+    ImportMenuItem,
+    ImportedName,
+    LayoutTabInert,
+    LoadingFonts,
+    LoadingImages,
+    NoImagesYet,
+    NumOutlineOpacity,
+    NumOutlineSize,
+    NumRangeInvalid,
+    NumShadowAngle,
+    NumShadowBlur,
+    NumShadowOffset,
+    NumShadowOpacity,
+    NumSize,
+    OffsetLabel,
+    OpacityLabel,
+    OutlineCenter,
+    OutlineInner,
+    OutlineOuter,
+    RoundInert,
+    SectionBackground,
+    SectionFont,
+    SectionOutline,
+    SectionShadow,
+    SectionSlideLayout,
+    SelectMedia,
+    ShadowEnabled,
+    SizeAuto,
+    SizeAutoTrigger,
+    SizeFixed,
+    SizeReset,
+    SlideTab,
+    SongWouldExceed,
+    SpectrumTab,
+    StyleTab,
+    SwatchesTab,
+    ValuesTab,
+}
+
+impl Msg {
+    pub const ALL: &[Msg] = &[
+        Msg::ToolbarNewMenu,
+        Msg::ToolbarOpen,
+        Msg::ToolbarSave,
+        Msg::ToolbarOptions,
+        Msg::ToolbarWeb,
+        Msg::ToolbarRemote,
+        Msg::ToolbarGoLive,
+        Msg::ToolbarAlerts,
+        Msg::MaskLogo,
+        Msg::MaskBlack,
+        Msg::MaskClear,
+        Msg::LiveOn,
+        Msg::LiveOff,
+        Msg::ButtonPrevious,
+        Msg::ButtonNext,
+        Msg::ResourcesHeader,
+        Msg::CollapseResources,
+        Msg::RestoreResources,
+        Msg::ButtonQuit,
+        Msg::ResetLayout,
+        Msg::NewSongItem,
+        Msg::NewScheduleItem,
+        Msg::CollectionsHeader,
+        Msg::NoCollections,
+        Msg::NewSongButton,
+        Msg::AddToSchedule,
+        Msg::NormalizeOn,
+        Msg::NormalizeOff,
+        Msg::ImportImage,
+        Msg::UseAsLogo,
+        Msg::RemoveFromSchedule,
+        Msg::TabSongs,
+        Msg::TabScriptures,
+        Msg::TabMedia,
+        Msg::TabPresentations,
+        Msg::TabThemes,
+        Msg::MenuNewSong,
+        Msg::MenuEditSong,
+        Msg::MenuDelete,
+        Msg::MenuUpdateSchedule,
+        Msg::MenuSortBy,
+        Msg::MenuRefresh,
+        Msg::PaneSchedule,
+        Msg::ScheduleTitled,
+        Msg::ScheduleUnsaved,
+        Msg::ScheduleEmptyHint,
+        Msg::ScheduleLiveMarker,
+        Msg::ButtonUp,
+        Msg::ButtonDown,
+        Msg::ButtonRemove,
+        Msg::LoadingSavedSchedules,
+        Msg::NoSavedSchedules,
+        Msg::PanePreview,
+        Msg::PaneLive,
+        Msg::NothingLive,
+        Msg::NothingSelected,
+        Msg::SlideN,
+        Msg::Untitled,
+        Msg::ScheduleFull,
+        Msg::ScheduleEmpty,
+        Msg::SelectScheduleItem,
+        Msg::Saving,
+        Msg::WaitScheduleBusy,
+        Msg::NoLibraryOpen,
+        Msg::OpeningSchedule,
+        Msg::SavingWaitDone,
+        Msg::SavedSchedule,
+        Msg::OpenedSchedule,
+        Msg::ScheduleUnreadable,
+        Msg::ScheduleConflict,
+        Msg::ScheduleStorageFailed,
+        Msg::SelectSongFirst,
+        Msg::DeletedSong,
+        Msg::DeleteConflict,
+        Msg::DeleteStorageFailed,
+        Msg::DeleteQueueFull,
+        Msg::LibraryUnavailable,
+        Msg::SongsNoLibrary,
+        Msg::SongsNoLibraryHint,
+        Msg::SongsEmptyTitle,
+        Msg::SongsEmptyHint,
+        Msg::NoUserDataDir,
+        Msg::DeleteBusy,
+        Msg::Deleting,
+        Msg::LibraryEmpty,
+        Msg::LibraryNotImplemented,
+        Msg::NoProfileImages,
+        Msg::NoProfileImport,
+        Msg::SelectImageFirst,
+        Msg::ImagesNoProfile,
+        Msg::ImagesNoProfileHint,
+        Msg::ImagesEmptyTitle,
+        Msg::ImagesEmptyHint,
+        Msg::ImageLogoSuffix,
+        Msg::ImagesUnavailable,
+        Msg::ImportedImage,
+        Msg::ImportFailed,
+        Msg::LogoUnavailable,
+        Msg::LogoPrepFailed,
+        Msg::ImportPrompt,
+        Msg::ImageWorkerFailed,
+        Msg::PreviewFooter,
+        Msg::PreviewNoSlides,
+        Msg::LiveNotSent,
+        Msg::OutputOff,
+        Msg::OutputStarting,
+        Msg::OutputConnected,
+        Msg::OutputLost,
+        Msg::NothingConfirmed,
+        Msg::UnknownState,
+        Msg::MaskLine,
+        Msg::UnderMask,
+        Msg::OnScreen,
+        Msg::LiveItemGone,
+        Msg::SendingMask,
+        Msg::MaskArmed,
+        Msg::PreparingLogo,
+        Msg::Sending,
+        Msg::CueNotShown,
+        Msg::MaskNotShown,
+        Msg::LogoNotShown,
+        Msg::NoLogoSet,
+        Msg::PreparingBackground,
+        Msg::ResolvingFonts,
+        Msg::RefusalNotConnected,
+        Msg::RefusalWrongExtent,
+        Msg::LayerNone,
+        Msg::LayerClear,
+        Msg::LayerBlack,
+        Msg::LayerLogo,
+        Msg::DialogSaveAs,
+        Msg::DialogOpen,
+        Msg::DialogUnsavedOpen,
+        Msg::DialogUnsavedNew,
+        Msg::DialogUnsavedQuit,
+        Msg::DialogRemoveTitled,
+        Msg::DialogRemoveGeneric,
+        Msg::DialogDeleteTitled,
+        Msg::DialogDeleteGeneric,
+        Msg::DialogDeleteNote,
+        Msg::ConfirmSave,
+        Msg::ConfirmDiscard,
+        Msg::ConfirmRemove,
+        Msg::ConfirmDelete,
+        Msg::ButtonKeep,
+        Msg::ButtonCancel,
+        Msg::ButtonOk,
+        Msg::EnterScheduleTitle,
+        Msg::OptionsTitle,
+        Msg::SectionMainOutput,
+        Msg::SectionAlternateOutput,
+        Msg::SectionFoldback,
+        Msg::SectionServiceIntervals,
+        Msg::SectionSlideLabels,
+        Msg::SectionAdvanced,
+        Msg::OptionsTabGeneral,
+        Msg::OptionsTabSong,
+        Msg::OptionsTabScripture,
+        Msg::OptionsTabTransitions,
+        Msg::NotAvailable,
+        Msg::MonitorHeading,
+        Msg::MonitorHint,
+        Msg::DetectingMonitors,
+        Msg::DefaultMonitor,
+        Msg::PrimarySuffix,
+        Msg::MonitorMissingDialog,
+        Msg::MonitorMissingNote,
+        Msg::LanguageHeading,
+        Msg::LanguageHint,
+        Msg::SettingsSaveFailed,
+        Msg::SettingsQueueFull,
+        Msg::SettingsNoProfile,
+        Msg::BgImageMissing,
+        Msg::BgImageChanged,
+        Msg::BgImageTooLarge,
+        Msg::BgImageUnreadable,
+        Msg::AllSlidesSelected,
+        Msg::ApplyToSchedule,
+        Msg::CannotBeShown,
+        Msg::CloseWithoutSaving,
+        Msg::ConfirmDeleteHint,
+        Msg::ContinueEditing,
+        Msg::CursorInLyrics,
+        Msg::DiscardAndClose,
+        Msg::DiscardEdits,
+        Msg::DocumentRedone,
+        Msg::DocumentUndone,
+        Msg::DraftChanged,
+        Msg::EditsDiscarded,
+        Msg::EditorAnimate,
+        Msg::EditorApply,
+        Msg::EditorCancel,
+        Msg::EditorConfirmDelete,
+        Msg::EditorDelete,
+        Msg::EditorDuplicate,
+        Msg::EditorFormat,
+        Msg::EditorInspector,
+        Msg::EditorLayouts,
+        Msg::EditorLibrary,
+        Msg::EditorMedia,
+        Msg::EditorNew,
+        Msg::EditorOk,
+        Msg::EditorPresentation,
+        Msg::EditorRedo,
+        Msg::EditorScripture,
+        Msg::EditorShape,
+        Msg::EditorSlides,
+        Msg::EditorText,
+        Msg::EditorUndo,
+        Msg::EditorUnsaved,
+        Msg::EditorWindowTitle,
+        Msg::EditorWords,
+        Msg::EmptySlideHint,
+        Msg::InputRejected,
+        Msg::InspectorAuthors,
+        Msg::InspectorCopyright,
+        Msg::InspectorHeader,
+        Msg::InspectorLicense,
+        Msg::JoinExceedsLimits,
+        Msg::KeepEditing,
+        Msg::LabelPlaceholder,
+        Msg::LayoutSample,
+        Msg::LibraryReady,
+        Msg::LoadedRevision,
+        Msg::LoadingOrSaving,
+        Msg::MasterLayoutFooter,
+        Msg::NewSongNotSaved,
+        Msg::NextPage,
+        Msg::OpeningLibrary,
+        Msg::RefreshFirstPage,
+        Msg::SaveBeforeDelete,
+        Msg::SaveOrDiscardSongs,
+        Msg::SavedEditsRemain,
+        Msg::SavedSongsHeader,
+        Msg::SlideFooter,
+        Msg::SlideInUse,
+        Msg::SlideRejectedNote,
+        Msg::SlideSplit,
+        Msg::SlidesJoined,
+        Msg::SongExceedsLimits,
+        Msg::SongMaster,
+        Msg::SongMasterNote,
+        Msg::SongPlaceholder,
+        Msg::SongTextReplaced,
+        Msg::SplitExceedsLimits,
+        Msg::StatusLine,
+        Msg::StorageConflict,
+        Msg::StorageCorrupt,
+        Msg::StorageExists,
+        Msg::StorageFull,
+        Msg::StorageInvalid,
+        Msg::StorageIo,
+        Msg::StorageLocked,
+        Msg::StorageMissing,
+        Msg::StorageUnavailable,
+        Msg::StorageUnsupported,
+        Msg::TextTooBig,
+        Msg::TitlePlaceholder,
+        Msg::TitleRequired,
+        Msg::TooManySlides,
+        Msg::UnchangedStatus,
+        Msg::UnexpectedReply,
+        Msg::UnsavedChanges,
+        Msg::WaitPendingClose,
+        Msg::WorkingStatus,
+        Msg::AngleLabel,
+        Msg::AspectMaintain,
+        Msg::AspectRatioLabel,
+        Msg::AspectStretch,
+        Msg::AspectZoom,
+        Msg::AutoSizing,
+        Msg::BackgroundNotStored,
+        Msg::BlurLabel,
+        Msg::BundledFont,
+        Msg::ColorLabel,
+        Msg::DescribeColorFill,
+        Msg::DescribeMedia,
+        Msg::DescribeMediaNoImage,
+        Msg::DescribeNoFill,
+        Msg::EditSlideLayouts,
+        Msg::FillColor,
+        Msg::FillGradient,
+        Msg::FillMedia,
+        Msg::FillNone,
+        Msg::FollowsMaster,
+        Msg::FormatOutOfRange,
+        Msg::HexInvalid,
+        Msg::HexValueLabel,
+        Msg::ImageUnusable,
+        Msg::ImagesHeader,
+        Msg::ImportMenuItem,
+        Msg::ImportedName,
+        Msg::LayoutTabInert,
+        Msg::LoadingFonts,
+        Msg::LoadingImages,
+        Msg::NoImagesYet,
+        Msg::NumOutlineOpacity,
+        Msg::NumOutlineSize,
+        Msg::NumRangeInvalid,
+        Msg::NumShadowAngle,
+        Msg::NumShadowBlur,
+        Msg::NumShadowOffset,
+        Msg::NumShadowOpacity,
+        Msg::NumSize,
+        Msg::OffsetLabel,
+        Msg::OpacityLabel,
+        Msg::OutlineCenter,
+        Msg::OutlineInner,
+        Msg::OutlineOuter,
+        Msg::RoundInert,
+        Msg::SectionBackground,
+        Msg::SectionFont,
+        Msg::SectionOutline,
+        Msg::SectionShadow,
+        Msg::SectionSlideLayout,
+        Msg::SelectMedia,
+        Msg::ShadowEnabled,
+        Msg::SizeAuto,
+        Msg::SizeAutoTrigger,
+        Msg::SizeFixed,
+        Msg::SizeReset,
+        Msg::SlideTab,
+        Msg::SongWouldExceed,
+        Msg::SpectrumTab,
+        Msg::StyleTab,
+        Msg::SwatchesTab,
+        Msg::ValuesTab,
+    ];
+
+    pub fn english(self) -> &'static str {
+        match self {
+            Self::ToolbarNewMenu => "New ▾",
+            Self::ToolbarOpen => "Open",
+            Self::ToolbarSave => "Save",
+            Self::ToolbarOptions => "Options…",
+            Self::ToolbarWeb => "Web",
+            Self::ToolbarRemote => "Remote",
+            Self::ToolbarGoLive => "Go Live",
+            Self::ToolbarAlerts => "Alerts",
+            Self::MaskLogo => "Logo",
+            Self::MaskBlack => "Black",
+            Self::MaskClear => "Clear",
+            Self::LiveOn => "Live ● On",
+            Self::LiveOff => "Live ○ Off",
+            Self::ButtonPrevious => "‹ Previous",
+            Self::ButtonNext => "Next ›",
+            Self::ResourcesHeader => "Resources",
+            Self::CollapseResources => "Collapse resources",
+            Self::RestoreResources => "Restore resources",
+            Self::ButtonQuit => "Quit · Ctrl+Q",
+            Self::ResetLayout => "Reset layout",
+            Self::NewSongItem => "New Song",
+            Self::NewScheduleItem => "New Schedule",
+            Self::CollectionsHeader => "Collections",
+            Self::NoCollections => "No collections",
+            Self::NewSongButton => "+ New Song",
+            Self::AddToSchedule => "Add to Schedule",
+            Self::NormalizeOn => "Normalize text size across slides: On",
+            Self::NormalizeOff => "Normalize text size across slides: Off",
+            Self::ImportImage => "Import image…",
+            Self::UseAsLogo => "Use As Logo Background",
+            Self::RemoveFromSchedule => "Remove From Schedule",
+            Self::TabSongs => "Songs",
+            Self::TabScriptures => "Scriptures",
+            Self::TabMedia => "Media",
+            Self::TabPresentations => "Presentations",
+            Self::TabThemes => "Themes",
+            Self::MenuNewSong => "New Song…",
+            Self::MenuEditSong => "Edit Song…",
+            Self::MenuDelete => "Delete",
+            Self::MenuUpdateSchedule => "Update items in Schedule",
+            Self::MenuSortBy => "Sort by ▸",
+            Self::MenuRefresh => "Refresh",
+            Self::PaneSchedule => "Schedule",
+            Self::ScheduleTitled => "Schedule · {title}",
+            Self::ScheduleUnsaved => "Unsaved",
+            Self::ScheduleEmptyHint => "Drag songs here or use Add to Schedule",
+            Self::ScheduleLiveMarker => "● Live",
+            Self::ButtonUp => "Up",
+            Self::ButtonDown => "Down",
+            Self::ButtonRemove => "Remove",
+            Self::LoadingSavedSchedules => "Loading saved schedules…",
+            Self::NoSavedSchedules => "No saved schedules",
+            Self::PanePreview => "Preview",
+            Self::PaneLive => "Live",
+            Self::NothingLive => "Nothing live",
+            Self::NothingSelected => "Nothing selected",
+            Self::SlideN => "Slide {index}",
+            Self::Untitled => "Untitled",
+            Self::ScheduleFull => "The schedule is full ({max} items)",
+            Self::ScheduleEmpty => "The schedule is empty",
+            Self::SelectScheduleItem => "Select a schedule item first",
+            Self::Saving => "Saving…",
+            Self::WaitScheduleBusy => "Wait for the schedule to finish saving or opening",
+            Self::NoLibraryOpen => "No song library open",
+            Self::OpeningSchedule => "Opening “{title}”…",
+            Self::SavingWaitDone => "Saving the schedule… try again when it is saved",
+            Self::SavedSchedule => "Saved “{title}”",
+            Self::OpenedSchedule => "Opened “{title}”",
+            Self::ScheduleUnreadable => "The saved schedule could not be read",
+            Self::ScheduleConflict => {
+                "Not saved: this schedule was saved elsewhere since it was opened"
+            }
+            Self::ScheduleStorageFailed => "Schedule storage failed ({error})",
+            Self::SelectSongFirst => "Select a song in Songs first",
+            Self::DeletedSong => "Deleted “{title}”",
+            Self::DeleteConflict => "Not deleted: “{title}” was changed or deleted elsewhere",
+            Self::DeleteStorageFailed => {
+                "Not deleted: “{title}” · song library storage failed ({error})"
+            }
+            Self::DeleteQueueFull => "Not deleted: song library busy ({error})",
+            Self::LibraryUnavailable => "Song library unavailable ({error})",
+            Self::SongsNoLibrary => "Songs · no library open",
+            Self::SongsNoLibraryHint => "Launch Sela without arguments to use the default library.",
+            Self::SongsEmptyTitle => "Songs · offline library",
+            Self::SongsEmptyHint => "No songs yet. Use + New Song to create one.",
+            Self::NoUserDataDir => "No user data directory. Launch with --library DATABASE_PATH.",
+            Self::DeleteBusy => "Not deleted: wait for the library to finish the previous change",
+            Self::Deleting => "Deleting…",
+            Self::LibraryEmpty => "{tab} library is empty",
+            Self::LibraryNotImplemented => "This resource library is not implemented.",
+            Self::NoProfileImages => "No profile folder; images are unavailable",
+            Self::NoProfileImport => "No profile folder; images cannot be imported",
+            Self::SelectImageFirst => "Select an image first",
+            Self::ImagesNoProfile => "Images · no profile",
+            Self::ImagesNoProfileHint => {
+                "Launch Sela without arguments to use the default profile."
+            }
+            Self::ImagesEmptyTitle => "Images",
+            Self::ImagesEmptyHint => "No images yet. Use Import image… to add a PNG or JPEG.",
+            Self::ImageLogoSuffix => "{name} · Logo",
+            Self::ImagesUnavailable => "Images unavailable: {error}",
+            Self::ImportedImage => "Imported {name}",
+            Self::ImportFailed => "Import failed: {error}",
+            Self::LogoUnavailable => "Logo unavailable: {error}",
+            Self::LogoPrepFailed => "Logo preparation could not start",
+            Self::ImportPrompt => "Import",
+            Self::ImageWorkerFailed => "Image worker could not start",
+            Self::PreviewFooter => "{title} · Slide {index} of {count}",
+            Self::PreviewNoSlides => "{title} · no slides",
+            Self::LiveNotSent => "{title} · not sent",
+            Self::OutputOff => "Live output off",
+            Self::OutputStarting => "Starting live output…",
+            Self::OutputConnected => "Live output {width}×{height}",
+            Self::OutputLost => "{loss} · output state unknown · turn Live off and on",
+            Self::NothingConfirmed => "nothing confirmed",
+            Self::UnknownState => "unknown",
+            Self::MaskLine => "Mask: {layer}",
+            Self::UnderMask => "Under mask: {slide}",
+            Self::OnScreen => "On screen: {slide}",
+            Self::LiveItemGone => "Live item is no longer in the schedule",
+            Self::SendingMask => "Sending mask: {layer}…",
+            Self::MaskArmed => "Mask armed: {layer} · shown when Live output is on",
+            Self::PreparingLogo => "Preparing logo · covering with Black",
+            Self::Sending => "Sending…",
+            Self::CueNotShown => "Last cue not shown: {error}",
+            Self::MaskNotShown => "Mask {layer} not shown: {error}",
+            Self::LogoNotShown => "Logo not shown: {error}",
+            Self::NoLogoSet => "No logo set · Media → select an image → Use As Logo Background",
+            Self::PreparingBackground => "Preparing background…",
+            Self::ResolvingFonts => "Resolving fonts…",
+            Self::RefusalNotConnected => "Live output is not connected",
+            Self::RefusalWrongExtent => "Output size changed; try again",
+            Self::LayerNone => "None",
+            Self::LayerClear => "Clear",
+            Self::LayerBlack => "Black",
+            Self::LayerLogo => "Logo",
+            Self::DialogSaveAs => "Save schedule as",
+            Self::DialogOpen => "Open schedule",
+            Self::DialogUnsavedOpen => "Open another schedule without saving changes?",
+            Self::DialogUnsavedNew => "Start a new schedule without saving changes?",
+            Self::DialogUnsavedQuit => "Quit without saving schedule changes?",
+            Self::DialogRemoveTitled => "Remove “{title}” from the schedule?",
+            Self::DialogRemoveGeneric => "Remove this item from the schedule?",
+            Self::DialogDeleteTitled => "Delete “{title}” from the song library?",
+            Self::DialogDeleteGeneric => "Delete this song from the song library?",
+            Self::DialogDeleteNote => {
+                "Schedules that use this song keep their copy. Live output does not change."
+            }
+            Self::ConfirmSave => "Save",
+            Self::ConfirmDiscard => "Discard changes",
+            Self::ConfirmRemove => "Remove",
+            Self::ConfirmDelete => "Delete",
+            Self::ButtonKeep => "Keep",
+            Self::ButtonCancel => "Cancel",
+            Self::ButtonOk => "OK",
+            Self::EnterScheduleTitle => "Enter a title for the schedule",
+            Self::OptionsTitle => "Options",
+            Self::SectionMainOutput => "Main Output",
+            Self::SectionAlternateOutput => "Alternate Output",
+            Self::SectionFoldback => "Foldback",
+            Self::SectionServiceIntervals => "Service Intervals",
+            Self::SectionSlideLabels => "Slide Labels",
+            Self::SectionAdvanced => "Advanced",
+            Self::OptionsTabGeneral => "General",
+            Self::OptionsTabSong => "Song",
+            Self::OptionsTabScripture => "Scripture",
+            Self::OptionsTabTransitions => "Transitions",
+            Self::NotAvailable => "not available",
+            Self::MonitorHeading => "Output monitor",
+            Self::MonitorHint => "The audience output opens on this monitor.",
+            Self::DetectingMonitors => "Detecting monitors…",
+            Self::DefaultMonitor => "Default (first non-primary monitor)",
+            Self::PrimarySuffix => " · primary",
+            Self::MonitorMissingDialog => "Saved monitor {name} is not connected.",
+            Self::MonitorMissingNote => {
+                "Saved output monitor {name} was not found; using the default non-primary monitor. Choose one in Options."
+            }
+            Self::LanguageHeading => "Language",
+            Self::LanguageHint => "Menus, buttons and dialogs use this language.",
+            Self::SettingsSaveFailed => "Settings were not saved ({error})",
+            Self::SettingsQueueFull => "Settings were not saved (queue full)",
+            Self::SettingsNoProfile => "No profile folder; the choice lasts this session",
+            Self::BgImageMissing => "Background image ‘{name}’ is missing; showing black",
+            Self::BgImageChanged => {
+                "Background image ‘{name}’ changed since it was chosen; showing black"
+            }
+            Self::BgImageTooLarge => "Background image ‘{name}’ is too large; showing black",
+            Self::BgImageUnreadable => "Background image ‘{name}’ cannot be read; showing black",
+            Self::AllSlidesSelected => "All slides selected · formatting applies to every slide",
+            Self::ApplyToSchedule => "Apply changes to items in schedule",
+            Self::CannotBeShown => "Cannot be shown",
+            Self::CloseWithoutSaving => "Close without saving?",
+            Self::ConfirmDeleteHint => {
+                "Click Confirm delete to remove this library entry. Schedule snapshots remain."
+            }
+            Self::ContinueEditing => "Continue editing",
+            Self::CursorInLyrics => "Place the cursor in the lyrics to split the slide.",
+            Self::DiscardAndClose => "Discard and close",
+            Self::DiscardEdits => "Discard edits",
+            Self::DocumentRedone => "Document redone",
+            Self::DocumentUndone => "Document undone",
+            Self::DraftChanged => "Draft changed · validate with Apply or OK",
+            Self::EditsDiscarded => "Edits discarded",
+            Self::EditorAnimate => "Animate",
+            Self::EditorApply => "Apply",
+            Self::EditorCancel => "Cancel",
+            Self::EditorConfirmDelete => "Confirm delete",
+            Self::EditorDelete => "Delete",
+            Self::EditorDuplicate => "Duplicate",
+            Self::EditorFormat => "Format",
+            Self::EditorInspector => "Inspector",
+            Self::EditorLayouts => "Layouts",
+            Self::EditorLibrary => "Library",
+            Self::EditorMedia => "Media",
+            Self::EditorNew => "New",
+            Self::EditorOk => "OK",
+            Self::EditorPresentation => "Presentation",
+            Self::EditorRedo => "Redo",
+            Self::EditorScripture => "Scripture",
+            Self::EditorShape => "Shape",
+            Self::EditorSlides => "Slides",
+            Self::EditorText => "Text",
+            Self::EditorUndo => "Undo",
+            Self::EditorUnsaved => "Unsaved",
+            Self::EditorWindowTitle => "Song Editor - {title}",
+            Self::EditorWords => "Words",
+            Self::EmptySlideHint => "Double click to edit song",
+            Self::InputRejected => {
+                "An input was rejected. Correct the highlighted field before saving."
+            }
+            Self::InspectorAuthors => "Authors",
+            Self::InspectorCopyright => "Copyright",
+            Self::InspectorHeader => "Inspector · song information",
+            Self::InspectorLicense => "License identifier",
+            Self::JoinExceedsLimits => "Joining would exceed the slide limits. Original unchanged.",
+            Self::KeepEditing => "Keep editing",
+            Self::LabelPlaceholder => "label",
+            Self::LayoutSample => {
+                "Sample text line one\nSample text line two\nSample text line three"
+            }
+            Self::LibraryReady => "Library ready · committed changes stay offline on this computer",
+            Self::LoadedRevision => "Loaded saved revision",
+            Self::LoadingOrSaving => "Loading or saving…",
+            Self::MasterLayoutFooter => "Master layout · audience layout preview",
+            Self::NewSongNotSaved => "New song · not saved",
+            Self::NextPage => "Next page",
+            Self::OpeningLibrary => "Opening library…",
+            Self::RefreshFirstPage => "Refresh / first page",
+            Self::SaveBeforeDelete => "Save or discard edits before deleting a saved song.",
+            Self::SaveOrDiscardSongs => "Save or discard your edits before changing songs.",
+            Self::SavedEditsRemain => "Saved revision; newer edits remain unsaved.",
+            Self::SavedSongsHeader => "Saved songs · ID order",
+            Self::SlideFooter => "Slide {index} of {count} · audience layout preview",
+            Self::SlideInUse => {
+                "Slide is used by an arrangement or the song exceeds limits. Original unchanged."
+            }
+            Self::SlideRejectedNote => {
+                "This slide cannot be shown: a line is too long or uses a character the bundled font lacks."
+            }
+            Self::SlideSplit => "Slide split · Undo restores it",
+            Self::SlidesJoined => "Slides joined · Undo restores them",
+            Self::SongExceedsLimits => {
+                "This song exceeds the editor's line limits or has multiline metadata. Original unchanged."
+            }
+            Self::SongMaster => "Master",
+            Self::SongMasterNote => "Song master · until themes exist",
+            Self::SongPlaceholder => "song",
+            Self::SongTextReplaced => "Song text replaced · Undo restores it",
+            Self::SplitExceedsLimits => {
+                "Splitting would exceed the song's section limits. Original unchanged."
+            }
+            Self::StatusLine => "{dirty} · {status}",
+            Self::StorageConflict => {
+                "Changed elsewhere. Your draft is retained; duplicate it to save a separate copy, or discard and reopen."
+            }
+            Self::StorageCorrupt => {
+                "Library is corrupt. Preserve the original and restore a known-good backup."
+            }
+            Self::StorageExists => {
+                "Backup destination already exists. Preserve it and the library; recovery requires a fresh destination."
+            }
+            Self::StorageFull => "Storage is full. Free space and retry; your draft is retained.",
+            Self::StorageInvalid => {
+                "Song is invalid or exceeds storage limits. Correct the draft and retry."
+            }
+            Self::StorageIo => {
+                "Library could not be read or written. Check folder permissions and free space, then reopen or retry."
+            }
+            Self::StorageLocked => {
+                "Library is busy in another process. Wait, then retry; your draft is retained."
+            }
+            Self::StorageMissing => "Saved revision is missing. Refresh the library.",
+            Self::StorageUnavailable => {
+                "Library is unavailable. Close and reopen; do not discard an unsaved draft without copying it."
+            }
+            Self::StorageUnsupported => {
+                "Unsupported library version or foreign database. Use a supported library; original was not replaced."
+            }
+            Self::TextTooBig => "That text does not fit in one slide. Song unchanged.",
+            Self::TitlePlaceholder => "Title",
+            Self::TitleRequired => {
+                "A title is required; the complete song must fit within 256 KiB."
+            }
+            Self::TooManySlides => "At most 128 slides. Original unchanged.",
+            Self::UnchangedStatus => "Unchanged",
+            Self::UnexpectedReply => "Unexpected storage reply. Close and reopen the library.",
+            Self::UnsavedChanges => "Unsaved changes. Save, discard, or keep editing.",
+            Self::WaitPendingClose => "Wait for the pending operation before closing.",
+            Self::WorkingStatus => "Working…",
+            Self::AngleLabel => "Angle",
+            Self::AspectMaintain => "Maintain",
+            Self::AspectRatioLabel => "Aspect Ratio",
+            Self::AspectStretch => "Stretch",
+            Self::AspectZoom => "Zoom",
+            Self::AutoSizing => "Auto Sizing",
+            Self::BackgroundNotStored => "That background cannot be stored. Slide unchanged.",
+            Self::BlurLabel => "Blur",
+            Self::BundledFont => "{name} (bundled)",
+            Self::ColorLabel => "Color",
+            Self::DescribeColorFill => "Color Fill {hex}",
+            Self::DescribeMedia => "{name} ({aspect})",
+            Self::DescribeMediaNoImage => "Media Fill without an image (black)",
+            Self::DescribeNoFill => "no fill (black)",
+            Self::EditSlideLayouts => "Edit Slide Layouts",
+            Self::FillColor => "Color Fill",
+            Self::FillGradient => "Gradient Fill",
+            Self::FillMedia => "Media Fill",
+            Self::FillNone => "None",
+            Self::FollowsMaster => "Follows the song master: {description}",
+            Self::FormatOutOfRange => "That format value is out of range. Slide unchanged.",
+            Self::HexInvalid => "Enter a color as #RRGGBB. Slide unchanged.",
+            Self::HexValueLabel => "Hex Value",
+            Self::ImageUnusable => "‘{name}’ cannot be used: {error}. Slide unchanged.",
+            Self::ImagesHeader => "Images",
+            Self::ImportMenuItem => "Import…",
+            Self::ImportedName => "Imported ‘{name}’",
+            Self::LayoutTabInert => "Layout",
+            Self::LoadingFonts => "Loading fonts…",
+            Self::LoadingImages => "Loading images…",
+            Self::NoImagesYet => "No images yet. Import one.",
+            Self::NumOutlineOpacity => "Outline opacity",
+            Self::NumOutlineSize => "Outline size",
+            Self::NumRangeInvalid => {
+                "{field} must be a whole number from {lo} to {hi}. Slide unchanged."
+            }
+            Self::NumShadowAngle => "Shadow angle",
+            Self::NumShadowBlur => "Shadow blur",
+            Self::NumShadowOffset => "Shadow offset",
+            Self::NumShadowOpacity => "Shadow opacity",
+            Self::NumSize => "Size",
+            Self::OffsetLabel => "Offset",
+            Self::OpacityLabel => "Opacity",
+            Self::OutlineCenter => "Center",
+            Self::OutlineInner => "Inner",
+            Self::OutlineOuter => "Outer",
+            Self::RoundInert => "Round ▾",
+            Self::SectionBackground => "BACKGROUND",
+            Self::SectionFont => "FONT",
+            Self::SectionOutline => "OUTLINE",
+            Self::SectionShadow => "SHADOW",
+            Self::SectionSlideLayout => "SLIDE LAYOUT",
+            Self::SelectMedia => "Select Media…",
+            Self::ShadowEnabled => "Enabled",
+            Self::SizeAuto => "Resize text to fit element",
+            Self::SizeAutoTrigger => "Auto",
+            Self::SizeFixed => "Do not auto size text",
+            Self::SizeReset => "Reset Size",
+            Self::SlideTab => "Slide",
+            Self::SongWouldExceed => "The song would exceed its limits. Slide unchanged.",
+            Self::SpectrumTab => "Spectrum",
+            Self::StyleTab => "Style",
+            Self::SwatchesTab => "Swatches",
+            Self::ValuesTab => "Values",
+        }
+    }
+
+    pub fn indonesian(self) -> &'static str {
+        match self {
+            Self::ToolbarNewMenu => "Baru ▾",
+            Self::ToolbarOpen => "Buka",
+            Self::ToolbarSave => "Simpan",
+            Self::ToolbarOptions => "Opsi…",
+            Self::ToolbarWeb => "Web",
+            Self::ToolbarRemote => "Remote",
+            Self::ToolbarGoLive => "Tayangkan",
+            Self::ToolbarAlerts => "Pengingat",
+            Self::MaskLogo => "Logo",
+            Self::MaskBlack => "Hitam",
+            Self::MaskClear => "Kosong",
+            Self::LiveOn => "Langsung ● Aktif",
+            Self::LiveOff => "Langsung ○ Mati",
+            Self::ButtonPrevious => "‹ Sebelumnya",
+            Self::ButtonNext => "Berikutnya ›",
+            Self::ResourcesHeader => "Sumber Daya",
+            Self::CollapseResources => "Ciutkan sumber daya",
+            Self::RestoreResources => "Pulihkan sumber daya",
+            Self::ButtonQuit => "Keluar · Ctrl+Q",
+            Self::ResetLayout => "Atur ulang tata letak",
+            Self::NewSongItem => "Lagu Baru",
+            Self::NewScheduleItem => "Jadwal Baru",
+            Self::CollectionsHeader => "Koleksi",
+            Self::NoCollections => "Belum ada koleksi",
+            Self::NewSongButton => "+ Lagu Baru",
+            Self::AddToSchedule => "Tambah ke Jadwal",
+            Self::NormalizeOn => "Samakan ukuran teks antarslide: Aktif",
+            Self::NormalizeOff => "Samakan ukuran teks antarslide: Mati",
+            Self::ImportImage => "Impor gambar…",
+            Self::UseAsLogo => "Jadikan Latar Logo",
+            Self::RemoveFromSchedule => "Hapus dari Jadwal",
+            Self::TabSongs => "Lagu",
+            Self::TabScriptures => "Alkitab",
+            Self::TabMedia => "Media",
+            Self::TabPresentations => "Presentasi",
+            Self::TabThemes => "Tema",
+            Self::MenuNewSong => "Lagu Baru…",
+            Self::MenuEditSong => "Ubah Lagu…",
+            Self::MenuDelete => "Hapus",
+            Self::MenuUpdateSchedule => "Perbarui item di Jadwal",
+            Self::MenuSortBy => "Urutkan ▸",
+            Self::MenuRefresh => "Segarkan",
+            Self::PaneSchedule => "Jadwal",
+            Self::ScheduleTitled => "Jadwal · {title}",
+            Self::ScheduleUnsaved => "Belum disimpan",
+            Self::ScheduleEmptyHint => "Seret lagu ke sini atau gunakan Tambah ke Jadwal",
+            Self::ScheduleLiveMarker => "● Langsung",
+            Self::ButtonUp => "Naik",
+            Self::ButtonDown => "Turun",
+            Self::ButtonRemove => "Hapus",
+            Self::LoadingSavedSchedules => "Memuat jadwal tersimpan…",
+            Self::NoSavedSchedules => "Tidak ada jadwal tersimpan",
+            Self::PanePreview => "Pratinjau",
+            Self::PaneLive => "Langsung",
+            Self::NothingLive => "Tidak ada yang tayang",
+            Self::NothingSelected => "Tidak ada yang dipilih",
+            Self::SlideN => "Slide {index}",
+            Self::Untitled => "Tanpa Judul",
+            Self::ScheduleFull => "Jadwal penuh ({max} item)",
+            Self::ScheduleEmpty => "Jadwal kosong",
+            Self::SelectScheduleItem => "Pilih item jadwal terlebih dahulu",
+            Self::Saving => "Menyimpan…",
+            Self::WaitScheduleBusy => "Tunggu jadwal selesai disimpan atau dibuka",
+            Self::NoLibraryOpen => "Tidak ada pustaka lagu yang terbuka",
+            Self::OpeningSchedule => "Membuka “{title}”…",
+            Self::SavingWaitDone => "Menyimpan jadwal… coba lagi setelah tersimpan",
+            Self::SavedSchedule => "“{title}” tersimpan",
+            Self::OpenedSchedule => "“{title}” dibuka",
+            Self::ScheduleUnreadable => "Jadwal tersimpan tidak dapat dibaca",
+            Self::ScheduleConflict => {
+                "Tidak tersimpan: jadwal ini disimpan di tempat lain sejak dibuka"
+            }
+            Self::ScheduleStorageFailed => "Penyimpanan jadwal gagal ({error})",
+            Self::SelectSongFirst => "Pilih lagu di tab Lagu terlebih dahulu",
+            Self::DeletedSong => "“{title}” dihapus",
+            Self::DeleteConflict => "Tidak dihapus: “{title}” diubah atau dihapus di tempat lain",
+            Self::DeleteStorageFailed => {
+                "Tidak dihapus: “{title}” · penyimpanan pustaka lagu gagal ({error})"
+            }
+            Self::DeleteQueueFull => "Tidak dihapus: pustaka lagu sibuk ({error})",
+            Self::LibraryUnavailable => "Pustaka lagu tidak tersedia ({error})",
+            Self::SongsNoLibrary => "Lagu · tidak ada pustaka terbuka",
+            Self::SongsNoLibraryHint => "Jalankan Sela tanpa argumen untuk memakai pustaka bawaan.",
+            Self::SongsEmptyTitle => "Lagu · pustaka luring",
+            Self::SongsEmptyHint => "Belum ada lagu. Gunakan + Lagu Baru untuk membuatnya.",
+            Self::NoUserDataDir => {
+                "Tidak ada folder data pengguna. Jalankan dengan --library DATABASE_PATH."
+            }
+            Self::DeleteBusy => "Tidak dihapus: tunggu pustaka menyelesaikan perubahan sebelumnya",
+            Self::Deleting => "Menghapus…",
+            Self::LibraryEmpty => "Pustaka {tab} kosong",
+            Self::LibraryNotImplemented => "Pustaka sumber daya ini belum diimplementasikan.",
+            Self::NoProfileImages => "Tidak ada folder profil; gambar tidak tersedia",
+            Self::NoProfileImport => "Tidak ada folder profil; gambar tidak dapat diimpor",
+            Self::SelectImageFirst => "Pilih gambar terlebih dahulu",
+            Self::ImagesNoProfile => "Gambar · tidak ada profil",
+            Self::ImagesNoProfileHint => "Jalankan Sela tanpa argumen untuk memakai profil bawaan.",
+            Self::ImagesEmptyTitle => "Gambar",
+            Self::ImagesEmptyHint => {
+                "Belum ada gambar. Gunakan Impor gambar… untuk menambah PNG atau JPEG."
+            }
+            Self::ImageLogoSuffix => "{name} · Logo",
+            Self::ImagesUnavailable => "Gambar tidak tersedia: {error}",
+            Self::ImportedImage => "{name} diimpor",
+            Self::ImportFailed => "Impor gagal: {error}",
+            Self::LogoUnavailable => "Logo tidak tersedia: {error}",
+            Self::LogoPrepFailed => "Persiapan logo tidak dapat dimulai",
+            Self::ImportPrompt => "Impor",
+            Self::ImageWorkerFailed => "Proses gambar tidak dapat dimulai",
+            Self::PreviewFooter => "{title} · Slide {index} dari {count}",
+            Self::PreviewNoSlides => "{title} · tidak ada slide",
+            Self::LiveNotSent => "{title} · belum dikirim",
+            Self::OutputOff => "Output langsung mati",
+            Self::OutputStarting => "Memulai output langsung…",
+            Self::OutputConnected => "Output langsung {width}×{height}",
+            Self::OutputLost => {
+                "{loss} · status output tidak diketahui · matikan lalu nyalakan Langsung"
+            }
+            Self::NothingConfirmed => "belum ada konfirmasi",
+            Self::UnknownState => "tidak diketahui",
+            Self::MaskLine => "Masker: {layer}",
+            Self::UnderMask => "Di balik masker: {slide}",
+            Self::OnScreen => "Di layar: {slide}",
+            Self::LiveItemGone => "Item tayang sudah tidak ada di jadwal",
+            Self::SendingMask => "Mengirim masker: {layer}…",
+            Self::MaskArmed => "Masker siap: {layer} · tampil saat output Langsung aktif",
+            Self::PreparingLogo => "Menyiapkan logo · ditutup dengan Hitam",
+            Self::Sending => "Mengirim…",
+            Self::CueNotShown => "Isyarat terakhir tidak tampil: {error}",
+            Self::MaskNotShown => "Masker {layer} tidak tampil: {error}",
+            Self::LogoNotShown => "Logo tidak tampil: {error}",
+            Self::NoLogoSet => "Belum ada logo · Media → pilih gambar → Jadikan Latar Logo",
+            Self::PreparingBackground => "Menyiapkan latar…",
+            Self::ResolvingFonts => "Menyiapkan fon…",
+            Self::RefusalNotConnected => "Output langsung tidak terhubung",
+            Self::RefusalWrongExtent => "Ukuran output berubah; coba lagi",
+            Self::LayerNone => "Tidak Ada",
+            Self::LayerClear => "Kosong",
+            Self::LayerBlack => "Hitam",
+            Self::LayerLogo => "Logo",
+            Self::DialogSaveAs => "Simpan jadwal sebagai",
+            Self::DialogOpen => "Buka jadwal",
+            Self::DialogUnsavedOpen => "Buka jadwal lain tanpa menyimpan perubahan?",
+            Self::DialogUnsavedNew => "Mulai jadwal baru tanpa menyimpan perubahan?",
+            Self::DialogUnsavedQuit => "Keluar tanpa menyimpan perubahan jadwal?",
+            Self::DialogRemoveTitled => "Hapus “{title}” dari jadwal?",
+            Self::DialogRemoveGeneric => "Hapus item ini dari jadwal?",
+            Self::DialogDeleteTitled => "Hapus “{title}” dari pustaka lagu?",
+            Self::DialogDeleteGeneric => "Hapus lagu ini dari pustaka lagu?",
+            Self::DialogDeleteNote => {
+                "Jadwal yang memakai lagu ini menyimpan salinannya. Output langsung tidak berubah."
+            }
+            Self::ConfirmSave => "Simpan",
+            Self::ConfirmDiscard => "Buang perubahan",
+            Self::ConfirmRemove => "Hapus",
+            Self::ConfirmDelete => "Hapus",
+            Self::ButtonKeep => "Pertahankan",
+            Self::ButtonCancel => "Batal",
+            Self::ButtonOk => "OK",
+            Self::EnterScheduleTitle => "Masukkan judul untuk jadwal",
+            Self::OptionsTitle => "Opsi",
+            Self::SectionMainOutput => "Output Utama",
+            Self::SectionAlternateOutput => "Output Alternatif",
+            Self::SectionFoldback => "Foldback",
+            Self::SectionServiceIntervals => "Interval Ibadah",
+            Self::SectionSlideLabels => "Label Slide",
+            Self::SectionAdvanced => "Lanjutan",
+            Self::OptionsTabGeneral => "Umum",
+            Self::OptionsTabSong => "Lagu",
+            Self::OptionsTabScripture => "Ayat",
+            Self::OptionsTabTransitions => "Transisi",
+            Self::NotAvailable => "belum tersedia",
+            Self::MonitorHeading => "Monitor output",
+            Self::MonitorHint => "Output audiens terbuka di monitor ini.",
+            Self::DetectingMonitors => "Mendeteksi monitor…",
+            Self::DefaultMonitor => "Bawaan (monitor non-primer pertama)",
+            Self::PrimarySuffix => " · primer",
+            Self::MonitorMissingDialog => "Monitor tersimpan {name} tidak terhubung.",
+            Self::MonitorMissingNote => {
+                "Monitor output tersimpan {name} tidak ditemukan; memakai monitor non-primer bawaan. Pilih satu di Opsi."
+            }
+            Self::LanguageHeading => "Bahasa",
+            Self::LanguageHint => "Menu, tombol, dan dialog memakai bahasa ini.",
+            Self::SettingsSaveFailed => "Pengaturan tidak tersimpan ({error})",
+            Self::SettingsQueueFull => "Pengaturan tidak tersimpan (antrean penuh)",
+            Self::SettingsNoProfile => {
+                "Tidak ada folder profil; pilihan berlaku untuk sesi ini saja"
+            }
+            Self::BgImageMissing => "Gambar latar ‘{name}’ tidak ditemukan; menampilkan hitam",
+            Self::BgImageChanged => {
+                "Gambar latar ‘{name}’ berubah sejak dipilih; menampilkan hitam"
+            }
+            Self::BgImageTooLarge => "Gambar latar ‘{name}’ terlalu besar; menampilkan hitam",
+            Self::BgImageUnreadable => {
+                "Gambar latar ‘{name}’ tidak dapat dibaca; menampilkan hitam"
+            }
+            Self::AllSlidesSelected => "Semua slide dipilih · format berlaku untuk setiap slide",
+            Self::ApplyToSchedule => "Terapkan perubahan ke item di jadwal",
+            Self::CannotBeShown => "Tidak dapat ditampilkan",
+            Self::CloseWithoutSaving => "Tutup tanpa menyimpan?",
+            Self::ConfirmDeleteHint => {
+                "Klik Konfirmasi hapus untuk menghapus entri pustaka ini. Salinan di jadwal tetap ada."
+            }
+            Self::ContinueEditing => "Lanjutkan mengedit",
+            Self::CursorInLyrics => "Letakkan kursor di lirik untuk memisah slide.",
+            Self::DiscardAndClose => "Buang dan tutup",
+            Self::DiscardEdits => "Buang perubahan",
+            Self::DocumentRedone => "Dokumen diulangi",
+            Self::DocumentUndone => "Dokumen diurungkan",
+            Self::DraftChanged => "Draf berubah · validasi dengan Terapkan atau OK",
+            Self::EditsDiscarded => "Perubahan dibuang",
+            Self::EditorAnimate => "Animasi",
+            Self::EditorApply => "Terapkan",
+            Self::EditorCancel => "Batal",
+            Self::EditorConfirmDelete => "Konfirmasi hapus",
+            Self::EditorDelete => "Hapus",
+            Self::EditorDuplicate => "Duplikat",
+            Self::EditorFormat => "Format",
+            Self::EditorInspector => "Inspektur",
+            Self::EditorLayouts => "Tata Letak",
+            Self::EditorLibrary => "Pustaka",
+            Self::EditorMedia => "Media",
+            Self::EditorNew => "Baru",
+            Self::EditorOk => "OK",
+            Self::EditorPresentation => "Presentasi",
+            Self::EditorRedo => "Ulangi",
+            Self::EditorScripture => "Alkitab",
+            Self::EditorShape => "Bentuk",
+            Self::EditorSlides => "Slide",
+            Self::EditorText => "Teks",
+            Self::EditorUndo => "Urungkan",
+            Self::EditorUnsaved => "Belum disimpan",
+            Self::EditorWindowTitle => "Editor Lagu - {title}",
+            Self::EditorWords => "Lirik",
+            Self::EmptySlideHint => "Klik ganda untuk mengedit lagu",
+            Self::InputRejected => {
+                "Sebuah masukan ditolak. Perbaiki kolom yang disorot sebelum menyimpan."
+            }
+            Self::InspectorAuthors => "Penulis",
+            Self::InspectorCopyright => "Hak Cipta",
+            Self::InspectorHeader => "Inspektur · informasi lagu",
+            Self::InspectorLicense => "Identifikasi lisensi",
+            Self::JoinExceedsLimits => {
+                "Penggabungan akan melebihi batas slide. Naskah asli tidak berubah."
+            }
+            Self::KeepEditing => "Tetap mengedit",
+            Self::LabelPlaceholder => "label",
+            Self::LayoutSample => {
+                "Contoh teks baris satu\nContoh teks baris dua\nContoh teks baris tiga"
+            }
+            Self::LibraryReady => {
+                "Pustaka siap · perubahan yang diterapkan tetap luring di komputer ini"
+            }
+            Self::LoadedRevision => "Revisi tersimpan dimuat",
+            Self::LoadingOrSaving => "Memuat atau menyimpan…",
+            Self::MasterLayoutFooter => "Tata letak master · pratinjau tata letak audiens",
+            Self::NewSongNotSaved => "Lagu baru · belum disimpan",
+            Self::NextPage => "Halaman berikutnya",
+            Self::OpeningLibrary => "Membuka pustaka…",
+            Self::RefreshFirstPage => "Segarkan / halaman pertama",
+            Self::SaveBeforeDelete => {
+                "Simpan atau buang perubahan sebelum menghapus lagu tersimpan."
+            }
+            Self::SaveOrDiscardSongs => "Simpan atau buang perubahan sebelum berganti lagu.",
+            Self::SavedEditsRemain => "Revisi tersimpan; perubahan yang lebih baru belum disimpan.",
+            Self::SavedSongsHeader => "Lagu tersimpan · urutan ID",
+            Self::SlideFooter => "Slide {index} dari {count} · pratinjau tata letak audiens",
+            Self::SlideInUse => {
+                "Slide dipakai susunan atau lagu melebihi batas. Naskah asli tidak berubah."
+            }
+            Self::SlideRejectedNote => {
+                "Slide ini tidak dapat ditampilkan: ada baris yang terlalu panjang atau memakai karakter yang tidak dimiliki fon bawaan."
+            }
+            Self::SlideSplit => "Slide dipisah · Urungkan memulihkannya",
+            Self::SlidesJoined => "Slide digabung · Urungkan memulihkannya",
+            Self::SongExceedsLimits => {
+                "Lagu ini melebihi batas baris editor atau memiliki metadata multibaris. Naskah asli tidak berubah."
+            }
+            Self::SongMaster => "Master",
+            Self::SongMasterNote => "Master lagu · hingga tema tersedia",
+            Self::SongPlaceholder => "lagu",
+            Self::SongTextReplaced => "Teks lagu diganti · Urungkan memulihkannya",
+            Self::SplitExceedsLimits => {
+                "Pemisahan akan melebihi batas bagian lagu. Naskah asli tidak berubah."
+            }
+            Self::StatusLine => "{dirty} · {status}",
+            Self::StorageConflict => {
+                "Diubah di tempat lain. Draf Anda tetap ada; duplikat untuk menyimpan salinan terpisah, atau buang lalu buka kembali."
+            }
+            Self::StorageCorrupt => {
+                "Pustaka rusak. Simpan naskah asli dan pulihkan cadangan yang diketahui baik."
+            }
+            Self::StorageExists => {
+                "Tujuan cadangan sudah ada. Simpan tujuan itu beserta pustaka; pemulihan memerlukan tujuan baru."
+            }
+            Self::StorageFull => {
+                "Penyimpanan penuh. Kosongkan ruang lalu coba lagi; draf Anda tetap ada."
+            }
+            Self::StorageInvalid => {
+                "Lagu tidak valid atau melebihi batas penyimpanan. Perbaiki draf lalu coba lagi."
+            }
+            Self::StorageIo => {
+                "Pustaka tidak dapat dibaca atau ditulis. Periksa izin folder dan ruang kosong, lalu buka kembali atau coba lagi."
+            }
+            Self::StorageLocked => {
+                "Pustaka sedang dipakai proses lain. Tunggu, lalu coba lagi; draf Anda tetap ada."
+            }
+            Self::StorageMissing => "Revisi tersimpan hilang. Segarkan pustaka.",
+            Self::StorageUnavailable => {
+                "Pustaka tidak tersedia. Tutup lalu buka kembali; jangan buang draf yang belum disimpan tanpa menyalinnya."
+            }
+            Self::StorageUnsupported => {
+                "Versi pustaka tidak didukung atau basis data asing. Gunakan pustaka yang didukung; naskah asli tidak diganti."
+            }
+            Self::TextTooBig => "Teks itu tidak muat dalam satu slide. Lagu tidak berubah.",
+            Self::TitlePlaceholder => "Judul",
+            Self::TitleRequired => "Judul wajib diisi; lagu lengkap harus muat dalam 256 KiB.",
+            Self::TooManySlides => "Paling banyak 128 slide. Naskah asli tidak berubah.",
+            Self::UnchangedStatus => "Tidak berubah",
+            Self::UnexpectedReply => {
+                "Balasan penyimpanan tak terduga. Tutup lalu buka kembali pustaka."
+            }
+            Self::UnsavedChanges => {
+                "Ada perubahan yang belum disimpan. Simpan, buang, atau lanjutkan mengedit."
+            }
+            Self::WaitPendingClose => "Tunggu operasi yang berjalan selesai sebelum menutup.",
+            Self::WorkingStatus => "Memproses…",
+            Self::AngleLabel => "Sudut",
+            Self::AspectMaintain => "Pertahankan",
+            Self::AspectRatioLabel => "Rasio Aspek",
+            Self::AspectStretch => "Regangkan",
+            Self::AspectZoom => "Zum",
+            Self::AutoSizing => "Ukuran Otomatis",
+            Self::BackgroundNotStored => "Latar itu tidak dapat disimpan. Slide tidak berubah.",
+            Self::BlurLabel => "Keburaman",
+            Self::BundledFont => "{name} (bawaan)",
+            Self::ColorLabel => "Warna",
+            Self::DescribeColorFill => "Isi Warna {hex}",
+            Self::DescribeMedia => "{name} ({aspect})",
+            Self::DescribeMediaNoImage => "Isi Media tanpa gambar (hitam)",
+            Self::DescribeNoFill => "tanpa isian (hitam)",
+            Self::EditSlideLayouts => "Ubah Tata Letak Slide",
+            Self::FillColor => "Isi Warna",
+            Self::FillGradient => "Isi Gradien",
+            Self::FillMedia => "Isi Media",
+            Self::FillNone => "Tidak Ada",
+            Self::FollowsMaster => "Mengikuti master lagu: {description}",
+            Self::FormatOutOfRange => "Nilai format itu di luar rentang. Slide tidak berubah.",
+            Self::HexInvalid => "Masukkan warna sebagai #RRGGBB. Slide tidak berubah.",
+            Self::HexValueLabel => "Nilai Heks",
+            Self::ImageUnusable => "‘{name}’ tidak dapat digunakan: {error}. Slide tidak berubah.",
+            Self::ImagesHeader => "Gambar",
+            Self::ImportMenuItem => "Impor…",
+            Self::ImportedName => "‘{name}’ diimpor",
+            Self::LayoutTabInert => "Tata Letak",
+            Self::LoadingFonts => "Memuat fon…",
+            Self::LoadingImages => "Memuat gambar…",
+            Self::NoImagesYet => "Belum ada gambar. Impor satu.",
+            Self::NumOutlineOpacity => "Kelegapan garis luar",
+            Self::NumOutlineSize => "Ukuran garis luar",
+            Self::NumRangeInvalid => {
+                "{field} harus berupa bilangan bulat dari {lo} hingga {hi}. Slide tidak berubah."
+            }
+            Self::NumShadowAngle => "Sudut bayangan",
+            Self::NumShadowBlur => "Keburaman bayangan",
+            Self::NumShadowOffset => "Jarak bayangan",
+            Self::NumShadowOpacity => "Kelegapan bayangan",
+            Self::NumSize => "Ukuran",
+            Self::OffsetLabel => "Jarak",
+            Self::OpacityLabel => "Kelegapan",
+            Self::OutlineCenter => "Tengah",
+            Self::OutlineInner => "Dalam",
+            Self::OutlineOuter => "Luar",
+            Self::RoundInert => "Bulat ▾",
+            Self::SectionBackground => "LATAR",
+            Self::SectionFont => "FON",
+            Self::SectionOutline => "GARIS LUAR",
+            Self::SectionShadow => "BAYANGAN",
+            Self::SectionSlideLayout => "TATA LETAK SLIDE",
+            Self::SelectMedia => "Pilih Media…",
+            Self::ShadowEnabled => "Aktif",
+            Self::SizeAuto => "Sesuaikan ukuran teks dengan elemen",
+            Self::SizeAutoTrigger => "Otomatis",
+            Self::SizeFixed => "Jangan ubah ukuran teks otomatis",
+            Self::SizeReset => "Atur Ulang Ukuran",
+            Self::SlideTab => "Slide",
+            Self::SongWouldExceed => "Lagu akan melebihi batasnya. Slide tidak berubah.",
+            Self::SpectrumTab => "Spektrum",
+            Self::StyleTab => "Gaya",
+            Self::SwatchesTab => "Palet Warna",
+            Self::ValuesTab => "Nilai",
+        }
+    }
+}
+
+/// The message in the active language, falling back to English when the
+/// translation is missing (empty), never to a raw key or a blank label.
+pub fn text(msg: Msg) -> &'static str {
+    match language() {
+        Language::English => msg.english(),
+        Language::Indonesian => {
+            let translated = msg.indonesian();
+            if translated.is_empty() {
+                msg.english()
+            } else {
+                translated
+            }
+        }
+    }
+}
+
+/// `text` with `{name}` placeholders replaced, in order, by `args`.
+pub fn format(msg: Msg, args: &[(&str, String)]) -> String {
+    let mut out = text(msg).to_string();
+    for (name, value) in args {
+        out = out.replace(&std::format!("{{{name}}}"), value);
+    }
+    out
+}
+
+/// The `{name}` placeholders of a message, in order of appearance.
+#[cfg(test)]
+fn placeholders(text: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            break;
+        };
+        found.push(&after[..close]);
+        rest = &after[close + 1..];
+    }
+    found
+}
+
+/// Translates a [`Msg`]: `t!(Msg::PaneLive)` for plain strings, or
+/// `t!(Msg::SlideN, index = n + 1)` to fill `{name}` placeholders.
+#[macro_export]
+macro_rules! t {
+    ($msg:expr) => {
+        $crate::i18n::text($msg)
+    };
+    ($msg:expr, $($name:ident = $value:expr),+ $(,)?) => {
+        $crate::i18n::format($msg, &[$( (stringify!($name), $value.to_string()) ),+])
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_lists_every_variant_exactly_once() {
+        let mut sorted = Msg::ALL.to_vec();
+        sorted.sort_by_key(|msg| *msg as usize);
+        sorted.dedup();
+        assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
+        // Match arms are exhaustive, so a variant missing from ALL still has
+        // both translations; this count guard keeps ALL honest as it grows.
+        assert_eq!(Msg::ALL.len(), 327);
+    }
+
+    #[test]
+    fn both_tables_have_non_empty_values_and_matching_placeholders() {
+        for &msg in Msg::ALL {
+            let english = msg.english();
+            let indonesian = msg.indonesian();
+            assert!(
+                !english.trim().is_empty(),
+                "{msg:?} has an empty English value"
+            );
+            assert!(
+                !indonesian.trim().is_empty(),
+                "{msg:?} has an empty Indonesian value"
+            );
+            assert_eq!(
+                placeholders(english),
+                placeholders(indonesian),
+                "{msg:?} placeholders differ between languages"
+            );
+        }
+    }
+
+    #[test]
+    fn indonesian_falls_back_to_english_when_empty() {
+        // The tables are exhaustive today; guard the runtime contract anyway.
+        set_language(Language::Indonesian);
+        assert_eq!(text(Msg::PaneLive), Msg::PaneLive.indonesian());
+        set_language(Language::English);
+        assert_eq!(text(Msg::PaneLive), "Live");
+    }
+
+    #[test]
+    fn placeholders_are_substituted() {
+        assert_eq!(
+            format(Msg::SlideN, &[("index", "3".to_string())]),
+            "Slide 3"
+        );
+        set_language(Language::Indonesian);
+        assert_eq!(
+            format(
+                Msg::PreviewFooter,
+                &[
+                    ("title", "Himne".to_string()),
+                    ("index", "2".to_string()),
+                    ("count", "4".to_string()),
+                ]
+            ),
+            "Himne · Slide 2 dari 4"
+        );
+        set_language(Language::English);
+    }
+
+    #[test]
+    fn language_codes_round_trip() {
+        for language in Language::ALL {
+            assert_eq!(Language::from_code(language.code()), Some(language));
+            assert!(!language.label().is_empty());
+        }
+        assert_eq!(Language::from_code("de"), None);
+    }
+}

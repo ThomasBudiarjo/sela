@@ -48,7 +48,8 @@ pub(crate) fn tile(slide: &Slide, index: usize, border: u32) -> gpui::Div {
 }
 
 pub(crate) fn slide_pane(
-    title: &'static str,
+    id: &'static str,
+    title: String,
     width: f32,
     footer: String,
     status: Option<Vec<(String, u32)>>,
@@ -56,7 +57,7 @@ pub(crate) fn slide_pane(
 ) -> impl IntoElement {
     let empty = tiles.as_ref().is_none_or(Vec::is_empty);
     div()
-        .debug_selector(|| title.into())
+        .debug_selector(|| id.into())
         .w(px(width))
         .h_full()
         .flex_shrink_0()
@@ -78,7 +79,7 @@ pub(crate) fn slide_pane(
         )
         .children(status.map(|lines| {
             div()
-                .debug_selector(move || format!("{title}-status"))
+                .debug_selector(move || format!("{id}-status"))
                 .flex_shrink_0()
                 .px_3()
                 .py_1()
@@ -94,7 +95,7 @@ pub(crate) fn slide_pane(
         }))
         .child(
             div()
-                .id(title)
+                .id(id)
                 .flex_1()
                 .min_h_0()
                 .p_2()
@@ -106,10 +107,10 @@ pub(crate) fn slide_pane(
                     d.flex()
                         .items_center()
                         .justify_center()
-                        .child(if title == "Live" {
-                            "Nothing live"
+                        .child(if id == "Live" {
+                            t!(Msg::NothingLive)
                         } else {
-                            "Nothing selected"
+                            t!(Msg::NothingSelected)
                         })
                 })
                 .when_some(tiles.filter(|t| !t.is_empty()), |d, tiles| {
@@ -236,7 +237,7 @@ impl Operator {
 
     pub(crate) fn toggle_mask(&mut self, mask: Mask) {
         if mask == Mask::Logo && !self.masks.is_on(Mask::Logo) && self.logo.is_none() {
-            self.live_message = Some(NO_LOGO.into());
+            self.live_message = Some(t!(Msg::NoLogoSet).into());
             return;
         }
         self.masks.toggle(mask);
@@ -511,7 +512,7 @@ impl Operator {
         // `fonts_resolved` (M1-05g2b).
         let Some(resolved) = item.resolved.clone() else {
             self.deferred_send = Some(index);
-            self.live_message = Some("Resolving fonts…".into());
+            self.live_message = Some(t!(Msg::ResolvingFonts).into());
             return;
         };
         // Image backgrounds are fitted by the image worker; until this one
@@ -540,7 +541,7 @@ impl Operator {
                     ),
                     None => {
                         self.deferred_send = Some(index);
-                        self.live_message = Some(PREPARING_BACKGROUND.into());
+                        self.live_message = Some(t!(Msg::PreparingBackground).into());
                         return;
                     }
                 }
@@ -568,8 +569,8 @@ impl Operator {
             output
                 .present(Arc::new(cue), Instant::now())
                 .map_err(|refusal| match refusal {
-                    Refusal::NotConnected => "Live output is not connected".into(),
-                    Refusal::WrongExtent => "Output size changed; try again".into(),
+                    Refusal::NotConnected => t!(Msg::RefusalNotConnected).into(),
+                    Refusal::WrongExtent => t!(Msg::RefusalWrongExtent).into(),
                 })
         });
         match result {
@@ -604,14 +605,14 @@ impl Operator {
 
     pub(crate) fn output_line(&self) -> String {
         match self.output.as_ref().map(Supervisor::status) {
-            None => "Live output off".into(),
-            Some(Status::Starting) => "Starting live output…".into(),
-            Some(Status::Connected { extent, .. }) => {
-                format!("Live output {}×{}", extent.width, extent.height)
-            }
-            Some(Status::Lost(loss)) => {
-                format!("{loss} · output state unknown · turn Live off and on")
-            }
+            None => t!(Msg::OutputOff).into(),
+            Some(Status::Starting) => t!(Msg::OutputStarting).into(),
+            Some(Status::Connected { extent, .. }) => t!(
+                Msg::OutputConnected,
+                width = extent.width,
+                height = extent.height
+            ),
+            Some(Status::Lost(loss)) => t!(Msg::OutputLost, loss = loss),
         }
     }
 
@@ -626,13 +627,14 @@ impl Operator {
             );
         }
         let footer = match &self.preview {
-            Some(item) if count > 0 => format!(
-                "{} · Slide {} of {count}",
-                item.title,
-                self.preview_slide + 1
+            Some(item) if count > 0 => t!(
+                Msg::PreviewFooter,
+                title = item.title,
+                index = self.preview_slide + 1,
+                count = count
             ),
-            Some(item) => format!("{} · no slides", item.title),
-            None => "Nothing selected".into(),
+            Some(item) => t!(Msg::PreviewNoSlides, title = item.title),
+            None => t!(Msg::NothingSelected).into(),
         };
         let tiles = self.preview.as_ref().map(|item| {
             item.slides
@@ -665,7 +667,14 @@ impl Operator {
                 .collect::<Vec<_>>()
         });
         let warning = self.preview_warning().map(|w| vec![(w, DARK_ERROR)]);
-        slide_pane("Preview", width, footer, warning, tiles)
+        slide_pane(
+            "Preview",
+            t!(Msg::PanePreview).to_string(),
+            width,
+            footer,
+            warning,
+            tiles,
+        )
     }
 
     /// Live pane status, top to bottom. Mask lines reflect acknowledged state.
@@ -679,13 +688,13 @@ impl Operator {
         let mut lines = vec![(self.output_line(), DARK_MUTED)];
         let slide = match self.on_screen() {
             Some(label) => label.to_owned(),
-            None if connected => "nothing confirmed".into(),
-            None => "unknown".into(),
+            None if connected => t!(Msg::NothingConfirmed).into(),
+            None => t!(Msg::UnknownState).into(),
         };
         match output.and_then(Supervisor::mask) {
             Some(layer) if layer != Layer::None => {
-                lines.push((format!("Mask: {}", layer_name(layer)), DARK_TEXT));
-                lines.push((format!("Under mask: {slide}"), DARK_MUTED));
+                lines.push((t!(Msg::MaskLine, layer = layer_name(layer)), DARK_TEXT));
+                lines.push((t!(Msg::UnderMask, slide = slide), DARK_MUTED));
             }
             _ => {
                 let color = if self.on_screen().is_some() {
@@ -693,7 +702,7 @@ impl Operator {
                 } else {
                     DARK_MUTED
                 };
-                lines.push((format!("On screen: {slide}"), color));
+                lines.push((t!(Msg::OnScreen, slide = slide), color));
             }
         }
         if self
@@ -702,17 +711,14 @@ impl Operator {
             .and_then(|item| item.entry)
             .is_some_and(|id| self.schedule.get(id).is_none())
         {
-            lines.push(("Live item is no longer in the schedule".into(), DARK_MUTED));
+            lines.push((t!(Msg::LiveItemGone).into(), DARK_MUTED));
         }
         if let Some(layer) = output.and_then(Supervisor::mask_pending) {
-            lines.push((format!("Sending mask: {}…", layer_name(layer)), SENDING));
+            lines.push((t!(Msg::SendingMask, layer = layer_name(layer)), SENDING));
         }
         if self.masks.any() && output.is_none() {
             lines.push((
-                format!(
-                    "Mask armed: {} · shown when Live output is on",
-                    layer_name(self.masks.layer())
-                ),
+                t!(Msg::MaskArmed, layer = layer_name(self.masks.layer())),
                 DARK_MUTED,
             ));
         }
@@ -720,23 +726,23 @@ impl Operator {
             if let Some(error) = &self.logo_error {
                 lines.push((error.clone(), DARK_ERROR));
             } else if connected && !self.logo_ready() {
-                lines.push(("Preparing logo · covering with Black".into(), SENDING));
+                lines.push((t!(Msg::PreparingLogo).into(), SENDING));
             }
         }
         if sending.is_some() {
-            lines.push(("Sending…".into(), SENDING));
+            lines.push((t!(Msg::Sending).into(), SENDING));
         }
         if let Some((_, error)) = output.and_then(|o| o.rejected()) {
-            lines.push((format!("Last cue not shown: {error}"), DARK_ERROR));
+            lines.push((t!(Msg::CueNotShown, error = error), DARK_ERROR));
         }
         if let Some((layer, error)) = output.and_then(|o| o.mask_rejected()) {
             lines.push((
-                format!("Mask {} not shown: {error}", layer_name(layer)),
+                t!(Msg::MaskNotShown, layer = layer_name(layer), error = error),
                 DARK_ERROR,
             ));
         }
         if let Some((_, error)) = output.and_then(|o| o.logo_rejected()) {
-            lines.push((format!("Logo not shown: {error}"), DARK_ERROR));
+            lines.push((t!(Msg::LogoNotShown, error = error), DARK_ERROR));
         }
         if let Some(message) = &self.live_message {
             lines.push((message.clone(), DARK_ERROR));
@@ -754,14 +760,14 @@ impl Operator {
         let sending = self.live_index(output.and_then(|o| o.wanted().or(o.in_flight())));
         let lines = self.live_lines();
         let footer = match (&self.live, self.live_slide) {
-            (Some(item), Some(index)) => format!(
-                "{} · Slide {} of {}",
-                item.title,
-                index + 1,
-                item.slides.len()
+            (Some(item), Some(index)) => t!(
+                Msg::PreviewFooter,
+                title = item.title,
+                index = index + 1,
+                count = item.slides.len()
             ),
-            (Some(item), None) => format!("{} · not sent", item.title),
-            _ => "Nothing live".into(),
+            (Some(item), None) => t!(Msg::LiveNotSent, title = item.title),
+            _ => t!(Msg::NothingLive).into(),
         };
         let tiles = self.live.as_ref().map(|item| {
             item.slides
@@ -791,6 +797,13 @@ impl Operator {
                 })
                 .collect::<Vec<_>>()
         });
-        slide_pane("Live", width, footer, Some(lines), tiles)
+        slide_pane(
+            "Live",
+            t!(Msg::PaneLive).to_string(),
+            width,
+            footer,
+            Some(lines),
+            tiles,
+        )
     }
 }

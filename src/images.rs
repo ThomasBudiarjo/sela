@@ -676,13 +676,13 @@ pub enum Substitute {
 
 impl Substitute {
     pub fn warning(self, name: &str) -> String {
-        let why = match self {
-            Self::Missing => "is missing",
-            Self::Changed => "changed since it was chosen",
-            Self::TooLarge => "is too large",
-            Self::Invalid => "cannot be read",
+        let msg = match self {
+            Self::Missing => crate::i18n::Msg::BgImageMissing,
+            Self::Changed => crate::i18n::Msg::BgImageChanged,
+            Self::TooLarge => crate::i18n::Msg::BgImageTooLarge,
+            Self::Invalid => crate::i18n::Msg::BgImageUnreadable,
         };
-        format!("Background image ‘{name}’ {why}; showing black")
+        crate::i18n::format(msg, &[("name", name.to_string())])
     }
 }
 

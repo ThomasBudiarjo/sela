@@ -62,15 +62,16 @@ impl Operator {
                     self.images = names;
                 }
                 Ok(images::Reply::Images(Err(error))) => {
-                    self.media_message = Some(format!("Images unavailable: {error}"));
+                    self.media_message =
+                        Some(t!(Msg::ImagesUnavailable, error = error.to_string()));
                 }
                 Ok(images::Reply::Imported(Ok(name))) => {
-                    self.media_message = Some(format!("Imported {name}"));
+                    self.media_message = Some(t!(Msg::ImportedImage, name = name));
                     self.selected_image = Some(name);
                     rescan = true;
                 }
                 Ok(images::Reply::Imported(Err(error))) => {
-                    self.media_message = Some(format!("Import failed: {error}"));
+                    self.media_message = Some(t!(Msg::ImportFailed, error = error.to_string()));
                 }
                 Ok(images::Reply::Logo(Ok(logo))) => {
                     self.logo = logo;
@@ -80,7 +81,7 @@ impl Operator {
                 }
                 // The previous logo, if any, stays in use.
                 Ok(images::Reply::Logo(Err(error))) => {
-                    self.logo_error = Some(format!("Logo unavailable: {error}"));
+                    self.logo_error = Some(t!(Msg::LogoUnavailable, error = error.to_string()));
                 }
             }
         }
@@ -110,7 +111,7 @@ impl Operator {
                     Ok(preparer) => self.logo_preparer = Some((caps, preparer)),
                     Err(_) => {
                         self.logo_requested = Some(version);
-                        self.logo_error = Some("Logo preparation could not start".into());
+                        self.logo_error = Some(t!(Msg::LogoPrepFailed).into());
                         return true;
                     }
                 }
@@ -122,7 +123,7 @@ impl Operator {
                 Err(PrepareError::Busy) => {}
                 Err(error) => {
                     self.logo_requested = Some(version);
-                    self.logo_error = Some(format!("Logo unavailable: {error}"));
+                    self.logo_error = Some(t!(Msg::LogoUnavailable, error = error.to_string()));
                     changed = true;
                 }
             }
@@ -141,7 +142,7 @@ impl Operator {
                 }
                 PreparationEvent::Ready { .. } => {}
                 PreparationEvent::Failed { error, .. } => {
-                    self.logo_error = Some(format!("Logo unavailable: {error}"));
+                    self.logo_error = Some(t!(Msg::LogoUnavailable, error = error.to_string()));
                 }
             }
         }
@@ -198,18 +199,19 @@ impl Operator {
                     if self.selected_song == Some(version) && self.selected_entry.is_none() {
                         self.selected_song = None;
                     }
-                    self.song_message = Some((format!("Deleted “{}”", shown_title(&title)), false));
+                    self.song_message =
+                        Some((t!(Msg::DeletedSong, title = shown_title(&title)), false));
                     self.catalog_stale = true;
                 }
                 (Some(Request::DeleteSong(_, title)), Err(error)) => {
                     let title = shown_title(&title);
                     self.song_message = Some((
                         match error {
-                            storage::Error::Conflict => {
-                                format!("Not deleted: “{title}” was changed or deleted elsewhere")
-                            }
-                            error => format!(
-                                "Not deleted: “{title}” · song library storage failed ({error:?})"
+                            storage::Error::Conflict => t!(Msg::DeleteConflict, title = title),
+                            error => t!(
+                                Msg::DeleteStorageFailed,
+                                title = title,
+                                error = format!("{error:?}")
                             ),
                         },
                         true,
@@ -236,7 +238,7 @@ impl Operator {
                     resolve_now = true;
                 }
                 (Some(Request::SaveSchedule(snapshot)), Ok(Reply::Saved(version))) => {
-                    self.schedule_message = Some(format!("Saved “{}”", snapshot.title));
+                    self.schedule_message = Some(t!(Msg::SavedSchedule, title = snapshot.title));
                     self.schedule.mark_saved(version, snapshot);
                 }
                 (Some(Request::ScheduleCatalog), Ok(Reply::ScheduleCatalog(mut list))) => {
@@ -250,15 +252,13 @@ impl Operator {
                         Some(match self.schedule.open(version, stored, titles) {
                             Ok(()) => {
                                 self.selected_entry = None;
-                                format!("Opened “{title}”")
+                                t!(Msg::OpenedSchedule, title = title)
                             }
-                            Err(_) => "The saved schedule could not be read".into(),
+                            Err(_) => t!(Msg::ScheduleUnreadable).into(),
                         });
                 }
                 (Some(Request::SaveSchedule(_)), Err(storage::Error::Conflict)) => {
-                    self.schedule_message = Some(
-                        "Not saved: this schedule was saved elsewhere since it was opened".into(),
-                    );
+                    self.schedule_message = Some(t!(Msg::ScheduleConflict).into());
                 }
                 (
                     Some(
@@ -268,7 +268,8 @@ impl Operator {
                     ),
                     Err(error),
                 ) => {
-                    self.schedule_message = Some(format!("Schedule storage failed ({error:?})"));
+                    self.schedule_message =
+                        Some(t!(Msg::ScheduleStorageFailed, error = format!("{error:?}")));
                     if self.dialog == Some(Dialog::Open) {
                         self.saved_schedules = Some(Vec::new());
                     }
@@ -302,12 +303,12 @@ impl Operator {
                     Ok(_) => self.request = Some(request),
                     Err(error) if matches!(request, Request::DeleteSong(..)) => {
                         self.song_message =
-                            Some((format!("Not deleted: song library busy ({error:?})"), true));
+                            Some((t!(Msg::DeleteQueueFull, error = format!("{error:?}")), true));
                         changed = true;
                     }
                     Err(error) if schedule => {
                         self.schedule_message =
-                            Some(format!("Schedule storage failed ({error:?})"));
+                            Some(t!(Msg::ScheduleStorageFailed, error = format!("{error:?}")));
                         changed = true;
                     }
                     Err(error) => {

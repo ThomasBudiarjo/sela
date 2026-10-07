@@ -33,14 +33,14 @@ pub(crate) const SONG_MENU: [SongItem; 6] = [
 
 impl SongItem {
     pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::NewSong => "New Song…",
-            Self::EditSong => "Edit Song…",
-            Self::Delete => "Delete",
-            Self::UpdateSchedule => "Update items in Schedule",
-            Self::SortBy => "Sort by ▸",
-            Self::Refresh => "Refresh",
-        }
+        t!(match self {
+            Self::NewSong => Msg::MenuNewSong,
+            Self::EditSong => Msg::MenuEditSong,
+            Self::Delete => Msg::MenuDelete,
+            Self::UpdateSchedule => Msg::MenuUpdateSchedule,
+            Self::SortBy => Msg::MenuSortBy,
+            Self::Refresh => Msg::MenuRefresh,
+        })
     }
 
     pub(crate) fn id(self) -> &'static str {

@@ -56,6 +56,7 @@ impl Operator {
         self.dialog = None;
         self.dialog_message = None;
         self.settings.draft = None;
+        self.settings.language_draft = None;
         match self.dialog_return.take() {
             Some(handle) => handle.focus(window, cx),
             None => self.focus.focus(window, cx),
@@ -75,7 +76,7 @@ impl Operator {
         match then {
             Then::Open => {
                 if self.worker.is_none() {
-                    self.schedule_message = Some("No song library open".into());
+                    self.schedule_message = Some(t!(Msg::NoLibraryOpen).into());
                 } else if self.queue(
                     storage::Command::ScheduleCatalog(None),
                     Request::ScheduleCatalog,
@@ -96,29 +97,27 @@ impl Operator {
     pub(crate) fn dialog_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let dialog = self.dialog?;
         let heading = match dialog {
-            Dialog::SaveAs => "Save schedule as".to_string(),
-            Dialog::Open => "Open schedule".into(),
-            Dialog::Unsaved(Then::Open) => "Open another schedule without saving changes?".into(),
-            Dialog::Unsaved(Then::New) => "Start a new schedule without saving changes?".into(),
-            Dialog::Unsaved(Then::Quit) => "Quit without saving schedule changes?".into(),
+            Dialog::SaveAs => t!(Msg::DialogSaveAs).to_string(),
+            Dialog::Open => t!(Msg::DialogOpen).into(),
+            Dialog::Unsaved(Then::Open) => t!(Msg::DialogUnsavedOpen).into(),
+            Dialog::Unsaved(Then::New) => t!(Msg::DialogUnsavedNew).into(),
+            Dialog::Unsaved(Then::Quit) => t!(Msg::DialogUnsavedQuit).into(),
             Dialog::Remove(id) => match self.schedule.get(id) {
-                Some(entry) => format!("Remove “{}” from the schedule?", entry.title),
-                None => "Remove this item from the schedule?".into(),
+                Some(entry) => t!(Msg::DialogRemoveTitled, title = entry.title),
+                None => t!(Msg::DialogRemoveGeneric).into(),
             },
             Dialog::Options => return None,
             Dialog::DeleteSong(version) => match self.catalog.iter().find(|(v, _)| *v == version) {
-                Some((_, title)) => {
-                    format!("Delete “{}” from the song library?", shown_title(title))
-                }
-                None => "Delete this song from the song library?".into(),
+                Some((_, title)) => t!(Msg::DialogDeleteTitled, title = shown_title(title)),
+                None => t!(Msg::DialogDeleteGeneric).into(),
             },
         };
         let confirm = match dialog {
-            Dialog::SaveAs => Some("Save"),
+            Dialog::SaveAs => Some(t!(Msg::ConfirmSave)),
             Dialog::Open => None,
-            Dialog::Unsaved(_) => Some("Discard changes"),
-            Dialog::Remove(_) => Some("Remove"),
-            Dialog::DeleteSong(_) => Some("Delete"),
+            Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDiscard)),
+            Dialog::Remove(_) => Some(t!(Msg::ConfirmRemove)),
+            Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmDelete)),
             Dialog::Options => None,
         };
         let body = match dialog {
@@ -128,7 +127,7 @@ impl Operator {
                 div()
                     .text_size(px(TEXT_SMALL))
                     .text_color(rgb(MUTED))
-                    .child("Schedules that use this song keep their copy. Live output does not change.")
+                    .child(t!(Msg::DialogDeleteNote))
                     .into_any_element(),
             ),
             _ => None,
@@ -178,9 +177,9 @@ impl Operator {
                             Control::DialogCancel,
                             "dialog-cancel",
                             if matches!(dialog, Dialog::Remove(_) | Dialog::DeleteSong(_)) {
-                                "Keep"
+                                t!(Msg::ButtonKeep)
                             } else {
-                                "Cancel"
+                                t!(Msg::ButtonCancel)
                             },
                             cx,
                         )),

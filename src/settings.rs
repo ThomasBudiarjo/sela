@@ -5,6 +5,7 @@
 //! Unknown keys are ignored so a newer build's file still loads; an unknown
 //! (newer) version is treated as unreadable rather than guessed at.
 
+use crate::i18n::Language;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -25,6 +26,8 @@ pub struct Settings {
     /// Device name of the audience output monitor (for example `\\.\DISPLAY6`);
     /// `None` means the default non-primary monitor.
     pub output_monitor: Option<String>,
+    /// Operator UI language; the default (English) is not written to the file.
+    pub language: Language,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -53,6 +56,9 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
         let (key, value) = line.split_once('=').ok_or(ParseError::Line(index + 2))?;
         if key == "output_monitor" && !value.is_empty() {
             settings.output_monitor = Some(value.to_owned());
+        } else if key == "language" {
+            // Unknown codes are ignored like unknown keys: English applies.
+            settings.language = Language::from_code(value).unwrap_or_default();
         }
     }
     Ok(settings)
@@ -64,6 +70,9 @@ pub fn render(settings: &Settings) -> String {
         // Names never contain line breaks; strip them so one cannot corrupt the file.
         let name: String = name.chars().filter(|c| !c.is_control()).collect();
         text.push_str(&format!("output_monitor={name}\n"));
+    }
+    if settings.language != Language::default() {
+        text.push_str(&format!("language={}\n", settings.language.code()));
     }
     text
 }
@@ -307,7 +316,22 @@ mod tests {
     fn chosen(name: &str) -> Settings {
         Settings {
             output_monitor: Some(name.into()),
+            ..Settings::default()
         }
+    }
+
+    #[test]
+    fn language_round_trips_and_defaults_to_english() {
+        let mut settings = chosen(r"\\.\DISPLAY6");
+        assert!(!render(&settings).contains("language="));
+        settings.language = Language::Indonesian;
+        let text = render(&settings);
+        assert!(text.contains("language=id\n"));
+        assert_eq!(parse(&text), Ok(settings));
+        assert_eq!(
+            parse("sela-settings 1\nlanguage=de\n"),
+            Ok(Settings::default())
+        );
     }
 
     #[test]

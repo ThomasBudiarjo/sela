@@ -7,9 +7,7 @@ impl Operator {
             .library
             .clone()
             .or_else(crate::song_library::default_path)
-            .ok_or_else(|| {
-                "No user data directory. Launch with --library DATABASE_PATH.".to_string()
-            })
+            .ok_or_else(|| t!(Msg::NoUserDataDir).to_string())
             .and_then(|path| crate::song_library::open_song(path, version, cx))
             .err();
     }
@@ -24,18 +22,15 @@ impl Operator {
             .map(|(_, title)| title.clone())
             .unwrap_or_default();
         self.song_message = Some(if self.worker.is_none() {
-            ("No song library open".into(), true)
+            (t!(Msg::NoLibraryOpen).into(), true)
         } else if self.queued.is_some() || matches!(self.request, Some(Request::DeleteSong(..))) {
-            (
-                "Not deleted: wait for the library to finish the previous change".into(),
-                true,
-            )
+            (t!(Msg::DeleteBusy).into(), true)
         } else {
             self.queued = Some((
                 storage::Command::DeleteSong(version),
                 Request::DeleteSong(version, title),
             ));
-            ("Deleting…".into(), false)
+            (t!(Msg::Deleting).into(), false)
         });
     }
 
@@ -58,16 +53,10 @@ impl Operator {
             );
         }
         if self.library.is_none() {
-            return empty_detail(
-                "Songs · no library open",
-                "Launch Sela without arguments to use the default library.",
-            );
+            return empty_detail(t!(Msg::SongsNoLibrary), t!(Msg::SongsNoLibraryHint));
         }
         if self.catalog.is_empty() {
-            return empty_detail(
-                "Songs · offline library",
-                "No songs yet. Use + New Song to create one.",
-            );
+            return empty_detail(t!(Msg::SongsEmptyTitle), t!(Msg::SongsEmptyHint));
         }
         let bounds = self.song_bounds.clone();
         div()
@@ -146,7 +135,7 @@ impl Operator {
                                 cx.new(|_| DragLabel(drag.title.clone().into()))
                             })
                             .child(if title.trim().is_empty() {
-                                "Untitled".to_string()
+                                t!(Msg::Untitled).to_string()
                             } else {
                                 title.clone()
                             })

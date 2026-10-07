@@ -8,9 +8,11 @@ use crate::{
 use gpui::{prelude::*, *};
 use sela::arrangement::{Occurrence, OccurrenceId, SectionId};
 use sela::background::{Aspect, ImageRef, Plan, plan};
+use sela::i18n::Msg;
 use sela::images::Substitute;
 use sela::scene::{ContentVersion, Extent, PreparedBackground, RendererCapabilities};
 use sela::storage::{Command, Error, Id, Reply, Section, Song, Version, Worker};
+use sela::t;
 use std::{
     collections::{HashMap, VecDeque},
     ops::Range,
@@ -99,10 +101,12 @@ pub fn open_song(path: PathBuf, version: Option<Version>, cx: &mut App) -> Resul
 
 fn window_title(title: &str) -> String {
     let title = title.trim();
-    format!(
-        "Song Editor - {}",
-        if title.is_empty() { "Untitled" } else { title }
-    )
+    let title = if title.is_empty() {
+        t!(Msg::Untitled)
+    } else {
+        title
+    };
+    t!(Msg::EditorWindowTitle, title = title)
 }
 
 enum Pending {
@@ -142,7 +146,9 @@ const PREVIEW: Extent = Extent {
     height: 720,
 };
 /// Layouts tab canvas text (EW shows sample lyrics there, EW8-OBS-043).
-const LAYOUT_SAMPLE: &str = "Sample text line one\nSample text line two\nSample text line three";
+fn layout_sample() -> &'static str {
+    t!(Msg::LayoutSample)
+}
 /// EW8-OBS-024: the Slides tab narrows the left pane to a thumbnail column.
 const SLIDES_PANE: f32 = 264.;
 const THUMBNAIL_WIDTH: f32 = 204.;
@@ -540,6 +546,9 @@ pub(crate) struct Library {
     history: History,
     section: usize,
     status: String,
+    /// True while `status` is a draft rejection that the next edit replaces
+    /// (`clear_rejection`); survives translation because it is not a string.
+    status_is_rejection: bool,
     confirm_close: bool,
     confirm_delete: bool,
     inspector: bool,
@@ -592,7 +601,7 @@ impl Library {
                     TextInput::new("", false, [1024, 4096, 4096, 4096][i], 20 + i as isize, cx)
                         .expect("empty text is valid");
                 if i == 0 {
-                    input.set_placeholder("Title");
+                    input.set_placeholder(t!(Msg::TitlePlaceholder));
                 }
                 input.use_document_history(move |text, cx| {
                     let _ = owner.update(cx, |this, cx| {
@@ -608,9 +617,19 @@ impl Library {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .map(PathBuf::from);
-        let (worker, pending, status) = match Worker::open(path) {
-            Ok(worker) => (Some(worker), Some(Pending::Open), "Opening library…".into()),
-            Err(e) => (None, None, error_message(e).into()),
+        let (worker, pending, status, status_is_rejection) = match Worker::open(path) {
+            Ok(worker) => (
+                Some(worker),
+                Some(Pending::Open),
+                t!(Msg::OpeningLibrary).into(),
+                false,
+            ),
+            Err(e) => (
+                None,
+                None,
+                error_message(e).into(),
+                matches!(e, Error::Invalid),
+            ),
         };
         let initial = blank();
         let mut this = Self {
@@ -634,6 +653,7 @@ impl Library {
             history: History::default(),
             section: 0,
             status,
+            status_is_rejection,
             confirm_close: false,
             confirm_delete: false,
             inspector: false,
@@ -710,7 +730,7 @@ impl Library {
                 .expect("empty text is valid");
                 input.set_flow(part == LABEL);
                 // EW8-OBS-022 placeholders.
-                input.set_placeholder(["label", "song"][part]);
+                input.set_placeholder([t!(Msg::LabelPlaceholder), t!(Msg::SongPlaceholder)][part]);
                 input.set_read_only(locked);
                 let typing = owner.clone();
                 input.use_document_history(move |text, cx| {
@@ -791,14 +811,26 @@ impl Library {
     fn locked(&self) -> bool {
         self.pending.is_some() || self.committed_close
     }
+    /// Every status write goes through `set_status` or `reject_status` so
+    /// this check never matches on the (translated) message text.
     fn clear_rejection(&mut self) {
-        if self.status.starts_with("A title is required")
-            || self.status.starts_with("An input was rejected")
-            || self.status.starts_with("Song is invalid")
-            || self.status.ends_with("Slide unchanged.")
-        {
-            self.status = "Draft changed · validate with Apply or OK".into();
+        if self.status_is_rejection {
+            self.set_status(t!(Msg::DraftChanged));
         }
+    }
+    fn set_status(&mut self, status: impl Into<String>) {
+        self.status = status.into();
+        self.status_is_rejection = false;
+    }
+    /// A draft rejection (refused or invalid input); the next edit clears it.
+    fn reject_status(&mut self, status: impl Into<String>) {
+        self.status = status.into();
+        self.status_is_rejection = true;
+    }
+    /// A storage failure rejects the draft only when the draft was invalid.
+    fn storage_error(&mut self, e: Error) {
+        self.status_is_rejection = matches!(e, Error::Invalid);
+        self.status = error_message(e).into();
     }
     // Called synchronously by the field. Never read the borrowed field here.
     fn field_edit(&mut self, index: usize, text: &str) {
@@ -866,24 +898,23 @@ impl Library {
                 let index = self.section;
                 self.focus_cell(index, LYRICS, usize::MAX, window, cx);
             }
-            self.status = if redo {
-                "Document redone"
+            self.set_status(if redo {
+                t!(Msg::DocumentRedone)
             } else {
-                "Document undone"
-            }
-            .into();
+                t!(Msg::DocumentUndone)
+            });
             cx.notify();
         }
     }
     fn may_close(&mut self, cx: &mut Context<Self>) -> bool {
         if self.pending.is_some() {
-            self.status = "Wait for the pending operation before closing.".into();
+            self.set_status(t!(Msg::WaitPendingClose));
             cx.notify();
             return false;
         }
         if self.dirty(cx) {
             self.confirm_close = true;
-            self.status = "Unsaved changes. Save, discard, or keep editing.".into();
+            self.set_status(t!(Msg::UnsavedChanges));
             cx.notify();
             return false;
         }
@@ -894,7 +925,7 @@ impl Library {
             return false;
         }
         if self.dirty(cx) {
-            self.status = "Save or discard your edits before changing songs.".into();
+            self.set_status(t!(Msg::SaveOrDiscardSongs));
             cx.notify();
             return false;
         }
@@ -973,9 +1004,9 @@ impl Library {
         match result {
             Ok(_) => {
                 self.pending = Some(pending);
-                self.status = "Working…".into();
+                self.set_status(t!(Msg::WorkingStatus));
             }
-            Err(e) => self.status = error_message(e).into(),
+            Err(e) => self.storage_error(e),
         }
         self.sync_input_lock(cx);
         cx.notify();
@@ -1000,8 +1031,7 @@ impl Library {
                     .map(|i| cx.focus_handle().tab_stop(true).tab_index(100 + i as isize))
                     .collect();
                 self.catalog = items;
-                self.status =
-                    "Library ready · committed changes stay offline on this computer".into();
+                self.set_status(t!(Msg::LibraryReady));
                 if let Some(version) = self.open_version.take() {
                     self.select(version, cx);
                 }
@@ -1011,9 +1041,9 @@ impl Library {
                 // Never partially load or silently alter such a document.
                 if editable(&song) {
                     self.begin(song, Some(v), cx);
-                    self.status = "Loaded saved revision".into();
+                    self.set_status(t!(Msg::LoadedRevision));
                 } else {
-                    self.status = "This song exceeds the editor's line limits or has multiline metadata. Original unchanged.".into();
+                    self.set_status(t!(Msg::SongExceedsLimits));
                 }
             }
             (Some(Pending::Save(song)), Ok(Reply::Saved(v))) => {
@@ -1028,7 +1058,7 @@ impl Library {
                     self.committed_close = !self.dirty(cx);
                     self.close_after_save = false;
                     if !self.committed_close {
-                        self.status = "Saved revision; newer edits remain unsaved.".into();
+                        self.set_status(t!(Msg::SavedEditsRemain));
                     }
                 } else {
                     self.refresh(cx);
@@ -1042,9 +1072,9 @@ impl Library {
             }
             (_, Err(e)) => {
                 self.close_after_save = false;
-                self.status = error_message(e).into();
+                self.storage_error(e);
             }
-            _ => self.status = "Unexpected storage reply. Close and reopen the library.".into(),
+            _ => self.set_status(t!(Msg::UnexpectedReply)),
         }
         self.sync_input_lock(cx);
         cx.notify();
@@ -1088,7 +1118,7 @@ impl Library {
             }
             0 if self.may_replace(cx) => {
                 self.begin(blank(), None, cx);
-                self.status = "New song · not saved".into();
+                self.set_status(t!(Msg::NewSongNotSaved));
                 self.focus_cell(0, LABEL, 0, window, cx);
             }
             1 | 2 => {
@@ -1099,12 +1129,9 @@ impl Library {
                     .chain(self.cells.iter().flatten())
                     .any(|field| field.read(cx).error().is_some())
                 {
-                    self.status =
-                        "An input was rejected. Correct the highlighted field before saving."
-                            .into();
+                    self.reject_status(t!(Msg::InputRejected));
                 } else if song.validate().is_err() {
-                    self.status =
-                        "A title is required; the complete song must fit within 256 KiB.".into();
+                    self.reject_status(t!(Msg::TitleRequired));
                 } else {
                     let previous = if index == 2 { None } else { self.version };
                     self.submit(
@@ -1123,12 +1150,12 @@ impl Library {
                     );
                 } else {
                     self.confirm_delete = true;
-                    self.status = "Click Confirm delete to remove this library entry. Schedule snapshots remain.".into();
+                    self.set_status(t!(Msg::ConfirmDeleteHint));
                 }
             }
             4 => {
                 self.begin(self.baseline.clone(), self.version, cx);
-                self.status = "Edits discarded".into();
+                self.set_status(t!(Msg::EditsDiscarded));
             }
             5 | 6 => self.history(index == 6, window, cx),
             7 | 8 => self.restructure(index == 7, window, cx),
@@ -1144,9 +1171,9 @@ impl Library {
             11 => {
                 self.confirm_close = false;
                 self.confirm_delete = false;
-                self.status = "Continue editing".into();
+                self.set_status(t!(Msg::ContinueEditing));
             }
-            _ => self.status = "Save or discard edits before deleting a saved song.".into(),
+            _ => self.set_status(t!(Msg::SaveBeforeDelete)),
         }
         cx.notify();
     }
@@ -1161,7 +1188,7 @@ impl Library {
         let mut section = self.section;
         if add {
             if candidate.sections.len() >= 128 {
-                self.status = "At most 128 slides. Original unchanged.".into();
+                self.set_status(t!(Msg::TooManySlides));
                 return;
             }
             candidate.sections.push(Section {
@@ -1180,9 +1207,7 @@ impl Library {
             section = section.min(candidate.sections.len().saturating_sub(1));
         }
         if !valid_draft(&candidate) {
-            self.status =
-                "Slide is used by an arrangement or the song exceeds limits. Original unchanged."
-                    .into();
+            self.set_status(t!(Msg::SlideInUse));
             return;
         }
         self.history.record(Document {
@@ -1214,7 +1239,7 @@ impl Library {
             .filter(|(_, part)| *part == LYRICS && !self.slides)
             .map(|(i, _)| i)
         else {
-            self.status = "Place the cursor in the lyrics to split the slide.".into();
+            self.set_status(t!(Msg::CursorInLyrics));
             cx.notify();
             return;
         };
@@ -1250,8 +1275,7 @@ impl Library {
             variant.occurrences = occurrences;
         }
         if !valid_draft(&candidate) {
-            self.status =
-                "Splitting would exceed the song's section limits. Original unchanged.".into();
+            self.set_status(t!(Msg::SplitExceedsLimits));
             cx.notify();
             return;
         }
@@ -1264,7 +1288,7 @@ impl Library {
         self.section = index + 1;
         self.load_fields(cx);
         self.focus_cell(index + 1, LYRICS, 0, window, cx);
-        self.status = "Slide split · Undo restores it".into();
+        self.set_status(t!(Msg::SlideSplit));
         cx.notify();
     }
 
@@ -1289,7 +1313,7 @@ impl Library {
             variant.occurrences.retain(|o| o.section != removed.id);
         }
         if !valid_draft(&candidate) || !editable(&candidate) {
-            self.status = "Joining would exceed the slide limits. Original unchanged.".into();
+            self.set_status(t!(Msg::JoinExceedsLimits));
             cx.notify();
             return;
         }
@@ -1302,7 +1326,7 @@ impl Library {
         self.section = index - 1;
         self.load_fields(cx);
         self.focus_cell(index - 1, LYRICS, caret, window, cx);
-        self.status = "Slides joined · Undo restores them".into();
+        self.set_status(t!(Msg::SlidesJoined));
         cx.notify();
     }
 
@@ -1327,7 +1351,7 @@ impl Library {
         }
         self.all = true;
         self.all_focus = (!self.slides).then_some((last, LYRICS));
-        self.status = "All slides selected · formatting applies to every slide".into();
+        self.set_status(t!(Msg::AllSlidesSelected));
         cx.notify();
     }
 
@@ -1390,7 +1414,7 @@ impl Library {
             variant.occurrences.retain(|o| o.section == id);
         }
         if !valid_draft(&candidate) || !editable(&candidate) {
-            self.status = "That text does not fit in one slide. Song unchanged.".into();
+            self.set_status(t!(Msg::TextTooBig));
             cx.notify();
             return;
         }
@@ -1404,7 +1428,7 @@ impl Library {
         self.load_fields(cx);
         self.pane.reload();
         self.focus_cell(0, LYRICS, usize::MAX, window, cx);
-        self.status = "Song text replaced · Undo restores it".into();
+        self.set_status(t!(Msg::SongTextReplaced));
         cx.notify();
     }
 
@@ -1520,7 +1544,7 @@ impl Library {
                 &Section {
                     id: SectionId(Id([0; 16])),
                     label: String::new(),
-                    lyrics: LAYOUT_SAMPLE.into(),
+                    lyrics: layout_sample().into(),
                     format: Default::default(),
                     background: None,
                 },
@@ -1652,7 +1676,7 @@ impl Library {
             &Section {
                 id: SectionId(Id([0; 16])),
                 label: String::new(),
-                lyrics: LAYOUT_SAMPLE.into(),
+                lyrics: layout_sample().into(),
                 format: Default::default(),
                 background: None,
             },
@@ -1675,7 +1699,7 @@ impl Library {
                     .px_1()
                     .text_size(px(12.))
                     .text_color(rgb(theme::MUTED))
-                    .child("Song master · until themes exist"),
+                    .child(t!(Msg::SongMasterNote)),
             )
             .child(
                 div()
@@ -1700,7 +1724,7 @@ impl Library {
                             .text_size(px(12.))
                             .bg(rgb(theme::FOCUS_BG))
                             .text_color(rgb(0x2f4f99))
-                            .child("Master"),
+                            .child(t!(Msg::SongMaster)),
                     ),
             )
     }
@@ -1778,7 +1802,7 @@ impl Library {
                                         .justify_center()
                                         .text_size(px(11.))
                                         .text_color(rgb(0x9a9ea5))
-                                        .child("Cannot be shown"),
+                                        .child(t!(Msg::CannotBeShown)),
                                 )
                             }),
                     )
@@ -1802,7 +1826,7 @@ impl Library {
                                     d.bg(rgb(0xeeeeec))
                                         .text_color(rgb(0x8a8f96))
                                         .italic()
-                                        .child(format!("Slide {}", index + 1))
+                                        .child(t!(Msg::SlideN, index = index + 1))
                                 }
                             }),
                     ),
@@ -2006,30 +2030,16 @@ fn editable(song: &Song) -> bool {
 
 fn error_message(e: Error) -> &'static str {
     match e {
-        Error::Conflict => {
-            "Changed elsewhere. Your draft is retained; duplicate it to save a separate copy, or discard and reopen."
-        }
-        Error::Locked => {
-            "Library is busy in another process. Wait, then retry; your draft is retained."
-        }
-        Error::Full => "Storage is full. Free space and retry; your draft is retained.",
-        Error::Unsupported => {
-            "Unsupported library version or foreign database. Use a supported library; original was not replaced."
-        }
-        Error::Corrupt => {
-            "Library is corrupt. Preserve the original and restore a known-good backup."
-        }
-        Error::Io => {
-            "Library could not be read or written. Check folder permissions and free space, then reopen or retry."
-        }
-        Error::Invalid => "Song is invalid or exceeds storage limits. Correct the draft and retry.",
-        Error::Missing => "Saved revision is missing. Refresh the library.",
-        Error::Exists => {
-            "Backup destination already exists. Preserve it and the library; recovery requires a fresh destination."
-        }
-        _ => {
-            "Library is unavailable. Close and reopen; do not discard an unsaved draft without copying it."
-        }
+        Error::Conflict => t!(Msg::StorageConflict),
+        Error::Locked => t!(Msg::StorageLocked),
+        Error::Full => t!(Msg::StorageFull),
+        Error::Unsupported => t!(Msg::StorageUnsupported),
+        Error::Corrupt => t!(Msg::StorageCorrupt),
+        Error::Io => t!(Msg::StorageIo),
+        Error::Invalid => t!(Msg::StorageInvalid),
+        Error::Missing => t!(Msg::StorageMissing),
+        Error::Exists => t!(Msg::StorageExists),
+        _ => t!(Msg::StorageUnavailable),
     }
 }
 
@@ -2132,33 +2142,37 @@ impl Render for Library {
                             .flex_col()
                             .gap(px(2.))
                             .child(self.fields[0].clone())
-                            .child(
-                                div()
-                                    .flex()
-                                    .when(!busy, |d| {
-                                        d.child(self.button(0, "New", cx))
-                                            .child(self.button(5, "Undo", cx))
-                                            .child(self.button(6, "Redo", cx))
-                                    }),
-                            ),
+                            .child(div().flex().when(!busy, |d| {
+                                d.child(self.button(0, t!(Msg::EditorNew), cx))
+                                    .child(self.button(5, t!(Msg::EditorUndo), cx))
+                                    .child(self.button(6, t!(Msg::EditorRedo), cx))
+                            })),
                     )
                     .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(theme::BORDER)))
-                    .children(["Text", "Scripture", "Shape", "Media"].map(inert))
+                    .children(
+                        [
+                            t!(Msg::EditorText),
+                            t!(Msg::EditorScripture),
+                            t!(Msg::EditorShape),
+                            t!(Msg::EditorMedia),
+                        ]
+                        .map(inert),
+                    )
                     .child(div().flex_1())
                     .child(if busy {
-                        inert("Format").into_any_element()
+                        inert(t!(Msg::EditorFormat)).into_any_element()
                     } else {
                         div()
                             .border_b_2()
                             .border_color(rgb(if self.format { 0x536aca } else { 0xf4f4f3 }))
-                            .child(self.button(18, "Format", cx))
+                            .child(self.button(18, t!(Msg::EditorFormat), cx))
                             .into_any_element()
                     })
-                    .children(["Animate", "Presentation"].map(inert))
+                    .children([t!(Msg::EditorAnimate), t!(Msg::EditorPresentation)].map(inert))
                     .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(theme::BORDER)))
                     .when(!busy, |d| {
-                        d.child(self.button(13, "Library", cx))
-                            .child(self.button(12, "Inspector", cx))
+                        d.child(self.button(13, t!(Msg::EditorLibrary), cx))
+                            .child(self.button(12, t!(Msg::EditorInspector), cx))
                     }),
             )
             .child(
@@ -2167,10 +2181,14 @@ impl Render for Library {
                     .py_1()
                     .text_size(px(12.))
                     .text_color(rgb(theme::MUTED))
-                    .child(format!(
-                        "{} · {}",
-                        if dirty { "Unsaved" } else { "Unchanged" },
-                        self.status
+                    .child(t!(
+                        Msg::StatusLine,
+                        dirty = if dirty {
+                            t!(Msg::EditorUnsaved)
+                        } else {
+                            t!(Msg::UnchangedStatus)
+                        },
+                        status = &self.status
                     )),
             )
             .when(self.confirm_close && !busy, |d| {
@@ -2182,9 +2200,9 @@ impl Render for Library {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child("Close without saving?")
-                        .child(self.button(10, "Discard and close", cx))
-                        .child(self.button(11, "Keep editing", cx)),
+                        .child(t!(Msg::CloseWithoutSaving))
+                        .child(self.button(10, t!(Msg::DiscardAndClose), cx))
+                        .child(self.button(11, t!(Msg::KeepEditing), cx)),
                 )
             })
             .child(
@@ -2207,7 +2225,7 @@ impl Render for Library {
                                     div()
                                         .p_3()
                                         .text_color(rgb(theme::MUTED))
-                                        .child("Saved songs · ID order"),
+                                        .child(t!(Msg::SavedSongsHeader)),
                                 )
                                 .when(!busy, |d| {
                                     d.child(
@@ -2215,17 +2233,17 @@ impl Render for Library {
                                             .px_2()
                                             .flex()
                                             .flex_wrap()
-                                            .child(self.button(2, "Duplicate", cx))
+                                            .child(self.button(2, t!(Msg::EditorDuplicate), cx))
                                             .child(self.button(
                                                 3,
                                                 if self.confirm_delete {
-                                                    "Confirm delete"
+                                                    t!(Msg::EditorConfirmDelete)
                                                 } else {
-                                                    "Delete"
+                                                    t!(Msg::EditorDelete)
                                                 },
                                                 cx,
                                             ))
-                                            .child(self.button(4, "Discard edits", cx)),
+                                            .child(self.button(4, t!(Msg::DiscardEdits), cx)),
                                     )
                                 })
                                 .child(
@@ -2277,9 +2295,9 @@ impl Render for Library {
                                     d.child(self.button(
                                         9,
                                         if self.catalog.len() == 128 {
-                                            "Next page"
+                                            t!(Msg::NextPage)
                                         } else {
-                                            "Refresh / first page"
+                                            t!(Msg::RefreshFirstPage)
                                         },
                                         cx,
                                     ))
@@ -2302,18 +2320,32 @@ impl Render for Library {
                                     .pt_1()
                                     .border_b_1()
                                     .border_color(rgb(theme::BORDER))
-                                    .children([(14, "Words", !self.slides && !self.layouts), (17, "Slides", self.slides && !self.layouts)].map(
-                                        |(index, label, active)| {
-                                            div()
-                                                .border_b_2()
-                                                .border_color(rgb(if active {
-                                                    0x536aca
-                                                } else {
-                                                    0xfbfbfa
-                                                }))
-                                                .child(self.button(index, label, cx))
-                                        },
-                                    ))
+                                    .children(
+                                        [
+                                            (
+                                                14,
+                                                t!(Msg::EditorWords),
+                                                !self.slides && !self.layouts,
+                                            ),
+                                            (
+                                                17,
+                                                t!(Msg::EditorSlides),
+                                                self.slides && !self.layouts,
+                                            ),
+                                        ]
+                                        .map(
+                                            |(index, label, active)| {
+                                                div()
+                                                    .border_b_2()
+                                                    .border_color(rgb(if active {
+                                                        0x536aca
+                                                    } else {
+                                                        0xfbfbfa
+                                                    }))
+                                                    .child(self.button(index, label, cx))
+                                            },
+                                        ),
+                                    )
                                     // EW8-OBS-043: "Layouts ⊗" beside Words and Slides.
                                     .when(self.layouts, |d| {
                                         d.child(
@@ -2322,7 +2354,12 @@ impl Render for Library {
                                                 .items_center()
                                                 .border_b_2()
                                                 .border_color(rgb(theme::ACCENT))
-                                                .child(div().px_2().text_size(px(12.)).child("Layouts"))
+                                                .child(
+                                                    div()
+                                                        .px_2()
+                                                        .text_size(px(12.))
+                                                        .child(t!(Msg::EditorLayouts)),
+                                                )
                                                 .child(self.button(19, "⊗", cx)),
                                         )
                                     }),
@@ -2331,7 +2368,7 @@ impl Render for Library {
                                 div()
                                     .flex_1()
                                     .p_6()
-                                    .child("Loading or saving…")
+                                    .child(t!(Msg::LoadingOrSaving))
                                     .into_any_element()
                             } else if self.layouts {
                                 self.layout_list().into_any_element()
@@ -2424,18 +2461,26 @@ impl Render for Library {
                                                     .bg(rgb(0x000000))
                                                     .border_1()
                                                     .border_color(rgb(0xc9ccd0))
-                                                    .on_click(cx.listener(|s, e: &ClickEvent, w, cx| {
-                                                        if e.click_count() == 2 {
-                                                            // No canvas editing yet: edit in Words.
-                                                            s.exit_all(cx);
-                                                            s.slides = false;
-                                                            let index = s.section;
-                                                            s.focus_cell(index, LYRICS, usize::MAX, w, cx);
-                                                        }
-                                                    }))
-                                                    .children(image.map(|image| {
-                                                        img(image).size_full()
-                                                    }))
+                                                    .on_click(cx.listener(
+                                                        |s, e: &ClickEvent, w, cx| {
+                                                            if e.click_count() == 2 {
+                                                                // No canvas editing yet: edit in Words.
+                                                                s.exit_all(cx);
+                                                                s.slides = false;
+                                                                let index = s.section;
+                                                                s.focus_cell(
+                                                                    index,
+                                                                    LYRICS,
+                                                                    usize::MAX,
+                                                                    w,
+                                                                    cx,
+                                                                );
+                                                            }
+                                                        },
+                                                    ))
+                                                    .children(
+                                                        image.map(|image| img(image).size_full()),
+                                                    )
                                                     .when(empty || rejected, |d| {
                                                         d.child(
                                                             div()
@@ -2447,10 +2492,10 @@ impl Render for Library {
                                                                 .p_4()
                                                                 .text_color(rgb(0x9a9ea5))
                                                                 .child(if rejected {
-                                                                    "This slide cannot be shown: a line is too long or uses a character the bundled font lacks."
+                                                                    t!(Msg::SlideRejectedNote)
                                                                 } else {
                                                                     // EW8-OBS-023 empty-slide hint.
-                                                                    "Double click to edit song"
+                                                                    t!(Msg::EmptySlideHint)
                                                                 }),
                                                         )
                                                     }),
@@ -2467,12 +2512,13 @@ impl Render for Library {
                                             .text_color(rgb(theme::MUTED))
                                             .gap_1()
                                             .child(if self.layouts {
-                                                "Master layout · audience layout preview".to_owned()
+                                                t!(Msg::MasterLayoutFooter).to_owned()
                                             } else {
-                                                format!(
-                                                    "Slide {} of {} · audience layout preview",
-                                                    (self.section + 1).min(self.cells.len()),
-                                                    self.cells.len()
+                                                t!(
+                                                    Msg::SlideFooter,
+                                                    index =
+                                                        (self.section + 1).min(self.cells.len()),
+                                                    count = self.cells.len()
                                                 )
                                             })
                                             // A named family that fell back to
@@ -2491,16 +2537,22 @@ impl Render for Library {
                                 })
                                 .when(self.inspector, |d| {
                                     d.child(
-                                        div().p_4().child("Inspector · song information").children(
-                                            ["Authors", "Copyright", "License identifier"]
-                                                .iter()
-                                                .enumerate()
-                                                .map(|(i, label)| {
+                                        div().p_4().child(t!(Msg::InspectorHeader)).children(
+                                            [
+                                                t!(Msg::InspectorAuthors),
+                                                t!(Msg::InspectorCopyright),
+                                                t!(Msg::InspectorLicense),
+                                            ]
+                                            .iter()
+                                            .enumerate()
+                                            .map(
+                                                |(i, label)| {
                                                     div()
                                                         .mt_3()
                                                         .child(*label)
                                                         .child(self.fields[i + 1].clone())
-                                                }),
+                                                },
+                                            ),
                                         ),
                                     )
                                 }),
@@ -2534,12 +2586,12 @@ impl Render for Library {
                                         .rounded(px(2.))
                                         .border_color(rgb(theme::BORDER)),
                                 )
-                                .child("Apply changes to items in schedule"),
+                                .child(t!(Msg::ApplyToSchedule)),
                         )
                         .child(div().flex_1())
-                        .child(self.framed(1, "Apply", dirty, cx))
-                        .child(self.framed(15, "OK", true, cx))
-                        .child(self.framed(16, "Cancel", true, cx)),
+                        .child(self.framed(1, t!(Msg::EditorApply), dirty, cx))
+                        .child(self.framed(15, t!(Msg::EditorOk), true, cx))
+                        .child(self.framed(16, t!(Msg::EditorCancel), true, cx)),
                 )
             })
     }
@@ -4403,7 +4455,7 @@ mod tests {
         assert_eq!(undo_len(&cx, &view), count + 2);
         view.read_with(&cx, |v, cx| {
             let preview = v.preview_slide(cx).unwrap();
-            assert_eq!(preview.text, LAYOUT_SAMPLE);
+            assert_eq!(preview.text, layout_sample());
             assert_eq!(preview.background, wine);
             let slides: Vec<_> = v
                 .draft

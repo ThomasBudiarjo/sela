@@ -8,7 +8,18 @@ mod scriptures;
 mod songs;
 mod themes;
 
-pub(crate) const TABS: [&str; 5] = ["Songs", "Scriptures", "Media", "Presentations", "Themes"];
+/// Tab labels, translated at render time.
+pub(crate) const TABS: [Msg; 5] = [
+    Msg::TabSongs,
+    Msg::TabScriptures,
+    Msg::TabMedia,
+    Msg::TabPresentations,
+    Msg::TabThemes,
+];
+
+/// Static element ids/selectors for the tabs; ids never change with language
+/// so tests and scripts can find the controls in any language.
+pub(crate) const TAB_IDS: [&str; 5] = ["Songs", "Scriptures", "Media", "Presentations", "Themes"];
 
 pub(crate) fn empty_detail(title: impl Into<SharedString>, text: &'static str) -> gpui::AnyElement {
     div()

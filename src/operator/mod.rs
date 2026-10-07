@@ -8,7 +8,9 @@ use gpui::{
 use sela::{
     background::{self, Plan},
     delivery::{Epoch, LiveState},
-    fonts, images,
+    fonts,
+    i18n::{self, Language, Msg},
+    images,
     masks::{Layer, Mask, Masks},
     output::{Launch, Refusal, Status, Supervisor},
     preparation::{PreparationEvent, Preparer},
@@ -16,6 +18,7 @@ use sela::{
     schedule::{EntryId, Schedule},
     slides::{self, Sizing, Slide},
     storage::{self, MAX_ITEMS, Reply, Version, Worker},
+    t,
 };
 use std::{
     cell::RefCell,
@@ -47,19 +50,17 @@ use menus::{MenuConfirm, MenuDismiss, MenuNext, MenuPrevious, OpenSongMenu, Song
 pub(super) use menus::{SONG_MENU, SongItem};
 use options::SettingsState;
 pub(super) use options::{MonitorSlot, SettingsConfig};
-use resources::TABS;
+use resources::{TAB_IDS, TABS};
 
 const POLL: Duration = Duration::from_millis(16);
 const LABELS: usize = 8;
 const LOGO_TIMEOUT: Duration = Duration::from_secs(5);
-const NO_LOGO: &str = "No logo set · Media → select an image → Use As Logo Background";
 /// Background prefetch size while Live output is off, so Preview can warn
 /// about a missing image before anything goes live.
 const NOMINAL_EXTENT: Extent = Extent {
     width: 1920,
     height: 1080,
 };
-const PREPARING_BACKGROUND: &str = "Preparing background…";
 
 /// Show-control button state. Lit only once the renderer acknowledged it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,12 +72,12 @@ pub(super) enum Indicator {
 }
 
 fn layer_name(layer: Layer) -> &'static str {
-    match layer {
-        Layer::None => "None",
-        Layer::Clear => "Clear",
-        Layer::Black => "Black",
-        Layer::Logo => "Logo",
-    }
+    t!(match layer {
+        Layer::None => Msg::LayerNone,
+        Layer::Clear => Msg::LayerClear,
+        Layer::Black => Msg::LayerBlack,
+        Layer::Logo => Msg::LayerLogo,
+    })
 }
 
 /// Builds the audience child command for a fresh session epoch.
@@ -248,7 +249,7 @@ impl Operator {
         let image_worker = profile.clone().and_then(|profile| {
             let worker = images::Worker::start(profile).ok();
             if worker.is_none() {
-                media_message = Some("Image worker could not start".into());
+                media_message = Some(t!(Msg::ImageWorkerFailed).into());
             }
             worker
         });
@@ -375,20 +376,20 @@ impl Operator {
 }
 
 fn storage_message(error: storage::Error) -> String {
-    format!("Song library unavailable ({error:?})")
+    t!(Msg::LibraryUnavailable, error = format!("{error:?}"))
 }
 
-fn shown_title(title: &str) -> &str {
+fn shown_title(title: &str) -> String {
     if title.trim().is_empty() {
-        "Untitled"
+        t!(Msg::Untitled).to_string()
     } else {
-        title
+        title.to_string()
     }
 }
 
 fn slide_name(index: usize, slide: &Slide) -> String {
     if slide.label.trim().is_empty() {
-        format!("Slide {}", index + 1)
+        t!(Msg::SlideN, index = index + 1)
     } else {
         slide.label.clone()
     }

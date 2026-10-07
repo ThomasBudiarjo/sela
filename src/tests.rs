@@ -2173,6 +2173,7 @@ fn a_failed_delete_shows_why_and_keeps_the_row(cx: &mut TestAppContext) {
 mod settings_ui {
     use super::*;
     use crate::operator::{Dialog, MonitorSlot, SettingsConfig};
+    use sela::i18n::{self, Language};
     use sela::settings::{self, MonitorInfo};
 
     fn monitor(name: &str, primary: bool) -> MonitorInfo {
@@ -2231,12 +2232,12 @@ mod settings_ui {
             Some(Dialog::Options)
         );
         for section in [
-            "Main Output",
-            "Alternate Output",
-            "Foldback",
-            "Service Intervals",
-            "Slide Labels",
-            "Advanced",
+            "main-output",
+            "alternate-output",
+            "foldback",
+            "service-intervals",
+            "slide-labels",
+            "advanced",
         ] {
             assert!(
                 vcx.debug_bounds(Box::leak(
@@ -2270,6 +2271,40 @@ mod settings_ui {
             operator.read_with(&vcx, |o, _| o.settings.draft.clone()),
             Some(Some(r"\\.\DISPLAY6".to_string()))
         );
+    }
+
+    #[gpui::test]
+    fn language_switches_at_runtime_and_persists(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vcx, operator, _slot) = start(cx, &dir, settings::default_writer());
+        assert_eq!(i18n::language(), Language::English);
+        click(&mut vcx, "options");
+        click(&mut vcx, "options-language-id");
+        click(&mut vcx, "dialog-confirm");
+        assert_eq!(i18n::language(), Language::Indonesian);
+        assert_eq!(
+            operator.read_with(&vcx, |o, _| o.settings.current.language),
+            Language::Indonesian
+        );
+        settle(&mut vcx, &operator, "file written", |_| {
+            file(&dir).is_some()
+        });
+        assert!(file(&dir).unwrap().contains("language=id\n"));
+        drop(vcx);
+
+        // A restart with the same profile opens in Indonesian.
+        let (mut vcx, operator, _slot) = start(cx, &dir, settings::default_writer());
+        settle(&mut vcx, &operator, "loaded", |o| {
+            o.settings.current.language == Language::Indonesian
+        });
+        assert_eq!(i18n::language(), Language::Indonesian);
+        click(&mut vcx, "options");
+        click(&mut vcx, "options-language-en");
+        click(&mut vcx, "dialog-confirm");
+        assert_eq!(i18n::language(), Language::English);
+        settle(&mut vcx, &operator, "file rewritten", |_| {
+            file(&dir).is_some_and(|text| !text.contains("language="))
+        });
     }
 
     #[gpui::test]

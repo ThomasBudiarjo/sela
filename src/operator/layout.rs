@@ -114,9 +114,9 @@ impl Render for Operator {
         let [left, middle, right, upper] =
             self.dimensions(viewport.width.into(), viewport.height.into());
         let live_label = if self.output.is_some() {
-            "Live ● On"
+            t!(Msg::LiveOn)
         } else {
-            "Live ○ Off"
+            t!(Msg::LiveOff)
         };
         div()
             .key_context("Sela SelaShow")
@@ -184,17 +184,27 @@ impl Render for Operator {
                     .gap_1()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(self.button(Control::NewMenu, "new-menu", "New ▾", cx))
-                    .child(self.button(Control::OpenSchedule, "open-schedule", "Open", cx))
-                    .child(self.button(Control::SaveSchedule, "save-schedule", "Save", cx))
-                    .child(self.button(Control::Options, "options", "Options…", cx))
+                    .child(self.button(Control::NewMenu, "new-menu", t!(Msg::ToolbarNewMenu), cx))
+                    .child(self.button(
+                        Control::OpenSchedule,
+                        "open-schedule",
+                        t!(Msg::ToolbarOpen),
+                        cx,
+                    ))
+                    .child(self.button(
+                        Control::SaveSchedule,
+                        "save-schedule",
+                        t!(Msg::ToolbarSave),
+                        cx,
+                    ))
+                    .child(self.button(Control::Options, "options", t!(Msg::ToolbarOptions), cx))
                     .children(
-                        ["Web", "Remote"]
-                            .map(|label| div().px_1().text_color(rgb(INACTIVE)).child(label)),
+                        [Msg::ToolbarWeb, Msg::ToolbarRemote]
+                            .map(|msg| div().px_1().text_color(rgb(INACTIVE)).child(t!(msg))),
                     )
                     .child(div().flex_1())
                     .child(
-                        self.button(Control::GoLive, "go-live", "Go Live", cx)
+                        self.button(Control::GoLive, "go-live", t!(Msg::ToolbarGoLive), cx)
                             .text_color(rgb(TEXT)),
                     )
                     .child(
@@ -202,11 +212,29 @@ impl Render for Operator {
                             .debug_selector(|| "Alerts".into())
                             .px_1()
                             .text_color(rgb(INACTIVE))
-                            .child("Alerts"),
+                            .child(t!(Msg::ToolbarAlerts)),
                     )
-                    .child(self.mask_button(Control::Logo, "mask-logo", "Logo", Mask::Logo, cx))
-                    .child(self.mask_button(Control::Black, "mask-black", "Black", Mask::Black, cx))
-                    .child(self.mask_button(Control::Clear, "mask-clear", "Clear", Mask::Clear, cx))
+                    .child(self.mask_button(
+                        Control::Logo,
+                        "mask-logo",
+                        t!(Msg::MaskLogo),
+                        Mask::Logo,
+                        cx,
+                    ))
+                    .child(self.mask_button(
+                        Control::Black,
+                        "mask-black",
+                        t!(Msg::MaskBlack),
+                        Mask::Black,
+                        cx,
+                    ))
+                    .child(self.mask_button(
+                        Control::Clear,
+                        "mask-clear",
+                        t!(Msg::MaskClear),
+                        Mask::Clear,
+                        cx,
+                    ))
                     .child(
                         self.button(Control::LiveOutput, "live-output", live_label, cx)
                             .when(self.output.is_some(), |d| d.text_color(rgb(ON_SCREEN))),
@@ -243,10 +271,15 @@ impl Render for Operator {
                                     .child(self.button(
                                         Control::Previous,
                                         "live-previous",
-                                        "‹ Previous",
+                                        t!(Msg::ButtonPrevious),
                                         cx,
                                     ))
-                                    .child(self.button(Control::Next, "live-next", "Next ›", cx)),
+                                    .child(self.button(
+                                        Control::Next,
+                                        "live-next",
+                                        t!(Msg::ButtonNext),
+                                        cx,
+                                    )),
                             ),
                     ),
             )
@@ -259,19 +292,28 @@ impl Render for Operator {
                     .items_center()
                     .px_3()
                     .gap_3()
-                    .child(div().font_weight(FontWeight::MEDIUM).child("Resources"))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(t!(Msg::ResourcesHeader)),
+                    )
                     .child(self.button(
                         Control::CollapseResources,
                         "collapse-resources",
                         if self.collapsed {
-                            "Restore resources"
+                            t!(Msg::RestoreResources)
                         } else {
-                            "Collapse resources"
+                            t!(Msg::CollapseResources)
                         },
                         cx,
                     ))
-                    .child(self.button(Control::Quit, "quit", "Quit · Ctrl+Q", cx))
-                    .child(self.button(Control::ResetLayout, "reset-layout", "Reset layout", cx))
+                    .child(self.button(Control::Quit, "quit", t!(Msg::ButtonQuit), cx))
+                    .child(self.button(
+                        Control::ResetLayout,
+                        "reset-layout",
+                        t!(Msg::ResetLayout),
+                        cx,
+                    ))
                     .child(
                         div()
                             .text_size(px(TEXT_CAPTION))
@@ -307,8 +349,8 @@ impl Render for Operator {
                                 .px_3()
                                 .border_b_1()
                                 .border_color(rgb(BORDER))
-                                .children(TABS.iter().enumerate().map(|(index, label)| {
-                                    self.button(Control::TABS[index], label, *label, cx)
+                                .children(TABS.iter().enumerate().map(|(index, &msg)| {
+                                    self.button(Control::TABS[index], TAB_IDS[index], t!(msg), cx)
                                         .h_full()
                                         .rounded_none()
                                         .border_b_2()
@@ -340,13 +382,13 @@ impl Render for Operator {
                                         .child(
                                             div()
                                                 .font_weight(FontWeight::MEDIUM)
-                                                .child("Collections"),
+                                                .child(t!(Msg::CollectionsHeader)),
                                         )
                                         .child(
                                             div()
                                                 .mt_2()
                                                 .text_color(rgb(MUTED))
-                                                .child("No collections"),
+                                                .child(t!(Msg::NoCollections)),
                                         ),
                                 )
                                 .child(
@@ -377,14 +419,14 @@ impl Render for Operator {
                             .child(self.button(
                                 Control::NewSongButton,
                                 "open-library",
-                                "+ New Song",
+                                t!(Msg::NewSongButton),
                                 cx,
                             ))
                             .child(
                                 self.button(
                                     Control::AddToSchedule,
                                     "add-to-schedule",
-                                    "Add to Schedule",
+                                    t!(Msg::AddToSchedule),
                                     cx,
                                 )
                                 .when(
@@ -408,9 +450,9 @@ impl Render for Operator {
                                     Control::Normalize,
                                     "normalize-text",
                                     if normalized {
-                                        "Normalize text size across slides: On"
+                                        t!(Msg::NormalizeOn)
                                     } else {
-                                        "Normalize text size across slides: Off"
+                                        t!(Msg::NormalizeOff)
                                     },
                                     cx,
                                 )
@@ -431,14 +473,14 @@ impl Render for Operator {
                             .child(self.button(
                                 Control::ImportImage,
                                 "import-image",
-                                "Import image…",
+                                t!(Msg::ImportImage),
                                 cx,
                             ))
                             .child(
                                 self.button(
                                     Control::UseAsLogo,
                                     "use-as-logo",
-                                    "Use As Logo Background",
+                                    t!(Msg::UseAsLogo),
                                     cx,
                                 )
                                 .when(self.selected_image.is_none(), |d| {
@@ -485,7 +527,7 @@ impl Render for Operator {
                             .child(self.button(
                                 Control::ImageMenuLogo,
                                 "image-menu-logo",
-                                "Use As Logo Background",
+                                t!(Msg::UseAsLogo),
                                 cx,
                             )),
                     )
@@ -502,11 +544,16 @@ impl Render for Operator {
                         .border_1()
                         .border_color(rgb(BORDER))
                         .shadow_md()
-                        .child(self.button(Control::NewSongItem, "new-song-menu", "New Song", cx))
+                        .child(self.button(
+                            Control::NewSongItem,
+                            "new-song-menu",
+                            t!(Msg::NewSongItem),
+                            cx,
+                        ))
                         .child(self.button(
                             Control::NewSchedule,
                             "new-schedule-menu",
-                            "New Schedule",
+                            t!(Msg::NewScheduleItem),
                             cx,
                         )),
                 )
@@ -529,7 +576,7 @@ impl Render for Operator {
                         .child(self.button(
                             Control::ItemMenuRemove,
                             "item-menu-remove",
-                            "Remove From Schedule",
+                            t!(Msg::RemoveFromSchedule),
                             cx,
                         )),
                 )

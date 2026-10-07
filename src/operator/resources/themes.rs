@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) fn detail() -> gpui::AnyElement {
     empty_detail(
-        format!("{} library is empty", TABS[4]),
-        "This resource library is not implemented.",
+        t!(Msg::LibraryEmpty, tab = t!(TABS[4])),
+        t!(Msg::LibraryNotImplemented),
     )
 }
