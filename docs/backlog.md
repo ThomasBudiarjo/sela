@@ -485,11 +485,16 @@ its toolbar/keyboard equivalent.
 - [ ] Verify keyboard-only access, visible focus and disabled/unavailable actions.
 
 Acceptance: focus and selection match observed workflows, with no typing-triggered
-live change and no shortcut-only access to critical controls.
+live change and no shortcut-only access to critical controls. Reference records:
+EW8-OBS-044/045/047 (search focus, plain B/C/L and Ctrl+B/L/C in search: UNOBSERVED
+with best guess), 048-052 (arrow, PageUp/PageDown and label-jump rules).
 
 ### M1-04 — Resource browser, collection organization and search UI
 
 Depends on: M1-01, M1-02, M1-03. Tests: U, I, N, P.
+
+Reference records: EW8-OBS-044-047 (search box, live filter, word-prefix match,
+B/C/L-in-search best guess), 061, 064, 065 (context menu, sort, delete confirm).
 
 - [ ] Implement observed resource tabs, list/grid sizing, sorting, context actions,
   collections/folders and selection behavior; audit any missing browser controls.
@@ -783,7 +788,8 @@ Images and picture logo) are **implemented-unqualified**; see
   removal and masked Go Live; inspect audience and operator state together.
 
 Acceptance: Live reflects renderer acknowledgment; preview/selection never leaks
-to audience and rapid input cannot apply an older scene last.
+to audience and rapid input cannot apply an older scene last. Reference records:
+EW8-OBS-047, 048-052 (keys and focus), 066 (Go Live under masks).
 
 ### M1-11 — Still-image assets and missing-resource preflight
 

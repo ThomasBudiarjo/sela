@@ -3174,6 +3174,14 @@ PY
 - UNOBSERVED with best guesses: label jump keys, Master edit reach, Update
   items dialog wording, Administrator/CCLI rendering, schedule multi-select
   and drag reorder, Preview Up/Down.
+- Correction (fix-foundation-observation-coverage, docs only): the best guesses
+  for schedule drag reorder (EW8-OBS-060) and Administrator/Song Number-CCLI
+  (EW8-OBS-063) did not exist in the first commit; they were added afterwards,
+  with the plain B/C/L-in-search and Ctrl+B/L/C-in-search rules (EW8-OBS-047),
+  the label-jump pane and Live target (EW8-OBS-052), the Master edit
+  cross-song/theme rule (EW8-OBS-057), the Options text lists (EW8-OBS-056) and
+  ledger rows for EW8-OBS-044-066. No new EW run: the search-field check stays
+  UNOBSERVED, so EW was not launched.
 - Checks: EW closed via WM_CLOSE, `Get-Process EasyWorship` empty; the
   unsaved-schedule prompt was answered No; nothing saved.
 - Next: consume the records in M1-07b (search), M1-02/M1-03 (keys), M5-06
