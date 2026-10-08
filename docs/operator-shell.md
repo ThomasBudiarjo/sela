@@ -349,13 +349,20 @@ image background (see delivery).
 
 Unmask barrier: every explicit operator cue request (click, step, Go Live,
 Normalize) gets a new generation, and a Live double-click under a mask stores
-that generation as its unmask intent. The mask lifts only when the presented cue
-carries exactly that generation and its outcome is clean (no image
-substitution, no failure). Any newer explicit request, mask toggle, item change
-or output toggle drops the intent, so an older cue landing later never lifts
-the mask. Dependency retries of the same request (fonts, background decode,
-size refresh, surface change) reuse the generation and keep the intent. If the
-first click already settled as a substitute, the second click finds a non-clean
+that generation as its unmask intent. The mask lifts only when the renderer's
+Applied receipt confirms exactly that request's slide version with a clean
+outcome (no image substitution, no failure); queue acceptance alone never
+lifts it. Any newer explicit request, mask toggle, item change or output
+toggle drops the intent at any stage — in preparation, queued with the
+supervisor, or awaiting the receipt — so an older cue may still complete
+under the mask but never lifts it, and neither does its late Applied receipt.
+A terminal renderer rejection keeps the mask over the retained scene;
+re-presenting the same slide clears the stale rejection report, so a repeated
+double-click retries and unmasks on success. Dependency retries of the same
+request (fonts, background decode) and surface/font refreshes rebuild the
+newest request with its own slide and generation (`refresh_live_request`), so
+a refresh can never rebind the intent to the previous slide. If the first
+click already settled as a substitute, the second click finds a non-clean
 presentation and leaves the mask on. Preparation failure, refusal (`Busy`,
 `Disconnected`, not connected) or cancellation also keep the mask and its
 indicator on and report in the Live status. Deferred cues carry the live item
@@ -366,7 +373,11 @@ Tests: `live_double_click_under_black_never_reveals_the_previous_slide`,
 `double_click_after_the_first_cue_was_substituted_keeps_the_mask`,
 `newer_deferred_request_cancels_the_double_click_unmask`,
 `same_request_retry_keeps_the_double_click_unmask`,
-`deferred_cue_dies_with_a_newer_request_or_a_new_session`.
+`deferred_cue_dies_with_a_newer_request_or_a_new_session`,
+`surface_refresh_keeps_the_masked_deferred_request`,
+`font_refresh_keeps_the_masked_deferred_request`,
+`newer_request_cancels_the_unmask_before_the_receipt`,
+`render_failed_double_click_keeps_the_mask_and_the_old_scene`.
 
 GPUI tests: `show_keys_toggle_masks_with_acknowledged_indicators`,
 `live_slide_clicks_apply_and_double_click_unmasks`,

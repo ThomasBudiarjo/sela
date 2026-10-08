@@ -247,7 +247,7 @@ impl Operator {
         }
         self.masks.toggle(mask);
         self.unmask_on_present = None;
-        self.unmask_after_cue = false;
+        self.unmask_on_applied = None;
         self.live_message = None;
         self.sync_show(Instant::now());
     }
@@ -280,8 +280,9 @@ impl Operator {
                 // (`poll_cues`).
                 self.unmask_on_present = Some(generation);
             } else if self.presented == Some((generation, index, true)) {
-                self.masks.live_double_click();
-                self.unmask_after_cue = true;
+                // Accepted already: the mask lifts on its Applied receipt
+                // (`sync_show`).
+                self.arm_unmask_on_applied(index);
             }
         }
         self.sync_show(Instant::now());
@@ -407,10 +408,8 @@ impl Operator {
                 .live
                 .as_ref()
                 .is_some_and(|live| live.version == version)
-                && let Some(index) = self.requested_slide()
             {
-                self.cancel_cues();
-                self.dispatch(index, self.request_generation);
+                self.refresh_live_request();
             }
         } else {
             self.retry_deferred();
@@ -495,7 +494,7 @@ impl Operator {
         // Masks do carry over (EW8-OBS-017); a fresh renderer starts unmasked.
         self.sent_mask = self.output.as_ref().map(|_| Layer::None);
         self.unmask_on_present = None;
-        self.unmask_after_cue = false;
+        self.unmask_on_applied = None;
         self.logo_requested = None;
         self.logo_sent = None;
         self.sync_show(Instant::now());
@@ -556,9 +555,11 @@ impl Operator {
     /// and background lookups are cheap map reads; fitting, sizing and cue
     /// assembly never run here.
     pub(crate) fn send(&mut self, index: usize) {
-        // A newer explicit request supersedes any double-click unmask intent.
+        // A newer explicit request supersedes any double-click unmask intent,
+        // including one already queued with the renderer.
         self.request_generation += 1;
         self.unmask_on_present = None;
+        self.unmask_on_applied = None;
         self.dispatch(index, self.request_generation);
     }
 
@@ -661,17 +662,32 @@ impl Operator {
         }
     }
 
-    /// The double-clicked request is presented: lift the mask. A substituted
-    /// background keeps it on.
-    fn unmask_presented(&mut self, generation: u64, substituted: bool) {
+    /// The double-clicked request was accepted by the supervisor: the mask
+    /// stays on and the intent stays owned until the renderer's matching
+    /// Applied receipt (`sync_show`). A substituted background keeps the
+    /// mask on for good.
+    fn unmask_presented(
+        &mut self,
+        generation: u64,
+        version: Option<ContentVersion>,
+        substituted: bool,
+    ) {
         if self.unmask_on_present != Some(generation) {
             return;
         }
         self.unmask_on_present = None;
         if !substituted {
-            self.masks.live_double_click();
-            self.unmask_after_cue = true;
+            self.unmask_on_applied = version;
         }
+    }
+
+    /// The double-clicked slide is already with the renderer: lift the mask
+    /// once its Applied receipt is the confirmed scene (`sync_show`).
+    fn arm_unmask_on_applied(&mut self, index: usize) {
+        self.unmask_on_applied = self
+            .live
+            .as_ref()
+            .and_then(|item| slides::slide_version(item.version, index));
     }
 
     fn drop_unmask_intent(&mut self, generation: u64) {
@@ -720,7 +736,7 @@ impl Operator {
                             self.live_slide = Some(pending.index);
                             let clean = pending.warning.is_none();
                             self.presented = Some((pending.generation, pending.index, clean));
-                            self.unmask_presented(pending.generation, !clean);
+                            self.unmask_presented(pending.generation, version, !clean);
                             self.live_message = pending.warning;
                         }
                         Err(refusal) => {
@@ -748,6 +764,35 @@ impl Operator {
         self.deferred_send = None;
         if let Some(preparer) = &self.cue_preparer {
             preparer.cancel(Lane::Live);
+        }
+    }
+
+    /// The newest live request and the generation that owns it: a deferred
+    /// send first (it is newer than anything in preparation), then the newest
+    /// cue in preparation, then the slide on screen.
+    fn latest_request(&self) -> Option<(usize, u64)> {
+        if let Some(deferred) = self.deferred_send {
+            return Some((deferred.index, deferred.generation));
+        }
+        if let Some(pending) = self.pending_cues.back() {
+            return Some((pending.index, pending.generation));
+        }
+        self.live_slide
+            .map(|index| (index, self.request_generation))
+    }
+
+    /// Same session, new parameters (surface or faces): rebuild the newest
+    /// request. It keeps its own slide AND its own generation, so a
+    /// double-click unmask intent can only ever match that exact request; if
+    /// the intent's request is gone, the intent dies here.
+    pub(crate) fn refresh_live_request(&mut self) {
+        let Some((index, generation)) = self.latest_request() else {
+            return;
+        };
+        self.cancel_cues();
+        self.dispatch(index, generation);
+        if self.unmask_on_present.is_some_and(|g| g != generation) {
+            self.unmask_on_present = None;
         }
     }
 

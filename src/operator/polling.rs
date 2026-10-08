@@ -10,11 +10,8 @@ impl Operator {
                 && self.output_extent != Some(extent)
             {
                 self.output_extent = Some(extent);
-                // Same session, new surface: re-render the current intent.
-                if let Some(index) = self.requested_slide() {
-                    self.cancel_cues();
-                    self.dispatch(index, self.request_generation);
-                }
+                // Same session, new surface: rebuild the newest request.
+                self.refresh_live_request();
                 changed = true;
             }
         }
@@ -23,6 +20,13 @@ impl Operator {
         if changed {
             cx.notify();
         }
+    }
+
+    /// Test hook: pretend the settled surface extent changed, so the next
+    /// `poll` takes the surface-refresh path.
+    #[cfg(test)]
+    pub(crate) fn resurface(&mut self) {
+        self.output_extent = None;
     }
 
     pub(crate) fn poll_images(&mut self) -> bool {
@@ -153,16 +157,28 @@ impl Operator {
 
     pub(crate) fn sync_show(&mut self, now: Instant) -> bool {
         let changed = self.sync_logo(now);
+        // The double-clicked slide lifts its mask only on its own Applied
+        // receipt. A terminal rejection keeps the mask over the retained
+        // scene; the intent just dies. A re-submission of the same slide
+        // still in flight is waited out.
+        if let Some(version) = self.unmask_on_applied {
+            let Some(output) = &self.output else {
+                return changed;
+            };
+            let applied = matches!(output.live(), LiveState::Confirmed(v) if v == version);
+            let retrying = output.in_flight() == Some(version) || output.wanted() == Some(version);
+            let failed = !retrying && output.rejected().is_some_and(|(v, _)| v == version);
+            if applied || failed {
+                self.unmask_on_applied = None;
+            }
+            if applied {
+                self.masks.live_double_click();
+            }
+        }
         let layer = self.wire_layer();
         let Some(output) = &mut self.output else {
             return changed;
         };
-        if self.unmask_after_cue {
-            if output.wanted().is_some() || output.in_flight().is_some() {
-                return changed;
-            }
-            self.unmask_after_cue = false;
-        }
         if self.sent_mask != Some(layer) && output.set_mask(layer, now).is_ok() {
             self.sent_mask = Some(layer);
             return true;

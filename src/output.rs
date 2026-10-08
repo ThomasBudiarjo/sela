@@ -238,6 +238,11 @@ impl Supervisor {
         if cue.extent() != extent {
             return Err(Refusal::WrongExtent);
         }
+        // A fresh submission supersedes this version's earlier rejection;
+        // its own terminal receipt will settle the report again.
+        if self.rejected.is_some_and(|(v, _)| v == cue.version()) {
+            self.rejected = None;
+        }
         self.wanted = Some(cue);
         self.pump(now);
         Ok(())

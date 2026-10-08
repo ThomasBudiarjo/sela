@@ -25,12 +25,20 @@ const FAKE_EXTENT: Extent = Extent {
 
 /// Renderer protocol stand-in: Ready, one surface report, then Accepted and
 /// Applied (or a renderer failure in `reject` mode) for every cue. No GPU.
+/// Extra modes: `reject-scene:<n>` fails only the nth scene payload (1-based),
+/// `slow-scene:<ms>` delays every scene's terminal receipt by ms.
 #[test]
 #[ignore = "subprocess fixture for operator live-output tests"]
 fn fake_audience_child() {
     let mode = std::env::var("SELA_FAKE_AUDIENCE").unwrap();
     let epoch =
         Epoch(u128::from_str_radix(&std::env::var("SELA_FAKE_EPOCH").unwrap(), 16).unwrap());
+    let reject_scene_at = mode
+        .strip_prefix("reject-scene:")
+        .map(|n| n.parse::<u64>().unwrap());
+    let slow_scene = mode
+        .strip_prefix("slow-scene:")
+        .map(|ms| Duration::from_millis(ms.parse().unwrap()));
     let caps = RendererCapabilities {
         max_texture_dimension: 2048,
     };
@@ -41,6 +49,7 @@ fn fake_audience_child() {
         std::process::exit(0);
     }
     let mut session = RendererSession::new(epoch);
+    let mut scenes = 0u64;
     while let Ok(frame) = Frame::read(std::io::stdin()) {
         let now = Instant::now();
         let stamp = frame.command_stamp().unwrap();
@@ -58,7 +67,16 @@ fn fake_audience_child() {
                     Payload::Mask(Layer::Logo) if !has_logo => Err(DeliveryError::RenderFailed),
                     Payload::Mask(_) | Payload::Logo(_) => Ok(()),
                     Payload::Scene(_) if mode == "reject" => Err(DeliveryError::RenderFailed),
-                    Payload::Scene(_) => Ok(()),
+                    Payload::Scene(_) => {
+                        scenes += 1;
+                        if reject_scene_at == Some(scenes) {
+                            return Err(DeliveryError::RenderFailed);
+                        }
+                        if let Some(delay) = slow_scene {
+                            std::thread::sleep(delay);
+                        }
+                        Ok(())
+                    }
                 })
                 .unwrap();
             Frame::acknowledgment(ack).write(out()).unwrap();
@@ -727,6 +745,55 @@ fn library_with_background_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
                         image("backdrop.png", sha2::Sha256::digest(&bytes).into()),
                     ),
                     section("Chorus", image("gone.png", [1; 32])),
+                    section("Bridge", None),
+                ],
+                master: Some(Background::color([0, 0, 90])),
+            },
+        )
+        .unwrap();
+    path
+}
+
+/// Verse 1 and Chorus each show an existing image, Bridge the master's
+/// color, so an evicted cache defers the Chorus cue on its decode.
+fn library_with_two_backgrounds(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    use sela::background::{Background, ImageRef};
+    use sha2::Digest;
+    let images = sela::images::images_dir(dir.path());
+    std::fs::create_dir_all(&images).unwrap();
+    let add = |name: &str, rgb: [u8; 4]| {
+        image::RgbaImage::from_pixel(64, 36, image::Rgba(rgb))
+            .save(images.join(name))
+            .unwrap();
+        let bytes = std::fs::read(images.join(name)).unwrap();
+        Background::image(ImageRef {
+            name: name.into(),
+            sha256: sha2::Sha256::digest(&bytes).into(),
+        })
+    };
+    let one = add("one.png", [30, 110, 210, 255]);
+    let two = add("two.png", [210, 110, 30, 255]);
+    let path = dir.path().join("library.sqlite");
+    let section = |label: &str, background: Option<Background>| Section {
+        id: SectionId::allocate(),
+        label: label.into(),
+        lyrics: format!("{label} original line"),
+        format: Default::default(),
+        background,
+    };
+    Repository::open(&path)
+        .unwrap()
+        .save_song(
+            None,
+            Song {
+                title: "Duet Hymn".into(),
+                authors: String::new(),
+                copyright: String::new(),
+                license: String::new(),
+                variants: Vec::new(),
+                sections: vec![
+                    section("Verse 1", Some(one)),
+                    section("Chorus", Some(two)),
                     section("Bridge", None),
                 ],
                 master: Some(Background::color([0, 0, 90])),
@@ -3482,6 +3549,251 @@ fn same_request_retry_keeps_the_double_click_unmask(cx: &mut TestAppContext) {
         "mask lifted over the clicked slide",
         |o| confirmed_mask(o) == Some(Layer::None) && o.on_screen() == Some("Signal Hymn · Chorus"),
     );
+    operator.read_with(&cx, |o, _| assert_eq!(o.masks.layer(), Layer::None));
+}
+
+#[derive(Clone, Copy)]
+enum Refresh {
+    Surface,
+    Fonts,
+}
+
+/// A masked double-click whose cue is deferred on an uncached image must
+/// survive a surface/font refresh as the SAME request: the refresh rebuilds
+/// the double-clicked slide with its own generation, so the slide on screen
+/// never inherits the unmask intent (FOUNDATION-R3-PREP-01).
+fn masked_deferred_request_survives_a_refresh(cx: &mut TestAppContext, refresh: Refresh) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_two_backgrounds(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "faces resolved", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.slides.len() == 3 && p.resolved.is_some())
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    settle(&mut cx, &operator, "output-size prefetch", |o| {
+        o.background_job.is_none() && !o.backgrounds.is_empty()
+    });
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Duet Hymn · Verse 1")
+    });
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black acknowledged", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+
+    // The Chorus image is no longer cached: the double-click defers, masked.
+    operator.update(&mut cx, |o, _| {
+        o.backgrounds = sela::images::BackgroundCache::new(sela::images::BACKGROUND_BUDGET)
+    });
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    let armed = operator.read_with(&cx, |o, _| {
+        assert_eq!(o.deferred_send.map(|d| d.index), Some(1));
+        assert_eq!(o.masks.layer(), Layer::Black);
+        o.unmask_on_present
+    });
+    assert!(armed.is_some());
+
+    // The refresh must rebuild THAT request, not the slide on screen.
+    match refresh {
+        Refresh::Surface => {
+            operator.update(&mut cx, |o, _| o.resurface());
+            operator.update(&mut cx, |o, cx| o.poll(cx));
+        }
+        Refresh::Fonts => {
+            let (version, formats) = operator.read_with(&cx, |o, _| {
+                let item = o.live.as_ref().unwrap();
+                (
+                    item.version,
+                    item.slides
+                        .iter()
+                        .map(|slide| slide.format.clone())
+                        .collect::<Vec<_>>(),
+                )
+            });
+            cx.update(|_, cx| {
+                operator.update(cx, |o, cx| {
+                    let landed = formats.iter().map(fonts::Resolved::bundled).collect();
+                    o.fonts_resolved(version, landed, cx);
+                })
+            });
+        }
+    }
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(
+            o.deferred_send.map(|d| d.index),
+            Some(1),
+            "the refresh keeps the double-clicked request"
+        );
+        assert_eq!(o.unmask_on_present, armed, "the intent stays with it");
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+    });
+
+    // The image lands: the mask lifts only over the double-clicked slide.
+    let mut revealed_with = None;
+    for _ in 0..400 {
+        poll_for(&mut cx, &operator, 1);
+        operator.read_with(&cx, |o, _| {
+            if confirmed_mask(o) == Some(Layer::None) {
+                revealed_with = Some(o.on_screen().map(str::to_owned));
+            }
+        });
+        if revealed_with.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        revealed_with,
+        Some(Some("Duet Hymn · Chorus".to_owned())),
+        "the mask lifts only over the double-clicked slide"
+    );
+    operator.read_with(&cx, |o, _| assert_eq!(o.masks.layer(), Layer::None));
+}
+
+#[gpui::test]
+fn surface_refresh_keeps_the_masked_deferred_request(cx: &mut TestAppContext) {
+    masked_deferred_request_survives_a_refresh(cx, Refresh::Surface);
+}
+
+#[gpui::test]
+fn font_refresh_keeps_the_masked_deferred_request(cx: &mut TestAppContext) {
+    masked_deferred_request_survives_a_refresh(cx, Refresh::Fonts);
+}
+
+/// Queue acceptance is not presentation: the mask stays owned by the request
+/// until the renderer's Applied receipt, so a newer request cancels the
+/// pending unmask even after the double-clicked cue was queued
+/// (FOUNDATION-R3-PREP-02). The older cue may still complete under Black.
+#[gpui::test]
+fn newer_request_cancels_the_unmask_before_the_receipt(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_song(&dir)), "slow-scene:400");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "faces resolved", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.slides.len() == 3 && p.resolved.is_some())
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black acknowledged", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+
+    // B double-clicked; its terminal receipt stays 400 ms out.
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    settle(&mut cx, &operator, "B queued with the renderer", |o| {
+        o.live_slide == Some(1)
+    });
+    // C: a newer same-item request, deferred on its fonts.
+    operator.update(&mut cx, |o, _| {
+        assert_eq!(
+            o.masks.layer(),
+            Layer::Black,
+            "queueing B alone never lifts the mask"
+        );
+        let resolved = o.live.as_mut().unwrap().resolved.take();
+        assert!(resolved.is_some());
+        o.send(2);
+        assert!(o.deferred_send.is_some());
+        o.live.as_mut().unwrap().resolved = resolved;
+    });
+
+    // B's Applied lands: B completes under Black, the mask never lifts.
+    settle(&mut cx, &operator, "B applied under Black", |o| {
+        o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+    poll_for(&mut cx, &operator, 60);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::Black);
+        assert_eq!(
+            confirmed_mask(o),
+            Some(Layer::Black),
+            "B's receipt must not unmask after C superseded it"
+        );
+    });
+
+    // C lands: still masked (no double-click intent belongs to it).
+    operator.update(&mut cx, |o, _| o.retry_deferred());
+    settle(&mut cx, &operator, "C applied under Black", |o| {
+        o.on_screen() == Some("Signal Hymn · Bridge")
+    });
+    poll_for(&mut cx, &operator, 60);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::Black);
+        assert_eq!(confirmed_mask(o), Some(Layer::Black), "C never unmasks");
+    });
+}
+
+/// A renderer rejection of the double-clicked slide keeps the mask and the
+/// previous scene; the empty cue slot is not a success receipt
+/// (FOUNDATION-R3-PREP-02). A repeated double-click retries and unmasks.
+#[gpui::test]
+fn render_failed_double_click_keeps_the_mask_and_the_old_scene(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_song(&dir)), "reject-scene:2");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "faces resolved", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.slides.len() == 3 && p.resolved.is_some())
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black acknowledged", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+
+    // The double-clicked chorus fails in the renderer.
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    settle(&mut cx, &operator, "chorus rejected", |o| {
+        o.output
+            .as_ref()
+            .is_some_and(|out| out.rejected().is_some())
+    });
+    poll_for(&mut cx, &operator, 40);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::Black);
+        assert_eq!(
+            confirmed_mask(o),
+            Some(Layer::Black),
+            "a failed presentation never lifts the mask"
+        );
+        assert_eq!(
+            o.on_screen(),
+            Some("Signal Hymn · Verse 1"),
+            "the rejected slide never replaces the live scene"
+        );
+    });
+
+    // Retried by hand: the stale rejection must not poison the new intent.
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    settle(&mut cx, &operator, "unmasked over the chorus", |o| {
+        confirmed_mask(o) == Some(Layer::None) && o.on_screen() == Some("Signal Hymn · Chorus")
+    });
     operator.read_with(&cx, |o, _| assert_eq!(o.masks.layer(), Layer::None));
 }
 

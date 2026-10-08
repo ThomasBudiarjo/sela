@@ -208,9 +208,11 @@ pub(super) struct Operator {
     request_generation: u64,
     /// The newest presented cue: (generation, slide, clean outcome).
     presented: Option<(u64, usize, bool)>,
-    /// The double-clicked slide is presented; the mask lifts once it left the
-    /// cue slot.
-    unmask_after_cue: bool,
+    /// The double-clicked slide was accepted by the supervisor; the mask
+    /// lifts only when the renderer acknowledges exactly this slide version
+    /// as applied. A terminal rejection keeps the mask over the old scene,
+    /// and any newer explicit request drops the intent.
+    pub(super) unmask_on_applied: Option<ContentVersion>,
     /// Counts output start/stop cycles; deferred cues never cross one.
     output_session: u64,
     pub(super) logo: Option<images::Logo>,
@@ -412,7 +414,7 @@ impl Operator {
             unmask_on_present: None,
             request_generation: 0,
             presented: None,
-            unmask_after_cue: false,
+            unmask_on_applied: None,
             output_session: 0,
             logo: None,
             logo_preparer: None,
