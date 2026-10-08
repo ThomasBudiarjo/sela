@@ -1,4 +1,5 @@
 use super::*;
+use sela::preparation::cue::LIVE_DEPTH;
 
 /// Text-only slide thumbnail over the slide's fill color (image fills show
 /// black); not a rendered audience frame.
@@ -259,7 +260,7 @@ impl Operator {
             self.unmask_after_cue = true;
         }
         // The first click of a double-click already sent this slide.
-        if !(double && self.live_slide == Some(index)) {
+        if !(double && self.requested_slide() == Some(index)) {
             self.send(index);
         }
         self.sync_show(Instant::now());
@@ -381,7 +382,8 @@ impl Operator {
             // Improved resolution (the catalog landed after a bundled
             // fallback): sizes re-fit, so drop the cap and refresh the cue.
             self.size_cap = None;
-            if let Some(index) = self.live_slide {
+            if let Some(index) = self.requested_slide() {
+                self.cancel_cues();
                 self.send(index);
             }
         } else if let Some(index) = self.deferred_send.take() {
@@ -427,6 +429,7 @@ impl Operator {
     }
 
     pub(crate) fn toggle_output(&mut self) {
+        self.cancel_cues();
         if self.output.take().is_some() {
             self.live_message = Some("Live output is off".into());
         } else {
@@ -459,6 +462,9 @@ impl Operator {
         }
         let index = self.preview_slide.min(item.slides.len() - 1);
         if self.ready_for_cue() {
+            if self.live.as_ref().map(|live| live.version) != Some(item.version) {
+                self.cancel_cues();
+            }
             self.live = Some(item);
             self.send(index);
         }
@@ -467,7 +473,7 @@ impl Operator {
     pub(crate) fn step_live(&mut self, forward: bool) {
         let (Some(count), Some(index)) = (
             self.live.as_ref().map(|item| item.slides.len()),
-            self.live_slide,
+            self.requested_slide(),
         ) else {
             self.live_message = Some("Nothing is live".into());
             return;
@@ -494,14 +500,17 @@ impl Operator {
         false
     }
 
+    /// Builds the cue on the preparation worker; `poll_cues` presents it. Font
+    /// and background lookups are cheap map reads; fitting, sizing and cue
+    /// assembly never run here.
     pub(crate) fn send(&mut self, index: usize) {
         if !self.ready_for_cue() {
             return;
         }
-        let (Some(output), Some(item)) = (&mut self.output, &self.live) else {
-            return;
-        };
-        let Status::Connected { extent, caps } = output.status() else {
+        let (Some(Status::Connected { extent, caps }), Some(item)) = (
+            self.output.as_ref().map(Supervisor::status),
+            self.live.clone(),
+        ) else {
             return;
         };
         let Some((slide, version)) = item
@@ -551,47 +560,115 @@ impl Operator {
                 }
             }
         };
-        let cap = match self.size_cap {
-            Some((v, e, s, cap)) if (v, e, s) == (item.version, extent, self.sizing) => cap,
-            _ => {
-                let cap = slides::size_cap(&item.slides, &resolved, extent, self.sizing);
-                self.size_cap = Some((item.version, extent, self.sizing, cap));
-                cap
-            }
-        };
-        let result = slides::cue(
+        let label = format!("{} · {}", item.title, slide_name(index, slide));
+        let job = CueJob {
+            item: item.version,
+            index,
             version,
-            slide,
-            &resolved[index],
+            slides: item.slides.clone(),
+            resolved,
             extent,
             caps,
-            cap,
+            sizing: self.sizing,
             background,
-        )
-        .map_err(|error| error.to_string())
-        .and_then(|cue| {
-            output
-                .present(Arc::new(cue), Instant::now())
-                .map_err(|refusal| match refusal {
-                    Refusal::NotConnected => t!(Msg::RefusalNotConnected).into(),
-                    Refusal::WrongExtent => t!(Msg::RefusalWrongExtent).into(),
-                })
-        });
-        match result {
-            Ok(()) => {
-                let label = format!("{} · {}", item.title, slide_name(index, slide));
-                if self.labels.len() == LABELS {
-                    self.labels.pop_front();
-                }
-                self.labels.retain(|(v, _)| *v != version);
-                self.labels.push_back((version, label));
-                self.live_slide = Some(index);
-                self.live_message = warning;
+        };
+        let sizing = job.sizing;
+        if self.cue_preparer.is_none() {
+            self.cue_preparer = CuePreparer::new().ok();
+        }
+        let submitted = match &self.cue_preparer {
+            Some(preparer) => preparer.submit(Lane::Live, job),
+            None => Err(PrepareError::Disconnected),
+        };
+        match submitted {
+            Ok(ticket) => self.pending_cues.push_back(PendingCue {
+                ticket,
+                index,
+                item: item.version,
+                sizing,
+                extent,
+                label,
+                warning,
+            }),
+            Err(PrepareError::Busy) => self.live_message = Some(t!(Msg::CueBusy).into()),
+            Err(error) => {
+                self.live_message = Some(t!(Msg::CueFailed, error = error.to_string()));
             }
-            Err(message) => self.live_message = Some(message),
         }
     }
 
+    /// Presents cues that finished preparing. A failed cue leaves the current
+    /// scene alone and only reports; results from cancelled requests never
+    /// surface because the preparer fences them.
+    pub(crate) fn poll_cues(&mut self) -> bool {
+        let mut changed = false;
+        for _ in 0..=LIVE_DEPTH {
+            let Some(event) = self.cue_preparer.as_ref().and_then(CuePreparer::poll) else {
+                break;
+            };
+            changed = true;
+            let Some(at) = self
+                .pending_cues
+                .iter()
+                .position(|p| p.ticket == event.ticket())
+            else {
+                continue;
+            };
+            let Some(pending) = self.pending_cues.remove(at) else {
+                continue;
+            };
+            match event {
+                CueEvent::Ready { cue, size_cap, .. } => {
+                    self.size_cap = Some((pending.item, pending.extent, pending.sizing, size_cap));
+                    let Some(output) = self.output.as_mut() else {
+                        continue;
+                    };
+                    match output.present(cue, Instant::now()) {
+                        Ok(()) => {
+                            let version = slides::slide_version(pending.item, pending.index);
+                            if let Some(version) = version {
+                                if self.labels.len() == LABELS {
+                                    self.labels.pop_front();
+                                }
+                                self.labels.retain(|(v, _)| *v != version);
+                                self.labels.push_back((version, pending.label));
+                            }
+                            self.live_slide = Some(pending.index);
+                            self.live_message = pending.warning;
+                        }
+                        Err(refusal) => {
+                            self.live_message = Some(match refusal {
+                                Refusal::NotConnected => t!(Msg::RefusalNotConnected).into(),
+                                Refusal::WrongExtent => t!(Msg::RefusalWrongExtent).into(),
+                            });
+                        }
+                    }
+                }
+                CueEvent::Failed { error, .. } => {
+                    self.live_message = Some(t!(Msg::CueFailed, error = error.to_string()));
+                }
+            }
+        }
+        changed
+    }
+
+    /// Everything submitted for Live so far is stale (new item, session or
+    /// surface); its results are dropped even if they finish later.
+    pub(crate) fn cancel_cues(&mut self) {
+        self.pending_cues.clear();
+        if let Some(preparer) = &self.cue_preparer {
+            preparer.cancel(Lane::Live);
+        }
+    }
+
+    /// The slide the operator last asked for: the newest cue in preparation,
+    /// else the one on screen.
+    pub(crate) fn requested_slide(&self) -> Option<usize> {
+        self.pending_cues
+            .back()
+            .map(|p| p.index)
+            .or(self.live_slide)
+    }
     /// What the renderer has acknowledged, by label, if anything.
     pub(crate) fn on_screen(&self) -> Option<&str> {
         let LiveState::Confirmed(version) = self.output.as_ref()?.live() else {

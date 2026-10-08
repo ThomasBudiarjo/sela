@@ -3,6 +3,7 @@ use super::*;
 impl Operator {
     pub(crate) fn poll(&mut self, cx: &mut Context<Self>) {
         let mut changed = self.poll_library(cx) | self.poll_images() | self.poll_settings();
+        changed |= self.poll_cues();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());
             if let Status::Connected { extent, .. } = output.status()
@@ -10,7 +11,8 @@ impl Operator {
             {
                 self.output_extent = Some(extent);
                 // Same session, new surface: re-render the current intent.
-                if let Some(index) = self.live_slide {
+                if let Some(index) = self.requested_slide() {
+                    self.cancel_cues();
                     self.send(index);
                 }
                 changed = true;
@@ -225,7 +227,7 @@ impl Operator {
                         version,
                         entry: self.selected_entry,
                         title: song.title.clone(),
-                        slides: slides::slides(&song),
+                        slides: slides::slides(&song).into(),
                         resolved: None,
                     });
                     self.preview_slide = 0;

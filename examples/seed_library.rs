@@ -7,7 +7,7 @@
 //! installed family); `--background-song` seeds a single-song library whose
 //! four slides exercise M1-05h backgrounds: a 4:1 profile image (red, green,
 //! blue bands) with Zoom, the same image with Maintain, a missing image, and
-//! the song master's color.
+//! the song master's color; --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
 use image::ImageEncoder;
 use sela::{
     arrangement::SectionId,
@@ -17,7 +17,7 @@ use sela::{
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--formatted-song] [--background-song]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--formatted-song] [--background-song] [--heavy-song]";
 
 /// `scripts/live-output-windows.py` samples these.
 const BANDS: [[u8; 3]; 3] = [[200, 40, 40], [40, 160, 60], [40, 60, 200]];
@@ -62,12 +62,13 @@ fn backdrop(path: &std::path::Path) -> Result<ImageRef, Box<dyn std::error::Erro
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let mut path = None;
-    let (mut second, mut formatted, mut background) = (false, false, false);
+    let (mut second, mut formatted, mut background, mut heavy) = (false, false, false, false);
     for arg in args {
         match arg {
             flag if flag == "--second-song" => second = true,
             flag if flag == "--formatted-song" => formatted = true,
             flag if flag == "--background-song" => background = true,
+            flag if flag == "--heavy-song" => heavy = true,
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -94,6 +95,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format,
         background: None,
     };
+    if heavy {
+        let line = "Original heavy line of lyrics for the fitting measurement";
+        let sections = (0..100)
+            .map(|i| {
+                section(
+                    &format!("Verse {i}"),
+                    &vec![format!("{line} {i}"); 28].join("\n"),
+                )
+            })
+            .collect();
+        repository
+            .save_song(
+                None,
+                Song {
+                    title: "Heavy Hymn".into(),
+                    authors: String::new(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    variants: Vec::new(),
+                    sections,
+                    master: None,
+                },
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        return Ok(());
+    }
     if background {
         let image = backdrop(path)?;
         let with = |label: &str, background: Option<Background>| Section {

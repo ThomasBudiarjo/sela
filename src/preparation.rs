@@ -174,5 +174,7 @@ impl Drop for Preparer {
     }
 }
 
+pub mod cue;
+
 #[cfg(test)]
 mod tests;

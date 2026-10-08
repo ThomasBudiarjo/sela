@@ -245,6 +245,8 @@ pub enum Msg {
     NoLogoSet,
     PreparingBackground,
     ResolvingFonts,
+    CueBusy,
+    CueFailed,
     RefusalNotConnected,
     RefusalWrongExtent,
     LayerNone,
@@ -628,6 +630,8 @@ impl Msg {
         Msg::NoLogoSet,
         Msg::PreparingBackground,
         Msg::ResolvingFonts,
+        Msg::CueBusy,
+        Msg::CueFailed,
         Msg::RefusalNotConnected,
         Msg::RefusalWrongExtent,
         Msg::LayerNone,
@@ -1012,6 +1016,8 @@ impl Msg {
             Self::NoLogoSet => "No logo set · Media → select an image → Use As Logo Background",
             Self::PreparingBackground => "Preparing background…",
             Self::ResolvingFonts => "Resolving fonts…",
+            Self::CueBusy => "Still preparing earlier slides; try again",
+            Self::CueFailed => "Slide could not be prepared: {error}",
             Self::RefusalNotConnected => "Live output is not connected",
             Self::RefusalWrongExtent => "Output size changed; try again",
             Self::LayerNone => "None",
@@ -1441,6 +1447,8 @@ impl Msg {
             Self::NoLogoSet => "Belum ada logo · Media → pilih gambar → Jadikan Latar Logo",
             Self::PreparingBackground => "Menyiapkan latar…",
             Self::ResolvingFonts => "Menyiapkan fon…",
+            Self::CueBusy => "Masih menyiapkan slide sebelumnya; coba lagi",
+            Self::CueFailed => "Slide tidak dapat disiapkan: {error}",
             Self::RefusalNotConnected => "Output langsung tidak terhubung",
             Self::RefusalWrongExtent => "Ukuran output berubah; coba lagi",
             Self::LayerNone => "Tidak Ada",
@@ -1767,7 +1775,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 374);
+        assert_eq!(Msg::ALL.len(), 376);
     }
 
     #[test]

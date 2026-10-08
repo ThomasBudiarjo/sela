@@ -375,3 +375,51 @@ sent is RenderFailed and stays black; a duplicate of seq 12 returns Applied
 without a redraw; None (14) restores a frame byte-identical to the retained
 text/image capture. The operator side is checked by
 `scripts/live-output-windows.py`; see [operator shell](operator-shell.md#m1-10c--masks-and-picture-logo).
+
+## Cue preparation off the UI thread (M0-05/M0-06 follow-through)
+
+`preparation::cue::CuePreparer` owns one `sela-prepare-cue` thread. The
+operator submits an owned `CueJob` (slide, resolved faces, extent, sizing, the
+already-fitted background); fitting, the normalized size cap and
+`PreparedCue` assembly run on the worker. The UI thread only looks up faces and
+fitted backgrounds (both already produced by their own workers), submits, and
+presents landed cues in `Operator::poll_cues`.
+
+- Live lane: ordered FIFO, `LIVE_DEPTH` (4) cues outstanding (queued, running
+  or finished-but-unpolled). A fifth is refused with `PrepareError::Busy`
+  and the operator shows "Still preparing earlier slides; try again".
+- Preview lane: one slot, newest wins (older job cancelled, counted in
+  `coalesced`). The worker serves Live before Preview. The operator has no
+  preview cue consumer yet; the lane is covered by unit tests.
+- Staleness: each submission has a generation; `cancel(lane)` raises the lane
+  fence, drops queued jobs, flags the running one and discards any result at
+  or below the fence, even if it completes later. The operator cancels on a
+  new live item, Live output off/on, a surface change and font re-resolution.
+- Failure: a failed or panicking build yields `Failed` for that ticket only;
+  the audience keeps its scene and the operator shows
+  "Slide could not be prepared: ...".
+- Safety lane: Black/Clear/Logo never enter this worker. Masks go straight to
+  the output supervisor and the logo uses its own `Preparer` thread, so a heavy
+  cue cannot queue ahead of them.
+- Memory: at most `LIVE_DEPTH` prepared cues plus one preview exist; the size
+  cap is cached per (item, surface, sizing, resolution) on the worker.
+
+### Measurements (2026-10-08, this workstation, debug build)
+
+Workload: 100-slide song, 28 lines per slide, Normalize text size on (each cue
+fits all 100 slides). `cargo test --locked --bin sela heavy_cue -- --ignored
+--nocapture` times the `go_live()` call on the UI thread, five samples, size cap
+cache cleared each time.
+
+| | UI-thread `go_live()` |
+|---|---|
+| Before (cue built inline) | 292, 298, 294, 297, 301 ms |
+| After (worker) | 89.5, 28.3, 6, 4.8, 4.9 µs (first includes starting the worker) |
+
+Native (`scripts/prep-windows.py`, same song, Go Live then Ctrl+B at once,
+2560x1600 audience): release build audience black in 156 ms and the Black
+button lit in 172 ms; main window not hung. The debug build lit the button in
+about 520 ms because painting 100 slide tiles in an unoptimized build takes
+hundreds of ms per frame, unrelated to preparation (audience black still 156 ms).
+Test `black_applies_within_the_bound_while_a_heavy_cue_prepares` measured a
+Black receipt of about 21 ms with a cue held in preparation.

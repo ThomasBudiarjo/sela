@@ -3439,3 +3439,37 @@ PY
   feature, recorded in the summary); mixed-DPI and collapsed-window runs.
 - Next: library-search-box (adds the last VAL-A11Y-001 expectation),
   accessibility-qualification slice (Narrator, M5-03), M1-07 search UI.
+
+### cue-preparation-off-ui-thread — M0-05/M0-06 follow-through — 2026-10-08 (Asia/Jakarta)
+
+- Scope: move `slides::cue()` assembly, size-cap fitting and cue construction
+  off the UI thread onto a bounded `sela-prepare-cue` worker; stale/failed
+  results never replace the scene; Black/Clear/Logo stay independent of it
+  (VAL-PREP-001..005).
+- Decisions: new `src/preparation/cue.rs` (`CuePreparer`, lanes Live ordered
+  FIFO depth 4 with `Busy` backpressure, Preview newest-wins, generation
+  fences). `Item.slides` became `Arc<[Slide]>` so jobs share slide text.
+  `Operator::send` now submits a `CueJob`; `poll_cues` presents landed cues,
+  sets `live_slide`/labels only then, and reports failures in the Live status
+  without touching the audience. Stale = `cancel_cues()` on a new item, Live
+  output toggle, surface change, font re-resolution. Safety lane = masks and
+  the logo bypass this worker entirely (documented in `docs/delivery.md`).
+  New Msg `CueBusy`/`CueFailed` (EN+ID). Background fitting was already on the
+  image worker; face resolution already off-thread; both unchanged.
+- Checks: `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets
+  -- -D warnings`, `cargo test --locked --all-targets -- --test-threads=12`,
+  `python -m ruff check scripts` (all exit 0, results in the final gate run).
+  New tests: 10 in `preparation::cue::tests`, 3 GPUI tests
+  (`black_applies_within_the_bound_while_a_heavy_cue_prepares`,
+  `failed_or_stale_preparation_never_replaces_the_current_scene`,
+  `the_cue_queue_is_bounded_and_refuses_with_a_message`), ignored measurement
+  `heavy_cue_ui_thread_time`. Native: `scripts/prep-windows.py` PASS with the
+  release binary (Black on audience 156 ms, button lit 172 ms); it FAILS the
+  250 ms bound with the debug binary (button lit 516 ms, tile painting cost);
+  `scripts/live-output-windows.py` PASS. Measurements in `docs/delivery.md`.
+- Unexecuted: the native check clicks nothing in the Schedule list (keyboard
+  only); 24 MP image variant (image fitting is on the image worker, prepared
+  before the cue and unchanged); physical multi-monitor qualification.
+- Evidence: `.amp/in/artifacts/prep-windows-release/`, `.amp/in/artifacts/live-output-prep/`.
+- Next: preview cue consumer for the Preview lane when preview thumbnails
+  need prepared cues; release-build paint cost of 100-slide preview (virtualize tiles).

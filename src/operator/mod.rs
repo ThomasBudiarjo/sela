@@ -13,7 +13,10 @@ use sela::{
     images,
     masks::{Layer, Mask, Masks},
     output::{Launch, Refusal, Status, Supervisor},
-    preparation::{PreparationEvent, Preparer},
+    preparation::{
+        PreparationEvent, Preparer,
+        cue::{CueEvent, CueJob, CuePreparer, Lane, Ticket},
+    },
     scene::{ContentVersion, Extent, PrepareError, PreparedBackground, RendererCapabilities},
     schedule::{EntryId, Schedule},
     slides::{self, Sizing, Slide},
@@ -126,10 +129,21 @@ pub(super) struct Item {
     /// The schedule entry this was previewed from; `None` for a library song.
     pub(super) entry: Option<EntryId>,
     pub(super) title: String,
-    pub(super) slides: Vec<Slide>,
+    pub(super) slides: Arc<[Slide]>,
     /// Per-slide face resolution, `None` until the background resolver lands.
     /// Until then the current live scene stays and a deferred cue waits.
     pub(super) resolved: Option<Arc<[fonts::Resolved]>>,
+}
+
+/// A live cue being prepared off the UI thread.
+pub(super) struct PendingCue {
+    pub(super) ticket: Ticket,
+    pub(super) index: usize,
+    pub(super) item: Version,
+    pub(super) sizing: Sizing,
+    pub(super) extent: Extent,
+    pub(super) label: String,
+    pub(super) warning: Option<String>,
 }
 
 pub(crate) enum Request {
@@ -192,6 +206,11 @@ pub(super) struct Operator {
     /// Not persisted yet.
     pub(super) sizing: Sizing,
     pub(super) size_cap: Option<(Version, Extent, Sizing, Option<u16>)>,
+    /// Builds cues on its own thread; created on first use.
+    pub(super) cue_preparer: Option<CuePreparer>,
+    /// Live cues submitted to cue_preparer, oldest first, bounded by the
+    /// preparer's live depth. Their slide and label apply only on landing.
+    pub(super) pending_cues: VecDeque<PendingCue>,
     pub(super) schedule: Schedule,
     pub(super) selected_entry: Option<EntryId>,
     schedule_rows: Vec<FocusHandle>,
@@ -383,6 +402,8 @@ impl Operator {
             media_message,
             sizing: Sizing::default(),
             size_cap: None,
+            cue_preparer: None,
+            pending_cues: VecDeque::new(),
             schedule: Schedule::default(),
             selected_entry: None,
             schedule_rows: Vec::new(),

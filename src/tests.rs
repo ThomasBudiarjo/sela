@@ -2827,3 +2827,236 @@ mod menu_bar {
         assert_eq!(operator.read_with(&cx, |o, _| o.bar_menu), None);
     }
 }
+
+/// A cue builder the test releases one token at a time; it also records which
+/// thread assembled each cue.
+fn gated_preparer(
+    threads: Arc<std::sync::Mutex<Vec<std::thread::ThreadId>>>,
+) -> (
+    std::sync::mpsc::Sender<()>,
+    sela::preparation::cue::CuePreparer,
+) {
+    use sela::preparation::cue::{Built, CuePreparer};
+    let (open, gate) = std::sync::mpsc::channel::<()>();
+    let preparer = CuePreparer::with_builder(move |job, _| {
+        threads.lock().unwrap().push(std::thread::current().id());
+        gate.recv_timeout(Duration::from_secs(10)).unwrap();
+        sela::slides::cue(
+            job.version,
+            &job.slides[job.index],
+            &job.resolved[job.index],
+            job.extent,
+            job.caps,
+            None,
+            job.background,
+        )
+        .map(|cue| Built {
+            cue,
+            size_cap: None,
+        })
+    })
+    .unwrap();
+    (open, preparer)
+}
+
+fn live_fixture(
+    cx: &mut TestAppContext,
+    dir: &tempfile::TempDir,
+) -> (VisualTestContext, Entity<Operator>) {
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_song(dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "faces resolved", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.slides.len() == 3 && p.resolved.is_some())
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    (cx, operator)
+}
+
+#[gpui::test]
+fn black_applies_within_the_bound_while_a_heavy_cue_prepares(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = live_fixture(cx, &dir);
+    let threads = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (open, preparer) = gated_preparer(threads.clone());
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(preparer));
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+
+    click(&mut cx, "go-live");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.pending_cues.len(), 1);
+        assert_eq!(submitted(o), sent, "the cue is not built or sent yet");
+        assert_eq!(o.live_slide, None);
+    });
+    let start = Instant::now();
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black acknowledged", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+    let took = start.elapsed();
+    eprintln!("Black receipt while a cue prepares: {took:?}");
+    assert!(took < Duration::from_millis(100), "Black took {took:?}");
+    assert_eq!(operator.read_with(&cx, |o, _| o.pending_cues.len()), 1);
+
+    open.send(()).unwrap();
+    settle(&mut cx, &operator, "cue on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    let recorded = threads.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 1);
+    assert_ne!(recorded[0], std::thread::current().id());
+    assert_eq!(
+        operator.read_with(&cx, |o, _| confirmed_mask(o)),
+        Some(Layer::Black),
+        "the mask stays over the new scene"
+    );
+}
+
+#[gpui::test]
+fn failed_or_stale_preparation_never_replaces_the_current_scene(cx: &mut TestAppContext) {
+    use sela::preparation::cue::{Built, CuePreparer};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = live_fixture(cx, &dir);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+
+    // Failure: the audience keeps the verse and the operator is told.
+    let failing = CuePreparer::with_builder(|_, _| -> Result<Built, _> {
+        Err(sela::scene::PrepareError::InvalidScene)
+    })
+    .unwrap();
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(failing));
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+    click(&mut cx, "live-next");
+    settle(&mut cx, &operator, "failure reported", |o| {
+        o.live_message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Slide could not be prepared"))
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(submitted(o), sent);
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
+        assert_eq!(o.live_slide, Some(0));
+        assert!(o.pending_cues.is_empty());
+    });
+
+    // Stale: a request superseded (surface or session change) is dropped even
+    // though its build completes afterwards.
+    let (open, preparer) = gated_preparer(Default::default());
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(preparer));
+    click(&mut cx, "live-next");
+    operator.update(&mut cx, |o, _| {
+        assert_eq!(o.pending_cues.len(), 1);
+        o.cancel_cues();
+        assert!(o.pending_cues.is_empty());
+    });
+    open.send(()).unwrap();
+    for _ in 0..40 {
+        operator.update(&mut cx, |o, cx| o.poll(cx));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(
+            submitted(o),
+            sent,
+            "the stale cue never reaches the audience"
+        );
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
+        assert_eq!(o.live_slide, Some(0));
+    });
+}
+
+#[gpui::test]
+fn the_cue_queue_is_bounded_and_refuses_with_a_message(cx: &mut TestAppContext) {
+    use sela::preparation::cue::LIVE_DEPTH;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = live_fixture(cx, &dir);
+    let (open, preparer) = gated_preparer(Default::default());
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(preparer));
+    click(&mut cx, "go-live");
+    for _ in 0..200 {
+        operator.update(&mut cx, |o, _| o.send(1));
+        assert!(operator.read_with(&cx, |o, _| o.pending_cues.len()) <= LIVE_DEPTH);
+    }
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.pending_cues.len(), LIVE_DEPTH);
+        assert_eq!(
+            o.live_message.as_deref(),
+            Some("Still preparing earlier slides; try again")
+        );
+    });
+    for _ in 0..LIVE_DEPTH {
+        open.send(()).unwrap();
+    }
+    settle(&mut cx, &operator, "queue drained", |o| {
+        o.pending_cues.is_empty() && o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+    // The final selection is still accepted after the burst.
+    open.send(()).unwrap();
+    operator.update(&mut cx, |o, _| o.send(2));
+    settle(&mut cx, &operator, "bridge on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Bridge")
+    });
+}
+fn library_with_heavy_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("library.sqlite");
+    let line = "Original heavy line of lyrics for the fitting measurement";
+    let sections = (0..100)
+        .map(|i| Section {
+            id: SectionId::allocate(),
+            label: format!("Verse {i}"),
+            lyrics: vec![format!("{line} {i}"); 28].join("\n"),
+            format: Default::default(),
+            background: None,
+        })
+        .collect();
+    Repository::open(&path)
+        .unwrap()
+        .save_song(
+            None,
+            Song {
+                title: "Heavy Hymn".into(),
+                authors: String::new(),
+                copyright: String::new(),
+                license: String::new(),
+                variants: Vec::new(),
+                sections,
+                master: None,
+            },
+        )
+        .unwrap();
+    path
+}
+
+/// Measurement, not a gate: UI-thread time of one Go Live on a 100-slide song
+/// with normalized sizing (`cargo test --release heavy_cue -- --ignored --nocapture`).
+#[gpui::test]
+#[ignore = "measurement recorded in docs/delivery.md"]
+fn heavy_cue_ui_thread_time(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_heavy_song(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "faces", |o| {
+        o.preview.as_ref().is_some_and(|p| p.resolved.is_some())
+    });
+    click(&mut cx, "normalize-text");
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        operator.update(&mut cx, |o, _| o.size_cap = None);
+        let start = Instant::now();
+        operator.update(&mut cx, |o, _| o.go_live());
+        samples.push(start.elapsed());
+        settle(&mut cx, &operator, "on screen", |o| o.on_screen().is_some());
+    }
+    eprintln!("go_live UI-thread ms: {samples:?}");
+}
