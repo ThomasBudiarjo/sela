@@ -916,7 +916,26 @@ instructions and the work log for precise evidence and limits.
   uninstall that preserves user data unless explicitly requested otherwise.
 - [ ] Label controls, expose focus/state where GPUI/platform supports it, and test
   keyboard-only operation and readable high-DPI sizing.
+  Slice **M1-16-a11y** (implemented-unqualified, 2026-10-08): stable element
+  ids plus AccessKit roles and localized names on all main-window critical
+  controls (toolbar incl. Go Live/Previous/Next, Black/Clear/Logo with
+  ToggleState, Live output On/Off, Resources TabList/tabs, Songs/Schedule/
+  saved-schedule/image Lists with ListItem rows reporting selected and
+  position, Preview/Live slide tiles, menu bar/popups/items with MenuBar/
+  Menu/MenuItem roles, Expanded and disabled state, the New/song/item/image
+  popup Menus); documented 31-stop Tab order (25 tabs to the first song,
+  unchanged); Songs-row Up/Down selection movement. Verified natively with
+  `scripts/uia-names-windows.ps1` (UIA tree dump) and
+  `scripts/a11y-windows.py` (names in EN/ID/restored EN, UIA toggles, list
+  selection, full Tab walk with focus-fill probes and audience-verified
+  Enter/Space activation) — see operator-shell.md M1-16-a11y. Open: high-DPI
+  sizing sweep, library search box exposure (pending feature).
 - [ ] Record screen-reader/native accessibility gaps for M5-03 rather than hiding them.
+  2026-10-08: recorded in operator-shell.md M1-16-a11y — GPUI rev `a846890`
+  has no `aria_disabled` (worked around via synthetic node mutation), no
+  WM_MOUSELEAVE on Windows (hover can stick after scripted pointer moves),
+  and hover paint wins over the focus fill; Narrator qualification and the
+  search-box gap stay with M5-03.
 
 Acceptance: another Windows operator can install and rehearse M1 from instructions.
 

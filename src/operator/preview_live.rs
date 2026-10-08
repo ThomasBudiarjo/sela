@@ -56,6 +56,7 @@ pub(crate) fn slide_pane(
     tiles: Option<Vec<gpui::Stateful<gpui::Div>>>,
 ) -> impl IntoElement {
     let empty = tiles.as_ref().is_none_or(Vec::is_empty);
+    let list_name = title.clone();
     div()
         .debug_selector(|| id.into())
         .w(px(width))
@@ -96,6 +97,9 @@ pub(crate) fn slide_pane(
         .child(
             div()
                 .id(id)
+                .role(Role::List)
+                .aria_label(list_name)
+                .accessibility_id(id)
                 .flex_1()
                 .min_h_0()
                 .p_2()
@@ -645,6 +649,10 @@ impl Operator {
                     tile(slide, index, if selected { ACCENT } else { CANVAS })
                         .id(("preview-slide", index))
                         .debug_selector(move || format!("preview-slide-{index}"))
+                        .role(Role::ListItem)
+                        .aria_label(format!("{} · {}", index + 1, slide_name(index, slide)))
+                        .aria_selected(selected)
+                        .accessibility_id(format!("preview-slide-{index}"))
                         .track_focus(&self.slide_rows[index])
                         .key_context("SelaControl")
                         .focus(|d| d.bg(rgb(CANVAS_FOCUS)))
@@ -784,6 +792,10 @@ impl Operator {
                     tile(slide, index, border)
                         .id(("live-slide", index))
                         .debug_selector(move || format!("live-slide-{index}"))
+                        .role(Role::ListItem)
+                        .aria_label(format!("{} · {}", index + 1, slide_name(index, slide)))
+                        .aria_selected(Some(index) == confirmed)
+                        .accessibility_id(format!("live-slide-{index}"))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                             if matches!(event, gpui::ClickEvent::Keyboard(_))

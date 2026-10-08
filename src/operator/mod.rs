@@ -3,7 +3,7 @@ use crate::text_input::{self, TextInput};
 use crate::ui::theme::*;
 use gpui::{
     CursorStyle, Empty, Entity, Focusable, FontWeight, MouseButton, PathPromptOptions, Pixels,
-    Point, SharedString, Subscription, Task, anchored, deferred, point,
+    Point, Role, SharedString, Subscription, Task, Toggled, anchored, deferred, point,
 };
 use sela::{
     background::{self, Plan},
@@ -42,7 +42,7 @@ mod schedule;
 pub(super) use controls::Control;
 use controls::{
     ControlSet, DIALOG_TAB_INDEX, IMAGE_TAB_INDEX, SAVED_TAB_INDEX, SCHEDULE_TAB_INDEX,
-    SLIDE_TAB_INDEX, SONG_TAB_INDEX,
+    SLIDE_TAB_INDEX, SONG_TAB_INDEX, mark_disabled,
 };
 pub(super) use dialogs::{Dialog, Then};
 pub(crate) use menus::{BarMenu, TopMenu};
@@ -55,7 +55,7 @@ use menus::{
 pub(super) use menus::{SONG_MENU, SongItem, TOP_MENUS};
 use options::SettingsState;
 pub(super) use options::{MonitorSlot, SettingsConfig};
-use resources::{TAB_IDS, TABS};
+use resources::{NextSongRow, PreviousSongRow, TAB_IDS, TABS};
 
 const POLL: Duration = Duration::from_millis(16);
 const LABELS: usize = 8;
@@ -293,6 +293,8 @@ impl Operator {
         cx.bind_keys([
             KeyBinding::new("shift-f10", OpenSongMenu, Some("SelaSongRow")),
             KeyBinding::new("menu", OpenSongMenu, Some("SelaSongRow")),
+            KeyBinding::new("down", NextSongRow, Some("SelaSongRow")),
+            KeyBinding::new("up", PreviousSongRow, Some("SelaSongRow")),
             KeyBinding::new("down", MenuNext, Some("SelaSongMenu")),
             KeyBinding::new("up", MenuPrevious, Some("SelaSongMenu")),
             KeyBinding::new("enter", MenuConfirm, Some("SelaSongMenu")),

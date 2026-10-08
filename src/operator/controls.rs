@@ -138,6 +138,37 @@ impl Control {
             _ => 2 * (self.index() as isize + 1),
         }
     }
+
+    /// AccessKit role exposed to UI Automation (zed rev a846890
+    /// gpui/src/elements/div.rs `StatefulInteractiveElement::role`).
+    pub(crate) fn role(self) -> Role {
+        if self.tab_number().is_some() {
+            return Role::Tab;
+        }
+        match self {
+            Self::NewSongItem | Self::NewSchedule | Self::ItemMenuRemove | Self::ImageMenuLogo => {
+                Role::MenuItem
+            }
+            _ => Role::Button,
+        }
+    }
+}
+
+/// The accessibility toggle state of a mask button follows the lit
+/// indicator: lit means on, a pending request is mixed (VAL-A11Y-002).
+pub(crate) fn mask_toggled(state: Indicator) -> Toggled {
+    match state {
+        Indicator::On => Toggled::True,
+        Indicator::Pending => Toggled::Mixed,
+        Indicator::Off => Toggled::False,
+    }
+}
+
+/// Expose a visually disabled control as disabled to assistive technology.
+/// GPUI's builder has no `disabled` setter at this rev, so the flag is
+/// written onto the element's accessibility node directly.
+pub(crate) fn mark_disabled(element: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
+    element.a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
 }
 
 /// One focus handle per `Control`.
@@ -332,7 +363,11 @@ impl Operator {
         label: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        chrome_button(id, label)
+        let label = label.into();
+        chrome_button(id, label.clone())
+            .role(control.role())
+            .aria_label(label)
+            .accessibility_id(id)
             .track_focus(&self.controls[control])
             .key_context("SelaControl")
             // Background distinguishes keyboard focus from the selected-tab underline.
@@ -365,6 +400,7 @@ impl Operator {
         let state = self.indicator(mask);
         let disabled = mask == Mask::Logo && self.logo.is_none() && !self.masks.is_on(mask);
         self.button(control, id, label, cx)
+            .aria_toggled(mask_toggled(state))
             .border_1()
             .border_color(rgb(if state == Indicator::Pending {
                 SENDING
@@ -376,6 +412,45 @@ impl Operator {
                     .text_color(rgb(ON_SCREEN))
                     .font_weight(FontWeight::MEDIUM)
             })
-            .when(disabled, |d| d.text_color(rgb(DISABLED)))
+            .when(disabled, |d| mark_disabled(d).text_color(rgb(DISABLED)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_control_has_an_exposed_role() {
+        for control in Control::ALL {
+            assert!(
+                matches!(control.role(), Role::Button | Role::Tab | Role::MenuItem),
+                "{control:?} has no accessibility role"
+            );
+        }
+        for tab in Control::TABS {
+            assert_eq!(tab.role(), Role::Tab, "{tab:?} is a resource tab");
+        }
+        for item in [
+            Control::NewSongItem,
+            Control::NewSchedule,
+            Control::ItemMenuRemove,
+            Control::ImageMenuLogo,
+        ] {
+            assert_eq!(
+                item.role(),
+                Role::MenuItem,
+                "{item:?} lives in a popup menu"
+            );
+        }
+        assert_eq!(Control::GoLive.role(), Role::Button);
+        assert_eq!(Control::LiveOutput.role(), Role::Button);
+    }
+
+    #[test]
+    fn mask_toggle_state_matches_the_lit_indicator() {
+        assert_eq!(mask_toggled(Indicator::On), Toggled::True);
+        assert_eq!(mask_toggled(Indicator::Pending), Toggled::Mixed);
+        assert_eq!(mask_toggled(Indicator::Off), Toggled::False);
     }
 }

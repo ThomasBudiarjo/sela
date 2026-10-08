@@ -1438,6 +1438,76 @@ fn drag_songs_into_the_schedule_reorder_and_cancel(cx: &mut TestAppContext) {
     );
 }
 
+/// VAL-A11Y-005: with focus in the Songs list, Down/Up move the song
+/// selection (and preview), never the schedule selection; the same keys in
+/// the Schedule list move the schedule selection. Sela keyboard policy,
+/// provisional (EasyWorship unobserved).
+#[gpui::test]
+fn song_row_arrows_move_the_song_selection_not_the_schedule(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_songs(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    let canticle = song_row(&mut cx, &operator, SECOND_SONG);
+    let selected_title = |o: &Operator| {
+        o.selected_song
+            .and_then(|v| o.catalog.iter().find(|(c, _)| *c == v))
+            .map(|(_, t)| t.clone())
+    };
+    // The catalog orders rows by version id, so derive them by position.
+    let (first, second) =
+        operator.read_with(&cx, |o, _| (o.catalog[0].1.clone(), o.catalog[1].1.clone()));
+
+    click(&mut cx, "song-0");
+    // Up at the first row stops at the start.
+    cx.simulate_keystrokes("up");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| selected_title(o)),
+        Some(first.clone())
+    );
+    cx.simulate_keystrokes("down");
+    let wanted = second.clone();
+    settle(&mut cx, &operator, "second song previewed", |o| {
+        previewed(o) == Some((None, wanted.as_str()))
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(selected_title(o), Some(second.clone()));
+        assert_eq!(
+            o.selected_entry, None,
+            "Down/Up on a song row must not select a schedule entry"
+        );
+    });
+    // Down past the last row stops at the end; Up walks back to the start.
+    cx.simulate_keystrokes("down");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| selected_title(o)),
+        Some(second.clone())
+    );
+    cx.simulate_keystrokes("up");
+    let wanted = first.clone();
+    settle(&mut cx, &operator, "first song previewed again", |o| {
+        previewed(o) == Some((None, wanted.as_str()))
+    });
+
+    // The schedule keeps its own arrows: focus a schedule row, then Down.
+    add_song(&mut cx, &operator, "Signal Hymn");
+    add_song(&mut cx, &operator, SECOND_SONG);
+    click(&mut cx, canticle);
+    let entries: Vec<_> = operator.read_with(&cx, |o, _| {
+        o.schedule.entries().iter().map(|e| e.id).collect()
+    });
+    click(&mut cx, "schedule-item-0");
+    cx.simulate_keystrokes("down");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.selected_entry, Some(entries[1]));
+        assert_eq!(
+            selected_title(o),
+            Some(SECOND_SONG.to_owned()),
+            "schedule selection pins its entry's song"
+        );
+    });
+}
+
 #[gpui::test]
 fn live_item_identity_survives_reorder_duplicates_and_removal(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();

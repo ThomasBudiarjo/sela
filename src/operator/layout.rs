@@ -142,6 +142,14 @@ impl Render for Operator {
                 this.step_schedule(false);
                 cx.notify();
             }))
+            // Deeper than the SelaShow bindings: Up/Down with a Songs row
+            // focused move the song selection, never the schedule (M1-16).
+            .on_action(cx.listener(|this, _: &NextSongRow, _, cx| {
+                this.step_song(true, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PreviousSongRow, _, cx| {
+                this.step_song(false, cx);
+            }))
             .on_action(cx.listener(|this, _: &RemoveScheduleItem, _, cx| {
                 this.remove_selected();
                 cx.notify();
@@ -255,6 +263,11 @@ impl Render for Operator {
                     ))
                     .child(
                         self.button(Control::LiveOutput, "live-output", live_label, cx)
+                            .aria_toggled(if self.output.is_some() {
+                                Toggled::True
+                            } else {
+                                Toggled::False
+                            })
                             .when(self.output.is_some(), |d| d.text_color(rgb(ON_SCREEN))),
                     ),
             )
@@ -360,6 +373,10 @@ impl Render for Operator {
                         .overflow_hidden()
                         .child(
                             div()
+                                .id("resources-tabs")
+                                .role(Role::TabList)
+                                .aria_label(t!(Msg::ResourcesHeader))
+                                .accessibility_id("resources-tabs")
                                 .h(px(TAB_BAR_H))
                                 .flex_shrink_0()
                                 .flex()
@@ -369,6 +386,7 @@ impl Render for Operator {
                                 .border_color(rgb(BORDER))
                                 .children(TABS.iter().enumerate().map(|(index, &msg)| {
                                     self.button(Control::TABS[index], TAB_IDS[index], t!(msg), cx)
+                                        .aria_selected(self.tab == index)
                                         .h_full()
                                         .rounded_none()
                                         .border_b_2()
@@ -449,7 +467,7 @@ impl Render for Operator {
                                 )
                                 .when(
                                     self.selected_song.is_none() || self.selected_entry.is_some(),
-                                    |d| d.text_color(rgb(DISABLED)),
+                                    |d| mark_disabled(d).text_color(rgb(DISABLED)),
                                 ),
                             )
                             .children(self.song_message.clone().map(|(message, failed)| {
@@ -502,7 +520,7 @@ impl Render for Operator {
                                     cx,
                                 )
                                 .when(self.selected_image.is_none(), |d| {
-                                    d.text_color(rgb(DISABLED))
+                                    mark_disabled(d).text_color(rgb(DISABLED))
                                 }),
                             )
                             .children(self.media_message.clone().map(|message| {
@@ -530,6 +548,10 @@ impl Render for Operator {
                 |d, position| {
                     d.child(
                         div()
+                            .id("image-menu-popup")
+                            .role(Role::Menu)
+                            .aria_label(t!(Msg::A11yImageMenu))
+                            .accessibility_id("image-menu-popup")
                             .occlude()
                             .absolute()
                             .left(position.x)
@@ -554,6 +576,10 @@ impl Render for Operator {
             .when(self.new_menu, |d| {
                 d.child(
                     div()
+                        .id("new-menu-popup")
+                        .role(Role::Menu)
+                        .aria_label(t!(Msg::A11yNewMenu))
+                        .accessibility_id("new-menu-popup")
                         .occlude()
                         .absolute()
                         .top(px(MENU_BAR_H + TOP_BAR_H))
@@ -579,6 +605,10 @@ impl Render for Operator {
             .when_some(self.item_menu, |d, (_, position)| {
                 d.child(
                     div()
+                        .id("item-menu-popup")
+                        .role(Role::Menu)
+                        .aria_label(t!(Msg::A11yScheduleItemMenu))
+                        .accessibility_id("item-menu-popup")
                         .occlude()
                         .absolute()
                         .left(position.x)

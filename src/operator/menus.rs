@@ -195,6 +195,10 @@ impl Operator {
                 div()
                     .id(item.id())
                     .debug_selector(move || item.id().into())
+                    .role(Role::MenuItem)
+                    .aria_label(item.label())
+                    .accessibility_id(item.id())
+                    .when(!enabled, mark_disabled)
                     .h(px(CONTROL_H))
                     .mx_1()
                     .px_3()
@@ -224,6 +228,9 @@ impl Operator {
                         div()
                             .id("song-menu")
                             .debug_selector(|| "song-menu".into())
+                            .role(Role::Menu)
+                            .aria_label(t!(Msg::A11ySongMenu))
+                            .accessibility_id("song-menu")
                             .track_focus(&self.song_menu_focus)
                             .key_context("SelaSongMenu")
                             .occlude()
@@ -509,6 +516,19 @@ impl BarItem {
             _ => false,
         }
     }
+
+    /// Items EW draws with a checkmark column; exposed as checkable menu
+    /// items to assistive technology.
+    fn checkable(self) -> bool {
+        matches!(
+            self,
+            BarItem::ShowLiveOutput
+                | BarItem::ProfileDefault
+                | BarItem::ViewPreviewLive
+                | BarItem::ViewCombined
+                | BarItem::ViewResourcePreview
+        )
+    }
 }
 
 // EW8-OBS-053 (File/Edit/Live) and the menu-p/v/h.png captures; separators
@@ -771,6 +791,10 @@ impl Operator {
                 div()
                     .id(top.id())
                     .debug_selector(move || top.id().into())
+                    .role(Role::MenuItem)
+                    .aria_label(top.label())
+                    .aria_expanded(is_open)
+                    .accessibility_id(top.id())
                     .h(px(CONTROL_H))
                     .px_2()
                     .flex()
@@ -821,6 +845,10 @@ impl Operator {
             .on_children_prepainted(move |child_bounds, _, _| {
                 *bounds.borrow_mut() = child_bounds.into_iter().collect();
             })
+            .id("menu-bar")
+            .role(Role::MenuBar)
+            .aria_label(t!(Msg::A11yMenuBar))
+            .accessibility_id("menu-bar")
     }
 
     fn bar_row(&self, item: BarItem, index: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -835,6 +863,21 @@ impl Operator {
         div()
             .id(item.id())
             .debug_selector(move || item.id().into())
+            .role(if item.checkable() {
+                Role::MenuItemCheckBox
+            } else {
+                Role::MenuItem
+            })
+            .aria_label(label)
+            .accessibility_id(item.id())
+            .when(!enabled, mark_disabled)
+            .when(item.checkable(), |d| {
+                d.aria_toggled(if checked {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+            })
             .h(px(CONTROL_H))
             .mx_1()
             .px_2()
@@ -931,6 +974,9 @@ impl Operator {
                         div()
                             .id("bar-menu")
                             .debug_selector(|| "bar-menu".into())
+                            .role(Role::Menu)
+                            .aria_label(menu.top.label())
+                            .accessibility_id("bar-menu")
                             .track_focus(&self.bar_menu_focus)
                             .key_context("SelaMenuBar")
                             .occlude()

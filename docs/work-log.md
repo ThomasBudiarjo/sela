@@ -6,6 +6,16 @@ include timezone for timed hardware/rehearsal evidence.
 
 ## Current state
 
+- **Accessibility basics (M1-16-a11y, 2026-10-08):** every critical
+  main-window control exposes a stable element id, an AccessKit role and a
+  localized (EN/ID) name through UI Automation; Black/Clear/Logo and Live
+  output report ToggleState, tabs/rows/tiles report selected, menus report
+  Expanded and disabled state. The 31-stop Tab order is documented
+  (25 tabs to the first song row, unchanged) and walked natively; Songs-row
+  Down/Up moves the song selection. `scripts/uia-names-windows.ps1` dumps
+  the UIA tree; `scripts/a11y-windows.py` PASSES the full VAL-A11Y-001…005
+  native check. **Implemented-unqualified** (Narrator qualification and the
+  pending library search box remain; see operator-shell.md M1-16-a11y).
 - **Main menu bar (M1-02d, 2026-10-08):** the operator window has the
   observed EasyWorship menu bar (File, Edit, Live, Profiles, View, Help)
   above the toolbar. Menus open by Alt+mnemonic and mouse (hover switches,
@@ -237,7 +247,7 @@ remain `planned`. Update the current state above when switching work.
 | M1-09 | active | M1-09a implemented-unqualified: framework-free `schedule` (session-local entry IDs pinning song revisions, 32-item cap, move/remove/neighbor, dirty tracking), Schedule pane with drag/drop, save/open dialogs and unsaved guard, Live identity by entry, renderer-acknowledged Live marker; Windows native check passed. Open: EW schedule observation, schedule item types beyond songs, persisted item IDs, multi-select, qualification. |
 | M1-10 | active | M1-10a: production `sela --audience` renderer mode (moved compositor/text, centered text, settled surface-extent frame, non-activating monitor-covering window, scene retained after controller loss), Windows DX12 smoke on two monitors. M1-10b: operator output supervisor, Songs list, section slides in Preview, Go Live/double-click, Previous/Next, Live shows renderer-acknowledged slide, Windows keyboard-driven native check. M1-10c (with M0-08a): operator Logo/Black/Clear toggles with acknowledged indicators, picture logo from the profile image folder, show-control key context, Windows native checks passed. M1-09a schedule items now exist. Open: preparation off the UI thread, reference-observed behavior (EW8-OBS-020), hotplug, latency, physical qualification. |
 | M1-11 | active | M1-11a implemented-unqualified: hardened PNG/JPEG import (8 MiB, 16384 px, 64 MiB decoded, header bomb guard, Exif orientation applied in the shared decoder, ICC ignored, APNG refused, identical re-import reused, same name different bytes numbered, cancellable temporary-and-link copy, side-specific errors), `preflight::check`/`Worker` (missing/changed images, missing fonts, logo) and hash-checked `images::relink`. Open: M1-11b operator UI, thumbnails pipeline, EW media observation, Linux/macOS and native checks. |
-| M1-16 | implemented-unqualified | Developer-local Linux install prerequisite; settings slice (versioned store + Options dialog with Output monitor) implemented-unqualified; language slice (i18n tables, all operator/editor strings migrated, Options language radio, runtime switch + persistence, native check) implemented-unqualified; Windows installer/accessibility and dependency gates remain open. |
+| M1-16 | implemented-unqualified | Developer-local Linux install prerequisite; settings slice (versioned store + Options dialog with Output monitor) implemented-unqualified; language slice (i18n tables, all operator/editor strings migrated, Options language radio, runtime switch + persistence, native check) implemented-unqualified; a11y slice (AccessKit ids/roles/localized names, toggle/selected/expanded/disabled states, documented Tab order, Songs-row arrows, UIA dump + VAL-A11Y native scripts pass) implemented-unqualified; Windows installer, Narrator qualification and dependency gates remain open. |
 
 ## Session records
 
@@ -3382,3 +3392,50 @@ PY
 - Next: enable the disabled items with their features (Open Recent, Save
   As…, clipboard Edit items, Go Back, Profiles/View/Help), M1-07 search box,
   remaining Main Output tabs.
+
+### M1-16-a11y — AccessKit roles/names and UIA verification — 2026-10-08 (Asia/Jakarta)
+
+- Scope: stable element ids, AccessKit roles and localized names for every
+  critical main-window control (menu bar/menus/items, toolbar, masks, Live
+  output, Resources tabs, Songs/Schedule/saved-schedule/Media lists and
+  rows, Preview/Live slide tiles, popups); ToggleState for Black/Clear/Logo
+  (Mixed while pending) and Live output; selected/expanded/disabled states;
+  a documented keyboard Tab order; Songs-row Down/Up selection movement;
+  `scripts/uia-names-windows.ps1` (read-only UIA tree dump) and
+  `scripts/a11y-windows.py` (VAL-A11Y-001…005 native driver).
+- Decisions/deviations: the pinned GPUI rev (`a846890`) has `role`,
+  `aria_label`, `aria_toggled`, `aria_selected`, `aria_expanded` but no
+  `aria_disabled` — disabled state is set through
+  `a11y_synthetic_children(|b| b.parent_node().set_disabled())`
+  (`Control::mark_disabled`). GPUI's Windows backend never receives
+  `WM_MOUSELEAVE`, so the native driver parks the pointer over inert
+  in-window space before focus-fill probes (a stuck hover fill otherwise
+  masks the focus fill; paint order makes hover win over focus — recorded
+  as policy). The song catalog order is randomized per run (sorted by
+  generated version id), so the new GPUI test derives expectations from the
+  catalog instead of assuming titles.
+- Upstream paths consulted: `crates/gpui/src/elements/div.rs`
+  (focus/in_focus/hover style application order, track_focus a11y
+  registration), `crates/gpui/src/accessibility.rs`, vendored
+  `accesskit`/`accesskit_windows` 0.24 mappings (Role→ControlType, toggled,
+  selected, expanded, disabled).
+- Checks (all exit 0): `cargo fmt --all -- --check`; `cargo clippy --locked
+  --all-targets -- -D warnings`; `cargo test --locked --all-targets`
+  (327 tests: new `controls.rs` unit tests for role/toggle mapping, new
+  GPUI test `song_row_arrows_move_the_song_selection_not_the_schedule`);
+  `python -m ruff check scripts/a11y-windows.py`. Native:
+  `scripts/a11y-windows.py` **PASS** — all expected id+role+name rows in
+  English, Indonesian and restored English; File menu popup named items,
+  disabled items and Expanded state; mask toggles in UIA with audience
+  pixel proof; list selection reporting in both lists; a full 31-stop
+  keyboard-only Tab walk with focus-fill probes, Enter/Space activation of
+  Go Live/Previous/Next/Black/Clear/Logo verified on the audience, and a
+  Shift+Tab back-step (`.amp/in/artifacts/a11y-windows/`, captures viewed).
+  `uia-names-windows.ps1` smoke-dumped the live tree (menu, toggles,
+  DISABLED flags, selected tabs/rows). Baselines live-output-windows,
+  schedule-windows, menu-bar-windows and i18n-windows re-run and PASS.
+- Unexecuted: Narrator/screen-reader qualification (M5-03); the library
+  search box Edit expectation (blocked on the pending library-search-box
+  feature, recorded in the summary); mixed-DPI and collapsed-window runs.
+- Next: library-search-box (adds the last VAL-A11Y-001 expectation),
+  accessibility-qualification slice (Narrator, M5-03), M1-07 search UI.

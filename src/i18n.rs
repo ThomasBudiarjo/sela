@@ -99,6 +99,12 @@ pub enum Msg {
     TabMedia,
     TabPresentations,
     TabThemes,
+    // Accessible names of containers with no visible caption (M1-16 a11y).
+    A11yMenuBar,
+    A11yNewMenu,
+    A11ySongMenu,
+    A11yScheduleItemMenu,
+    A11yImageMenu,
     // Songs context menu (EW8-OBS-021 order).
     MenuNewSong,
     MenuEditSong,
@@ -486,6 +492,11 @@ impl Msg {
         Msg::TabMedia,
         Msg::TabPresentations,
         Msg::TabThemes,
+        Msg::A11yMenuBar,
+        Msg::A11yNewMenu,
+        Msg::A11ySongMenu,
+        Msg::A11yScheduleItemMenu,
+        Msg::A11yImageMenu,
         Msg::MenuNewSong,
         Msg::MenuEditSong,
         Msg::MenuDelete,
@@ -859,6 +870,11 @@ impl Msg {
             Self::TabMedia => "Media",
             Self::TabPresentations => "Presentations",
             Self::TabThemes => "Themes",
+            Self::A11yMenuBar => "Menu bar",
+            Self::A11yNewMenu => "New menu",
+            Self::A11ySongMenu => "Song actions",
+            Self::A11yScheduleItemMenu => "Schedule item actions",
+            Self::A11yImageMenu => "Image actions",
             Self::MenuNewSong => "New Song…",
             Self::MenuEditSong => "Edit Song…",
             Self::MenuDelete => "Delete",
@@ -1279,6 +1295,11 @@ impl Msg {
             Self::TabMedia => "Media",
             Self::TabPresentations => "Presentasi",
             Self::TabThemes => "Tema",
+            Self::A11yMenuBar => "Bilah menu",
+            Self::A11yNewMenu => "Menu baru",
+            Self::A11ySongMenu => "Aksi lagu",
+            Self::A11yScheduleItemMenu => "Aksi item jadwal",
+            Self::A11yImageMenu => "Aksi gambar",
             Self::MenuNewSong => "Lagu Baru…",
             Self::MenuEditSong => "Ubah Lagu…",
             Self::MenuDelete => "Hapus",
@@ -1746,7 +1767,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 369);
+        assert_eq!(Msg::ALL.len(), 374);
     }
 
     #[test]

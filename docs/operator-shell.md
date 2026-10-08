@@ -589,3 +589,60 @@ the first-item highlight match the reference.
 Open: EW confirmation of the unobserved mnemonics and of File › New ▸'s
 submenu; screen-reader exposure of the bar; collapsed-window menu captures;
 the disabled items become enabled with their features.
+
+## M1-16-a11y — AccessKit roles, names and UI Automation
+
+Implemented-unqualified on local main (2026-10-08). Every critical operator
+control now has a stable element id, an AccessKit role and a localized name,
+so the Windows UI Automation tree is fully navigable. The pinned GPUI rev
+(`a846890`) exposes `role`, `aria_label`, `aria_toggled`, `aria_selected` and
+`aria_expanded`; it has no `aria_disabled`, so disabled state is set by
+mutating the node through `a11y_synthetic_children`
+(`Control::mark_disabled` in `src/operator/controls.rs`).
+
+Roles/names (ids in parentheses): menu bar (`menu-bar`, MenuBar "Menu bar"),
+its labels and popups (MenuItem with Expanded state, Menu) and items
+(MenuItem / MenuItemCheckBox with toggled state and disabled); toolbar
+buttons (Button) with ToggleState on the masks — Black/Clear/Logo report
+On/Off (Mixed while an acknowledgement is pending) and Live output reports
+On/Off; the Resources tab strip (TabList "Resources", tabs report selected);
+the Songs, Schedule, saved-schedule and Media image lists (List with
+localized pane name) whose rows/tiles are ListItem with selected and
+position-in-set/size-of-set; the Preview and Live slide panes (List, tiles
+named "n · slide name", selected); the New/song/schedule-item/image popups
+(Menu with a localized name, e.g. "Song actions"). Names follow the Options
+language and were verified in English and Indonesian.
+
+Tab order is unchanged in count (25 tabs to the first song row) and is now
+documented end to end from the native walk: song rows, schedule rows,
+preview slides, reset-layout, quit, collapse-resources, the five resource
+tabs, open-library, new-menu, live-output, go-live, live-previous,
+live-next, mask-logo, mask-black, mask-clear, normalize-text, open/save
+schedule, add-to-schedule, schedule-up/down/remove, then wrap. In the Songs
+list, Down/Up move the song selection (new `NextSongRow`/`PreviousSongRow`
+actions in the `SelaSongRow` context) without touching the schedule or the
+focus.
+
+Two scripts carry the native evidence: `scripts/uia-names-windows.ps1`
+(.NET UIAutomationClient tree dump — AutomationId, ControlType, Name,
+IsEnabled, IsOffscreen, HasKeyboardFocus, bounds and Toggle/Selected/
+Expanded states; `-Hwnd`, `-ProcessId`, `-FocusedOnly`, `-OutJson`, UTF-8
+output) and `scripts/a11y-windows.py` (drives VAL-A11Y-001…005: every
+expected id+role+name in English, Indonesian and restored English; mask
+toggles observed in UIA and on the audience; list selection reporting;
+a full keyboard-only Tab walk with focus-fill pixel probes and Enter/Space
+activation of Go Live/Previous/Next/masks on the real audience).
+
+GPUI-on-Windows probing note: the backend never receives `WM_MOUSELEAVE`,
+so teleporting the pointer off the window leaves hover stuck on the
+last-clicked element, and hover paint wins over the focus fill. Native
+probes park the pointer over an inert in-window area (empty list space)
+instead of the desktop. A focused row under the resting pointer shows the
+hover fill; this matches common desktop behavior and is recorded as policy,
+not a bug.
+
+Native run **PASS** (`.amp/in/artifacts/a11y-windows/summary.json` + dumps
+01–07, menu popup and per-stop walk captures, several viewed). Open:
+Narrator/screen-reader qualification (M5-03), the library search box Edit
+exposure (blocked on the pending library-search-box feature), mixed-DPI
+runs, and Live-tile keyboard activation policy.

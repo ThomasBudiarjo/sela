@@ -8,6 +8,8 @@ mod scriptures;
 mod songs;
 mod themes;
 
+pub(super) use songs::{NextSongRow, PreviousSongRow};
+
 /// Tab labels, translated at render time.
 pub(crate) const TABS: [Msg; 5] = [
     Msg::TabSongs,

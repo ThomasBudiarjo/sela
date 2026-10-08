@@ -1,6 +1,29 @@
 use super::*;
 
+actions!(operator, [NextSongRow, PreviousSongRow]);
+
 impl Operator {
+    /// Down/Up with a Songs row focused: move the song selection (and its
+    /// preview), stopping at the ends. Provisional Sela keyboard policy
+    /// (EasyWorship unobserved); before M1-16 these keys moved the schedule
+    /// selection even with a song row focused (VAL-A11Y-005).
+    pub(crate) fn step_song(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.catalog.is_empty() {
+            return;
+        }
+        let current = self
+            .selected_song
+            .filter(|_| self.selected_entry.is_none())
+            .and_then(|v| self.catalog.iter().position(|(c, _)| *c == v));
+        let next = match current {
+            Some(index) if forward => (index + 1).min(self.catalog.len() - 1),
+            Some(index) => index.saturating_sub(1),
+            None if forward => 0,
+            None => self.catalog.len() - 1,
+        };
+        self.select_song(next, cx);
+    }
+
     /// Opens a Song Editor window: a new song, or the given saved revision.
     pub(crate) fn open_editor(&mut self, version: Option<Version>, cx: &mut Context<Self>) {
         self.library_error = self
@@ -59,9 +82,13 @@ impl Operator {
             return empty_detail(t!(Msg::SongsEmptyTitle), t!(Msg::SongsEmptyHint));
         }
         let bounds = self.song_bounds.clone();
+        let count = self.catalog.len();
         div()
             .on_children_prepainted(move |rows, _, _| *bounds.borrow_mut() = rows)
             .id("song-list")
+            .role(Role::List)
+            .aria_label(t!(Msg::TabSongs))
+            .accessibility_id("song-list")
             .size_full()
             .overflow_y_scroll()
             .flex()
@@ -77,9 +104,20 @@ impl Operator {
                             version: *version,
                             title: title.clone(),
                         };
+                        let name = if title.trim().is_empty() {
+                            t!(Msg::Untitled).to_string()
+                        } else {
+                            title.clone()
+                        };
                         div()
                             .id(("song", index))
                             .debug_selector(move || format!("song-{index}"))
+                            .role(Role::ListItem)
+                            .aria_label(name.clone())
+                            .aria_selected(selected)
+                            .aria_position_in_set(index)
+                            .aria_size_of_set(count)
+                            .accessibility_id(format!("song-{index}"))
                             .track_focus(&self.song_rows[index])
                             .key_context("SelaControl SelaSongRow")
                             .flex_shrink_0()
@@ -134,11 +172,7 @@ impl Operator {
                             .on_drag(drag, |drag, _, _, cx| {
                                 cx.new(|_| DragLabel(drag.title.clone().into()))
                             })
-                            .child(if title.trim().is_empty() {
-                                t!(Msg::Untitled).to_string()
-                            } else {
-                                title.clone()
-                            })
+                            .child(name)
                     }),
             )
             .into_any_element()
