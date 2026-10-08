@@ -13,7 +13,7 @@ impl Operator {
                 // Same session, new surface: re-render the current intent.
                 if let Some(index) = self.requested_slide() {
                     self.cancel_cues();
-                    self.send(index);
+                    self.dispatch(index, self.request_generation);
                 }
                 changed = true;
             }

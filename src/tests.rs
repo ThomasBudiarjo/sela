@@ -3266,6 +3266,127 @@ fn failed_live_double_click_keeps_the_mask_and_reports(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn double_click_after_the_first_cue_was_substituted_keeps_the_mask(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_background_song(&dir)), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "faces resolved", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.slides.len() == 3 && p.resolved.is_some())
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    settle(&mut cx, &operator, "output-size prefetch", |o| {
+        o.background_job.is_none() && !o.backgrounds.is_empty()
+    });
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Backdrop Hymn · Verse 1")
+    });
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black acknowledged", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+
+    // The first click settles as a missing-image substitute before the second.
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    settle(&mut cx, &operator, "chorus on screen", |o| {
+        o.on_screen() == Some("Backdrop Hymn · Chorus") && o.pending_cues.is_empty()
+    });
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    poll_for(&mut cx, &operator, 40);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::Black, "intent stays Black");
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+        assert_eq!(o.indicator(Mask::Black), Indicator::On);
+        assert_eq!(o.unmask_on_present, None);
+    });
+}
+
+#[gpui::test]
+fn newer_deferred_request_cancels_the_double_click_unmask(cx: &mut TestAppContext) {
+    use sela::preparation::cue::{Built, CuePreparer};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = show_verse_then_black(cx, &dir);
+    let (open, preparer) = gated_preparer(Default::default());
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(preparer));
+
+    // B: a double-click in preparation; C: a newer step waiting on faces.
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    let resolved = operator.update(&mut cx, |o, _| {
+        assert!(o.unmask_on_present.is_some());
+        let resolved = o.live.as_mut().unwrap().resolved.take();
+        o.send(2);
+        assert!(o.deferred_send.is_some());
+        assert_eq!(o.unmask_on_present, None, "a newer request cancels it");
+        resolved
+    });
+    open.send(()).unwrap();
+    settle(&mut cx, &operator, "B on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+    poll_for(&mut cx, &operator, 20);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::Black, "B landing never unmasks");
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+    });
+
+    // C fails: the mask still stays.
+    let failing = CuePreparer::with_builder(|_, _| -> Result<Built, _> {
+        Err(sela::scene::PrepareError::InvalidScene)
+    })
+    .unwrap();
+    operator.update(&mut cx, |o, _| {
+        o.cue_preparer = Some(failing);
+        o.live.as_mut().unwrap().resolved = resolved;
+        o.retry_deferred();
+    });
+    settle(&mut cx, &operator, "C failure reported", |o| {
+        o.live_message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Slide could not be prepared"))
+    });
+    poll_for(&mut cx, &operator, 20);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::Black);
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Chorus"));
+    });
+}
+
+#[gpui::test]
+fn same_request_retry_keeps_the_double_click_unmask(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = show_verse_then_black(cx, &dir);
+    let resolved = operator.update(&mut cx, |o, _| o.live.as_mut().unwrap().resolved.take());
+
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    operator.read_with(&cx, |o, _| {
+        assert!(o.deferred_send.is_some());
+        assert!(
+            o.unmask_on_present.is_some(),
+            "the double-click adds no request"
+        );
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+    });
+    operator.update(&mut cx, |o, _| {
+        o.live.as_mut().unwrap().resolved = resolved;
+        o.retry_deferred();
+    });
+    settle(
+        &mut cx,
+        &operator,
+        "mask lifted over the clicked slide",
+        |o| confirmed_mask(o) == Some(Layer::None) && o.on_screen() == Some("Signal Hymn · Chorus"),
+    );
+    operator.read_with(&cx, |o, _| assert_eq!(o.masks.layer(), Layer::None));
+}
+
+#[gpui::test]
 fn deferred_cue_dies_with_a_newer_request_or_a_new_session(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (mut cx, operator) = live_fixture(cx, &dir);

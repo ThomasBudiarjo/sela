@@ -140,6 +140,7 @@ pub(super) struct PendingCue {
     pub(super) ticket: Ticket,
     pub(super) index: usize,
     pub(super) item: Version,
+    pub(super) generation: u64,
     pub(super) sizing: Sizing,
     pub(super) extent: Extent,
     pub(super) label: String,
@@ -151,6 +152,7 @@ pub(super) struct PendingCue {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DeferredSend {
     pub(super) index: usize,
+    pub(super) generation: u64,
     pub(super) item: Version,
     pub(super) session: u64,
 }
@@ -196,10 +198,16 @@ pub(super) struct Operator {
     pub(super) masks: Masks,
     /// Layer handed to this session's supervisor.
     sent_mask: Option<Layer>,
-    /// A Live double-click under a mask: the slide whose presentation lifts
-    /// it. The mask stays on while that slide prepares, and on any failure or
-    /// cancellation, so the previous slide is never revealed.
-    pub(super) unmask_on_present: Option<usize>,
+    /// A Live double-click under a mask: the request generation whose clean
+    /// presentation lifts it. Any newer explicit request drops it, and the mask
+    /// stays on for failure, substitution or cancellation, so the previous
+    /// slide is never revealed.
+    pub(super) unmask_on_present: Option<u64>,
+    /// Generation of the newest explicit operator cue request. Retries of a
+    /// deferred or refreshed request reuse it.
+    request_generation: u64,
+    /// The newest presented cue: (generation, slide, clean outcome).
+    presented: Option<(u64, usize, bool)>,
     /// The double-clicked slide is presented; the mask lifts once it left the
     /// cue slot.
     unmask_after_cue: bool,
@@ -402,6 +410,8 @@ impl Operator {
             masks: Masks::default(),
             sent_mask: None,
             unmask_on_present: None,
+            request_generation: 0,
+            presented: None,
             unmask_after_cue: false,
             output_session: 0,
             logo: None,

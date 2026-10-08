@@ -256,19 +256,30 @@ impl Operator {
     /// double-click also turns a single mask off; clearing combined masks is
     /// provisional (EW8-OBS-020), as is keeping a mask on a single click.
     pub(crate) fn click_live(&mut self, index: usize, double: bool) {
-        self.unmask_on_present = None;
         // The first click of a double-click already sent this slide.
-        let requested = self.requested_slide() == Some(index);
-        if !(double && requested) {
+        let latest = self
+            .deferred_send
+            .map(|d| d.index)
+            .or_else(|| self.requested_slide());
+        if double && latest == Some(index) {
+            self.unmask_on_present = None;
+        } else {
             self.send(index);
         }
         if double && self.masks.any() {
-            let waiting = self.pending_cues.back().is_some_and(|p| p.index == index)
-                || self.deferred_send.is_some_and(|d| d.index == index);
+            let generation = self.request_generation;
+            let waiting = self
+                .pending_cues
+                .back()
+                .is_some_and(|p| p.generation == generation && p.index == index)
+                || self
+                    .deferred_send
+                    .is_some_and(|d| d.generation == generation && d.index == index);
             if waiting {
-                // Presenting the slide lifts the mask (`poll_cues`).
-                self.unmask_on_present = Some(index);
-            } else if self.live_slide == Some(index) {
+                // Presenting exactly this request cleanly lifts the mask
+                // (`poll_cues`).
+                self.unmask_on_present = Some(generation);
+            } else if self.presented == Some((generation, index, true)) {
                 self.masks.live_double_click();
                 self.unmask_after_cue = true;
             }
@@ -399,7 +410,7 @@ impl Operator {
                 && let Some(index) = self.requested_slide()
             {
                 self.cancel_cues();
-                self.send(index);
+                self.dispatch(index, self.request_generation);
             }
         } else {
             self.retry_deferred();
@@ -452,13 +463,14 @@ impl Operator {
         let current = self.live.as_ref().map(|live| live.version) == Some(deferred.item)
             && self.output_session == deferred.session;
         if current {
-            self.send(deferred.index);
+            self.dispatch(deferred.index, deferred.generation);
         }
     }
 
-    fn defer(&mut self, index: usize, item: Version) {
+    fn defer(&mut self, index: usize, generation: u64, item: Version) {
         self.deferred_send = Some(DeferredSend {
             index,
+            generation,
             item,
             session: self.output_session,
         });
@@ -544,6 +556,15 @@ impl Operator {
     /// and background lookups are cheap map reads; fitting, sizing and cue
     /// assembly never run here.
     pub(crate) fn send(&mut self, index: usize) {
+        // A newer explicit request supersedes any double-click unmask intent.
+        self.request_generation += 1;
+        self.unmask_on_present = None;
+        self.dispatch(index, self.request_generation);
+    }
+
+    /// Submits (or defers) the cue for request `generation`; retries of the
+    /// same request pass the generation through unchanged.
+    pub(crate) fn dispatch(&mut self, index: usize, generation: u64) {
         if !self.ready_for_cue() {
             return;
         }
@@ -566,7 +587,7 @@ impl Operator {
         // current live scene stays; the deferred cue is retried by
         // `fonts_resolved` (M1-05g2b).
         let Some(resolved) = item.resolved.clone() else {
-            self.defer(index, item.version);
+            self.defer(index, generation, item.version);
             self.live_message = Some(t!(Msg::ResolvingFonts).into());
             return;
         };
@@ -595,7 +616,7 @@ impl Operator {
                         Some(why.warning(&image.name)),
                     ),
                     None => {
-                        self.defer(index, item.version);
+                        self.defer(index, generation, item.version);
                         self.live_message = Some(t!(Msg::PreparingBackground).into());
                         return;
                     }
@@ -626,6 +647,7 @@ impl Operator {
             Ok(ticket) => self.pending_cues.push_back(PendingCue {
                 ticket,
                 index,
+                generation,
                 item: item.version,
                 sizing,
                 extent,
@@ -639,16 +661,22 @@ impl Operator {
         }
     }
 
-    /// The double-clicked slide is presented: lift the mask. A substituted
-    /// background or a newer request in preparation keeps it on.
-    fn unmask_presented(&mut self, index: usize, substituted: bool) {
-        if self.unmask_on_present != Some(index) {
+    /// The double-clicked request is presented: lift the mask. A substituted
+    /// background keeps it on.
+    fn unmask_presented(&mut self, generation: u64, substituted: bool) {
+        if self.unmask_on_present != Some(generation) {
             return;
         }
         self.unmask_on_present = None;
-        if !substituted && self.pending_cues.is_empty() {
+        if !substituted {
             self.masks.live_double_click();
             self.unmask_after_cue = true;
+        }
+    }
+
+    fn drop_unmask_intent(&mut self, generation: u64) {
+        if self.unmask_on_present == Some(generation) {
+            self.unmask_on_present = None;
         }
     }
 
@@ -676,7 +704,7 @@ impl Operator {
                 CueEvent::Ready { cue, size_cap, .. } => {
                     self.size_cap = Some((pending.item, pending.extent, pending.sizing, size_cap));
                     let Some(output) = self.output.as_mut() else {
-                        self.unmask_on_present = None;
+                        self.drop_unmask_intent(pending.generation);
                         continue;
                     };
                     match output.present(cue, Instant::now()) {
@@ -690,11 +718,13 @@ impl Operator {
                                 self.labels.push_back((version, pending.label));
                             }
                             self.live_slide = Some(pending.index);
-                            self.unmask_presented(pending.index, pending.warning.is_some());
+                            let clean = pending.warning.is_none();
+                            self.presented = Some((pending.generation, pending.index, clean));
+                            self.unmask_presented(pending.generation, !clean);
                             self.live_message = pending.warning;
                         }
                         Err(refusal) => {
-                            self.unmask_on_present = None;
+                            self.drop_unmask_intent(pending.generation);
                             self.live_message = Some(match refusal {
                                 Refusal::NotConnected => t!(Msg::RefusalNotConnected).into(),
                                 Refusal::WrongExtent => t!(Msg::RefusalWrongExtent).into(),
@@ -703,7 +733,7 @@ impl Operator {
                     }
                 }
                 CueEvent::Failed { error, .. } => {
-                    self.unmask_on_present = None;
+                    self.drop_unmask_intent(pending.generation);
                     self.live_message = Some(t!(Msg::CueFailed, error = error.to_string()));
                 }
             }

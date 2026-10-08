@@ -347,18 +347,25 @@ Evidence: `.amp\in\artifacts\live-output-windows-masks{,-r1,-r2}\`.
 `scripts/native-cues.py` adds renderer-level mask frames, including Clear over an
 image background (see delivery).
 
-Unmask barrier: a Live double-click under a mask keeps the mask on until the
-clicked slide is presented by the renderer path (`poll_cues` presents it, then
-the mask lifts once the cue left the supervisor slot). While the slide waits in
-`pending_cues`, behind fonts or a background (`deferred_send`), or in
-preparation, the previous slide is never revealed. If preparation fails, is
-refused (`Busy`, `Disconnected`, not connected), substitutes an image, or is
-cancelled (new item, output toggle, another request), the mask and its
-indicator stay on and the Live status reports the failure. Deferred cues carry
-the live item version and output session; a retry sends only if it is still the
+Unmask barrier: every explicit operator cue request (click, step, Go Live,
+Normalize) gets a new generation, and a Live double-click under a mask stores
+that generation as its unmask intent. The mask lifts only when the presented cue
+carries exactly that generation and its outcome is clean (no image
+substitution, no failure). Any newer explicit request, mask toggle, item change
+or output toggle drops the intent, so an older cue landing later never lifts
+the mask. Dependency retries of the same request (fonts, background decode,
+size refresh, surface change) reuse the generation and keep the intent. If the
+first click already settled as a substitute, the second click finds a non-clean
+presentation and leaves the mask on. Preparation failure, refusal (`Busy`,
+`Disconnected`, not connected) or cancellation also keep the mask and its
+indicator on and report in the Live status. Deferred cues carry the live item
+version, output session and generation; a retry sends only if it is still the
 newest request for that item and session, and `cancel_cues` clears it.
 Tests: `live_double_click_under_black_never_reveals_the_previous_slide`,
 `failed_live_double_click_keeps_the_mask_and_reports`,
+`double_click_after_the_first_cue_was_substituted_keeps_the_mask`,
+`newer_deferred_request_cancels_the_double_click_unmask`,
+`same_request_retry_keeps_the_double_click_unmask`,
 `deferred_cue_dies_with_a_newer_request_or_a_new_session`.
 
 GPUI tests: `show_keys_toggle_masks_with_acknowledged_indicators`,
