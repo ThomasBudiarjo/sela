@@ -347,6 +347,20 @@ Evidence: `.amp\in\artifacts\live-output-windows-masks{,-r1,-r2}\`.
 `scripts/native-cues.py` adds renderer-level mask frames, including Clear over an
 image background (see delivery).
 
+Unmask barrier: a Live double-click under a mask keeps the mask on until the
+clicked slide is presented by the renderer path (`poll_cues` presents it, then
+the mask lifts once the cue left the supervisor slot). While the slide waits in
+`pending_cues`, behind fonts or a background (`deferred_send`), or in
+preparation, the previous slide is never revealed. If preparation fails, is
+refused (`Busy`, `Disconnected`, not connected), substitutes an image, or is
+cancelled (new item, output toggle, another request), the mask and its
+indicator stay on and the Live status reports the failure. Deferred cues carry
+the live item version and output session; a retry sends only if it is still the
+newest request for that item and session, and `cancel_cues` clears it.
+Tests: `live_double_click_under_black_never_reveals_the_previous_slide`,
+`failed_live_double_click_keeps_the_mask_and_reports`,
+`deferred_cue_dies_with_a_newer_request_or_a_new_session`.
+
 GPUI tests: `show_keys_toggle_masks_with_acknowledged_indicators`,
 `live_slide_clicks_apply_and_double_click_unmasks`,
 `show_keys_stay_out_of_text_fields`, `media_logo_is_imported_persisted_and_shown`

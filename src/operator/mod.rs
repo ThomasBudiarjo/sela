@@ -146,6 +146,15 @@ pub(super) struct PendingCue {
     pub(super) warning: Option<String>,
 }
 
+/// A cue held back until fonts or a background land. It is submitted only
+/// while it is still the newest request for the same live item and session.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DeferredSend {
+    pub(super) index: usize,
+    pub(super) item: Version,
+    pub(super) session: u64,
+}
+
 pub(crate) enum Request {
     Open,
     Catalog,
@@ -187,9 +196,15 @@ pub(super) struct Operator {
     pub(super) masks: Masks,
     /// Layer handed to this session's supervisor.
     sent_mask: Option<Layer>,
-    /// A Live double-click unmasks only after its slide left the cue slot,
-    /// so the previous slide is never revealed in between.
+    /// A Live double-click under a mask: the slide whose presentation lifts
+    /// it. The mask stays on while that slide prepares, and on any failure or
+    /// cancellation, so the previous slide is never revealed.
+    pub(super) unmask_on_present: Option<usize>,
+    /// The double-clicked slide is presented; the mask lifts once it left the
+    /// cue slot.
     unmask_after_cue: bool,
+    /// Counts output start/stop cycles; deferred cues never cross one.
+    output_session: u64,
     pub(super) logo: Option<images::Logo>,
     logo_preparer: Option<(RendererCapabilities, Preparer)>,
     logo_requested: Option<ContentVersion>,
@@ -250,7 +265,7 @@ pub(super) struct Operator {
     font_task: Option<Task<()>>,
     /// A Go Live/Next/Previous cue deferred until the live item's fonts or
     /// its slide background land.
-    deferred_send: Option<usize>,
+    pub(super) deferred_send: Option<DeferredSend>,
     /// Slide backgrounds fitted to the output extent (M1-05h).
     pub(super) backgrounds: images::BackgroundCache,
     /// At most one background job with the image worker, so an import still
@@ -386,7 +401,9 @@ impl Operator {
             live_message: None,
             masks: Masks::default(),
             sent_mask: None,
+            unmask_on_present: None,
             unmask_after_cue: false,
+            output_session: 0,
             logo: None,
             logo_preparer: None,
             logo_requested: None,

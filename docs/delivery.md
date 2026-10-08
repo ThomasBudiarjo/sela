@@ -408,8 +408,10 @@ presents landed cues in `Operator::poll_cues`.
 
 Workload: 100-slide song, 28 lines per slide, Normalize text size on (each cue
 fits all 100 slides). `cargo test --locked --bin sela heavy_cue -- --ignored
---nocapture` times the `go_live()` call on the UI thread, five samples, size cap
-cache cleared each time.
+--nocapture` times the `go_live()` call on the UI thread, five samples. Each
+sample clears only the operator's own size cap; the worker's per-item size-cap
+cache stays warm after the first sample, so only the first sample prepares cold
+(its fit still runs off the UI thread).
 
 | | UI-thread `go_live()` |
 |---|---|

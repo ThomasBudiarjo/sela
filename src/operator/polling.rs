@@ -90,8 +90,8 @@ impl Operator {
         if rescan {
             self.submit_image_job(images::Job::Scan);
         }
-        if retry && let Some(index) = self.deferred_send.take() {
-            self.send(index);
+        if retry {
+            self.retry_deferred();
         }
         changed
     }

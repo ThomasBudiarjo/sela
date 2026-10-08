@@ -3004,6 +3004,168 @@ fn the_cue_queue_is_bounded_and_refuses_with_a_message(cx: &mut TestAppContext) 
         o.on_screen() == Some("Signal Hymn · Bridge")
     });
 }
+
+fn show_verse_then_black(
+    cx: &mut TestAppContext,
+    dir: &tempfile::TempDir,
+) -> (VisualTestContext, Entity<Operator>) {
+    let (mut cx, operator) = live_fixture(cx, dir);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black acknowledged", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+    (cx, operator)
+}
+
+fn poll_for(cx: &mut VisualTestContext, operator: &Entity<Operator>, rounds: usize) {
+    for _ in 0..rounds {
+        operator.update(cx, |o, cx| o.poll(cx));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[gpui::test]
+fn live_double_click_under_black_never_reveals_the_previous_slide(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = show_verse_then_black(cx, &dir);
+    let (open, preparer) = gated_preparer(Default::default());
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(preparer));
+
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    poll_for(&mut cx, &operator, 40);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.pending_cues.len(), 1, "the double-click adds no cue");
+        assert_eq!(o.masks.layer(), Layer::Black, "intent stays Black");
+        assert_eq!(confirmed_mask(o), Some(Layer::Black), "never revealed");
+        assert_eq!(o.live_slide, Some(0));
+    });
+
+    open.send(()).unwrap();
+    let mut revealed_with = None;
+    for _ in 0..400 {
+        poll_for(&mut cx, &operator, 1);
+        operator.read_with(&cx, |o, _| {
+            if confirmed_mask(o) == Some(Layer::None) {
+                revealed_with = Some(o.on_screen().map(str::to_owned));
+            }
+        });
+        if revealed_with.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        revealed_with,
+        Some(Some("Signal Hymn · Chorus".to_owned())),
+        "the mask lifts only over the clicked slide"
+    );
+    operator.read_with(&cx, |o, _| assert_eq!(o.masks.layer(), Layer::None));
+}
+
+#[gpui::test]
+fn failed_live_double_click_keeps_the_mask_and_reports(cx: &mut TestAppContext) {
+    use sela::preparation::cue::{Built, CuePreparer};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = show_verse_then_black(cx, &dir);
+    let failing = CuePreparer::with_builder(|_, _| -> Result<Built, _> {
+        Err(sela::scene::PrepareError::InvalidScene)
+    })
+    .unwrap();
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(failing));
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    settle(&mut cx, &operator, "failure reported", |o| {
+        o.live_message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Slide could not be prepared"))
+    });
+    poll_for(&mut cx, &operator, 20);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::Black);
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+        assert_eq!(o.indicator(Mask::Black), Indicator::On);
+        assert_eq!(o.unmask_on_present, None);
+        assert_eq!(submitted(o), sent);
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
+    });
+}
+
+#[gpui::test]
+fn deferred_cue_dies_with_a_newer_request_or_a_new_session(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = live_fixture(cx, &dir);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    let strip = |o: &mut Operator| {
+        let live = o.live.as_mut().unwrap();
+        let resolved = live.resolved.take();
+        (live.version, resolved)
+    };
+
+    // A newer request supersedes the deferred one.
+    let (version, resolved) = operator.update(&mut cx, |o, _| strip(o));
+    operator.update(&mut cx, |o, _| {
+        o.send(1);
+        assert_eq!(o.deferred_send.map(|d| d.index), Some(1));
+        o.live.as_mut().unwrap().resolved = resolved.clone();
+        o.send(2);
+        assert!(o.deferred_send.is_none());
+        assert_eq!(o.pending_cues.len(), 1);
+        o.retry_deferred();
+        assert_eq!(o.pending_cues.len(), 1, "no stale cue is added");
+    });
+    settle(&mut cx, &operator, "bridge on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Bridge")
+    });
+
+    // Cancelling drops it, and a late landing sends nothing.
+    operator.update(&mut cx, |o, _| {
+        strip(o);
+        o.send(1);
+        assert!(o.deferred_send.is_some());
+        o.cancel_cues();
+        assert!(o.deferred_send.is_none());
+    });
+
+    // A restarted output session never replays it.
+    operator.update(&mut cx, |o, _| {
+        o.send(1);
+        assert!(o.deferred_send.is_some());
+    });
+    click(&mut cx, "live-output");
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "new session", connected);
+    let formats: Vec<_> = operator.read_with(&cx, |o, _| {
+        o.live
+            .as_ref()
+            .unwrap()
+            .slides
+            .iter()
+            .map(|slide| slide.format.clone())
+            .collect()
+    });
+    cx.update(|_, cx| {
+        operator.update(cx, |o, cx| {
+            let landed = formats.iter().map(fonts::Resolved::bundled).collect();
+            o.fonts_resolved(version, landed, cx);
+        })
+    });
+    poll_for(&mut cx, &operator, 40);
+    operator.read_with(&cx, |o, _| {
+        assert!(o.deferred_send.is_none());
+        assert!(o.pending_cues.is_empty());
+        assert_eq!(submitted(o), 0, "nothing reached the new session");
+        assert_eq!(o.live_slide, None);
+    });
+}
+
 fn library_with_heavy_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let path = dir.path().join("library.sqlite");
     let line = "Original heavy line of lyrics for the fitting measurement";
@@ -3035,7 +3197,8 @@ fn library_with_heavy_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
 }
 
 /// Measurement, not a gate: UI-thread time of one Go Live on a 100-slide song
-/// with normalized sizing (`cargo test --release heavy_cue -- --ignored --nocapture`).
+/// with normalized sizing. Only the first sample is cold on the worker; the
+/// loop clears the operator's size cap, not the worker's cache (`cargo test --release heavy_cue -- --ignored --nocapture`).
 #[gpui::test]
 #[ignore = "measurement recorded in docs/delivery.md"]
 fn heavy_cue_ui_thread_time(cx: &mut TestAppContext) {

@@ -173,7 +173,7 @@ impl Operator {
         let extent = self.background_extent();
         let mut centers: Vec<(&Item, usize)> = Vec::new();
         if let Some(live) = &self.live {
-            centers.extend(self.deferred_send.map(|index| (live, index)));
+            centers.extend(self.deferred_send.map(|d| (live, d.index)));
             centers.extend(self.live_slide.map(|index| (live, index)));
         }
         if let Some(preview) = &self.preview {
@@ -246,6 +246,7 @@ impl Operator {
             return;
         }
         self.masks.toggle(mask);
+        self.unmask_on_present = None;
         self.unmask_after_cue = false;
         self.live_message = None;
         self.sync_show(Instant::now());
@@ -255,13 +256,22 @@ impl Operator {
     /// double-click also turns a single mask off; clearing combined masks is
     /// provisional (EW8-OBS-020), as is keeping a mask on a single click.
     pub(crate) fn click_live(&mut self, index: usize, double: bool) {
-        if double && self.masks.any() {
-            self.masks.live_double_click();
-            self.unmask_after_cue = true;
-        }
+        self.unmask_on_present = None;
         // The first click of a double-click already sent this slide.
-        if !(double && self.requested_slide() == Some(index)) {
+        let requested = self.requested_slide() == Some(index);
+        if !(double && requested) {
             self.send(index);
+        }
+        if double && self.masks.any() {
+            let waiting = self.pending_cues.back().is_some_and(|p| p.index == index)
+                || self.deferred_send.is_some_and(|d| d.index == index);
+            if waiting {
+                // Presenting the slide lifts the mask (`poll_cues`).
+                self.unmask_on_present = Some(index);
+            } else if self.live_slide == Some(index) {
+                self.masks.live_double_click();
+                self.unmask_after_cue = true;
+            }
         }
         self.sync_show(Instant::now());
     }
@@ -382,12 +392,17 @@ impl Operator {
             // Improved resolution (the catalog landed after a bundled
             // fallback): sizes re-fit, so drop the cap and refresh the cue.
             self.size_cap = None;
-            if let Some(index) = self.requested_slide() {
+            if self
+                .live
+                .as_ref()
+                .is_some_and(|live| live.version == version)
+                && let Some(index) = self.requested_slide()
+            {
                 self.cancel_cues();
                 self.send(index);
             }
-        } else if let Some(index) = self.deferred_send.take() {
-            self.send(index);
+        } else {
+            self.retry_deferred();
         }
         self.resolve_fonts(cx);
         cx.notify();
@@ -428,8 +443,30 @@ impl Operator {
         }
     }
 
+    /// Submits the deferred cue if it is still the newest request for the
+    /// live item and this output session; anything older is dropped.
+    pub(crate) fn retry_deferred(&mut self) {
+        let Some(deferred) = self.deferred_send.take() else {
+            return;
+        };
+        let current = self.live.as_ref().map(|live| live.version) == Some(deferred.item)
+            && self.output_session == deferred.session;
+        if current {
+            self.send(deferred.index);
+        }
+    }
+
+    fn defer(&mut self, index: usize, item: Version) {
+        self.deferred_send = Some(DeferredSend {
+            index,
+            item,
+            session: self.output_session,
+        });
+    }
+
     pub(crate) fn toggle_output(&mut self) {
         self.cancel_cues();
+        self.output_session += 1;
         if self.output.take().is_some() {
             self.live_message = Some("Live output is off".into());
         } else {
@@ -445,6 +482,7 @@ impl Operator {
         self.live_slide = None;
         // Masks do carry over (EW8-OBS-017); a fresh renderer starts unmasked.
         self.sent_mask = self.output.as_ref().map(|_| Layer::None);
+        self.unmask_on_present = None;
         self.unmask_after_cue = false;
         self.logo_requested = None;
         self.logo_sent = None;
@@ -464,6 +502,7 @@ impl Operator {
         if self.ready_for_cue() {
             if self.live.as_ref().map(|live| live.version) != Some(item.version) {
                 self.cancel_cues();
+                self.unmask_on_present = None;
             }
             self.live = Some(item);
             self.send(index);
@@ -485,6 +524,7 @@ impl Operator {
         };
         // Boundary behavior across schedule items is unobserved; stop here.
         if target < count {
+            self.unmask_on_present = None;
             self.send(target);
         }
     }
@@ -513,6 +553,8 @@ impl Operator {
         ) else {
             return;
         };
+        // This request supersedes any cue still waiting on fonts or an image.
+        self.deferred_send = None;
         let Some((slide, version)) = item
             .slides
             .get(index)
@@ -524,7 +566,7 @@ impl Operator {
         // current live scene stays; the deferred cue is retried by
         // `fonts_resolved` (M1-05g2b).
         let Some(resolved) = item.resolved.clone() else {
-            self.deferred_send = Some(index);
+            self.defer(index, item.version);
             self.live_message = Some(t!(Msg::ResolvingFonts).into());
             return;
         };
@@ -553,7 +595,7 @@ impl Operator {
                         Some(why.warning(&image.name)),
                     ),
                     None => {
-                        self.deferred_send = Some(index);
+                        self.defer(index, item.version);
                         self.live_message = Some(t!(Msg::PreparingBackground).into());
                         return;
                     }
@@ -597,6 +639,19 @@ impl Operator {
         }
     }
 
+    /// The double-clicked slide is presented: lift the mask. A substituted
+    /// background or a newer request in preparation keeps it on.
+    fn unmask_presented(&mut self, index: usize, substituted: bool) {
+        if self.unmask_on_present != Some(index) {
+            return;
+        }
+        self.unmask_on_present = None;
+        if !substituted && self.pending_cues.is_empty() {
+            self.masks.live_double_click();
+            self.unmask_after_cue = true;
+        }
+    }
+
     /// Presents cues that finished preparing. A failed cue leaves the current
     /// scene alone and only reports; results from cancelled requests never
     /// surface because the preparer fences them.
@@ -621,6 +676,7 @@ impl Operator {
                 CueEvent::Ready { cue, size_cap, .. } => {
                     self.size_cap = Some((pending.item, pending.extent, pending.sizing, size_cap));
                     let Some(output) = self.output.as_mut() else {
+                        self.unmask_on_present = None;
                         continue;
                     };
                     match output.present(cue, Instant::now()) {
@@ -634,9 +690,11 @@ impl Operator {
                                 self.labels.push_back((version, pending.label));
                             }
                             self.live_slide = Some(pending.index);
+                            self.unmask_presented(pending.index, pending.warning.is_some());
                             self.live_message = pending.warning;
                         }
                         Err(refusal) => {
+                            self.unmask_on_present = None;
                             self.live_message = Some(match refusal {
                                 Refusal::NotConnected => t!(Msg::RefusalNotConnected).into(),
                                 Refusal::WrongExtent => t!(Msg::RefusalWrongExtent).into(),
@@ -645,6 +703,7 @@ impl Operator {
                     }
                 }
                 CueEvent::Failed { error, .. } => {
+                    self.unmask_on_present = None;
                     self.live_message = Some(t!(Msg::CueFailed, error = error.to_string()));
                 }
             }
@@ -656,6 +715,7 @@ impl Operator {
     /// surface); its results are dropped even if they finish later.
     pub(crate) fn cancel_cues(&mut self) {
         self.pending_cues.clear();
+        self.deferred_send = None;
         if let Some(preparer) = &self.cue_preparer {
             preparer.cancel(Lane::Live);
         }
