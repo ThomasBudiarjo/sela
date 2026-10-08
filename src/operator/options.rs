@@ -62,6 +62,9 @@ pub(crate) struct SettingsState {
     applied: bool,
     /// Waiting for pending saves before the window closes.
     closing: Option<Task<()>>,
+    /// The wait bound expired: the close skips the settings wait and only
+    /// the schedule guard still applies.
+    close_forced: bool,
     /// `None` while the monitor list is loading.
     pub(crate) monitors: Option<Vec<MonitorInfo>>,
     slot: Arc<MonitorSlot>,
@@ -109,6 +112,7 @@ impl SettingsState {
             pending_saves: 0,
             applied: false,
             closing: None,
+            close_forced: false,
             monitors: None,
             slot: config.slot,
             draft: None,
@@ -293,7 +297,7 @@ impl Operator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.settings.pending_saves == 0 {
+        if self.settings.pending_saves == 0 || self.settings.close_forced {
             return true;
         }
         if self.settings.closing.is_none() {
@@ -302,15 +306,28 @@ impl Operator {
                 loop {
                     cx.background_executor().timer(CLOSE_POLL).await;
                     let timed_out = cx.background_executor().now() - started >= CLOSE_WAIT;
-                    let done = this.update_in(cx, |this, window, _| {
+                    let done = this.update_in(cx, |this, window, cx| {
                         if timed_out && this.settings.pending_saves > 0 {
                             eprintln!("{}", t!(Msg::SettingsCloseTimeout));
+                            this.settings.close_forced = true;
                         }
-                        let done = timed_out || this.settings.pending_saves == 0;
-                        if done {
+                        if !timed_out && this.settings.pending_saves > 0 {
+                            return false;
+                        }
+                        // The request is finished: hand it back to the full
+                        // guard, which may prompt for schedule edits made
+                        // during the wait instead of closing silently.
+                        if let Some(task) = this.settings.closing.take() {
+                            task.detach();
+                        }
+                        if this.dialog == Some(Dialog::Unsaved(Then::Quit)) {
+                            // The prompt already owns the decision.
+                            return true;
+                        }
+                        if this.may_close(window, cx) {
                             window.remove_window();
                         }
-                        done
+                        true
                     });
                     if done.unwrap_or(true) {
                         break;
@@ -320,6 +337,18 @@ impl Operator {
         }
         cx.notify();
         false
+    }
+
+    #[cfg(test)]
+    pub(crate) fn close_pending(&self) -> bool {
+        self.settings.closing.is_some()
+    }
+
+    /// Drops a pending close request, e.g. when the operator cancels the
+    /// unsaved-schedule prompt.
+    pub(crate) fn cancel_close_request(&mut self) {
+        self.settings.closing = None;
+        self.settings.close_forced = false;
     }
 
     fn choose_monitor(&mut self, index: usize) {

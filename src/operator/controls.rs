@@ -350,7 +350,12 @@ impl Operator {
                 }
                 Some(Dialog::Open) | None => return,
             },
-            Control::DialogCancel if self.dialog.is_some() => self.close_dialog(window, cx),
+            Control::DialogCancel if self.dialog.is_some() => {
+                if self.dialog == Some(Dialog::Unsaved(Then::Quit)) {
+                    self.cancel_close_request();
+                }
+                self.close_dialog(window, cx);
+            }
             _ => return,
         }
         cx.notify();

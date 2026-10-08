@@ -2562,6 +2562,105 @@ mod settings_ui {
         release.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    fn gated_writer() -> (settings::Writer, Arc<std::sync::atomic::AtomicBool>) {
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hold = release.clone();
+        let writer: settings::Writer = Arc::new(move |path, settings| {
+            while !hold.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            settings::save(path, settings)
+        });
+        (writer, release)
+    }
+
+    fn drain_writer(
+        vcx: &mut VisualTestContext,
+        dir: &tempfile::TempDir,
+        release: &std::sync::atomic::AtomicBool,
+    ) {
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        let end = Instant::now() + Duration::from_secs(10);
+        while file(dir).is_none() {
+            assert!(Instant::now() < end, "bounded wait for the write");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        vcx.executor().advance_clock(Duration::from_millis(200));
+        vcx.run_until_parked();
+    }
+
+    fn quit(vcx: &mut VisualTestContext, operator: &Entity<Operator>) -> bool {
+        vcx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)))
+    }
+
+    #[gpui::test]
+    fn schedule_edit_during_the_settings_wait_prompts_instead_of_closing(cx: &mut TestAppContext) {
+        use crate::operator::{Dialog, Then};
+        let dir = tempfile::tempdir().unwrap();
+        let (writer, release) = gated_writer();
+        let (mut vcx, operator, _slot) = start(cx, &dir, writer);
+        settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == 1);
+        open_options(&mut vcx);
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        assert!(!quit(&mut vcx, &operator));
+        add_song(&mut vcx, &operator, "Signal Hymn");
+        drain_writer(&mut vcx, &dir, &release);
+        assert_eq!(windows(&mut vcx), 1, "the edit is not lost");
+        operator.read_with(&vcx, |o, _| {
+            assert_eq!(o.dialog, Some(Dialog::Unsaved(Then::Quit)));
+            assert!(!o.close_pending());
+        });
+    }
+
+    #[gpui::test]
+    fn second_quit_then_cancel_drops_the_close_request(cx: &mut TestAppContext) {
+        use crate::operator::{Dialog, Then};
+        let dir = tempfile::tempdir().unwrap();
+        let (writer, release) = gated_writer();
+        let (mut vcx, operator, _slot) = start(cx, &dir, writer);
+        settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == 1);
+        open_options(&mut vcx);
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        assert!(!quit(&mut vcx, &operator));
+        add_song(&mut vcx, &operator, "Signal Hymn");
+        assert!(!quit(&mut vcx, &operator));
+        assert_eq!(
+            operator.read_with(&vcx, |o, _| o.dialog),
+            Some(Dialog::Unsaved(Then::Quit))
+        );
+        click(&mut vcx, "dialog-cancel");
+        assert!(!operator.read_with(&vcx, |o, _| o.close_pending()));
+        drain_writer(&mut vcx, &dir, &release);
+        assert_eq!(windows(&mut vcx), 1, "Cancel keeps the window open");
+        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
+    }
+
+    #[gpui::test]
+    fn stuck_writer_with_a_dirty_schedule_prompts_after_the_bound(cx: &mut TestAppContext) {
+        use crate::operator::{Dialog, Then};
+        let dir = tempfile::tempdir().unwrap();
+        let (writer, release) = gated_writer();
+        let (mut vcx, operator, _slot) = start(cx, &dir, writer);
+        settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == 1);
+        open_options(&mut vcx);
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        assert!(!quit(&mut vcx, &operator));
+        add_song(&mut vcx, &operator, "Signal Hymn");
+        vcx.executor().advance_clock(Duration::from_secs(7));
+        vcx.run_until_parked();
+        assert_eq!(windows(&mut vcx), 1);
+        assert_eq!(
+            operator.read_with(&vcx, |o, _| o.dialog),
+            Some(Dialog::Unsaved(Then::Quit))
+        );
+        click(&mut vcx, "dialog-confirm");
+        assert_eq!(windows(&mut vcx), 0, "discarding after the bound closes");
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     #[gpui::test]
     fn options_before_loaded_never_rewrites_the_saved_monitor(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();

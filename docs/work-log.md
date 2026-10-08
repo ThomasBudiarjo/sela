@@ -3567,3 +3567,10 @@ PY
 - Docs: operator-shell.md unmask barrier rewritten.
 - Verified: fmt, clippy -D warnings, cargo test --all-targets, ruff clean; scripts/live-output-windows.py PASS (.amp/in/artifacts/live-output-unmask-r2c; first two attempts failed with "window lost the foreground before 'tab'", an environment focus flake); release-binary scripts/prep-windows.py PASS (.amp/in/artifacts/prep-unmask-r2, Black observed 157 ms, lit 172 ms).
 - Next: none for this fix.
+
+### fix-foundation-quit-guard-r2 (foundation scrutiny round 2)
+- Decision: the settings-close task is the single close request (`SettingsState.closing`). On completion (saves landed or 5 s bound, which sets `close_forced`) it detaches itself and re-runs `Operator::may_close` instead of `remove_window`, so a dirty schedule shows the Unsaved(Quit) prompt; if that prompt is already open it just ends. Cancel on the Unsaved(Quit) dialog calls `cancel_close_request` (drops task, clears forced flag). UI keeps painting; the wait stays on the executor.
+- Tests (src/tests.rs settings_ui): `schedule_edit_during_the_settings_wait_prompts_instead_of_closing`, `second_quit_then_cancel_drops_the_close_request`, `stuck_writer_with_a_dirty_schedule_prompts_after_the_bound`; existing `quit_after_ok_waits_for_the_write_and_keeps_painting` and `quit_after_a_stuck_write_force_closes_after_the_bound` still pass.
+- Verified: fmt, clippy -D warnings, cargo test --all-targets, ruff clean; scripts/options-windows.py PASS (.amp/in/artifacts/options-quit-r2); scripts/schedule-windows.py PASS (.amp/in/artifacts/schedule-quit-r2).
+- Next: none for this fix.
+
