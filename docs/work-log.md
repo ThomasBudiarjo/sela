@@ -3473,3 +3473,35 @@ PY
 - Evidence: `.amp/in/artifacts/prep-windows-release/`, `.amp/in/artifacts/live-output-prep/`.
 - Next: preview cue consumer for the Preview lane when preview thumbnails
   need prepared cues; release-build paint cost of 100-slide preview (virtualize tiles).
+
+### fix-foundation-live-prep-barriers — M0-05/M0-06 scrutiny fix — 2026-10-08 (Asia/Jakarta)
+
+- Scope: foundation scrutiny items #13/#14. (A) A Live double-click under
+  Black/Clear/Logo no longer clears the mask before the clicked slide is
+  presented; (B) deferred font/image cues are fenced.
+- Decisions: `Operator.unmask_on_present` records the double-clicked slide
+  while it sits in `pending_cues` or `deferred_send`; `poll_cues` lifts the
+  mask (then the existing `unmask_after_cue` waits for the supervisor slot)
+  only when that slide is presented. Failure, `Busy`, refusal, no output,
+  image substitute, new item, output toggle, another request or a manual
+  mask toggle clear it, so the mask stays on and the failed status shows.
+  `deferred_send` is now `DeferredSend {index, item, output session}`; it is
+  cleared by `cancel_cues` and by any newer `send`, and `retry_deferred`
+  (font landing, image landing) sends only if item and session still match.
+  A font re-resolution refresh only re-sends when the landed version is the
+  live item. Cold-cache benchmark wording corrected: only the first sample
+  is cold on the worker (docs/delivery.md, src/tests.rs).
+- Checks: `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets
+  -- -D warnings`, `cargo test --locked --all-targets -- --test-threads=12`,
+  `python -m ruff check scripts` all exit 0. New GPUI tests:
+  `live_double_click_under_black_never_reveals_the_previous_slide`,
+  `failed_live_double_click_keeps_the_mask_and_reports`,
+  `deferred_cue_dies_with_a_newer_request_or_a_new_session`. Native:
+  `scripts/live-output-windows.py` PASS; release `scripts/prep-windows.py`
+  PASS (Black on audience 141 ms, button lit 172 ms, bound 250 ms).
+- Unexecuted: an image-background (uncached) variant of the deferral tests
+  uses the font-deferral path, which shares `retry_deferred`; native check
+  of a slow-prep double-click (no seed with a slow cue).
+- Evidence: `.amp/in/artifacts/live-output-barriers/`,
+  `.amp/in/artifacts/prep-windows-barriers/`.
+- Next: none for this fix.
