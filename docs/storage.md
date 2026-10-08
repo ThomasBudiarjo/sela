@@ -68,16 +68,16 @@ Snapshot occurrence identity currently is `(schedule ID, revision, position)`;
 stable cross-edit/live selection identity belongs to M1-09, not this storage slice.
 
 Fresh schema 0 initializes schema 5. Existing schema 1, 2, 3 or 4 upgrades only after
-the verified backup gate documented below (`<profile>.schema1-backup`,
-`<profile>.schema2-backup` or `<profile>.schema3-backup`; every older schema
-goes straight to 4 with one backup). A schema-0 database
+the verified backup gate documented below, straight to schema 5 behind exactly
+one `<profile>.schema{N}-backup` (`schema1-backup` to `schema4-backup`, N = the
+version found on open). A schema-0 database
 with user objects is foreign and rejected. Migration and validation share one
 transaction; failed migration drops/rolls back it. Nonmatching application IDs,
 newer/unsupported versions, SQLite quick-check/foreign-key failures and malformed
 payload reads are rejected. No reset, overwrite, rename or recovery mutation.
 Required column checks run at open; payload semantic validation runs on bounded
 reads. This is not an adversarial SQLite sandbox or exhaustive schema attestation.
-Backup verification never invokes upgrading open. Versions above 4 remain
+Backup verification never invokes upgrading open. Versions above 5 remain
 `Unsupported`; no migration resets, overwrites or replaces those profiles.
 
 ## Bounds and remaining parent work

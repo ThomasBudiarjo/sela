@@ -63,6 +63,21 @@ pub(crate) const STATUS_BAR_H: f32 = 30.;
 pub(crate) const PANE_FOOTER_H: f32 = 26.;
 pub(crate) const CONTROL_H: f32 = 26.;
 
+// Spacing in logical pixels. The scale equals GPUI's 16 px-rem utilities
+// (`*_1` = 4, `*_2` = 8, `*_3` = 12).
+pub(crate) const SPACE_XS: f32 = 4.;
+pub(crate) const SPACE_S: f32 = 8.;
+pub(crate) const SPACE_M: f32 = 12.;
+/// Horizontal padding of pane headers, footers and message rows.
+pub(crate) const PANE_PAD_X: f32 = SPACE_M;
+/// Gap between sibling controls and tiles.
+pub(crate) const ROW_GAP: f32 = SPACE_S;
+pub(crate) const MENU_ITEM_PAD_X: f32 = SPACE_M;
+/// Inset of a menu row from the popup edge.
+pub(crate) const MENU_ITEM_MARGIN_X: f32 = SPACE_XS;
+pub(crate) const DIALOG_PAD: f32 = SPACE_M;
+pub(crate) const DIALOG_GAP: f32 = SPACE_S;
+
 // Radii.
 pub(crate) const RADIUS: f32 = 4.;
 pub(crate) const RADIUS_SMALL: f32 = 3.;
@@ -76,6 +91,15 @@ mod tests {
         assert_eq!(PANE_HEADER_H, 32.);
         assert_eq!(CHROME, 0xf4f4f3);
         assert_eq!(BORDER, 0xdcdedc);
+    }
+
+    #[test]
+    fn spacing_tokens_match_the_rendered_chrome() {
+        assert_eq!((SPACE_XS, SPACE_S, SPACE_M), (4., 8., 12.));
+        assert_eq!(PANE_PAD_X, 12.);
+        assert_eq!(ROW_GAP, 8.);
+        assert_eq!((MENU_ITEM_PAD_X, MENU_ITEM_MARGIN_X), (12., 4.));
+        assert_eq!((DIALOG_PAD, DIALOG_GAP), (12., 8.));
     }
 
     #[test]

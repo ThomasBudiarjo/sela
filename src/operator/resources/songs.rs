@@ -122,7 +122,7 @@ impl Operator {
                             .key_context("SelaControl SelaSongRow")
                             .flex_shrink_0()
                             .h(px(28.))
-                            .px_3()
+                            .px(px(PANE_PAD_X))
                             .flex()
                             .items_center()
                             .border_b_1()

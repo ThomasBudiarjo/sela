@@ -3545,3 +3545,10 @@ PY
 - Options sidebar widened 196->224 px, dialog 660->720 px, section title no longer truncated, the 'not available' tag moved under the label (still greyed/visible); tab order unchanged. Seven Live status literals in preview_live.rs moved to Msg keys (EN+ID; Live-prefixed keys for the three whose existing keys had different text); Msg::ALL count 386.
 - Verified: scripts/i18n-windows.py PASS and scripts/options-windows.py PASS (captures .amp/in/artifacts/i18n-fit/04,08 show full labels in EN and ID); fmt, clippy -D warnings, cargo test --all-targets, ruff all clean.
 
+
+### fix-foundation-spacing-tokens-storage-doc (VAL-SHELL-006, storage doc)
+- src/ui/theme.rs gains SPACE_XS/S/M (4/8/12 px = GPUI 16 px-rem `*_1/_2/_3`), PANE_PAD_X, ROW_GAP, MENU_ITEM_PAD_X, MENU_ITEM_MARGIN_X, DIALOG_PAD, DIALOG_GAP; used in schedule.rs, preview_live.rs, resources/songs.rs, menus.rs (item row), dialogs/mod.rs and the Options dialog chrome. Values equal the previous utilities, so rendering is unchanged. Test `spacing_tokens_match_the_rendered_chrome`.
+- docs/storage.md migration contract corrected: schema 0 -> 5; schema 1-4 -> 5 behind one `<profile>.schema{N}-backup`; versions above 5 Unsupported. No other current-tense 'schema 4 current' claims in docs/ (historical sections kept).
+- Indonesian clip item: before/after captures show 'Presentasi' tab and the drop hint fit at 1280x800; the apparent clipping in 08-options-indonesian.png was the modal Options dialog covering them, so no layout change was needed.
+- Verified: fmt, clippy -D warnings, cargo test --all-targets, ruff exit 0; i18n, live-output, schedule, song-editor, operator-menu, options native scripts exit 0. Before/after i18n captures (.amp/in/artifacts/spacing-before vs spacing-after-i18n) differ only in the bottom 8 px strip; audience captures byte-identical.
+- Next: none for this fix.
