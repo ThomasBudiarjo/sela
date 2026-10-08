@@ -466,24 +466,19 @@ impl Operator {
         let sections = SECTIONS.map(|(msg, slug, available)| {
             div()
                 .debug_selector(move || format!("options-section-{slug}"))
-                .h(px(CONTROL_H + 2.))
+                .min_h(px(CONTROL_H + 2.))
                 .px_3()
                 .flex()
-                .items_center()
-                .justify_between()
+                .flex_col()
+                .justify_center()
+                .when(!available, |d| d.py_1())
                 .when(msg == Msg::SectionMainOutput, |d| {
                     d.bg(rgb(SELECTED_ROW)).font_weight(FontWeight::MEDIUM)
                 })
                 .when(!available, |d| d.text_color(rgb(DISABLED)))
-                .child(div().flex_1().min_w_0().truncate().child(t!(msg)))
+                .child(div().child(t!(msg)))
                 .when(!available, |d| {
-                    d.child(
-                        div()
-                            .flex_shrink_0()
-                            .pl_2()
-                            .text_size(px(TEXT_TILE))
-                            .child(t!(Msg::NotAvailable)),
-                    )
+                    d.child(div().text_size(px(TEXT_TILE)).child(t!(Msg::NotAvailable)))
                 })
         });
         let tabs = MAIN_OUTPUT_TABS.map(|(msg, slug, available)| {
@@ -515,7 +510,7 @@ impl Operator {
                 .child(
                     div()
                         .debug_selector(|| "options-dialog".into())
-                        .w(px(660.))
+                        .w(px(720.))
                         .max_w_full()
                         .h(px(500.))
                         .flex()
@@ -548,7 +543,7 @@ impl Operator {
                                 .flex()
                                 .child(
                                     div()
-                                        .w(px(196.))
+                                        .w(px(224.))
                                         .flex_shrink_0()
                                         .flex()
                                         .flex_col()

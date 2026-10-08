@@ -246,6 +246,13 @@ pub enum Msg {
     PreparingBackground,
     ResolvingFonts,
     CueBusy,
+    LiveOutputOff,
+    LiveSelectSongFirst,
+    LivePreviewNoSlides,
+    LiveNothingLive,
+    TurnOnLiveFirst,
+    LiveStillStarting,
+    OutputStateUnknown,
     CueFailed,
     RefusalNotConnected,
     RefusalWrongExtent,
@@ -634,6 +641,13 @@ impl Msg {
         Msg::PreparingBackground,
         Msg::ResolvingFonts,
         Msg::CueBusy,
+        Msg::LiveOutputOff,
+        Msg::LiveSelectSongFirst,
+        Msg::LivePreviewNoSlides,
+        Msg::LiveNothingLive,
+        Msg::TurnOnLiveFirst,
+        Msg::LiveStillStarting,
+        Msg::OutputStateUnknown,
         Msg::CueFailed,
         Msg::RefusalNotConnected,
         Msg::RefusalWrongExtent,
@@ -1023,6 +1037,13 @@ impl Msg {
             Self::PreparingBackground => "Preparing background…",
             Self::ResolvingFonts => "Resolving fonts…",
             Self::CueBusy => "Still preparing earlier slides; try again",
+            Self::LiveOutputOff => "Live output is off",
+            Self::LiveSelectSongFirst => "Select a song to preview first",
+            Self::LivePreviewNoSlides => "The previewed song has no slides",
+            Self::LiveNothingLive => "Nothing is live",
+            Self::TurnOnLiveFirst => "Turn on Live output first",
+            Self::LiveStillStarting => "Live output is still starting",
+            Self::OutputStateUnknown => "Output state unknown · turn Live off and on",
             Self::CueFailed => "Slide could not be prepared: {error}",
             Self::RefusalNotConnected => "Live output is not connected",
             Self::RefusalWrongExtent => "Output size changed; try again",
@@ -1457,6 +1478,15 @@ impl Msg {
             Self::PreparingBackground => "Menyiapkan latar…",
             Self::ResolvingFonts => "Menyiapkan fon…",
             Self::CueBusy => "Masih menyiapkan slide sebelumnya; coba lagi",
+            Self::LiveOutputOff => "Output Live mati",
+            Self::LiveSelectSongFirst => "Pilih lagu untuk dipratinjau dulu",
+            Self::LivePreviewNoSlides => "Lagu yang dipratinjau tidak punya slide",
+            Self::LiveNothingLive => "Tidak ada yang tayang",
+            Self::TurnOnLiveFirst => "Nyalakan output Live dulu",
+            Self::LiveStillStarting => "Output Live masih dimulai",
+            Self::OutputStateUnknown => {
+                "Status output tidak diketahui · matikan lalu nyalakan Live"
+            }
             Self::CueFailed => "Slide tidak dapat disiapkan: {error}",
             Self::RefusalNotConnected => "Output langsung tidak terhubung",
             Self::RefusalWrongExtent => "Ukuran output berubah; coba lagi",
@@ -1789,7 +1819,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 379);
+        assert_eq!(Msg::ALL.len(), 386);
     }
 
     #[test]

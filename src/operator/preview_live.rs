@@ -468,7 +468,7 @@ impl Operator {
         self.cancel_cues();
         self.output_session += 1;
         if self.output.take().is_some() {
-            self.live_message = Some("Live output is off".into());
+            self.live_message = Some(t!(Msg::LiveOutputOff).into());
         } else {
             let launcher = self.launcher.clone();
             self.output = Some(Supervisor::start(
@@ -491,11 +491,11 @@ impl Operator {
 
     pub(crate) fn go_live(&mut self) {
         let Some(item) = self.preview.clone() else {
-            self.live_message = Some("Select a song to preview first".into());
+            self.live_message = Some(t!(Msg::LiveSelectSongFirst).into());
             return;
         };
         if item.slides.is_empty() {
-            self.live_message = Some("The previewed song has no slides".into());
+            self.live_message = Some(t!(Msg::LivePreviewNoSlides).into());
             return;
         }
         let index = self.preview_slide.min(item.slides.len() - 1);
@@ -514,7 +514,7 @@ impl Operator {
             self.live.as_ref().map(|item| item.slides.len()),
             self.requested_slide(),
         ) else {
-            self.live_message = Some("Nothing is live".into());
+            self.live_message = Some(t!(Msg::LiveNothingLive).into());
             return;
         };
         let target = if forward {
@@ -531,9 +531,9 @@ impl Operator {
 
     pub(crate) fn ready_for_cue(&mut self) -> bool {
         let message = match self.output.as_ref().map(Supervisor::status) {
-            None => "Turn on Live output first",
-            Some(Status::Starting) => "Live output is still starting",
-            Some(Status::Lost(_)) => "Output state unknown · turn Live off and on",
+            None => t!(Msg::TurnOnLiveFirst),
+            Some(Status::Starting) => t!(Msg::LiveStillStarting),
+            Some(Status::Lost(_)) => t!(Msg::OutputStateUnknown),
             Some(Status::Connected { .. }) => return true,
         };
         self.live_message = Some(message.into());

@@ -3539,3 +3539,9 @@ PY
 - Unexecuted: native quit-with-slow-writer (the real writer is fast; covered by
   GPUI tests with injected writer/clock).
 - Next: none for this fix.
+
+
+### fix-foundation-i18n-options-fit (VAL-I18N-005)
+- Options sidebar widened 196->224 px, dialog 660->720 px, section title no longer truncated, the 'not available' tag moved under the label (still greyed/visible); tab order unchanged. Seven Live status literals in preview_live.rs moved to Msg keys (EN+ID; Live-prefixed keys for the three whose existing keys had different text); Msg::ALL count 386.
+- Verified: scripts/i18n-windows.py PASS and scripts/options-windows.py PASS (captures .amp/in/artifacts/i18n-fit/04,08 show full labels in EN and ID); fmt, clippy -D warnings, cargo test --all-targets, ruff all clean.
+
