@@ -296,6 +296,9 @@ pub enum Msg {
     LanguageHint,
     SettingsSaveFailed,
     SettingsQueueFull,
+    SavingSettings,
+    LoadingSettings,
+    SettingsCloseTimeout,
     SettingsNoProfile,
     // Background image substitution warnings (images.rs).
     BgImageMissing,
@@ -679,6 +682,9 @@ impl Msg {
         Msg::LanguageHint,
         Msg::SettingsSaveFailed,
         Msg::SettingsQueueFull,
+        Msg::SavingSettings,
+        Msg::LoadingSettings,
+        Msg::SettingsCloseTimeout,
         Msg::SettingsNoProfile,
         Msg::BgImageMissing,
         Msg::BgImageChanged,
@@ -1069,6 +1075,9 @@ impl Msg {
             Self::LanguageHint => "Menus, buttons and dialogs use this language.",
             Self::SettingsSaveFailed => "Settings were not saved ({error})",
             Self::SettingsQueueFull => "Settings were not saved (queue full)",
+            Self::SavingSettings => "Saving settings…",
+            Self::LoadingSettings => "Loading settings…",
+            Self::SettingsCloseTimeout => "Settings may not have been saved (write timed out)",
             Self::SettingsNoProfile => "No profile folder; the choice lasts this session",
             Self::BgImageMissing => "Background image ‘{name}’ is missing; showing black",
             Self::BgImageChanged => {
@@ -1500,6 +1509,11 @@ impl Msg {
             Self::LanguageHint => "Menu, tombol, dan dialog memakai bahasa ini.",
             Self::SettingsSaveFailed => "Pengaturan tidak tersimpan ({error})",
             Self::SettingsQueueFull => "Pengaturan tidak tersimpan (antrean penuh)",
+            Self::SavingSettings => "Menyimpan pengaturan…",
+            Self::LoadingSettings => "Memuat pengaturan…",
+            Self::SettingsCloseTimeout => {
+                "Pengaturan mungkin tidak tersimpan (penulisan melewati batas waktu)"
+            }
             Self::SettingsNoProfile => {
                 "Tidak ada folder profil; pilihan berlaku untuk sesi ini saja"
             }
@@ -1775,7 +1789,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 376);
+        assert_eq!(Msg::ALL.len(), 379);
     }
 
     #[test]

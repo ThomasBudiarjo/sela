@@ -2272,6 +2272,7 @@ mod settings_ui {
                 ]
             }),
             writer,
+            loader: settings::default_loader(),
         };
         (config, slot)
     }
@@ -2468,6 +2469,175 @@ mod settings_ui {
         settle(&mut vcx, &operator, "file written", |_| {
             file(&dir).is_some()
         });
+    }
+
+    fn start_loading(
+        cx: &mut TestAppContext,
+        dir: &tempfile::TempDir,
+        writer: settings::Writer,
+        gate: Arc<std::sync::atomic::AtomicBool>,
+    ) -> (VisualTestContext, Entity<Operator>, Arc<MonitorSlot>) {
+        let (mut config, slot) = config(writer);
+        config.loader = Arc::new(move |path| {
+            while !gate.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            settings::load(path)
+        });
+        let (mut cx, operator, _) =
+            with_settings(cx, Some(library_with_song(dir)), "apply", config);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "monitors", |o| {
+            o.settings.monitors.is_some()
+        });
+        (cx, operator, slot)
+    }
+
+    fn windows(cx: &mut VisualTestContext) -> usize {
+        cx.read(|cx| cx.windows().len())
+    }
+
+    #[gpui::test]
+    fn quit_after_ok_waits_for_the_write_and_keeps_painting(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let writer: settings::Writer = Arc::new(|path, settings| {
+            std::thread::sleep(Duration::from_secs(2));
+            settings::save(path, settings)
+        });
+        let (mut vcx, operator, _slot) = start(cx, &dir, writer);
+        open_options(&mut vcx);
+        click(&mut vcx, "options-language-id");
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        let started = Instant::now();
+        let closed = vcx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+        assert!(!closed, "close waits for the pending save");
+        assert!(started.elapsed() < Duration::from_millis(1000));
+        assert!(
+            operator.read_with(&vcx, |o, _| o
+                .settings_note()
+                .is_some_and(|note| note.contains("Menyimpan pengaturan")
+                    || note.contains("Saving settings")))
+        );
+        assert_eq!(windows(&mut vcx), 1);
+        let end = Instant::now() + Duration::from_secs(10);
+        while file(&dir).is_none() {
+            assert!(Instant::now() < end, "bounded wait for the write");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        vcx.executor().advance_clock(Duration::from_millis(200));
+        vcx.run_until_parked();
+        assert_eq!(windows(&mut vcx), 0, "closed once the write landed");
+        let text = file(&dir).unwrap();
+        assert!(text.contains("DISPLAY6") && text.contains("language=id"));
+        i18n::set_language(Language::English);
+    }
+
+    #[gpui::test]
+    fn quit_after_a_stuck_write_force_closes_after_the_bound(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hold = release.clone();
+        let writer: settings::Writer = Arc::new(move |path, settings| {
+            while !hold.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            settings::save(path, settings)
+        });
+        let (mut vcx, operator, _slot) = start(cx, &dir, writer);
+        open_options(&mut vcx);
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        assert!(!vcx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx))));
+        vcx.executor().advance_clock(Duration::from_secs(2));
+        vcx.run_until_parked();
+        assert_eq!(windows(&mut vcx), 1, "still within the bound");
+        vcx.executor().advance_clock(Duration::from_secs(4));
+        vcx.run_until_parked();
+        assert_eq!(
+            windows(&mut vcx),
+            0,
+            "a stuck writer cannot trap the window"
+        );
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[gpui::test]
+    fn options_before_loaded_never_rewrites_the_saved_monitor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = "sela-settings 1\noutput_monitor=\\\\.\\DISPLAY6\nlanguage=id\n";
+        std::fs::write(settings::path_in(dir.path()), saved).unwrap();
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (mut vcx, operator, slot) =
+            start_loading(cx, &dir, settings::default_writer(), gate.clone());
+        open_options(&mut vcx);
+        assert!(vcx.debug_bounds("options-loading").is_some());
+        click(&mut vcx, "options-monitor-1");
+        click(&mut vcx, "options-language-en");
+        click(&mut vcx, "dialog-confirm");
+        vcx.run_until_parked();
+        assert_eq!(
+            file(&dir).as_deref(),
+            Some(saved),
+            "inert OK writes nothing"
+        );
+        gate.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut vcx, &operator, "loaded", |o| {
+            o.settings.current.output_monitor.is_some()
+        });
+        assert_eq!(slot.get(), r"name:\\.\DISPLAY6");
+        vcx.run_until_parked();
+        assert_eq!(file(&dir).as_deref(), Some(saved));
+        assert_eq!(i18n::language(), Language::Indonesian);
+        i18n::set_language(Language::English);
+    }
+
+    #[gpui::test]
+    fn options_open_during_load_rebase_on_loaded_and_keep_a_missing_monitor(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = "sela-settings 1\noutput_monitor=\\\\.\\DISPLAY99\n";
+        std::fs::write(settings::path_in(dir.path()), saved).unwrap();
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (mut vcx, operator, _slot) =
+            start_loading(cx, &dir, settings::default_writer(), gate.clone());
+        open_options(&mut vcx);
+        gate.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut vcx, &operator, "loaded", |o| {
+            o.settings.draft == Some(Some(r"\\.\DISPLAY99".to_string()))
+        });
+        assert!(vcx.debug_bounds("options-loading").is_none());
+        click(&mut vcx, "dialog-confirm");
+        vcx.run_until_parked();
+        assert_eq!(file(&dir).as_deref(), Some(saved), "missing monitor kept");
+    }
+
+    #[gpui::test]
+    fn late_loaded_never_overwrites_an_applied_choice(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (mut vcx, operator, slot) =
+            start_loading(cx, &dir, settings::default_writer(), gate.clone());
+        // Settle the loader gate open only after the choice is applied.
+        operator.update(&mut vcx, |o, cx| {
+            o.settings.force_loaded_for_test();
+            cx.notify();
+        });
+        open_options(&mut vcx);
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        gate.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut vcx, &operator, "file written", |_| {
+            file(&dir).is_some()
+        });
+        vcx.run_until_parked();
+        assert_eq!(slot.get(), r"name:\\.\DISPLAY6");
+        assert_eq!(
+            operator.read_with(&vcx, |o, _| o.settings.current.output_monitor.clone()),
+            Some(r"\\.\DISPLAY6".to_string())
+        );
+        assert!(file(&dir).unwrap().contains("DISPLAY6"));
     }
 }
 

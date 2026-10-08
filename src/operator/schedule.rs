@@ -114,7 +114,7 @@ impl Operator {
         } else if self.schedule.is_dirty() {
             self.open_dialog(Dialog::Unsaved(Then::Quit), window, cx);
         } else {
-            return true;
+            return self.settings_allow_close(window, cx);
         }
         cx.notify();
         false

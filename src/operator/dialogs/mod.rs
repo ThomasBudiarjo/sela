@@ -91,7 +91,11 @@ impl Operator {
                 self.selected_entry = None;
                 self.schedule_message = None;
             }
-            Then::Quit => window.remove_window(),
+            Then::Quit => {
+                if self.settings_allow_close(window, cx) {
+                    window.remove_window();
+                }
+            }
         }
     }
 

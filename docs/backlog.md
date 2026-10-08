@@ -897,6 +897,9 @@ instructions and the work log for precise evidence and limits.
   dependencies and profile/data locations; no publishing/signing secret required.
 - [ ] Add observed core settings and output selection, persistence, validation and
   cancel/reset behavior without exposing unsupported features as functional.
+  Lifecycle fix (2026-10-08): quit waits (bounded 5 s) for accepted settings
+  saves, the worker drains queued saves, and Options is inert until the initial
+  load replies.
   Slice **M1-16-settings** (implemented-unqualified, 2026-10-08): versioned
   per-profile `settings.txt` (atomic temp+rename, corrupt file kept as
   `settings.txt.bad` with defaults and one note, worker thread), Options dialog

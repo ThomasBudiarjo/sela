@@ -3505,3 +3505,37 @@ PY
 - Evidence: `.amp/in/artifacts/live-output-barriers/`,
   `.amp/in/artifacts/prep-windows-barriers/`.
 - Next: none for this fix.
+
+### Foundation fix / fix-foundation-settings-lifecycle — M1-16 settings slice — 2026-10-08
+
+- State: implemented-unqualified (settings slice of M1-16).
+- (A) Exit drain: `Worker` loop no longer breaks when the reply receiver is
+  gone, so every queued `Save` is written after `Worker` drop. `SettingsState`
+  counts accepted saves (`pending_saves`, decremented on `Saved`).
+  `may_close` (Ctrl+Q, File > Exit, window close) and the unsaved-dialog Quit
+  path call `settings_allow_close`: while saves are pending it returns false,
+  shows "Saving settings…" in the settings note, and a window task polls every
+  25 ms and removes the window once the count reaches 0. After 5 s it closes
+  anyway and writes "Settings may not have been saved (write timed out)" to
+  stderr. UI stays live (no blocking wait).
+- (B) Load race: `loaded` flag (true at once when there is no worker). Until
+  `Loaded` arrives Options shows "Loading settings…", monitor/language rows are
+  inert and OK writes nothing. A `Loaded` that arrives with Options open
+  reseeds the drafts from the persisted values; an `applied` flag stops a late
+  `Loaded` from replacing an operator choice. New strings EN+ID:
+  SavingSettings, LoadingSettings, SettingsCloseTimeout. `Worker::start_with`
+  and `SettingsConfig.loader` inject a slow loader for tests.
+- Tests: `worker_drains_every_queued_save_after_the_worker_is_dropped`,
+  `quit_after_ok_waits_for_the_write_and_keeps_painting` (2 s writer),
+  `quit_after_a_stuck_write_force_closes_after_the_bound`,
+  `options_before_loaded_never_rewrites_the_saved_monitor` (DISPLAY6 + id),
+  `options_open_during_load_rebase_on_loaded_and_keep_a_missing_monitor`
+  (DISPLAY99), `late_loaded_never_overwrites_an_applied_choice`. The worker
+  drain test was added with the fix rather than watched failing first.
+- Checks: fmt, clippy `-D warnings`, `cargo test --locked --all-targets
+  -- --test-threads=12`, `python -m ruff check scripts` all exit 0;
+  `python scripts/options-windows.py` PASS (evidence
+  `.amp/in/artifacts/options-lifecycle/`).
+- Unexecuted: native quit-with-slow-writer (the real writer is fast; covered by
+  GPUI tests with injected writer/clock).
+- Next: none for this fix.

@@ -233,6 +233,12 @@ pub fn default_writer() -> Writer {
     Arc::new(save)
 }
 
+pub type Loader = Arc<dyn Fn(&Path) -> Loaded + Send + Sync>;
+
+pub fn default_loader() -> Loader {
+    Arc::new(load)
+}
+
 enum Job {
     Load,
     Save(Settings),
@@ -254,6 +260,10 @@ pub struct Worker {
 
 impl Worker {
     pub fn start(path: PathBuf, writer: Writer) -> std::io::Result<Self> {
+        Self::start_with(path, writer, default_loader())
+    }
+
+    pub fn start_with(path: PathBuf, writer: Writer, loader: Loader) -> std::io::Result<Self> {
         let (jobs, job_rx) = mpsc::sync_channel::<Job>(QUEUE);
         let (reply_tx, replies) = mpsc::channel();
         let thread = std::thread::Builder::new()
@@ -261,14 +271,13 @@ impl Worker {
             .spawn(move || {
                 for job in job_rx {
                     let reply = match job {
-                        Job::Load => Reply::Loaded(load(&path)),
+                        Job::Load => Reply::Loaded(loader(&path)),
                         Job::Save(settings) => Reply::Saved(
                             writer(&path, &settings).map_err(|error| error.to_string()),
                         ),
                     };
-                    if reply_tx.send(reply).is_err() {
-                        break;
-                    }
+                    // A dropped receiver must not discard saves still queued.
+                    let _ = reply_tx.send(reply);
                 }
             })?;
         Ok(Self {
@@ -301,8 +310,8 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        // Closing the queue lets the thread finish queued writes and exit; the
-        // handle is detached so a slow write never delays the UI thread.
+        // Closing the queue lets the thread finish every queued write and exit;
+        // the handle is detached so a slow write never delays the UI thread.
         self.jobs = None;
         self.thread.take();
     }
@@ -434,6 +443,25 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(load(&path).settings, chosen("A"));
+    }
+
+    #[test]
+    fn worker_drains_every_queued_save_after_the_worker_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_in(dir.path());
+        let writer: Writer = Arc::new(|path, settings| {
+            std::thread::sleep(Duration::from_millis(200));
+            save(path, settings)
+        });
+        let worker = Worker::start(path.clone(), writer).unwrap();
+        assert!(worker.save(chosen("A")));
+        assert!(worker.save(chosen("B")));
+        drop(worker);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while load(&path).settings != chosen("B") {
+            assert!(Instant::now() < deadline, "second save was dropped");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

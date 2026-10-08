@@ -229,6 +229,7 @@ fn main() {
                     slot: slot.clone(),
                     list_monitors: std::sync::Arc::new(list_monitors),
                     writer: sela::settings::default_writer(),
+                    loader: sela::settings::default_loader(),
                 };
                 let operator = cx.new(|cx| {
                     Operator::with_settings(library, audience_launcher(slot), config, cx)

@@ -34,6 +34,7 @@ pub(crate) struct SettingsConfig {
     pub(crate) slot: Arc<MonitorSlot>,
     pub(crate) list_monitors: MonitorLister,
     pub(crate) writer: settings::Writer,
+    pub(crate) loader: settings::Loader,
 }
 
 impl Default for SettingsConfig {
@@ -42,6 +43,7 @@ impl Default for SettingsConfig {
             slot: Arc::default(),
             list_monitors: Arc::new(Vec::new),
             writer: settings::default_writer(),
+            loader: settings::default_loader(),
         }
     }
 }
@@ -51,6 +53,15 @@ pub(crate) struct SettingsState {
     worker: Option<settings::Worker>,
     load_note: Option<String>,
     save_error: Option<String>,
+    /// The initial load replied (or there is nothing to load). Options stays
+    /// inert until then so a draft never starts from defaults.
+    loaded: bool,
+    /// Accepted saves whose `Saved` reply has not been polled yet.
+    pending_saves: usize,
+    /// A choice was applied before `Loaded`; the late reply must not undo it.
+    applied: bool,
+    /// Waiting for pending saves before the window closes.
+    closing: Option<Task<()>>,
     /// `None` while the monitor list is loading.
     pub(crate) monitors: Option<Vec<MonitorInfo>>,
     slot: Arc<MonitorSlot>,
@@ -70,8 +81,12 @@ impl SettingsState {
         cx: &mut Context<Operator>,
     ) -> Self {
         let worker = profile.and_then(|profile| {
-            let worker =
-                settings::Worker::start(settings::path_in(profile), config.writer.clone()).ok()?;
+            let worker = settings::Worker::start_with(
+                settings::path_in(profile),
+                config.writer.clone(),
+                config.loader.clone(),
+            )
+            .ok()?;
             worker.load().then_some(worker)
         });
         let lister = config.list_monitors;
@@ -84,11 +99,16 @@ impl SettingsState {
                 cx.notify();
             });
         });
+        let loaded = worker.is_none();
         let state = Self {
             current: Settings::default(),
             worker,
             load_note: None,
             save_error: None,
+            loaded,
+            pending_saves: 0,
+            applied: false,
+            closing: None,
             monitors: None,
             slot: config.slot,
             draft: None,
@@ -99,6 +119,11 @@ impl SettingsState {
         };
         state.sync_slot();
         state
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_loaded_for_test(&mut self) {
+        self.loaded = true;
     }
 
     fn sync_slot(&self) {
@@ -135,6 +160,8 @@ const MAIN_OUTPUT_TABS: [(Msg, &str, bool); 6] = [
     (Msg::ToolbarAlerts, "alerts", false),
 ];
 
+const CLOSE_WAIT: Duration = Duration::from_secs(5);
+const CLOSE_POLL: Duration = Duration::from_millis(25);
 const MONITOR_TAB_INDEX: isize = 800;
 const LANGUAGE_TAB_INDEX: isize = 780;
 
@@ -154,13 +181,25 @@ impl Operator {
             changed = true;
             match reply {
                 settings::Reply::Loaded(loaded) => {
-                    i18n::set_language(loaded.settings.language);
-                    self.settings.current = loaded.settings;
+                    self.settings.loaded = true;
                     self.settings.load_note = loaded.note;
-                    self.settings.sync_slot();
+                    if !self.settings.applied {
+                        i18n::set_language(loaded.settings.language);
+                        self.settings.current = loaded.settings;
+                        self.settings.sync_slot();
+                        if self.settings.draft.is_some() {
+                            self.settings.draft =
+                                Some(self.settings.current.output_monitor.clone());
+                            self.settings.language_draft = Some(self.settings.current.language);
+                        }
+                    }
                 }
-                settings::Reply::Saved(Ok(())) => self.settings.save_error = None,
+                settings::Reply::Saved(Ok(())) => {
+                    self.settings.pending_saves = self.settings.pending_saves.saturating_sub(1);
+                    self.settings.save_error = None;
+                }
                 settings::Reply::Saved(Err(error)) => {
+                    self.settings.pending_saves = self.settings.pending_saves.saturating_sub(1);
                     self.settings.save_error = Some(t!(Msg::SettingsSaveFailed, error = error));
                 }
             }
@@ -172,6 +211,9 @@ impl Operator {
     pub(crate) fn settings_note(&self) -> Option<String> {
         let mut notes = Vec::new();
         notes.extend(self.settings.load_note.clone());
+        if self.settings.closing.is_some() {
+            notes.push(t!(Msg::SavingSettings).into());
+        }
         if self.settings.monitor_missing() {
             notes.push(t!(
                 Msg::MonitorMissingNote,
@@ -204,6 +246,10 @@ impl Operator {
         let Some(draft) = self.settings.draft.take() else {
             return;
         };
+        if !self.settings.loaded {
+            self.settings.language_draft = None;
+            return;
+        }
         let language = self
             .settings
             .language_draft
@@ -214,11 +260,14 @@ impl Operator {
         if !monitor_changed && !language_changed {
             return;
         }
+        self.settings.applied = true;
         self.settings.current.output_monitor = draft;
         self.settings.current.language = language;
         self.settings.sync_slot();
         if let Some(worker) = &self.settings.worker {
-            if !worker.save(self.settings.current.clone()) {
+            if worker.save(self.settings.current.clone()) {
+                self.settings.pending_saves += 1;
+            } else {
                 self.settings.save_error = Some(t!(Msg::SettingsQueueFull).into());
             }
         } else {
@@ -235,18 +284,56 @@ impl Operator {
         }
     }
 
+    /// Close guard for settings writes. While an accepted save is unwritten
+    /// the close is deferred, with a status, and retried once the writer
+    /// answers; after `CLOSE_WAIT` the window closes anyway and the failure
+    /// is recorded so a stuck writer cannot trap the operator.
+    pub(crate) fn settings_allow_close(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.settings.pending_saves == 0 {
+            return true;
+        }
+        if self.settings.closing.is_none() {
+            let started = cx.background_executor().now();
+            self.settings.closing = Some(cx.spawn_in(window, async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(CLOSE_POLL).await;
+                    let timed_out = cx.background_executor().now() - started >= CLOSE_WAIT;
+                    let done = this.update_in(cx, |this, window, _| {
+                        if timed_out && this.settings.pending_saves > 0 {
+                            eprintln!("{}", t!(Msg::SettingsCloseTimeout));
+                        }
+                        let done = timed_out || this.settings.pending_saves == 0;
+                        if done {
+                            window.remove_window();
+                        }
+                        done
+                    });
+                    if done.unwrap_or(true) {
+                        break;
+                    }
+                }
+            }));
+        }
+        cx.notify();
+        false
+    }
+
     fn choose_monitor(&mut self, index: usize) {
         let name = index
             .checked_sub(1)
             .and_then(|i| self.settings.monitors.as_ref()?.get(i))
             .map(|m| m.name.clone());
-        if self.settings.draft.is_some() {
+        if self.settings.loaded && self.settings.draft.is_some() {
             self.settings.draft = Some(name);
         }
     }
 
     fn choose_language(&mut self, language: Language) {
-        if self.settings.language_draft.is_some() {
+        if self.settings.loaded && self.settings.language_draft.is_some() {
             self.settings.language_draft = Some(language);
         }
     }
@@ -415,6 +502,7 @@ impl Operator {
                 .child(t!(msg))
         });
         let loading = monitors.is_none();
+        let settings_loaded = self.settings.loaded;
         Some(
             div()
                 .debug_selector(|| "options-backdrop".into())
@@ -524,6 +612,13 @@ impl Operator {
                                                         .text_color(rgb(MUTED))
                                                         .child(t!(Msg::MonitorHint)),
                                                 )
+                                                .children((!settings_loaded).then(|| {
+                                                    div()
+                                                        .debug_selector(|| "options-loading".into())
+                                                        .text_size(px(TEXT_SMALL))
+                                                        .text_color(rgb(MUTED))
+                                                        .child(t!(Msg::LoadingSettings))
+                                                }))
                                                 .children(loading.then(|| {
                                                     div()
                                                         .text_size(px(TEXT_SMALL))
