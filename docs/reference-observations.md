@@ -677,3 +677,5 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 | EW8-OBS-068 | UNOBSERVED | Default folder of the native Save/Open schedule dialogs. Sela starts beside the current file, else beside the newest recent file, else `<profile>\Schedules`. |
 | EW8-OBS-069 | UNOBSERVED | Open Recent labelling and count (Sela: file name only, up to 10, newest first). EW8-OBS-053 records only that the item exists. |
 | EW8-OBS-070 | observed text, reused | Unsaved-changes wording "The current Schedule is not saved. Would you like to save it now?" comes from the recorded EW exit prompt (Yes/No/Cancel); Sela's buttons are Save / Don't Save / Cancel with Cancel as the default. |
+
+- schedule-remainder (2026-10-15): Sela adds a Duplicate Item entry to the schedule item menu although EW8-OBS-060 observed none in EW (deliberate deviation, VAL-SCHED-001). Shift/Ctrl multi-select, group move, drag-reorder insertion line/autoscroll/Esc cancel, and the Update items diff dialog remain best guesses (UNOBSERVED beyond EW8-OBS-059..061).

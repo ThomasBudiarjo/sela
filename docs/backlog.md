@@ -754,9 +754,10 @@ Depends on: M1-04, M1-06, M1-08. Tests: U, I, N.
 Progress: M1-09a (song items pinned to revisions, add/remove/reorder by buttons
 and drag, Save/Open with Ctrl+S/Ctrl+O, unsaved guard, stable live item
 identity) is **implemented-unqualified**; see
-[operator shell](operator-shell.md#m1-09a--basic-schedule). Duplicate/copy,
-multi-item move, autoscroll, theme/asset references and explicit library
-refresh remain open.
+[operator shell](operator-shell.md#m1-09a--basic-schedule). The remainder (duplicate,
+Shift/Ctrl multi-select and group move, drag reorder with autoscroll and Esc
+cancel, reviewable Update items in Schedule) is **implemented-unqualified**; see
+the work-log record "schedule-remainder". Theme/asset references remain open.
 
 Schedule files (**implemented-unqualified**, owner decision 2026-10-13): the
 user-facing schedule is a `.selaschedule` file with Save, Save As, Open, Open
@@ -769,12 +770,14 @@ Export Standalone Schedule, theme/asset snapshots in the file.
 
 - [x] Schedule documents: Save/Save As/Open/Open Recent/Close, versioned JSON,
   limits, atomic worker writes, hidden revisions (VAL-SCHFILE-001..007).
-- [ ] Add/remove/reorder/duplicate items and observed context/drag-drop actions,
-  including correct insertion target, autoscroll and canceled drag.
+- [x] Add/remove/reorder/duplicate items and observed context/drag-drop actions,
+  including correct insertion target, autoscroll and canceled drag (GPUI-tested;
+  native drag not executed).
 - [ ] Persist song/theme versions and asset/font references in schedule snapshots.
-- [ ] Make library refresh explicit with a reviewable difference and undo policy.
-- [ ] Define stable selection/live identity when preceding items move or delete.
-- [ ] Test duplicate occurrences, multi-item reorder, delete-live-item, canceled
+- [x] Make library refresh explicit with a reviewable difference (Cancel leaves
+  everything; no undo, the old revisions stay in the library).
+- [x] Define stable selection/live identity when preceding items move or delete.
+- [x] Test duplicate occurrences, multi-item reorder, delete-live-item, canceled
   edit and library update while the original revision is live.
 
 Acceptance: editing the service cannot silently retarget the current live cue;
