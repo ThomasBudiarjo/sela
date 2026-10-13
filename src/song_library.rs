@@ -1749,7 +1749,7 @@ impl Library {
             .border_2()
             .rounded(px(6.))
             .border_color(rgb(if selected { 0x536aca } else { 0xfbfbfa }))
-            .when(selected, |d| d.bg(rgb(theme::FOCUS_BG)))
+            .when(selected, |d| d.bg(rgb(theme::SELECTED_ROW)))
             .focus(|d| d.border_color(rgb(0x8fa1e0)))
             .cursor_pointer()
             .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
@@ -1950,7 +1950,11 @@ impl Library {
                     .justify_end()
                     .text_size(px(12.))
                     .text_color(rgb(if selected { 0x2f4f99 } else { 0x7a7f86 }))
-                    .bg(rgb(if selected { 0xdce3fa } else { 0xf1f1ef }))
+                    .bg(rgb(if selected {
+                        theme::SELECTED_ROW
+                    } else {
+                        0xf1f1ef
+                    }))
                     .cursor_pointer()
                     .on_click(cx.listener(move |s, _, w, cx| s.select_section(index, w, cx)))
                     .child((index + 1).to_string()),
@@ -2316,8 +2320,9 @@ impl Render for Library {
                                 div()
                                     .flex()
                                     .flex_shrink_0()
+                                    .items_end()
+                                    .h(px(theme::PANE_HEADER_H))
                                     .px_2()
-                                    .pt_1()
                                     .border_b_1()
                                     .border_color(rgb(theme::BORDER))
                                     .children(

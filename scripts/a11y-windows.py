@@ -158,6 +158,16 @@ def click_node(hwnd: int, node: dict) -> None:
     time.sleep(0.3)
 
 
+def show_live_output(hwnd: int) -> None:
+    """Live > Show Live Output through the open menu's UIA row."""
+    nw.press(hwnd, "alt+l")
+    time.sleep(0.4)
+    found = nodes_by_id(uia(hwnd))
+    if "bar-live-show" not in found:
+        raise nw.Failure("Live menu row bar-live-show missing from the UIA tree")
+    click_node(hwnd, found["bar-live-show"])
+
+
 def park_cursor(hwnd: int) -> None:
     """Park the pointer over an inert area inside the operator window.
 
@@ -510,6 +520,15 @@ def main() -> int:
         click_node(hwnd, found[hymn_aid])
         time.sleep(1.0)
         park_cursor(hwnd)  # clear hover off the clicked row before probing
+        # A mouse-seeded start can leave UIA focus on the root window; Tab
+        # until a real control (non-empty AutomationId) holds it instead of
+        # assuming the click focused one.
+        for _ in range(4):
+            seeded = uia(hwnd, focused=True)["nodes"]
+            if seeded and seeded[0]["automationId"] and seeded[0]["controlType"] != "Window":
+                break
+            press("tab")
+            time.sleep(0.4)
         sequence: list[str] = []
         probed: set[str] = set()
         acted: set[str] = set()

@@ -39,8 +39,12 @@ _spec = importlib.util.spec_from_file_location(
 )
 lo = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lo)
+_a11y_spec = importlib.util.spec_from_file_location(
+    "a11y_windows", ROOT / "scripts" / "a11y-windows.py"
+)
+a11y = importlib.util.module_from_spec(_a11y_spec)
+_a11y_spec.loader.exec_module(a11y)
 
-TABS_TO_LIVE_OUTPUT = 11
 BORDER = (0xDC, 0xDE, 0xDC)
 CHROME = (0xF4, 0xF4, 0xF3)
 SELECTED_ROW = (0xE3, 0xE7, 0xF3)
@@ -101,7 +105,7 @@ class Session:
         return pixels
 
     def live_on(self) -> int:
-        self.keys(*["tab"] * TABS_TO_LIVE_OUTPUT, "enter")
+        a11y.show_live_output(self.hwnd)
         found = lo.audience(self.app.process.pid, 15)
         if not found:
             raise nw.Failure("no audience window after Live output on")

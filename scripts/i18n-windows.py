@@ -35,11 +35,14 @@ _spec = importlib.util.spec_from_file_location(
 )
 lo = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lo)
+_a11y_spec = importlib.util.spec_from_file_location(
+    "a11y_windows", ROOT / "scripts" / "a11y-windows.py"
+)
+a11y = importlib.util.module_from_spec(_a11y_spec)
+_a11y_spec.loader.exec_module(a11y)
 
 # The Options toolbar button moved to the Edit menu (M1-02), shortening the
 # pre-songs traversal by one; Options opens via the Alt+E mnemonic instead.
-TABS_TO_FIRST_SONG = 25
-SHIFT_TABS_SONG_TO_LIVE_OUTPUT = 15
 
 
 def monitors(binary: pathlib.Path) -> list[str]:
@@ -87,6 +90,15 @@ class Session:
 
     def quit(self) -> None:
         self.keys("ctrl+q")
+        # Go Live of an unscheduled song dirties the schedule, so Quit asks
+        # before discarding it; confirm by its stable id when it is showing.
+        time.sleep(0.6)
+        try:
+            confirm = a11y.nodes_by_id(a11y.uia(self.hwnd)).get("dialog-confirm")
+        except nw.Failure:
+            confirm = None  # the window already closed: nothing was dirty
+        if confirm:
+            a11y.click_node(self.hwnd, confirm)
         self.app.wait_exit()
 
     def close(self) -> None:
@@ -129,9 +141,14 @@ def main() -> int:
         run = Session(args.binary, library, args.out, args.monitor)
         sessions.append(run)
         run.save("01-english-operator")
-        run.keys(*["tab"] * TABS_TO_FIRST_SONG, "enter", "tab", "enter")
+        # Select the first song by UIA id, then turn
+        # Live output on through the Live menu, so layout changes cannot shift
+        # the path.
+        found = a11y.nodes_by_id(a11y.uia(run.hwnd))
+        a11y.click_node(run.hwnd, found["song-0"])
+        a11y.click_node(run.hwnd, found["add-to-schedule"])
         time.sleep(0.4)
-        run.keys(*["shift+tab"] * SHIFT_TABS_SONG_TO_LIVE_OUTPUT, "enter")
+        a11y.show_live_output(run.hwnd)
         found = lo.audience(run.app.process.pid, 15)
         if not found:
             raise nw.Failure("no audience window after Live output on")
