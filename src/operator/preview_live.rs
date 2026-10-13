@@ -146,6 +146,9 @@ impl Operator {
         let Some((version, _)) = self.catalog.get(index).cloned() else {
             return;
         };
+        // A library Go Live is a newer explicit request even while its song is
+        // still loading; an older double-click must not unmask the previous item.
+        self.unmask.cancel();
         self.selected_song = Some(version);
         self.selected_entry = None;
         if self
@@ -495,6 +498,8 @@ impl Operator {
     }
 
     pub(crate) fn go_live(&mut self) {
+        // Refused or not, this is the newest explicit request.
+        self.unmask.cancel();
         let Some(item) = self.preview.clone() else {
             self.live_message = Some(t!(Msg::LiveSelectSongFirst).into());
             return;
@@ -507,7 +512,6 @@ impl Operator {
         if self.ready_for_cue() {
             if self.live.as_ref().map(|live| live.version) != Some(item.version) {
                 self.cancel_cues();
-                self.unmask.cancel();
             }
             self.live = Some(item);
             self.send(index);
@@ -754,6 +758,15 @@ impl Operator {
         self.cancel_cues();
         self.dispatch(index, generation);
         self.unmask.retain_only(generation);
+        // Without a cue carrying the id, the `live_slide` fallback could later
+        // present another slide under it.
+        let carried = self
+            .deferred_send
+            .is_some_and(|d| d.generation == generation)
+            || self.pending_cues.iter().any(|p| p.generation == generation);
+        if !carried {
+            self.unmask.drop_submission(generation);
+        }
     }
 
     /// The slide the operator last asked for: the newest cue in preparation,

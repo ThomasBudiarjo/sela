@@ -364,7 +364,9 @@ queued with the supervisor, or awaiting the receipt — so an older cue (for
 example a delayed B) may still complete under the mask but never lifts it, and
 neither does its late Applied receipt. Internal retries of the same request
 (font/image deferral, surface/font refresh) re-use its id, and re-presenting an
-id forgets its earlier receipt. A failed receipt keeps the mask over the
+id forgets a receipt already recorded for it (an earlier presentation of the
+same request that is still in flight may still settle the intent, and it shows
+the same slide). A failed receipt keeps the mask over the
 retained scene and kills the intent; a repeated double-click is a new request
 and unmasks on success. `src/masks/model.rs` drives the production `Masks`,
 `UnmaskIntent` and `Submissions` types through random (60 000 sequences) and

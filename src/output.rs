@@ -240,8 +240,9 @@ impl Supervisor {
     }
 
     /// `present` for one operator request. Re-presenting the same submission
-    /// (a refresh or retry of that request) forgets its earlier receipt, so
-    /// only a receipt for this presentation can satisfy it.
+    /// (a refresh or retry of that request) forgets a receipt already recorded
+    /// for it. An earlier presentation of the same request that is still in
+    /// flight may still satisfy it; it shows the same slide.
     pub fn present_submission(
         &mut self,
         cue: Arc<PreparedCue>,

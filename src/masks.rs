@@ -36,8 +36,9 @@ pub struct Submissions {
 }
 
 impl Submissions {
-    /// A (re-)submission replaces the wanted one and forgets its own earlier
-    /// receipt, so only a receipt for this presentation can settle it.
+    /// A (re-)submission replaces the wanted one and forgets a receipt already
+    /// recorded for it. An earlier presentation of the same request that is
+    /// still in flight may still settle it; it shows the same slide.
     pub fn want(&mut self, submission: Submission) {
         if self.applied == Some(submission) {
             self.applied = None;

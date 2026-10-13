@@ -3926,6 +3926,198 @@ fn same_version_render_failed_retry_never_unmasks(cx: &mut TestAppContext) {
     });
 }
 
+/// Two songs; the first is live on Verse 1 under Black. Scene 2 is slow.
+fn masked_two_songs(
+    cx: &mut TestAppContext,
+    dir: &tempfile::TempDir,
+) -> (VisualTestContext, Entity<Operator>) {
+    let (mut cx, operator, _) =
+        with_library(cx, Some(library_with_songs(dir)), "slow-scene-at:2:400");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    let row = song_row(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, row);
+    settle(&mut cx, &operator, "faces resolved", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.slides.len() == 3 && p.resolved.is_some())
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black acknowledged", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+    (cx, operator)
+}
+
+/// Double-clicks the chorus while its slow cue is in flight.
+fn arm_double_click_on_chorus(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+    operator.update(cx, |o, _| o.click_live(1, false));
+    operator.update(cx, |o, _| o.click_live(1, true));
+    settle(cx, operator, "chorus with the renderer", |o| {
+        o.output
+            .as_ref()
+            .is_some_and(|out| out.in_flight().is_some())
+    });
+    operator.read_with(cx, |o, _| assert!(o.unmask.armed().is_some()));
+}
+
+/// Polls until the delayed chorus is on screen; the mask never lifts.
+fn chorus_lands_under_black(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+    for _ in 0..600 {
+        poll_for(cx, operator, 1);
+        let landed = operator.read_with(cx, |o, _| {
+            assert_eq!(o.masks.layer(), Layer::Black);
+            assert_eq!(confirmed_mask(o), Some(Layer::Black), "mask never lifts");
+            o.on_screen() == Some("Signal Hymn · Chorus")
+        });
+        if landed {
+            return;
+        }
+    }
+    panic!("the delayed chorus never landed");
+}
+
+fn canticle_row(o: &Operator) -> usize {
+    o.catalog
+        .iter()
+        .position(|(_, title)| title == SECOND_SONG)
+        .unwrap()
+}
+
+/// A Songs Go Live whose load is still pending is the newest request: the
+/// older double-click on a live slide must not unmask the previous item.
+#[gpui::test]
+fn library_go_live_cancels_a_pending_double_click_unmask(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = masked_two_songs(cx, &dir);
+    arm_double_click_on_chorus(&mut cx, &operator);
+
+    let parked = operator.update(&mut cx, |o, _| o.worker.take());
+    operator.update(&mut cx, |o, _| {
+        let row = canticle_row(o);
+        o.song_to_live(row);
+        assert_eq!(o.unmask.armed(), None);
+    });
+    chorus_lands_under_black(&mut cx, &operator);
+    poll_for(&mut cx, &operator, 40);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Chorus"));
+    });
+
+    operator.update(&mut cx, |o, _| o.worker = parked);
+    settle(&mut cx, &operator, "the library song on screen", |o| {
+        o.on_screen() == Some("Quiet Canticle · Verse 1")
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+        assert_eq!(o.masks.layer(), Layer::Black);
+    });
+}
+
+#[gpui::test]
+fn failed_library_go_live_keeps_the_mask(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = masked_two_songs(cx, &dir);
+    arm_double_click_on_chorus(&mut cx, &operator);
+
+    operator.update(&mut cx, |o, _| {
+        let row = canticle_row(o);
+        o.catalog[row].0.revision += 1000;
+        o.song_to_live(row);
+        assert_eq!(o.unmask.armed(), None);
+    });
+    settle(&mut cx, &operator, "the load error", |o| {
+        o.library_error.is_some()
+    });
+    chorus_lands_under_black(&mut cx, &operator);
+    for _ in 0..60 {
+        poll_for(&mut cx, &operator, 1);
+        operator.read_with(&cx, |o, _| {
+            assert!(o.library_error.is_some());
+            assert_eq!(o.masks.layer(), Layer::Black);
+            assert_eq!(confirmed_mask(o), Some(Layer::Black));
+            assert_eq!(o.unmask.armed(), None);
+            assert_eq!(o.on_screen(), Some("Signal Hymn · Chorus"));
+        });
+    }
+}
+
+fn refused_go_live_keeps_the_mask(cx: &mut TestAppContext, refuse: fn(&mut Operator)) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = masked_two_songs(cx, &dir);
+    arm_double_click_on_chorus(&mut cx, &operator);
+
+    operator.update(&mut cx, |o, _| {
+        o.live_message = None;
+        refuse(o);
+        o.go_live();
+        assert!(o.live_message.is_some(), "the refusal is reported");
+        assert_eq!(o.unmask.armed(), None);
+    });
+    chorus_lands_under_black(&mut cx, &operator);
+    poll_for(&mut cx, &operator, 40);
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(confirmed_mask(o), Some(Layer::Black))
+    });
+}
+
+#[gpui::test]
+fn refused_go_live_cancels_a_pending_double_click_unmask(cx: &mut TestAppContext) {
+    refused_go_live_keeps_the_mask(cx, |o| o.preview = None);
+}
+
+#[gpui::test]
+fn slideless_go_live_cancels_a_pending_double_click_unmask(cx: &mut TestAppContext) {
+    refused_go_live_keeps_the_mask(cx, |o| {
+        o.preview.as_mut().unwrap().slides = Vec::new().into();
+    });
+}
+
+/// The chorus already applied under Black is the latest intent when its
+/// double-click completes, so the mask lifts at once without a new cue.
+#[gpui::test]
+fn double_click_on_an_already_applied_slide_unmasks_without_a_new_cue(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = masked_verse_with_mode(cx, &dir, "apply");
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    settle(&mut cx, &operator, "chorus under Black", |o| {
+        o.on_screen() == Some("Signal Hymn · Chorus") && confirmed_mask(o) == Some(Layer::Black)
+    });
+    let before = operator.read_with(&cx, |o, _| o.request_generation);
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    settle(&mut cx, &operator, "unmasked over the chorus", |o| {
+        confirmed_mask(o) == Some(Layer::None)
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::None);
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Chorus"));
+        assert_eq!(o.request_generation, before, "no extra cue");
+        assert!(o.pending_cues.is_empty());
+    });
+}
+
+/// A refresh that leaves no cue carrying the armed request drops the intent,
+/// so a later fallback can never satisfy it with another slide.
+#[gpui::test]
+fn refresh_without_a_cue_drops_the_armed_request(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = masked_two_songs(cx, &dir);
+    arm_double_click_on_chorus(&mut cx, &operator);
+    operator.update(&mut cx, |o, _| {
+        let live = o.live.as_mut().unwrap();
+        live.slides = live.slides[..1].to_vec().into();
+        o.refresh_live_request();
+        assert_eq!(o.unmask.armed(), None);
+    });
+}
+
 #[gpui::test]
 fn deferred_cue_dies_with_a_newer_request_or_a_new_session(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();

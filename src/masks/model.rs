@@ -1,12 +1,21 @@
 //! Model-based check of the operator's mask/cue state machine without GPUI.
 //!
 //! The model mirrors `operator::preview_live` (requests, deferral, preparation
-//! outcomes, refresh, output toggles) and drives the production `Masks`,
-//! `UnmaskIntent` and `Submissions` types through random and exhaustive
-//! interleavings with renderer receipts that arrive in any order. It asserts
-//! mask safety: masks only lift on the operator's toggle or on the successful
-//! Applied receipt of the exact submission that is the latest explicit
-//! request, and the audience then shows that request's slide.
+//! outcomes, refresh, library Go Live, output toggles) and drives the production
+//! `Masks`, `UnmaskIntent` and `Submissions` types through random and exhaustive
+//! interleavings with renderer receipts that arrive in any order. The oracle is
+//! what the audience sees, kept by the model's own renderer scene:
+//!
+//! - Masks go off only on the operator's toggle, or when an armed double-click
+//!   settles.
+//! - At that moment the double-clicked request is the operator's latest explicit
+//!   intent (no newer click, step, Go Live, refused Go Live or pending library
+//!   Go Live), and the renderer is already showing that request's slide. An
+//!   earlier overlapping presentation of the same request shows the same slide.
+//! - Until the next explicit intent the renderer never switches to a scene of
+//!   another request.
+//!
+//! Failed preparation, failed render and stale results never change the scene.
 use super::*;
 use std::collections::VecDeque;
 
@@ -21,9 +30,18 @@ enum Prep {
 enum Step {
     Click(u8),
     DoubleClick(u8),
+    /// The second callback of a double-click; honoured only right after the
+    /// matching `Click` with no operator step in between.
+    SecondClick(u8),
     Next,
     Prev,
     GoLiveNew,
+    /// Songs-tab Go Live of a song whose load is still pending.
+    LibraryGoLive,
+    LoadLands,
+    LoadFails,
+    /// Go Live with an empty Preview or a slideless item.
+    RefusedGoLive,
     Toggle(Mask),
     Output,
     Refresh,
@@ -36,14 +54,21 @@ enum Step {
 
 const SLIDES: u8 = 3;
 
-const ALPHABET: [Step; 21] = [
+/// The first `EXHAUSTIVE` steps are walked exhaustively; the rest only
+/// weight the random runs.
+const ALPHABET: [Step; 27] = [
     Step::Click(0),
     Step::Click(1),
     Step::DoubleClick(0),
     Step::DoubleClick(1),
+    Step::SecondClick(1),
     Step::Next,
     Step::Prev,
     Step::GoLiveNew,
+    Step::LibraryGoLive,
+    Step::LoadLands,
+    Step::LoadFails,
+    Step::RefusedGoLive,
     Step::Toggle(Mask::Black),
     Step::Toggle(Mask::Clear),
     Step::Toggle(Mask::Logo),
@@ -56,9 +81,11 @@ const ALPHABET: [Step; 21] = [
     Step::Prepared(Prep::Substitute),
     Step::Applied,
     Step::RenderFailed,
+    Step::SecondClick(0),
     Step::Applied,
     Step::Prepared(Prep::Ok),
 ];
+const EXHAUSTIVE: usize = 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Req {
@@ -73,6 +100,16 @@ struct Req {
 enum Satisfy {
     Submission,
     Version,
+    /// Production minus the cancel in a library Go Live.
+    NoLibraryCancel,
+}
+
+/// The operator's latest explicit intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Intent {
+    Slide(Req),
+    LoadItem(u8),
+    Refused,
 }
 
 struct Model {
@@ -92,7 +129,9 @@ struct Model {
     in_flight: Option<Req>,
     shown: Option<Req>,
     presented: Option<(u64, u8, bool)>,
-    last_explicit: Option<Req>,
+    last_explicit: Intent,
+    last_click: Option<u8>,
+    pending_load: Option<u8>,
     lifted_for: Option<Req>,
 }
 
@@ -127,7 +166,9 @@ impl Model {
             in_flight: None,
             shown: Some(first),
             presented: Some((1, 0, true)),
-            last_explicit: Some(first),
+            last_explicit: Intent::Slide(first),
+            last_click: None,
+            pending_load: None,
             lifted_for: None,
         }
     }
@@ -145,7 +186,7 @@ impl Model {
             idx,
             sub: self.sub,
         };
-        self.last_explicit = Some(req);
+        self.last_explicit = Intent::Slide(req);
         self.dispatch(req, true);
     }
 
@@ -176,6 +217,25 @@ impl Model {
         }
     }
 
+    /// `go_live`: the cancel comes first, so a refused Go Live ends the older
+    /// intent too.
+    fn go_live(&mut self) {
+        self.unmask.cancel();
+        if self.output {
+            self.cancel_cues();
+            self.item += 1;
+            self.send(0);
+        } else {
+            self.refuse();
+        }
+    }
+
+    fn refuse(&mut self) {
+        self.unmask.cancel();
+        self.lifted_for = None;
+        self.last_explicit = Intent::Refused;
+    }
+
     fn click(&mut self, idx: u8, double: bool) {
         let latest = self.deferred.map(|d| d.idx).or(self.requested_slide());
         if double && latest == Some(idx) {
@@ -204,8 +264,30 @@ impl Model {
     fn apply(&mut self, step: Step) -> Result<(), String> {
         let masked = self.masks.any();
         let mut toggled = false;
+        let prior_click = self.last_click;
+        if !matches!(
+            step,
+            Step::Prepared(_)
+                | Step::Applied
+                | Step::RenderFailed
+                | Step::FontsLand
+                | Step::DeferNext
+                | Step::Refresh
+                | Step::LoadLands
+                | Step::LoadFails
+        ) {
+            self.last_click = None;
+        }
         match step {
-            Step::Click(i) => self.click(i, false),
+            Step::Click(i) => {
+                self.click(i, false);
+                self.last_click = Some(i);
+            }
+            Step::SecondClick(i) => {
+                if prior_click == Some(i) {
+                    self.click(i, true);
+                }
+            }
             Step::DoubleClick(i) => {
                 // A double-click delivers its first click as a plain click.
                 self.click(i, false);
@@ -224,14 +306,23 @@ impl Model {
                     }
                 }
             }
-            Step::GoLiveNew => {
-                if self.output {
-                    self.cancel_cues();
+            Step::GoLiveNew => self.go_live(),
+            Step::LibraryGoLive => {
+                if self.satisfy != Satisfy::NoLibraryCancel {
                     self.unmask.cancel();
-                    self.item += 1;
-                    self.send(0);
+                }
+                self.lifted_for = None;
+                self.last_explicit = Intent::LoadItem(self.item + 1);
+                self.pending_load = Some(self.item + 1);
+            }
+            Step::LoadLands => {
+                if self.pending_load.take().is_some() {
+                    self.go_live();
                 }
             }
+            // Production keeps the pending load and retries it.
+            Step::LoadFails => {}
+            Step::RefusedGoLive => self.refuse(),
             Step::Toggle(mask) => {
                 self.masks.toggle(mask);
                 self.unmask.cancel();
@@ -260,6 +351,11 @@ impl Model {
                     self.cancel_cues();
                     self.dispatch(req, true);
                     self.unmask.retain_only(req.sub);
+                    let carried = self.deferred.is_some_and(|d| d.sub == req.sub)
+                        || self.prep.iter().any(|p| p.sub == req.sub);
+                    if !carried {
+                        self.unmask.drop_submission(req.sub);
+                    }
                 }
             }
             Step::DeferNext => self.defer_next = true,
@@ -315,7 +411,7 @@ impl Model {
                 SubmissionState::Applied
             }
             (Satisfy::Version, ..) => SubmissionState::Waiting,
-            (Satisfy::Submission, ..) => self.ledger.state(id),
+            (Satisfy::Submission | Satisfy::NoLibraryCancel, ..) => self.ledger.state(id),
         }
     }
 
@@ -340,11 +436,17 @@ impl Model {
             let Some(req) = lifted else {
                 return Err("masks went off without a toggle or a satisfied intent".into());
             };
-            if Some(req) != self.last_explicit {
-                return Err(format!("lifted for {req:?}, not the latest request"));
+            if self.last_explicit != Intent::Slide(req) {
+                return Err(format!(
+                    "lifted for {req:?}, but the latest intent is {:?}",
+                    self.last_explicit
+                ));
             }
-            if self.ledger.state(req.sub) != SubmissionState::Applied {
-                return Err(format!("lifted without an Applied receipt for {req:?}"));
+            if self.shown != Some(req) {
+                return Err(format!(
+                    "lifted for {req:?} while the audience shows {:?}",
+                    self.shown
+                ));
             }
         }
         if let Some(req) = self.lifted_for
@@ -413,7 +515,7 @@ fn every_short_sequence_keeps_masks_safe() {
             }
             return;
         }
-        for step in ALPHABET[..19].iter() {
+        for step in ALPHABET[..EXHAUSTIVE].iter() {
             prefix.push(*step);
             walk(depth - 1, prefix);
             prefix.pop();
@@ -460,4 +562,129 @@ fn same_version_render_failed_retry_never_unmasks() {
     }
     assert!(model.masks.any());
     assert_eq!(model.unmask.armed(), None);
+}
+
+/// What the audience sees after each step.
+struct Seen {
+    masked: bool,
+    shown: Option<Req>,
+}
+
+fn replay(satisfy: Satisfy, steps: &[Step]) -> Vec<Seen> {
+    let mut model = Model::new(satisfy);
+    steps
+        .iter()
+        .map(|step| {
+            model.apply(*step).unwrap();
+            Seen {
+                masked: model.masks.any(),
+                shown: model.shown,
+            }
+        })
+        .collect()
+}
+
+/// A same-request retry overlapping the original presentation may settle the
+/// intent, and then the audience shows exactly that request.
+#[test]
+fn overlapping_same_request_retry_reveals_only_that_request() {
+    let steps = [
+        Step::DoubleClick(1),
+        Step::Prepared(Prep::Ok),
+        Step::Refresh,
+        Step::Prepared(Prep::Ok),
+        Step::Applied,
+        Step::RenderFailed,
+    ];
+    run(Satisfy::Submission, steps).unwrap();
+    let last = replay(Satisfy::Submission, &steps).pop().unwrap();
+    if !last.masked {
+        assert_eq!(
+            last.shown,
+            Some(Req {
+                item: 0,
+                idx: 1,
+                sub: 2
+            })
+        );
+    }
+}
+
+/// An Applied that lands between the two callbacks of a double-click is the
+/// clicked slide and the latest intent, so the second callback unmasks.
+#[test]
+fn applied_between_double_click_callbacks_reveals_the_clicked_slide() {
+    let seen = replay(
+        Satisfy::Submission,
+        &[
+            Step::Click(1),
+            Step::Prepared(Prep::Ok),
+            Step::Applied,
+            Step::SecondClick(1),
+        ],
+    );
+    let last = seen.last().unwrap();
+    assert!(!last.masked);
+    assert_eq!(last.shown.map(|r| r.idx), Some(1));
+}
+
+/// A second callback without its first click does nothing.
+#[test]
+fn second_click_needs_its_first_click() {
+    let seen = replay(
+        Satisfy::Submission,
+        &[Step::Click(1), Step::Next, Step::SecondClick(1)],
+    );
+    assert!(seen.last().unwrap().masked);
+}
+
+/// A pending or failed library Go Live ends the older double-click: the masks
+/// stay on whatever the load and delayed B do next.
+#[test]
+fn library_go_live_cancels_the_older_unmask() {
+    let prefix = [
+        Step::DoubleClick(1),
+        Step::Prepared(Prep::Ok),
+        Step::LibraryGoLive,
+        Step::Applied,
+    ];
+    for tail in [
+        &[Step::LoadLands, Step::Prepared(Prep::Ok), Step::Applied][..],
+        &[Step::LoadFails, Step::LoadFails][..],
+    ] {
+        let steps: Vec<_> = prefix.iter().chain(tail).copied().collect();
+        for seen in replay(Satisfy::Submission, &steps) {
+            assert!(seen.masked, "{steps:?}");
+        }
+    }
+}
+
+/// A refused Go Live is a newer explicit request as well.
+#[test]
+fn refused_go_live_cancels_the_older_unmask() {
+    let steps = [
+        Step::DoubleClick(1),
+        Step::Prepared(Prep::Ok),
+        Step::RefusedGoLive,
+        Step::Applied,
+    ];
+    for seen in replay(Satisfy::Submission, &steps) {
+        assert!(seen.masked);
+    }
+}
+
+/// Negative control: without the cancel in a library Go Live, B's Applied
+/// lifts the mask although the latest intent is the library load.
+#[test]
+fn the_model_catches_a_library_go_live_that_does_not_cancel() {
+    let steps = [
+        Step::DoubleClick(1),
+        Step::Prepared(Prep::Ok),
+        Step::LibraryGoLive,
+        Step::Applied,
+    ];
+    run(Satisfy::Submission, steps).unwrap();
+    assert!(run(Satisfy::NoLibraryCancel, steps).is_err());
+    let caught = (0..60_000).any(|seed| random_run(Satisfy::NoLibraryCancel, seed).is_err());
+    assert!(caught, "the random runs must catch the missing cancel");
 }

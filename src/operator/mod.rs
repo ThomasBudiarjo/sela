@@ -178,7 +178,7 @@ pub(super) struct Operator {
     pub(super) library_error: Option<String>,
     new_menu: bool,
     library: Option<PathBuf>,
-    worker: Option<Worker>,
+    pub(super) worker: Option<Worker>,
     request: Option<Request>,
     catalog_stale: bool,
     pub(super) catalog: Vec<(Version, String)>,
@@ -207,7 +207,7 @@ pub(super) struct Operator {
     /// Submission id of the newest explicit operator cue request: unique,
     /// monotonic, never reused across output sessions and independent of
     /// `ContentVersion`. Retries of a deferred or refreshed request reuse it.
-    request_generation: u64,
+    pub(super) request_generation: u64,
     /// The newest presented cue: (submission, slide, clean outcome).
     presented: Option<(u64, usize, bool)>,
     /// Counts output start/stop cycles; deferred cues never cross one.

@@ -615,6 +615,7 @@ captures; do not claim a field that is not in `mA/mB/mC/mD.png`.
 | ID | Status | Observation |
 | --- | --- | --- |
 | EW8-OBS-066 | observed (RUN-W07A) | With Black on (Ctrl+B), selecting Preview slide 2 and Live › Go Live moves Live to slide 2 and Black stays on; Ctrl+B again turns it off. Same with Logo (Ctrl+L): Go Live to slide 3 kept Logo until Ctrl+L. This repeats and agrees with the W03 masked-apply rows. Toolbar button clicks were ignored by synthetic input and are not part of this observation. |
+| EW8-OBS-066b | UNOBSERVED | **Pending library Go Live versus a newer Live selection.** In Sela a Songs-tab Go Live of a song that is still loading stays pending (`live_on_load`); a later Live click or step on the current item does not clear it, so the older Songs Go Live replaces the newer Live selection once the song loads. A newer Songs Go Live, a refused Go Live and a mask toggle do end an armed double-click unmask. EW ordering for the pending-load case has not been observed; behavior is left unchanged and tracked as an unknown (M1-10). |
 
 Implementation implications: Go Live and navigation keep masks; the Delete
 confirmation defaults to No and ignores Esc (Sela should still allow Esc =

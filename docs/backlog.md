@@ -791,6 +791,13 @@ Acceptance: Live reflects renderer acknowledgment; preview/selection never leaks
 to audience and rapid input cannot apply an older scene last. Reference records:
 EW8-OBS-047, 048-052 (keys and focus), 066 (Go Live under masks).
 
+UNOBSERVED (non-blocking, behavior unchanged): a pending Songs Go Live
+(`live_on_load`, set while the song is still loading) is not cleared by a later
+Live click or step on the current item, so the older Songs Go Live still
+replaces the newer Live selection once it loads, even with no mask on. Which
+intent should win has not been observed in EasyWorship; see
+`docs/reference-observations.md` (Go Live under masks).
+
 ### M1-11 — Still-image assets and missing-resource preflight
 
 Depends on: M1-01, M1-04, M1-08. Tests: U, I, R, N.
