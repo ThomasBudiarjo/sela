@@ -39,6 +39,20 @@ pub(crate) struct SettingsConfig {
     pub(crate) schedule_writer: sela::schedule_file::Writer,
 }
 
+pub(crate) enum RecentChange {
+    Remember(PathBuf),
+    Forget(PathBuf),
+}
+
+impl RecentChange {
+    fn apply(self, settings: &mut Settings) {
+        match self {
+            Self::Remember(path) => settings.remember_recent(path),
+            Self::Forget(path) => settings.forget_recent(&path),
+        }
+    }
+}
+
 impl Default for SettingsConfig {
     fn default() -> Self {
         Self {
@@ -61,6 +75,9 @@ pub(crate) struct SettingsState {
     loaded: bool,
     /// Accepted saves whose `Saved` reply has not been polled yet.
     pending_saves: usize,
+    /// Recent-schedule changes made before `Loaded`, applied in order on top
+    /// of the loaded list so a fast save or open is not forgotten.
+    queued_recent: Vec<RecentChange>,
     /// A choice was applied before `Loaded`; the late reply must not undo it.
     applied: bool,
     /// Waiting for pending saves before the window closes.
@@ -113,6 +130,7 @@ impl SettingsState {
             save_error: None,
             loaded,
             pending_saves: 0,
+            queued_recent: Vec::new(),
             applied: false,
             closing: None,
             close_forced: false,
@@ -199,6 +217,15 @@ impl Operator {
                                 Some(self.settings.current.output_monitor.clone());
                             self.settings.language_draft = Some(self.settings.current.language);
                         }
+                    } else {
+                        self.settings.current.recent_schedules = loaded.settings.recent_schedules;
+                    }
+                    let queued = std::mem::take(&mut self.settings.queued_recent);
+                    if !queued.is_empty() {
+                        for change in queued {
+                            change.apply(&mut self.settings.current);
+                        }
+                        self.save_settings_now();
                     }
                 }
                 settings::Reply::Saved(Ok(())) => {
@@ -217,11 +244,16 @@ impl Operator {
     /// Changes the stored settings (the recent schedule list) and writes them
     /// through the settings worker. Skipped until the initial load replied, so
     /// defaults never overwrite the stored file.
-    pub(crate) fn update_recent(&mut self, change: impl FnOnce(&mut Settings)) {
+    pub(crate) fn update_recent(&mut self, change: RecentChange) {
         if !self.settings.loaded {
+            self.settings.queued_recent.push(change);
             return;
         }
-        change(&mut self.settings.current);
+        change.apply(&mut self.settings.current);
+        self.save_settings_now();
+    }
+
+    fn save_settings_now(&mut self) {
         let Some(worker) = &self.settings.worker else {
             return;
         };

@@ -2,8 +2,9 @@ use super::*;
 use crate::text_input::TextInput;
 use crate::ui::theme::*;
 use gpui::{
-    CursorStyle, Empty, Entity, Focusable, FontWeight, MouseButton, PathPromptOptions, Pixels,
-    Point, Role, SharedString, Subscription, Task, Toggled, anchored, deferred, point,
+    CursorStyle, DragMoveEvent, Empty, Entity, Focusable, FontWeight, KeyDownEvent, MouseButton,
+    PathPromptOptions, Pixels, Point, Role, ScrollHandle, SharedString, Subscription, Task,
+    Toggled, anchored, deferred, point,
 };
 use sela::{
     background::{self, Plan},
@@ -26,7 +27,7 @@ use sela::{
 };
 use std::{
     cell::RefCell,
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -44,6 +45,7 @@ mod preview_live;
 mod resources;
 mod schedule;
 mod schedule_files;
+mod update_items;
 
 use assets::{Assets, PREFLIGHT_DIALOG_W};
 pub(super) use controls::Control;
@@ -60,8 +62,8 @@ use menus::{
 };
 #[cfg(test)]
 pub(super) use menus::{SONG_MENU, SongItem, TOP_MENUS};
-use options::SettingsState;
 pub(super) use options::{MonitorSlot, SettingsConfig};
+use options::{RecentChange, SettingsState};
 use resources::{ClearSongSearch, NextSongRow, PreviousSongRow, SongSearch, TAB_IDS, TABS};
 
 const POLL: Duration = Duration::from_millis(16);
@@ -171,6 +173,12 @@ pub(crate) enum Request {
     SaveSchedule(schedule_files::SaveJob),
     /// Resolving an opened schedule file's songs against the library.
     ImportSchedule(PathBuf),
+    /// Loading the old and new revision of each outdated entry's song;
+    /// `versions` names the songs in reply order.
+    UpdateScan {
+        pairs: Vec<(EntryId, Version, Version)>,
+        versions: Vec<Version>,
+    },
 }
 
 pub(super) struct Operator {
@@ -244,7 +252,10 @@ pub(super) struct Operator {
     /// preparer's live depth. Their slide and label apply only on landing.
     pub(super) pending_cues: VecDeque<PendingCue>,
     pub(super) schedule: Schedule,
+    /// The focused entry: what Preview shows and Go Live applies.
     pub(super) selected_entry: Option<EntryId>,
+    /// Multi-selection, drag and update-review state of the Schedule pane.
+    pub(super) view: schedule::ScheduleView,
     schedule_rows: Vec<FocusHandle>,
     pub(super) schedule_message: Option<String>,
     /// One schedule storage job waiting for the worker.
@@ -481,6 +492,7 @@ impl Operator {
             pending_cues: VecDeque::new(),
             schedule: Schedule::default(),
             selected_entry: None,
+            view: Default::default(),
             schedule_rows: Vec::new(),
             schedule_message: None,
             queued: None,

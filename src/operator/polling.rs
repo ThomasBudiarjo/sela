@@ -203,6 +203,8 @@ impl Operator {
         let mut opened_songs = None;
         let mut to_write = None;
         let mut to_open = None;
+        let mut scanned = None;
+        let mut rescan = false;
         if let Some(reply) = worker.poll() {
             changed = true;
             match (self.request.take(), reply) {
@@ -220,6 +222,7 @@ impl Operator {
                     }
                     self.catalog = catalog;
                     self.library_error = None;
+                    rescan = std::mem::take(&mut self.view.scan_wanted);
                 }
                 (Some(Request::Search), Ok(Reply::Search(results))) => {
                     // A stale generation changes nothing and is not shown.
@@ -281,7 +284,17 @@ impl Operator {
                 (Some(Request::ImportSchedule(path)), Ok(Reply::Imported(items))) => {
                     to_open = Some((path, items));
                 }
-                (Some(Request::SaveSchedule(_) | Request::ImportSchedule(_)), Err(error)) => {
+                (Some(Request::UpdateScan { pairs, versions }), Ok(Reply::Songs(songs))) => {
+                    scanned = Some((pairs, versions, songs));
+                }
+                (
+                    Some(
+                        Request::SaveSchedule(_)
+                        | Request::ImportSchedule(_)
+                        | Request::UpdateScan { .. },
+                    ),
+                    Err(error),
+                ) => {
                     self.schedule_message =
                         Some(t!(Msg::ScheduleStorageFailed, error = format!("{error:?}")));
                 }
@@ -313,7 +326,9 @@ impl Operator {
             if let Some((command, request)) = request {
                 let schedule = matches!(
                     request,
-                    Request::SaveSchedule(_) | Request::ImportSchedule(_)
+                    Request::SaveSchedule(_)
+                        | Request::ImportSchedule(_)
+                        | Request::UpdateScan { .. }
                 );
                 match worker.submit(command) {
                     Ok(_) => self.request = Some(request),
@@ -333,6 +348,13 @@ impl Operator {
                     }
                 }
             }
+        }
+        if let Some((pairs, versions, songs)) = scanned {
+            self.finish_update_scan(pairs, versions, songs);
+            changed = true;
+        }
+        if rescan {
+            self.begin_update_scan();
         }
         if let Some((job, songs)) = to_write {
             self.write_schedule(job, songs);

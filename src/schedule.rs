@@ -104,6 +104,101 @@ impl Schedule {
         true
     }
 
+    /// Inserts a copy of each entry in `ids` directly after its original, with
+    /// a fresh ID. Nothing is copied when the copies would not fit. Returns
+    /// the new IDs in schedule order.
+    pub fn duplicate(&mut self, ids: &[EntryId]) -> Result<Vec<EntryId>, Error> {
+        let originals: Vec<EntryId> = self
+            .entries
+            .iter()
+            .map(|e| e.id)
+            .filter(|id| ids.contains(id))
+            .collect();
+        if self.entries.len() + originals.len() > MAX_ITEMS {
+            return Err(Error::Full);
+        }
+        let mut copies = Vec::with_capacity(originals.len());
+        for original in originals {
+            let id = self.allocate();
+            let at = self.index(original).map_or(self.entries.len(), |i| i + 1);
+            let mut entry = self.entries[at - 1].clone();
+            entry.id = id;
+            self.entries.insert(at, entry);
+            copies.push(id);
+        }
+        Ok(copies)
+    }
+
+    /// Moves every entry in `ids` so the group sits just before the entry
+    /// that is at `before` now (`usize::MAX` or past the end: the end). The
+    /// group keeps its relative order. Returns whether the order changed.
+    pub fn move_group(&mut self, ids: &[EntryId], before: usize) -> bool {
+        let before = before.min(self.entries.len());
+        let selected = |e: &Entry| ids.contains(&e.id);
+        let landing = self.entries[..before]
+            .iter()
+            .filter(|e| !selected(e))
+            .count();
+        let (group, mut rest): (Vec<Entry>, Vec<Entry>) =
+            self.entries.iter().cloned().partition(selected);
+        if group.is_empty() {
+            return false;
+        }
+        let tail = rest.split_off(landing);
+        let moved = rest
+            .into_iter()
+            .chain(group)
+            .chain(tail)
+            .collect::<Vec<_>>();
+        let changed = moved
+            .iter()
+            .map(|e| e.id)
+            .ne(self.entries.iter().map(|e| e.id));
+        self.entries = moved;
+        changed
+    }
+
+    /// Moves the group one step up or down as a block; entries already at
+    /// that edge, or blocked by a neighbour that is also moving, stay put.
+    pub fn move_group_by(&mut self, ids: &[EntryId], up: bool) -> bool {
+        let mut changed = false;
+        let len = self.entries.len();
+        let order: Vec<usize> = if up {
+            (0..len).collect()
+        } else {
+            (0..len).rev().collect()
+        };
+        for index in order {
+            if !ids.contains(&self.entries[index].id) {
+                continue;
+            }
+            let neighbour = if up {
+                index.checked_sub(1)
+            } else {
+                (index + 1 < len).then_some(index + 1)
+            };
+            if let Some(other) = neighbour
+                && !ids.contains(&self.entries[other].id)
+            {
+                self.entries.swap(index, other);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Re-pins an entry to another revision of its song.
+    pub fn set_version(&mut self, id: EntryId, version: Version, title: String) -> bool {
+        match self.entries.iter_mut().find(|e| e.id == id) {
+            Some(entry) => {
+                entry.version = version;
+                entry.title = title;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// One step towards the start (`up`) or the end. False at the boundary.
     pub fn move_by(&mut self, id: EntryId, up: bool) -> bool {
         match self.index(id) {
@@ -227,6 +322,80 @@ mod tests {
         let removed = s.remove(ids[1]).unwrap().id;
         assert!(!s.move_to(removed, 0));
         assert_eq!(s.get(ids[0]).unwrap().version, v(1, 1));
+    }
+
+    fn six() -> (Schedule, Vec<EntryId>) {
+        let mut s = Schedule::default();
+        let ids = (1..=6)
+            .map(|n| s.push(v(n, 1), n.to_string()).unwrap())
+            .collect();
+        (s, ids)
+    }
+
+    #[test]
+    fn group_moves_to_the_end_keeping_relative_order() {
+        let (mut s, ids) = six();
+        assert!(s.move_group(&[ids[3], ids[1]], usize::MAX));
+        assert_eq!(
+            order(&s),
+            [ids[0], ids[2], ids[4], ids[5], ids[1], ids[3]],
+            "1,3,5,6,2,4"
+        );
+        assert!(!s.move_group(&[ids[1], ids[3]], usize::MAX), "already last");
+    }
+
+    #[test]
+    fn group_drops_before_a_row_and_same_place_is_a_no_op() {
+        let (mut s, ids) = six();
+        assert!(s.move_group(&[ids[4], ids[5]], 1));
+        assert_eq!(order(&s), [ids[0], ids[4], ids[5], ids[1], ids[2], ids[3]]);
+        let (mut s, ids) = six();
+        assert!(!s.move_group(&[ids[2]], 2), "before itself");
+        assert!(!s.move_group(&[ids[2]], 3), "before its successor");
+        assert!(s.move_group(&[ids[0]], 3));
+        assert_eq!(order(&s)[..3], [ids[1], ids[2], ids[0]]);
+        assert!(!s.move_group(&[], 0));
+    }
+
+    #[test]
+    fn group_steps_as_a_block_and_stops_at_the_edge() {
+        let (mut s, ids) = six();
+        assert!(s.move_group_by(&[ids[1], ids[2], ids[4]], true));
+        assert_eq!(order(&s), [ids[1], ids[2], ids[0], ids[4], ids[3], ids[5]]);
+        assert!(!s.move_group_by(&[ids[1], ids[2]], true), "at the top");
+        let (mut s, ids) = six();
+        assert!(!s.move_group_by(&[ids[4], ids[5]], false), "at the bottom");
+        assert!(s.move_group_by(&[ids[1], ids[4]], false));
+        assert_eq!(order(&s), [ids[0], ids[2], ids[1], ids[3], ids[5], ids[4]]);
+    }
+
+    #[test]
+    fn duplicate_is_independent_and_follows_its_original() {
+        let (mut s, ids) = six();
+        let copies = s.duplicate(&[ids[1]]).unwrap();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(order(&s)[1..3], [ids[1], copies[0]]);
+        assert_eq!(s.get(copies[0]).unwrap().title, "2");
+        assert_eq!(s.get(copies[0]).unwrap().version, v(2, 1));
+        assert!(s.set_version(copies[0], v(2, 2), "2b".into()));
+        assert_eq!(
+            s.get(ids[1]).unwrap().version,
+            v(2, 1),
+            "original unchanged"
+        );
+        s.remove(ids[1]);
+        assert!(s.get(copies[0]).is_some(), "copy survives its original");
+    }
+
+    #[test]
+    fn duplicate_is_all_or_nothing_at_the_limit() {
+        let mut s = Schedule::default();
+        let ids: Vec<_> = (0..MAX_ITEMS - 1)
+            .map(|n| s.push(v(1, n as i64), "x".into()).unwrap())
+            .collect();
+        assert_eq!(s.duplicate(&[ids[0], ids[1]]), Err(Error::Full));
+        assert_eq!(s.entries().len(), MAX_ITEMS - 1);
+        assert_eq!(s.duplicate(&[ids[0]]).unwrap().len(), 1);
     }
 
     #[test]

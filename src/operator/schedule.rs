@@ -1,6 +1,119 @@
 use super::*;
+use update_items::UpdateReview;
+
+pub(crate) const SCHEDULE_ROW_H: f32 = 28.;
+/// Pointer distance from the list edge where a drag starts autoscrolling.
+const EDGE_ZONE: f32 = 24.;
+const SCROLL_STEP: f32 = 10.;
+const SCROLL_TICK: Duration = Duration::from_millis(30);
+
+/// Schedule pane state beyond the focused entry.
+#[derive(Default)]
+pub(crate) struct ScheduleView {
+    /// Fixed end of a Shift range; the focused entry is the moving end.
+    anchor: Option<EntryId>,
+    /// Every selected entry, including the focused one.
+    selected: HashSet<EntryId>,
+    /// Drop indicator: the group lands before the row now at this index.
+    drop_before: Option<usize>,
+    pub(crate) scroll: ScrollHandle,
+    list_bounds: Option<gpui::Bounds<Pixels>>,
+    pointer: Option<Point<Pixels>>,
+    scroller: Option<Task<()>>,
+    /// Update items was chosen while the catalog was refreshing.
+    pub(crate) scan_wanted: bool,
+    pub(crate) review: Option<UpdateReview>,
+}
+
+/// Horizontal insertion line at a row's top (`before`) or bottom edge.
+fn drop_line(top: bool) -> gpui::Div {
+    let line = div()
+        .debug_selector(|| "schedule-drop-indicator".into())
+        .absolute()
+        .left_0()
+        .right_0()
+        .h(px(2.))
+        .bg(rgb(ACCENT));
+    if top { line.top_0() } else { line.bottom_0() }
+}
 
 impl Operator {
+    pub(crate) fn is_entry_selected(&self, id: EntryId) -> bool {
+        self.view.selected.contains(&id)
+    }
+
+    /// Selected entries in schedule order.
+    pub(crate) fn selected_ids(&self) -> Vec<EntryId> {
+        self.schedule
+            .entries()
+            .iter()
+            .map(|e| e.id)
+            .filter(|id| self.view.selected.contains(id))
+            .collect()
+    }
+
+    pub(crate) fn clear_entry_selection(&mut self) {
+        self.selected_entry = None;
+        self.view.anchor = None;
+        self.view.selected.clear();
+    }
+
+    /// The entries a drag or menu command acts on: the whole selection when
+    /// `id` is part of it, otherwise just `id`.
+    pub(crate) fn group_of(&self, id: EntryId) -> Vec<EntryId> {
+        if self.view.selected.contains(&id) {
+            self.selected_ids()
+        } else {
+            vec![id]
+        }
+    }
+
+    /// Ctrl+click: adds or removes one entry. An added entry becomes the
+    /// focused one; removing the focused one hands focus to the first entry
+    /// still selected.
+    pub(crate) fn toggle_entry(&mut self, id: EntryId) {
+        if self.schedule.get(id).is_none() {
+            return;
+        }
+        if !self.view.selected.remove(&id) {
+            self.view.selected.insert(id);
+            self.focus_entry(id);
+            self.view.anchor = Some(id);
+            return;
+        }
+        if self.selected_entry == Some(id) {
+            match self.selected_ids().first().copied() {
+                Some(next) => self.focus_entry(next),
+                None => self.selected_entry = None,
+            }
+        }
+        if self.view.anchor == Some(id) {
+            self.view.anchor = self.selected_entry;
+        }
+    }
+
+    /// Shift+click or Shift+Down/Up: selects the range from the anchor to
+    /// `id` and focuses `id`.
+    pub(crate) fn extend_to(&mut self, id: EntryId) {
+        let Some(to) = self.schedule.index(id) else {
+            return;
+        };
+        let anchor = self
+            .view
+            .anchor
+            .filter(|a| self.schedule.get(*a).is_some())
+            .or(self.selected_entry)
+            .unwrap_or(id);
+        let from = self.schedule.index(anchor).unwrap_or(to);
+        let (low, high) = (from.min(to), from.max(to));
+        self.view.selected = self.schedule.entries()[low..=high]
+            .iter()
+            .map(|e| e.id)
+            .collect();
+        self.view.anchor = Some(anchor);
+        self.focus_entry(id);
+    }
+
     pub(crate) fn add_entry(&mut self, at: usize, version: Version, title: String) {
         self.schedule_message = match self.schedule.insert(at, version, title) {
             Ok(_) => None,
@@ -8,14 +121,146 @@ impl Operator {
         };
     }
 
-    /// Never touches Live: a removed live item stays on screen (see `live_lines`).
-    pub(crate) fn remove_entry(&mut self, id: EntryId) {
-        if self.schedule.remove(id).is_some() && self.selected_entry == Some(id) {
-            self.selected_entry = None;
+    /// Context menu Duplicate: a copy of each selected entry right after its
+    /// original. The copies become the selection.
+    pub(crate) fn duplicate_entries(&mut self, id: EntryId) {
+        let group = self.group_of(id);
+        match self.schedule.duplicate(&group) {
+            Ok(copies) => {
+                self.schedule_message = None;
+                if let Some(last) = copies.last().copied() {
+                    self.view.selected = copies.iter().copied().collect();
+                    self.view.anchor = copies.first().copied();
+                    self.focus_entry(last);
+                }
+            }
+            Err(_) => self.schedule_message = Some(t!(Msg::ScheduleFull, max = MAX_ITEMS)),
         }
     }
 
-    pub(crate) fn select_entry(&mut self, id: EntryId) {
+    /// Drop of a dragged entry (or its selection) at the drop indicator.
+    pub(crate) fn drop_entries(&mut self, dragged: EntryId, before: usize) {
+        let group = self.group_of(dragged);
+        self.schedule.move_group(&group, before);
+        self.view.drop_before = None;
+        self.view.scroller = None;
+    }
+
+    pub(crate) fn drop_indicator(&self) -> Option<usize> {
+        self.view.drop_before
+    }
+
+    /// Pointer over the list during an entry drag: where it would land, and
+    /// whether it is close enough to an edge to scroll.
+    fn drag_over_list(
+        &mut self,
+        event: &DragMoveEvent<EntryDrag>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.view.list_bounds = Some(event.bounds);
+        self.view.pointer = Some(event.event.position);
+        if !event.bounds.contains(&event.event.position) {
+            self.view.drop_before = None;
+            return;
+        }
+        self.locate_drop();
+        let y = event.event.position.y;
+        let near_top = y < event.bounds.top() + px(EDGE_ZONE);
+        let near_bottom = y > event.bounds.bottom() - px(EDGE_ZONE);
+        if (near_top || near_bottom) && self.view.scroller.is_none() {
+            let up = near_top;
+            self.view.scroller = Some(cx.spawn_in(window, async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(SCROLL_TICK).await;
+                    let go = this
+                        .update_in(cx, |this, _, cx| {
+                            if !cx.has_active_drag() || !this.autoscroll(up) {
+                                this.view.scroller = None;
+                                return false;
+                            }
+                            cx.notify();
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !go {
+                        break;
+                    }
+                }
+            }));
+        }
+        cx.notify();
+    }
+
+    /// Scrolls one step while the pointer stays in the edge zone. False when
+    /// it left the zone or the list cannot scroll further that way.
+    fn autoscroll(&mut self, up: bool) -> bool {
+        let (Some(bounds), Some(pointer)) = (self.view.list_bounds, self.view.pointer) else {
+            return false;
+        };
+        let in_zone = if up {
+            pointer.y < bounds.top() + px(EDGE_ZONE)
+        } else {
+            pointer.y > bounds.bottom() - px(EDGE_ZONE)
+        } && bounds.contains(&pointer);
+        let handle = &self.view.scroll;
+        let mut offset = handle.offset();
+        let limit = handle.max_offset().y;
+        let next = if up {
+            (offset.y + px(SCROLL_STEP)).min(px(0.))
+        } else {
+            (offset.y - px(SCROLL_STEP)).max(-limit)
+        };
+        if !in_zone || next == offset.y {
+            return false;
+        }
+        offset.y = next;
+        handle.set_offset(offset);
+        self.locate_drop();
+        true
+    }
+
+    /// Nearest row boundary under the pointer, in schedule order.
+    fn locate_drop(&mut self) {
+        let (Some(bounds), Some(pointer)) = (self.view.list_bounds, self.view.pointer) else {
+            return;
+        };
+        let rel = f32::from(pointer.y - bounds.top() - self.view.scroll.offset().y);
+        let boundary = (rel / SCHEDULE_ROW_H).round().max(0.) as usize;
+        self.view.drop_before = Some(boundary.min(self.schedule.entries().len()));
+    }
+
+    /// Esc during an entry drag: nothing moves.
+    pub(crate) fn cancel_entry_drag(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !cx.has_active_drag() {
+            return false;
+        }
+        cx.stop_active_drag(window);
+        self.view.drop_before = None;
+        self.view.scroller = None;
+        cx.notify();
+        true
+    }
+
+    /// Never touches Live: a removed live item stays on screen (see `live_lines`).
+    pub(crate) fn remove_entry(&mut self, id: EntryId) {
+        if self.schedule.remove(id).is_some() {
+            self.view.selected.remove(&id);
+            if self.view.anchor == Some(id) {
+                self.view.anchor = None;
+            }
+            if self.selected_entry == Some(id) {
+                self.selected_entry = None;
+            }
+        }
+    }
+
+    /// Focuses one entry (Preview follows) without touching the selection set.
+    fn focus_entry(&mut self, id: EntryId) {
         if let Some(entry) = self.schedule.get(id) {
             self.selected_entry = Some(id);
             self.selected_song = Some(entry.version);
@@ -24,9 +269,21 @@ impl Operator {
         }
     }
 
-    /// Down/Up. Stops at either end; provisional (EasyWorship unobserved).
-    pub(crate) fn step_schedule(&mut self, forward: bool) {
+    /// Plain click or keyboard selection: this entry alone.
+    pub(crate) fn select_entry(&mut self, id: EntryId) {
+        if self.schedule.get(id).is_some() {
+            self.focus_entry(id);
+            self.view.anchor = Some(id);
+            self.view.selected.clear();
+            self.view.selected.insert(id);
+        }
+    }
+
+    /// Down/Up (`extend`: Shift+Down/Up). Stops at either end; provisional
+    /// (EasyWorship unobserved).
+    pub(crate) fn step_schedule(&mut self, forward: bool, extend: bool) {
         match self.schedule.neighbor(self.selected_entry, forward) {
+            Some(id) if extend => self.extend_to(id),
             Some(id) => self.select_entry(id),
             None if self.schedule.entries().is_empty() => {
                 self.schedule_message = Some(t!(Msg::ScheduleEmpty).into());
@@ -94,6 +351,11 @@ impl Operator {
         };
         let dirty = self.schedule.is_dirty();
         let idle = self.selected_entry.is_none();
+        if !cx.has_active_drag() {
+            self.view.drop_before = None;
+        }
+        let drop_at = self.view.drop_before;
+        let chosen = self.view.selected.len();
         let rows = self
             .schedule
             .entries()
@@ -102,7 +364,12 @@ impl Operator {
             .map(|(index, entry)| {
                 let id = entry.id;
                 let title = entry.title.clone();
-                let selected = self.selected_entry == Some(id);
+                let selected = self.is_entry_selected(id);
+                let drag_title = if selected && chosen > 1 {
+                    format!("{title} (+{})", chosen - 1)
+                } else {
+                    title.clone()
+                };
                 div()
                     .id(("schedule-item", index))
                     .debug_selector(move || format!("schedule-item-{index}"))
@@ -115,7 +382,8 @@ impl Operator {
                     .track_focus(&self.schedule_rows[index])
                     .key_context("SelaControl")
                     .flex_shrink_0()
-                    .h(px(28.))
+                    .relative()
+                    .h(px(SCHEDULE_ROW_H))
                     .px(px(PANE_PAD_X))
                     .flex()
                     .items_center()
@@ -141,7 +409,14 @@ impl Operator {
                                 return;
                             }
                             this.schedule_rows[index].focus(window, cx);
-                            this.select_entry(id);
+                            let keys = event.modifiers();
+                            if keys.shift {
+                                this.extend_to(id);
+                            } else if keys.secondary() {
+                                this.toggle_entry(id);
+                            } else {
+                                this.select_entry(id);
+                            }
                             cx.notify();
                         }),
                     )
@@ -149,25 +424,30 @@ impl Operator {
                         MouseButton::Right,
                         cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                             this.schedule_rows[index].focus(window, cx);
-                            this.select_entry(id);
+                            if !this.is_entry_selected(id) {
+                                this.select_entry(id);
+                            }
                             this.item_menu = Some((id, event.position));
                             cx.notify();
                         }),
                     )
-                    .on_drag(EntryDrag(id), {
-                        let title = title.clone();
-                        move |_, _, _, cx| cx.new(|_| DragLabel(title.clone().into()))
+                    .on_drag(EntryDrag(id), move |_, _, _, cx| {
+                        cx.new(|_| DragLabel(drag_title.clone().into()))
                     })
-                    // Dropping on a row inserts a song before it, or moves the
-                    // dragged entry into its place (provisional).
+                    // Dropping a library song on a row inserts it before the row.
                     .on_drop(cx.listener(move |this, drag: &SongDrag, _, cx| {
                         this.add_entry(index, drag.version, drag.title.clone());
                         cx.notify();
                     }))
                     .on_drop(cx.listener(move |this, drag: &EntryDrag, _, cx| {
-                        this.schedule.move_to(drag.0, index);
+                        let before = this.drop_indicator().unwrap_or(index);
+                        this.drop_entries(drag.0, before);
                         cx.notify();
                     }))
+                    .when(drop_at == Some(index), |d| d.child(drop_line(true)))
+                    .when(drop_at == Some(count) && index + 1 == count, |d| {
+                        d.child(drop_line(false))
+                    })
                     .child(
                         div()
                             .w(px(18.))
@@ -245,16 +525,23 @@ impl Operator {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.view.scroll)
                     .flex()
                     .flex_col()
                     .bg(rgb(SURFACE))
                     .drag_over::<SongDrag>(|s, _, _, _| s.bg(rgb(DROP_TARGET)))
+                    .on_drag_move::<EntryDrag>(cx.listener(
+                        |this, event: &DragMoveEvent<EntryDrag>, window, cx| {
+                            this.drag_over_list(event, window, cx);
+                        },
+                    ))
                     .on_drop(cx.listener(|this, drag: &SongDrag, _, cx| {
                         this.add_entry(usize::MAX, drag.version, drag.title.clone());
                         cx.notify();
                     }))
                     .on_drop(cx.listener(|this, drag: &EntryDrag, _, cx| {
-                        this.schedule.move_to(drag.0, usize::MAX);
+                        let before = this.drop_indicator().unwrap_or(usize::MAX);
+                        this.drop_entries(drag.0, before);
                         cx.notify();
                     }))
                     .when(rows.is_empty(), |d| {

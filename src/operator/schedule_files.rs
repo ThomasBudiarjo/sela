@@ -242,7 +242,7 @@ impl Operator {
             .collect();
         match self.schedule.open(path.clone(), entries) {
             Ok(()) => {
-                self.selected_entry = None;
+                self.clear_entry_selection();
                 self.remember_recent(path);
                 self.schedule_message = Some(t!(Msg::OpenedSchedule, title = name));
                 Some(items.into_iter().map(|(_, song)| song).collect())
@@ -350,11 +350,11 @@ impl Operator {
     }
 
     fn remember_recent(&mut self, path: PathBuf) {
-        self.update_recent(|settings| settings.remember_recent(path));
+        self.update_recent(RecentChange::Remember(path));
     }
 
     fn forget_recent(&mut self, path: &Path) {
-        self.update_recent(|settings| settings.forget_recent(path));
+        self.update_recent(RecentChange::Forget(path.to_path_buf()));
     }
 
     /// Continues a guarded command after its Save landed. Runs from `render`,

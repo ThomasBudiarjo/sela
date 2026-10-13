@@ -138,12 +138,25 @@ impl Render for Operator {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &NextScheduleItem, _, cx| {
-                this.step_schedule(true);
+                this.step_schedule(true, false);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &PreviousScheduleItem, _, cx| {
-                this.step_schedule(false);
+                this.step_schedule(false, false);
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ExtendNextScheduleItem, _, cx| {
+                this.step_schedule(true, true);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ExtendPreviousScheduleItem, _, cx| {
+                this.step_schedule(false, true);
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.cancel_entry_drag(window, cx) {
+                    cx.stop_propagation();
+                }
             }))
             // Deeper than the SelaShow bindings: Up/Down with a Songs row
             // focused move the song selection, never the schedule (M1-16).
@@ -657,6 +670,12 @@ impl Render for Operator {
                             this.item_menu = None;
                             cx.notify();
                         }))
+                        .child(self.button(
+                            Control::ItemMenuDuplicate,
+                            "item-menu-duplicate",
+                            t!(Msg::ScheduleDuplicate),
+                            cx,
+                        ))
                         .child(self.button(
                             Control::ItemMenuRemove,
                             "item-menu-remove",

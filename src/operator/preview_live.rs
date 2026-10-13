@@ -150,7 +150,7 @@ impl Operator {
         // still loading; an older double-click must not unmask the previous item.
         self.unmask.cancel();
         self.selected_song = Some(version);
-        self.selected_entry = None;
+        self.clear_entry_selection();
         if self
             .preview
             .as_ref()

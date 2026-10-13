@@ -26,6 +26,8 @@ pub(crate) enum Dialog {
     Preflight,
     /// Go Live on an item whose images cannot be shown as chosen.
     GoLiveMissing,
+    /// Songs menu → Update items in Schedule: the reviewable diff.
+    UpdateItems,
 }
 
 impl Operator {
@@ -74,7 +76,7 @@ impl Operator {
             Then::Recent(index) => self.open_recent(index),
             Then::New => {
                 self.schedule.clear();
-                self.selected_entry = None;
+                self.clear_entry_selection();
                 self.schedule_message = None;
             }
             Then::Quit => {
@@ -97,6 +99,7 @@ impl Operator {
             Dialog::Options => return None,
             Dialog::Preflight => t!(Msg::PreflightHeading).into(),
             Dialog::GoLiveMissing => t!(Msg::GoLiveMissingHeading).into(),
+            Dialog::UpdateItems => t!(Msg::MenuUpdateSchedule).into(),
             Dialog::DeleteSong(version) => match self.catalog.iter().find(|(v, _)| *v == version) {
                 Some((_, title)) => t!(Msg::DialogDeleteTitled, title = shown_title(title)),
                 None => t!(Msg::DialogDeleteGeneric).into(),
@@ -108,6 +111,7 @@ impl Operator {
             Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmDelete)),
             Dialog::Options | Dialog::Preflight | Dialog::FileError => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
+            Dialog::UpdateItems => Some(t!(Msg::UpdateItemsConfirm)),
         };
         let body = match dialog {
             Dialog::FileError => self.file_error.clone().map(|message| {
@@ -124,6 +128,7 @@ impl Operator {
             }),
             Dialog::Preflight => Some(self.preflight_body(cx)),
             Dialog::GoLiveMissing => Some(self.go_live_missing_body()),
+            Dialog::UpdateItems => Some(self.update_items_body()),
             Dialog::DeleteSong(_) => Some(
                 div()
                     .text_size(px(TEXT_SMALL))
@@ -140,11 +145,13 @@ impl Operator {
                 .absolute()
                 .top(px(MENU_BAR_H + 44.))
                 .left(px(8.))
-                .w(px(if dialog == Dialog::Preflight {
-                    PREFLIGHT_DIALOG_W
-                } else {
-                    380.
-                }))
+                .w(px(
+                    if matches!(dialog, Dialog::Preflight | Dialog::UpdateItems) {
+                        PREFLIGHT_DIALOG_W
+                    } else {
+                        380.
+                    },
+                ))
                 .p(px(DIALOG_PAD))
                 .flex()
                 .flex_col()

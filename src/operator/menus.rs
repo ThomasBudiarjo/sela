@@ -62,10 +62,14 @@ impl SongItem {
         }
     }
 
-    /// Shown but inert: what Update items in Schedule does is unobserved,
-    /// and the Sort by options belong to library sorting (not built).
-    pub(crate) fn enabled(self) -> bool {
-        !matches!(self, Self::UpdateSchedule | Self::SortBy)
+    /// Update items in Schedule needs a schedule with items (EW8-OBS-061);
+    /// the Sort by options belong to library sorting (not built).
+    pub(crate) fn enabled(self, schedule_items: usize) -> bool {
+        match self {
+            Self::UpdateSchedule => schedule_items > 0,
+            Self::SortBy => false,
+            _ => true,
+        }
     }
 }
 
@@ -137,6 +141,7 @@ impl Operator {
 
     /// Up/Down (and Tab) move the highlight over enabled items, wrapping.
     pub(crate) fn move_song_highlight(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let items = self.schedule.entries().len();
         let Some(menu) = &mut self.song_menu else {
             return;
         };
@@ -150,7 +155,7 @@ impl Operator {
                 Some(index) => (index + count - 1) % count,
             };
             next = Some(index);
-            if SONG_MENU[index].enabled() {
+            if SONG_MENU[index].enabled(items) {
                 break;
             }
         }
@@ -167,7 +172,7 @@ impl Operator {
         let (Some(menu), Some(item)) = (self.song_menu, SONG_MENU.get(index).copied()) else {
             return;
         };
-        if !item.enabled() {
+        if !item.enabled(self.schedule.entries().len()) {
             return;
         }
         self.dismiss_song_menu(window, cx);
@@ -176,7 +181,8 @@ impl Operator {
             SongItem::EditSong => self.open_editor(Some(menu.version), cx),
             SongItem::Delete => self.open_dialog(Dialog::DeleteSong(menu.version), window, cx),
             SongItem::Refresh => self.catalog_stale = true,
-            SongItem::UpdateSchedule | SongItem::SortBy => {}
+            SongItem::UpdateSchedule => self.begin_update_scan(),
+            SongItem::SortBy => {}
         }
         cx.notify();
     }
@@ -187,11 +193,12 @@ impl Operator {
         let menu = self
             .song_menu
             .filter(|_| self.tab == 0 && !self.collapsed)?;
+        let schedule_items = self.schedule.entries().len();
         let items = SONG_MENU
             .iter()
             .enumerate()
             .map(|(index, &item)| {
-                let enabled = item.enabled();
+                let enabled = item.enabled(schedule_items);
                 div()
                     .id(item.id())
                     .debug_selector(move || item.id().into())

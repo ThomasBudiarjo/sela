@@ -18,6 +18,8 @@ actions!(
         OpenSchedule,
         NextScheduleItem,
         PreviousScheduleItem,
+        ExtendNextScheduleItem,
+        ExtendPreviousScheduleItem,
         RemoveScheduleItem
     ]
 );
@@ -27,6 +29,8 @@ actions!(
 /// and friends for editing; `!SelaMenuBar` keeps an open menu modal-ish, so
 /// show shortcuts stay inert until it closes.
 const SHOW: &str = "SelaShow && !SelaTextInput && !SelaMenuBar";
+/// Shift+Up/Down extend the Schedule selection, not a Songs row focus.
+const EXTEND: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongRow";
 
 fn bind_operator_keys(cx: &mut App) {
     text_input::bind_keys(cx);
@@ -40,6 +44,8 @@ fn bind_operator_keys(cx: &mut App) {
         KeyBinding::new("ctrl-o", OpenSchedule, Some(SHOW)),
         KeyBinding::new("down", NextScheduleItem, Some(SHOW)),
         KeyBinding::new("up", PreviousScheduleItem, Some(SHOW)),
+        KeyBinding::new("shift-down", ExtendNextScheduleItem, Some(EXTEND)),
+        KeyBinding::new("shift-up", ExtendPreviousScheduleItem, Some(EXTEND)),
         KeyBinding::new("ctrl-delete", RemoveScheduleItem, Some(SHOW)),
         KeyBinding::new("ctrl-q", Quit, Some("Sela")),
         KeyBinding::new("tab", FocusNext, Some("Sela")),

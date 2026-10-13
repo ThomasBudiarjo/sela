@@ -44,6 +44,7 @@ pub(crate) enum Control {
     ItemMenuRemove,
     CancelImport,
     ReviewFiles,
+    ItemMenuDuplicate,
 }
 
 /// First tab index of each focus band. Rows are placed by band so lists of
@@ -55,7 +56,7 @@ pub(crate) const SLIDE_TAB_INDEX: isize = 1000;
 pub(crate) const IMAGE_TAB_INDEX: isize = 2000;
 
 impl Control {
-    pub(crate) const ALL: [Control; 35] = [
+    pub(crate) const ALL: [Control; 36] = [
         Self::ResetLayout,
         Self::Quit,
         Self::CollapseResources,
@@ -91,6 +92,7 @@ impl Control {
         Self::ItemMenuRemove,
         Self::CancelImport,
         Self::ReviewFiles,
+        Self::ItemMenuDuplicate,
     ];
 
     pub(crate) const COUNT: usize = Self::ALL.len();
@@ -153,9 +155,11 @@ impl Control {
             return Role::Tab;
         }
         match self {
-            Self::NewSongItem | Self::NewSchedule | Self::ItemMenuRemove | Self::ImageMenuLogo => {
-                Role::MenuItem
-            }
+            Self::NewSongItem
+            | Self::NewSchedule
+            | Self::ItemMenuRemove
+            | Self::ItemMenuDuplicate
+            | Self::ImageMenuLogo => Role::MenuItem,
             _ => Role::Button,
         }
     }
@@ -308,12 +312,15 @@ impl Operator {
                     None => self.schedule_message = Some(t!(Msg::SelectSongFirst).into()),
                 }
             }
-            Control::MoveUp | Control::MoveDown => match self.selected_entry {
-                Some(id) => {
-                    self.schedule.move_by(id, control == Control::MoveUp);
+            Control::MoveUp | Control::MoveDown => {
+                let group = self.selected_ids();
+                if group.is_empty() {
+                    self.schedule_message = Some(t!(Msg::SelectScheduleItem).into());
+                } else {
+                    self.schedule
+                        .move_group_by(&group, control == Control::MoveUp);
                 }
-                None => self.schedule_message = Some(t!(Msg::SelectScheduleItem).into()),
-            },
+            }
             Control::RemoveItem => match self.selected_entry {
                 Some(id) => self.open_dialog(Dialog::Remove(id), window, cx),
                 None => self.schedule_message = Some(t!(Msg::SelectScheduleItem).into()),
@@ -321,6 +328,11 @@ impl Operator {
             Control::ItemMenuRemove => {
                 if let Some((id, _)) = self.item_menu.take() {
                     self.open_dialog(Dialog::Remove(id), window, cx);
+                }
+            }
+            Control::ItemMenuDuplicate => {
+                if let Some((id, _)) = self.item_menu.take() {
+                    self.duplicate_entries(id);
                 }
             }
             Control::NewSchedule if self.new_menu => {
@@ -356,9 +368,16 @@ impl Operator {
                     self.close_dialog(window, cx);
                     self.go_live_anyway();
                 }
+                Some(Dialog::UpdateItems) => {
+                    self.close_dialog(window, cx);
+                    self.apply_update_review();
+                }
                 Some(Dialog::Preflight | Dialog::FileError) | None => return,
             },
             Control::DialogCancel if self.dialog.is_some() => {
+                if self.dialog == Some(Dialog::UpdateItems) {
+                    self.discard_update_review();
+                }
                 if self.dialog == Some(Dialog::Unsaved(Then::Quit)) {
                     self.cancel_close_request();
                 }
@@ -451,6 +470,7 @@ mod tests {
             Control::NewSongItem,
             Control::NewSchedule,
             Control::ItemMenuRemove,
+            Control::ItemMenuDuplicate,
             Control::ImageMenuLogo,
         ] {
             assert_eq!(

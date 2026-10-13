@@ -787,7 +787,8 @@ impl Repository {
     }
     /// The song at each version, in order, for a schedule file to embed.
     pub fn songs(&self, versions: &[Version]) -> Result<Vec<Song>> {
-        if versions.len() > MAX_ITEMS {
+        // Twice a schedule: an update review loads the old and new revision.
+        if versions.len() > 2 * MAX_ITEMS {
             return Err(Error::Invalid);
         }
         versions.iter().map(|v| self.song(*v)).collect()
@@ -1320,7 +1321,7 @@ impl Worker {
             Command::SaveSchedule(_, s) if s.items.len() > MAX_ITEMS || s.title.len() > 1024 => {
                 return Err(Error::Invalid);
             }
-            Command::Songs(v) if v.len() > MAX_ITEMS => return Err(Error::Invalid),
+            Command::Songs(v) if v.len() > 2 * MAX_ITEMS => return Err(Error::Invalid),
             Command::ImportSongs(items) if items.len() > MAX_ITEMS => return Err(Error::Invalid),
             Command::BackupNew(p) if p.as_os_str().len() > 4096 => return Err(Error::Invalid),
             Command::RestoreNew {

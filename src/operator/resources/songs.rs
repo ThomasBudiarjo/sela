@@ -66,7 +66,7 @@ impl Operator {
     pub(crate) fn select_song(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some((version, _)) = self.songs().get(index) {
             self.selected_song = Some(*version);
-            self.selected_entry = None;
+            self.clear_entry_selection();
             self.live_on_load = None;
             cx.notify();
         }

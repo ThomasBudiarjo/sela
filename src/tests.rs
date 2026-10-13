@@ -4762,6 +4762,41 @@ mod schedule_files_ui {
     }
 
     #[gpui::test]
+    fn a_save_before_settings_load_still_reaches_open_recent(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let older = dir.path().join("older.selaschedule");
+        let mut stored = sela::settings::Settings::default();
+        stored.remember_recent(older.clone());
+        sela::settings::save(&sela::settings::path_in(dir.path()), &stored).unwrap();
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut config = crate::operator::SettingsConfig::default();
+        let opened = gate.clone();
+        config.loader = Arc::new(move |path| {
+            while !opened.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            sela::settings::load(path)
+        });
+        let (mut cx, operator, _) =
+            with_settings(cx, Some(library_with_songs(&dir)), "apply", config);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        cx.simulate_keystrokes("ctrl-s");
+        let a = dir.path().join("A.selaschedule");
+        save_new(&mut cx, &operator, a.clone());
+        assert!(recent(&cx, &operator).is_empty(), "settings not loaded yet");
+
+        gate.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut cx, &operator, "loaded and written", |o| {
+            o.settings_idle() && o.recent_schedules().len() == 2
+        });
+        assert_eq!(recent(&cx, &operator), [a.clone(), older.clone()]);
+        let on_disk = sela::settings::load(&sela::settings::path_in(dir.path())).settings;
+        assert_eq!(on_disk.recent_schedules, [a, older]);
+    }
+
+    #[gpui::test]
     fn open_recent_lists_files_and_drops_a_missing_one(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let (mut cx, operator) = loaded(cx, &dir);
@@ -4924,5 +4959,434 @@ mod schedule_files_ui {
             o.schedule.entries().is_empty() && o.schedule.path().is_none()
         });
         assert_eq!(schedule_file::read(&file).unwrap().items.len(), 1);
+    }
+}
+
+mod schedule_remainder_ui {
+    use super::*;
+    use crate::operator::Dialog;
+    use gpui::{Modifiers, MouseButton, point};
+    use sela::schedule::EntryId;
+    use sela::storage::Version;
+
+    const ROWS: [&str; 8] = [
+        "schedule-item-0",
+        "schedule-item-1",
+        "schedule-item-2",
+        "schedule-item-3",
+        "schedule-item-4",
+        "schedule-item-5",
+        "schedule-item-6",
+        "schedule-item-7",
+    ];
+
+    fn ready(
+        cx: &mut TestAppContext,
+        dir: &tempfile::TempDir,
+    ) -> (VisualTestContext, Entity<Operator>) {
+        let (mut cx, operator, _) = with_library(cx, Some(library_with_songs(dir)), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+        (cx, operator)
+    }
+
+    /// Appends `count` entries alternating between the two library songs.
+    fn fill(cx: &mut VisualTestContext, operator: &Entity<Operator>, count: usize) -> Vec<EntryId> {
+        for n in 0..count {
+            operator.update(cx, |o, cx| {
+                let (version, title) = o.catalog[n % 2].clone();
+                o.add_entry(usize::MAX, version, title);
+                cx.notify();
+            });
+        }
+        cx.run_until_parked();
+        order(cx, operator)
+    }
+
+    fn order(cx: &VisualTestContext, operator: &Entity<Operator>) -> Vec<EntryId> {
+        operator.read_with(cx, |o, _| {
+            o.schedule.entries().iter().map(|e| e.id).collect()
+        })
+    }
+
+    fn selected(cx: &VisualTestContext, operator: &Entity<Operator>) -> Vec<usize> {
+        operator.read_with(cx, |o, _| {
+            o.schedule
+                .entries()
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| o.is_entry_selected(e.id))
+                .map(|(i, _)| i)
+                .collect()
+        })
+    }
+
+    fn click_with(cx: &mut VisualTestContext, selector: &'static str, modifiers: Modifiers) {
+        let at = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_click(at, modifiers);
+    }
+
+    fn focus_root(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+        cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+    }
+
+    #[gpui::test]
+    fn shift_ctrl_click_and_shift_arrows_select_in_the_schedule(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = ready(cx, &dir);
+        let ids = fill(&mut cx, &operator, 7);
+        click(&mut cx, ROWS[1]);
+        assert_eq!(selected(&cx, &operator), [1]);
+        click_with(&mut cx, ROWS[4], Modifiers::shift());
+        assert_eq!(selected(&cx, &operator), [1, 2, 3, 4], "range 2 to 5");
+        click_with(&mut cx, ROWS[2], Modifiers::control());
+        assert_eq!(selected(&cx, &operator), [1, 3, 4], "ctrl removes");
+        click_with(&mut cx, ROWS[5], Modifiers::control());
+        assert_eq!(selected(&cx, &operator), [1, 3, 4, 5], "ctrl adds");
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.selected_entry),
+            Some(ids[5]),
+            "the added row is the focused one"
+        );
+        // Selection is visible on each selected row through the a11y state.
+        click(&mut cx, ROWS[1]);
+        cx.simulate_keystrokes("shift-down shift-down");
+        assert_eq!(
+            selected(&cx, &operator),
+            [1, 2, 3],
+            "extends from the anchor"
+        );
+        cx.simulate_keystrokes("shift-up");
+        assert_eq!(selected(&cx, &operator), [1, 2]);
+        cx.simulate_keystrokes("down");
+        assert_eq!(selected(&cx, &operator), [3], "a plain arrow collapses it");
+        click_with(&mut cx, ROWS[0], Modifiers::shift());
+        assert_eq!(selected(&cx, &operator), [0, 1, 2, 3], "from anchor 4 to 1");
+        click(&mut cx, ROWS[6]);
+        assert_eq!(selected(&cx, &operator), [6]);
+    }
+
+    #[gpui::test]
+    fn a_multi_selection_sends_only_the_focused_item_live(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = ready(cx, &dir);
+        let ids = fill(&mut cx, &operator, 5);
+        click(&mut cx, "live-output");
+        settle(&mut cx, &operator, "output connection", connected);
+        click(&mut cx, ROWS[1]);
+        click_with(&mut cx, ROWS[3], Modifiers::shift());
+        assert_eq!(selected(&cx, &operator), [1, 2, 3]);
+        settle(&mut cx, &operator, "focused item previewed", |o| {
+            o.preview.as_ref().and_then(|p| p.entry) == Some(ids[3])
+        });
+        let sent = operator.read_with(&cx, |o, _| submitted(o));
+        focus_root(&mut cx, &operator);
+        cx.simulate_keystrokes("pagedown");
+        settle(&mut cx, &operator, "one cue", |o| {
+            o.live.as_ref().and_then(|l| l.entry) == Some(ids[3]) && o.on_screen().is_some()
+        });
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(submitted(o), sent + 1, "exactly one cue");
+            assert_eq!(o.live.as_ref().unwrap().entry, Some(ids[3]));
+        });
+        assert_eq!(
+            selected(&cx, &operator),
+            [1, 2, 3],
+            "selection is untouched"
+        );
+    }
+
+    #[gpui::test]
+    fn moving_a_selection_keeps_relative_order_and_selection(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = ready(cx, &dir);
+        let ids = fill(&mut cx, &operator, 6);
+        click(&mut cx, ROWS[1]);
+        click_with(&mut cx, ROWS[3], Modifiers::control());
+        drag(&mut cx, ROWS[1], "schedule-list");
+        assert_eq!(
+            order(&cx, &operator),
+            [ids[0], ids[2], ids[4], ids[5], ids[1], ids[3]],
+            "1,3,5,6,2,4"
+        );
+        assert_eq!(selected(&cx, &operator), [4, 5], "both stay selected");
+        // Move Up steps the whole group.
+        click(&mut cx, "schedule-up");
+        assert_eq!(
+            order(&cx, &operator),
+            [ids[0], ids[2], ids[4], ids[1], ids[3], ids[5]]
+        );
+        assert_eq!(selected(&cx, &operator), [3, 4]);
+    }
+
+    #[gpui::test]
+    fn escape_cancels_a_drag_and_the_drop_indicator_shows(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = ready(cx, &dir);
+        let ids = fill(&mut cx, &operator, 4);
+        let start = cx.debug_bounds(ROWS[0]).unwrap().center();
+        let end = cx.debug_bounds(ROWS[2]).unwrap().center();
+        cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(
+            start + point(px(8.), px(8.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        cx.simulate_mouse_move(end, MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("schedule-drop-indicator").is_some(),
+            "an insertion line shows while dragging"
+        );
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(
+            !cx.update(|_, cx| cx.has_active_drag()),
+            "Esc ends the drag"
+        );
+        assert!(cx.debug_bounds("schedule-drop-indicator").is_none());
+        cx.simulate_mouse_up(end, MouseButton::Left, Default::default());
+        assert_eq!(order(&cx, &operator), ids, "order unchanged");
+        // A later drag still works.
+        drag(&mut cx, ROWS[0], "schedule-list");
+        assert_eq!(
+            order(&cx, &operator),
+            [ids[1], ids[2], ids[3], ids[0]],
+            "dropped past the last row"
+        );
+    }
+
+    #[gpui::test]
+    fn dragging_to_the_bottom_edge_autoscrolls(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = ready(cx, &dir);
+        let ids = fill(&mut cx, &operator, 30);
+        let list = cx.debug_bounds("schedule-list").unwrap();
+        let start = cx.debug_bounds(ROWS[0]).unwrap().center();
+        let edge = point(start.x, list.bottom() - px(4.));
+        cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(
+            start + point(px(8.), px(8.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        cx.simulate_mouse_move(edge, MouseButton::Left, Default::default());
+        for _ in 0..10 {
+            cx.executor().advance_clock(Duration::from_millis(60));
+            cx.run_until_parked();
+        }
+        let offset = operator.read_with(&cx, |o, _| o.view.scroll.offset().y);
+        assert!(offset < px(0.), "the list scrolled ({offset:?})");
+        cx.simulate_mouse_up(edge, MouseButton::Left, Default::default());
+        let landed = order(&cx, &operator)
+            .iter()
+            .position(|id| *id == ids[0])
+            .unwrap();
+        assert!(
+            landed > 15,
+            "dropped at the indicator, not the start: {landed}"
+        );
+    }
+
+    #[gpui::test]
+    fn duplicate_makes_an_independent_copy_right_after_the_original(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = ready(cx, &dir);
+        let ids = fill(&mut cx, &operator, 3);
+        let title = operator.read_with(&cx, |o, _| o.schedule.entries()[1].title.clone());
+        right_click(&mut cx, ROWS[1]);
+        click(&mut cx, "item-menu-duplicate");
+        let after = order(&cx, &operator);
+        assert_eq!(after.len(), 4);
+        assert_eq!((after[0], after[1], after[3]), (ids[0], ids[1], ids[2]));
+        let copy = after[2];
+        assert_ne!(copy, ids[1]);
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.schedule.get(copy).unwrap().title, title);
+            assert_eq!(
+                o.schedule.get(copy).unwrap().version,
+                o.schedule.get(ids[1]).unwrap().version
+            );
+            assert_eq!(o.selected_entry, Some(copy), "the copy is selected");
+        });
+        assert_eq!(selected(&cx, &operator), [2]);
+        settle(&mut cx, &operator, "copy previewed", |o| {
+            o.preview.as_ref().and_then(|p| p.entry) == Some(copy)
+        });
+        // Removing the copy leaves the original.
+        focus_root(&mut cx, &operator);
+        cx.simulate_keystrokes("ctrl-delete");
+        assert_eq!(order(&cx, &operator), [ids[0], ids[1], ids[2]]);
+    }
+
+    /// Saves a new revision of "Signal Hymn" in the library file and returns
+    /// it, then lets the Songs list pick it up.
+    fn edit_hymn(
+        cx: &mut VisualTestContext,
+        operator: &Entity<Operator>,
+        dir: &tempfile::TempDir,
+    ) -> Version {
+        let old = operator.read_with(cx, |o, _| version_of(o, "Signal Hymn"));
+        let mut repository = Repository::open(&dir.path().join("library.sqlite")).unwrap();
+        let mut song = repository.song(old).unwrap();
+        song.sections[0].lyrics = "First revised line".into();
+        let new = repository.save_song(Some(old), song).unwrap();
+        let hymn = song_row(cx, operator, "Signal Hymn");
+        right_click(cx, hymn);
+        click(cx, "song-menu-refresh");
+        settle(cx, operator, "catalog has the new revision", |o| {
+            o.catalog.iter().any(|(v, _)| *v == new)
+        });
+        new
+    }
+
+    fn open_update(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+        let hymn = song_row(cx, operator, "Signal Hymn");
+        right_click(cx, hymn);
+        click(cx, "song-menu-update");
+        settle(cx, operator, "review", |o| {
+            o.dialog == Some(Dialog::UpdateItems)
+        });
+    }
+
+    fn versions(cx: &VisualTestContext, operator: &Entity<Operator>) -> Vec<Version> {
+        operator.read_with(cx, |o, _| o.schedule.versions())
+    }
+
+    #[gpui::test]
+    fn update_items_shows_a_diff_and_applies_only_on_confirm(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = ready(cx, &dir);
+        // Two hymns and two canticles: the canticles are never listed.
+        fill(&mut cx, &operator, 4);
+        let hymn = operator.read_with(&cx, |o, _| version_of(o, "Signal Hymn"));
+        let before = versions(&cx, &operator);
+        assert_eq!(before.iter().filter(|v| **v == hymn).count(), 2);
+        let up_to_date = || "Schedule items are up to date";
+        open_update_expect_none(&mut cx, &operator, up_to_date());
+
+        let new = edit_hymn(&mut cx, &operator, &dir);
+        open_update(&mut cx, &operator);
+        assert!(cx.debug_bounds("update-item-0").is_some());
+        assert!(cx.debug_bounds("update-item-1").is_some());
+        assert!(
+            cx.debug_bounds("update-item-2").is_none(),
+            "canticle unlisted"
+        );
+        operator.read_with(&cx, |o, _| {
+            let review = o.view.review.as_ref().unwrap();
+            assert_eq!(review.updates.len(), 2);
+            let change = &review.updates[0].changes[0];
+            assert_eq!(change.number, 1);
+            assert!(
+                change
+                    .old
+                    .as_deref()
+                    .unwrap()
+                    .contains("First original line")
+            );
+            assert!(
+                change
+                    .new
+                    .as_deref()
+                    .unwrap()
+                    .contains("First revised line")
+            );
+        });
+        assert_eq!(
+            versions(&cx, &operator),
+            before,
+            "nothing changes before confirm"
+        );
+
+        click(&mut cx, "dialog-cancel");
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+        assert_eq!(versions(&cx, &operator), before, "Cancel leaves the items");
+
+        open_update(&mut cx, &operator);
+        click(&mut cx, "dialog-confirm");
+        let after = versions(&cx, &operator);
+        let expected: Vec<_> = before
+            .iter()
+            .map(|v| if *v == hymn { new } else { *v })
+            .collect();
+        assert_eq!(after, expected);
+        operator.read_with(&cx, |o, _| {
+            assert!(o.schedule.is_dirty());
+            assert_eq!(
+                o.schedule_message.as_deref(),
+                Some("Updated 2 item(s) in the schedule")
+            );
+        });
+        open_update_expect_none(&mut cx, &operator, up_to_date());
+    }
+
+    fn open_update_expect_none(
+        cx: &mut VisualTestContext,
+        operator: &Entity<Operator>,
+        text: &str,
+    ) {
+        let hymn = song_row(cx, operator, "Signal Hymn");
+        right_click(cx, hymn);
+        click(cx, "song-menu-update");
+        cx.run_until_parked();
+        operator.read_with(cx, |o, _| {
+            assert_eq!(o.dialog, None);
+            assert_eq!(o.schedule_message.as_deref(), Some(text));
+        });
+    }
+
+    #[gpui::test]
+    fn updating_a_live_item_leaves_the_audience_until_go_live(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = ready(cx, &dir);
+        operator.update(&mut cx, |o, cx| {
+            let version = version_of(o, "Signal Hymn");
+            o.add_entry(usize::MAX, version, "Signal Hymn".into());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let ids = order(&cx, &operator);
+        click(&mut cx, "live-output");
+        settle(&mut cx, &operator, "output connection", connected);
+        click(&mut cx, ROWS[0]);
+        settle(&mut cx, &operator, "previewed", |o| {
+            o.preview.as_ref().and_then(|p| p.entry) == Some(ids[0])
+        });
+        focus_root(&mut cx, &operator);
+        cx.simulate_keystrokes("pagedown");
+        settle(&mut cx, &operator, "verse on screen", |o| {
+            o.on_screen() == Some("Signal Hymn · Verse 1")
+        });
+        let sent = operator.read_with(&cx, |o, _| submitted(o));
+
+        let new = edit_hymn(&mut cx, &operator, &dir);
+        open_update(&mut cx, &operator);
+        click(&mut cx, "dialog-confirm");
+        settle(&mut cx, &operator, "preview shows the new text", |o| {
+            o.preview.as_ref().is_some_and(|p| {
+                p.version == new && p.slides[0].text.contains("First revised line")
+            })
+        });
+        operator.read_with(&cx, |o, _| {
+            let live = o.live.as_ref().unwrap();
+            assert!(live.slides[0].text.contains("First original line"));
+            assert_eq!(live.entry, Some(ids[0]));
+            assert_eq!(submitted(o), sent, "the audience got no new cue");
+            assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
+        });
+        focus_root(&mut cx, &operator);
+        cx.simulate_keystrokes("pagedown");
+        settle(
+            &mut cx,
+            &operator,
+            "explicit Go Live shows the update",
+            |o| {
+                o.live
+                    .as_ref()
+                    .is_some_and(|l| l.slides[0].text.contains("First revised line"))
+                    && submitted(o) == sent + 1
+            },
+        );
     }
 }
