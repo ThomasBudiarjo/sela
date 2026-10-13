@@ -32,6 +32,13 @@ pub const DEFAULT_FIT: Extent = Extent {
     height: 1080,
 };
 
+/// Size of the slide-tile thumbnails in Preview and Live (2x the 168x94
+/// tile for high-DPI displays).
+pub const TILE: Extent = Extent {
+    width: 336,
+    height: 188,
+};
+
 pub const IMAGES: &str = "Resources/Images";
 pub const LOGO_FILE: &str = "logo.txt";
 const MAX_NAME: usize = 255;

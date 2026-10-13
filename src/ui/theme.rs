@@ -45,6 +45,9 @@ pub(crate) const CANVAS_TEXT: u32 = 0xb2b6be;
 pub(crate) const DARK_TEXT: u32 = 0xf2f2f2;
 pub(crate) const DARK_MUTED: u32 = 0x9ea3ab;
 pub(crate) const DARK_ERROR: u32 = 0xf08a80;
+/// Live status indicators that are neither confirmed nor failed.
+pub(crate) const DARK_PREPARING: u32 = 0x8fa8ff;
+pub(crate) const DARK_DISCONNECTED: u32 = 0xe08cd8;
 pub(crate) const BLACK: u32 = 0x000000;
 
 // Type sizes in logical pixels.

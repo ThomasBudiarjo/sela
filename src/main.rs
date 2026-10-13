@@ -20,9 +20,31 @@ actions!(
         PreviousScheduleItem,
         ExtendNextScheduleItem,
         ExtendPreviousScheduleItem,
-        RemoveScheduleItem
+        RemoveScheduleItem,
+        LiveNextSlide,
+        LivePreviousSlide,
+        LiveFirstSlide,
+        LiveLastSlide,
+        LiveNextItem,
+        LivePreviousItem,
+        ScheduleFirstItem,
+        ScheduleLastItem,
+        PreviewPreviousSlide,
+        PreviewNextSlide
     ]
 );
+
+/// A completed label shortcut: kind letter, optional number, Enter
+/// (EW8-OBS-052, EW8-OBS-056).
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = sela, no_json)]
+pub struct LabelJump {
+    pub key: char,
+    pub number: Option<u32>,
+}
+
+/// Highest label number reachable from the keyboard ("v 1 2 enter").
+const LABEL_NUMBERS: u32 = 30;
 
 /// Show controls (EW8-OBS-018). `!SelaTextInput` is evaluated against the
 /// whole context stack, so a focused text field anywhere below keeps Ctrl+C
@@ -31,10 +53,70 @@ actions!(
 const SHOW: &str = "SelaShow && !SelaTextInput && !SelaMenuBar";
 /// Shift+Up/Down extend the Schedule selection, not a Songs row focus.
 const EXTEND: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongRow";
+/// Live navigation keys (EW8-OBS-014/050): Songs rows and Schedule rows keep
+/// Home/End and the arrows for their own selection (EW8-OBS-048).
+const NAVIGATE: &str =
+    "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongRow && !SelaScheduleRow";
+
+/// Label shortcuts as GPUI multi-keystroke bindings ("v 1 enter"): a pending
+/// prefix times out by itself, an unknown sequence replays as ordinary keys
+/// and nothing changes. Bridge needs Shift+B because bare B is Black, the
+/// key presenter remotes send.
+fn label_bindings() -> Vec<KeyBinding> {
+    let mut bindings = Vec::new();
+    for letter in ['c', 'e', 'i', 'm', 'r', 't', 'v', 'b'] {
+        let prefix = if letter == 'b' {
+            "shift-b".to_owned()
+        } else {
+            letter.to_string()
+        };
+        let jump = |number| LabelJump {
+            key: letter,
+            number,
+        };
+        bindings.push(KeyBinding::new(
+            &format!("{prefix} enter"),
+            jump(None),
+            Some(NAVIGATE),
+        ));
+        for number in 1..=LABEL_NUMBERS {
+            let digits: Vec<String> = number.to_string().chars().map(String::from).collect();
+            bindings.push(KeyBinding::new(
+                &format!("{prefix} {} enter", digits.join(" ")),
+                jump(Some(number)),
+                Some(NAVIGATE),
+            ));
+        }
+    }
+    bindings
+}
 
 fn bind_operator_keys(cx: &mut App) {
     text_input::bind_keys(cx);
     song_library::bind_keys(cx);
+    cx.bind_keys(label_bindings());
+    cx.bind_keys([
+        KeyBinding::new("right", LiveNextSlide, Some(NAVIGATE)),
+        KeyBinding::new("left", LivePreviousSlide, Some(NAVIGATE)),
+        KeyBinding::new("home", LiveFirstSlide, Some(NAVIGATE)),
+        KeyBinding::new("end", LiveLastSlide, Some(NAVIGATE)),
+        KeyBinding::new(
+            "pagedown",
+            LiveNextItem,
+            Some("SelaLivePane && !SelaTextInput"),
+        ),
+        KeyBinding::new(
+            "pageup",
+            LivePreviousItem,
+            Some("SelaLivePane && !SelaTextInput"),
+        ),
+        KeyBinding::new("home", ScheduleFirstItem, Some("SelaScheduleRow")),
+        KeyBinding::new("end", ScheduleLastItem, Some("SelaScheduleRow")),
+        KeyBinding::new("up", PreviewPreviousSlide, Some("SelaPreviewSlide")),
+        KeyBinding::new("down", PreviewNextSlide, Some("SelaPreviewSlide")),
+        KeyBinding::new("b", ToggleBlack, Some(SHOW)),
+        KeyBinding::new(".", ToggleBlack, Some(SHOW)),
+    ]);
     cx.bind_keys([
         KeyBinding::new("ctrl-b", ToggleBlack, Some(SHOW)),
         KeyBinding::new("ctrl-l", ToggleLogo, Some(SHOW)),

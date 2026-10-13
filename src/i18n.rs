@@ -254,6 +254,9 @@ pub enum Msg {
     MaskArmed,
     PreparingLogo,
     Sending,
+    IndicatorPreparing,
+    IndicatorFailed,
+    IndicatorDisconnected,
     CueNotShown,
     MaskNotShown,
     LogoNotShown,
@@ -695,6 +698,9 @@ impl Msg {
         Msg::MaskArmed,
         Msg::PreparingLogo,
         Msg::Sending,
+        Msg::IndicatorPreparing,
+        Msg::IndicatorFailed,
+        Msg::IndicatorDisconnected,
         Msg::CueNotShown,
         Msg::MaskNotShown,
         Msg::LogoNotShown,
@@ -1137,14 +1143,17 @@ impl Msg {
             Self::SendingMask => "Sending mask: {layer}…",
             Self::MaskArmed => "Mask armed: {layer} · shown when Live output is on",
             Self::PreparingLogo => "Preparing logo · covering with Black",
-            Self::Sending => "Sending…",
+            Self::Sending => "◐ Requested: waiting for the renderer…",
+            Self::IndicatorPreparing => "◌ Preparing the slide…",
+            Self::IndicatorFailed => "✕ Failed: the slide was not applied",
+            Self::IndicatorDisconnected => "⚠ Disconnected from the audience output",
             Self::CueNotShown => "Last cue not shown: {error}",
             Self::MaskNotShown => "Mask {layer} not shown: {error}",
             Self::LogoNotShown => "Logo not shown: {error}",
             Self::NoLogoSet => "No logo set · Media → select an image → Use As Logo Background",
             Self::PreparingBackground => "Preparing background…",
             Self::ResolvingFonts => "Resolving fonts…",
-            Self::CueBusy => "Still preparing earlier slides; try again",
+            Self::CueBusy => "Still preparing earlier slides; this one follows",
             Self::LiveOutputOff => "Live output is off",
             Self::LiveSelectSongFirst => "Select a song to preview first",
             Self::LivePreviewNoSlides => "The previewed song has no slides",
@@ -1637,14 +1646,17 @@ impl Msg {
             Self::SendingMask => "Mengirim masker: {layer}…",
             Self::MaskArmed => "Masker siap: {layer} · tampil saat output Langsung aktif",
             Self::PreparingLogo => "Menyiapkan logo · ditutup dengan Hitam",
-            Self::Sending => "Mengirim…",
+            Self::Sending => "◐ Diminta: menunggu penampil…",
+            Self::IndicatorPreparing => "◌ Menyiapkan slide…",
+            Self::IndicatorFailed => "✕ Gagal: slide tidak diterapkan",
+            Self::IndicatorDisconnected => "⚠ Terputus dari output audiens",
             Self::CueNotShown => "Isyarat terakhir tidak tampil: {error}",
             Self::MaskNotShown => "Masker {layer} tidak tampil: {error}",
             Self::LogoNotShown => "Logo tidak tampil: {error}",
             Self::NoLogoSet => "Belum ada logo · Media → pilih gambar → Jadikan Latar Logo",
             Self::PreparingBackground => "Menyiapkan latar…",
             Self::ResolvingFonts => "Menyiapkan fon…",
-            Self::CueBusy => "Masih menyiapkan slide sebelumnya; coba lagi",
+            Self::CueBusy => "Masih menyiapkan slide sebelumnya; yang ini menyusul",
             Self::LiveOutputOff => "Output Live mati",
             Self::LiveSelectSongFirst => "Pilih lagu untuk dipratinjau dulu",
             Self::LivePreviewNoSlides => "Lagu yang dipratinjau tidak punya slide",
@@ -2028,7 +2040,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 431);
+        assert_eq!(Msg::ALL.len(), 434);
     }
 
     #[test]

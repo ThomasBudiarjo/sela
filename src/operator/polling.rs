@@ -57,8 +57,12 @@ impl Operator {
                     if self.background_job.as_ref() == Some(&key) {
                         self.background_job = None;
                     }
-                    self.backgrounds.insert(key, fitted);
-                    retry = true;
+                    if key.2 == images::TILE {
+                        self.store_thumbnail(key, fitted);
+                    } else {
+                        self.backgrounds.insert(key, fitted);
+                        retry = true;
+                    }
                 }
                 Ok(images::Reply::Images(Ok(names))) => {
                     // The folder changed: a missing image may be back.
@@ -272,6 +276,12 @@ impl Operator {
                     self.preview_slide = 0;
                     if self.live_on_load == Some(version) && self.selected_entry.is_none() {
                         self.live_on_load = None;
+                        live_now = true;
+                    }
+                    if self.live_entry_on_load.is_some()
+                        && self.live_entry_on_load == self.selected_entry
+                    {
+                        self.live_entry_on_load = None;
                         live_now = true;
                     }
                     // The item's faces resolve off the UI thread before any

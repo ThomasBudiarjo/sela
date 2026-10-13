@@ -265,6 +265,7 @@ impl Operator {
             self.selected_entry = Some(id);
             self.selected_song = Some(entry.version);
             self.live_on_load = None;
+            self.live_entry_on_load = None;
             self.schedule_message = None;
         }
     }
@@ -380,7 +381,7 @@ impl Operator {
                     .aria_size_of_set(count)
                     .accessibility_id(format!("schedule-item-{index}"))
                     .track_focus(&self.schedule_rows[index])
-                    .key_context("SelaControl")
+                    .key_context("SelaControl SelaScheduleRow")
                     .flex_shrink_0()
                     .relative()
                     .h(px(SCHEDULE_ROW_H))

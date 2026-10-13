@@ -1,9 +1,28 @@
 use super::*;
 use sela::preparation::cue::LIVE_DEPTH;
 
-/// Text-only slide thumbnail over the slide's fill color (image fills show
-/// black); not a rendered audience frame.
-pub(crate) fn tile(slide: &Slide, index: usize, border: u32) -> gpui::Div {
+/// Thumbnails kept for tiles at once.
+const MAX_THUMBNAILS: usize = 32;
+
+/// GPUI draws BGRA; the fitted background is RGBA.
+fn render_image(rgba: &[u8], extent: Extent) -> Option<Arc<gpui::RenderImage>> {
+    let mut bgra = rgba.to_vec();
+    bgra.chunks_exact_mut(4).for_each(|px| px.swap(0, 2));
+    let buffer = image::RgbaImage::from_raw(extent.width, extent.height, bgra)?;
+    Some(Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        buffer,
+    )])))
+}
+
+/// Slide thumbnail: the image background when `thumb` has landed, else the
+/// slide's fill color (black while an image is still loading), under the
+/// slide text; not a rendered audience frame.
+pub(crate) fn tile(
+    slide: &Slide,
+    index: usize,
+    border: u32,
+    thumb: Option<Arc<gpui::RenderImage>>,
+) -> gpui::Div {
     let fill = match background::plan(slide.background.as_ref()) {
         Plan::Color([r, g, b]) => u32::from_be_bytes([0, r, g, b]),
         Plan::Image(..) => BLACK,
@@ -28,9 +47,18 @@ pub(crate) fn tile(slide: &Slide, index: usize, border: u32) -> gpui::Div {
                 .items_center()
                 .justify_center()
                 .overflow_hidden()
+                .relative()
                 .px_1()
                 .text_size(px(TEXT_TILE))
                 .text_color(rgb(DARK_TEXT))
+                .children(thumb.map(|image| {
+                    gpui::img(image)
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Cover)
+                }))
                 .children(
                     slide
                         .text
@@ -55,9 +83,11 @@ pub(crate) fn slide_pane(
     footer: String,
     status: Option<Vec<(String, u32)>>,
     tiles: Option<Vec<gpui::Stateful<gpui::Div>>>,
+    focus: Option<FocusHandle>,
 ) -> impl IntoElement {
     let empty = tiles.as_ref().is_none_or(Vec::is_empty);
     let list_name = title.clone();
+    let status_id = SharedString::from(format!("{id}-status"));
     div()
         .debug_selector(|| id.into())
         .w(px(width))
@@ -80,7 +110,16 @@ pub(crate) fn slide_pane(
                 .child(title),
         )
         .children(status.map(|lines| {
+            let spoken = lines
+                .iter()
+                .map(|(line, _)| line.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
             div()
+                .id(status_id.clone())
+                .role(Role::Label)
+                .aria_label(spoken)
+                .accessibility_id(status_id.clone())
                 .debug_selector(move || format!("{id}-status"))
                 .flex_shrink_0()
                 .px(px(PANE_PAD_X))
@@ -108,6 +147,9 @@ pub(crate) fn slide_pane(
                 .bg(rgb(CANVAS))
                 .text_size(px(TEXT_BASE))
                 .text_color(rgb(CANVAS_TEXT))
+                .when_some(focus, |d, handle| {
+                    d.track_focus(&handle).key_context("SelaLivePane")
+                })
                 .when(empty, |d| {
                     d.flex()
                         .items_center()
@@ -203,6 +245,49 @@ impl Operator {
         wanted
     }
 
+    /// Tile thumbnails wanted for the previewed and live items: the image
+    /// backgrounds of their slides at tile size, bounded.
+    pub(crate) fn wanted_thumbnails(&self) -> Vec<images::BackgroundKey> {
+        let mut wanted = Vec::new();
+        for item in self.preview.iter().chain(self.live.iter()) {
+            for slide in item.slides.iter() {
+                if let Plan::Image(image, aspect) = background::plan(slide.background.as_ref()) {
+                    let key = (image.clone(), aspect, images::TILE);
+                    if !wanted.contains(&key) {
+                        wanted.push(key);
+                    }
+                    if wanted.len() >= MAX_THUMBNAILS {
+                        return wanted;
+                    }
+                }
+            }
+        }
+        wanted
+    }
+
+    /// The decoded tile thumbnail for a slide's image background, once the
+    /// image worker has delivered it.
+    pub(crate) fn thumbnail(&self, slide: &Slide) -> Option<Arc<gpui::RenderImage>> {
+        let Plan::Image(image, aspect) = background::plan(slide.background.as_ref()) else {
+            return None;
+        };
+        let key = (image.clone(), aspect, images::TILE);
+        self.tile_images
+            .iter()
+            .find(|(k, _)| *k == key)
+            .and_then(|(_, rendered)| rendered.clone())
+    }
+
+    /// Keeps a landed thumbnail (a failed one is remembered as `None` so it is
+    /// not requested again) and drops those no longer wanted.
+    pub(crate) fn store_thumbnail(&mut self, key: images::BackgroundKey, fitted: images::Fitted) {
+        let rendered = fitted.ok().and_then(|rgba| render_image(&rgba, key.2));
+        let wanted = self.wanted_thumbnails();
+        self.tile_images.retain(|(k, _)| wanted.contains(k));
+        self.tile_images.retain(|(k, _)| *k != key);
+        self.tile_images.push((key, rendered));
+    }
+
     /// Hands the most urgent missing background to the image worker. Wanted
     /// entries are refreshed least urgent first, so eviction spares them.
     pub(crate) fn prefetch_backgrounds(&mut self) {
@@ -210,6 +295,13 @@ impl Operator {
             return;
         }
         let mut missing = None;
+        // Tile thumbnails are the least urgent, so they are tried first and
+        // any missing full-size background overwrites them.
+        for key in self.wanted_thumbnails().into_iter().rev() {
+            if !self.tile_images.iter().any(|(k, _)| *k == key) {
+                missing = Some(key);
+            }
+        }
         for key in self.wanted_backgrounds().into_iter().rev() {
             if self.backgrounds.get(&key).is_none() {
                 missing = Some(key);
@@ -464,12 +556,13 @@ impl Operator {
         }
     }
 
-    fn defer(&mut self, index: usize, generation: u64, item: Version) {
+    fn defer(&mut self, index: usize, generation: u64, item: Version, busy: bool) {
         self.deferred_send = Some(DeferredSend {
             index,
             generation,
             item,
             session: self.output_session,
+            busy,
         });
     }
 
@@ -571,6 +664,7 @@ impl Operator {
         // including one already queued with the renderer.
         self.request_generation += 1;
         self.unmask.cancel();
+        self.cue_failed = false;
         self.dispatch(index, self.request_generation);
     }
 
@@ -599,7 +693,7 @@ impl Operator {
         // current live scene stays; the deferred cue is retried by
         // `fonts_resolved` (M1-05g2b).
         let Some(resolved) = item.resolved.clone() else {
-            self.defer(index, generation, item.version);
+            self.defer(index, generation, item.version, false);
             self.live_message = Some(t!(Msg::ResolvingFonts).into());
             return;
         };
@@ -628,7 +722,7 @@ impl Operator {
                         Some(why.warning(&image.name)),
                     ),
                     None => {
-                        self.defer(index, generation, item.version);
+                        self.defer(index, generation, item.version, false);
                         self.live_message = Some(t!(Msg::PreparingBackground).into());
                         return;
                     }
@@ -666,7 +760,11 @@ impl Operator {
                 label,
                 warning,
             }),
-            Err(PrepareError::Busy) => self.live_message = Some(t!(Msg::CueBusy).into()),
+            Err(PrepareError::Busy) => {
+                // Kept in order: `poll_cues` resubmits it once the lane drains.
+                self.defer(index, generation, item.version, true);
+                self.live_message = Some(t!(Msg::CueBusy).into());
+            }
             Err(error) => {
                 self.live_message = Some(t!(Msg::CueFailed, error = error.to_string()));
             }
@@ -729,10 +827,15 @@ impl Operator {
                     }
                 }
                 CueEvent::Failed { error, .. } => {
+                    self.cue_failed = true;
                     self.unmask.drop_submission(pending.generation);
                     self.live_message = Some(t!(Msg::CueFailed, error = error.to_string()));
                 }
             }
+        }
+        if self.deferred_send.is_some_and(|d| d.busy) && self.pending_cues.len() < LIVE_DEPTH {
+            self.retry_deferred();
+            changed = true;
         }
         changed
     }
@@ -786,9 +889,9 @@ impl Operator {
     /// The slide the operator last asked for: the newest cue in preparation,
     /// else the one on screen.
     pub(crate) fn requested_slide(&self) -> Option<usize> {
-        self.pending_cues
-            .back()
-            .map(|p| p.index)
+        self.deferred_send
+            .map(|d| d.index)
+            .or_else(|| self.pending_cues.back().map(|p| p.index))
             .or(self.live_slide)
     }
     /// What the renderer has acknowledged, by label, if anything.
@@ -845,31 +948,36 @@ impl Operator {
                 .enumerate()
                 .map(|(index, slide)| {
                     let selected = index == self.preview_slide;
-                    tile(slide, index, if selected { ACCENT } else { CANVAS })
-                        .id(("preview-slide", index))
-                        .debug_selector(move || format!("preview-slide-{index}"))
-                        .role(Role::ListItem)
-                        .aria_label(format!("{} · {}", index + 1, slide_name(index, slide)))
-                        .aria_selected(selected)
-                        .accessibility_id(format!("preview-slide-{index}"))
-                        .track_focus(&self.slide_rows[index])
-                        .key_context("SelaControl")
-                        .focus(|d| d.bg(rgb(CANVAS_FOCUS)))
-                        .cursor_pointer()
-                        .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
-                            window.prevent_default();
-                            this.select_slide(index, false, cx);
-                        }))
-                        .on_click(
-                            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                                if matches!(event, gpui::ClickEvent::Keyboard(_)) {
-                                    return;
-                                }
-                                this.slide_rows[index].focus(window, cx);
-                                // Documented (EasyWorship 7 guide): double-click sends to output.
-                                this.select_slide(index, event.click_count() >= 2, cx);
-                            }),
-                        )
+                    tile(
+                        slide,
+                        index,
+                        if selected { ACCENT } else { CANVAS },
+                        self.thumbnail(slide),
+                    )
+                    .id(("preview-slide", index))
+                    .debug_selector(move || format!("preview-slide-{index}"))
+                    .role(Role::ListItem)
+                    .aria_label(format!("{} · {}", index + 1, slide_name(index, slide)))
+                    .aria_selected(selected)
+                    .accessibility_id(format!("preview-slide-{index}"))
+                    .track_focus(&self.slide_rows[index])
+                    .key_context("SelaControl SelaPreviewSlide")
+                    .focus(|d| d.bg(rgb(CANVAS_FOCUS)))
+                    .cursor_pointer()
+                    .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
+                        window.prevent_default();
+                        this.select_slide(index, false, cx);
+                    }))
+                    .on_click(cx.listener(
+                        move |this, event: &gpui::ClickEvent, window, cx| {
+                            if matches!(event, gpui::ClickEvent::Keyboard(_)) {
+                                return;
+                            }
+                            this.slide_rows[index].focus(window, cx);
+                            // Documented (EasyWorship 7 guide): double-click sends to output.
+                            this.select_slide(index, event.click_count() >= 2, cx);
+                        },
+                    ))
                 })
                 .collect::<Vec<_>>()
         });
@@ -881,6 +989,7 @@ impl Operator {
             footer,
             warning,
             tiles,
+            None,
         )
     }
 
@@ -936,8 +1045,20 @@ impl Operator {
                 lines.push((t!(Msg::PreparingLogo).into(), SENDING));
             }
         }
+        if !self.pending_cues.is_empty() || self.deferred_send.is_some() {
+            lines.push((t!(Msg::IndicatorPreparing).into(), DARK_PREPARING));
+        }
         if sending.is_some() {
             lines.push((t!(Msg::Sending).into(), SENDING));
+        }
+        if self.cue_failed || output.is_some_and(|o| o.rejected().is_some()) {
+            lines.push((t!(Msg::IndicatorFailed).into(), DARK_ERROR));
+        }
+        if matches!(output.map(Supervisor::status), Some(Status::Lost(_))) {
+            lines.insert(
+                1,
+                (t!(Msg::IndicatorDisconnected).into(), DARK_DISCONNECTED),
+            );
         }
         if let Some((_, error)) = output.and_then(|o| o.rejected()) {
             lines.push((t!(Msg::CueNotShown, error = error), DARK_ERROR));
@@ -988,7 +1109,7 @@ impl Operator {
                     } else {
                         CANVAS
                     };
-                    tile(slide, index, border)
+                    tile(slide, index, border, self.thumbnail(slide))
                         .id(("live-slide", index))
                         .debug_selector(move || format!("live-slide-{index}"))
                         .role(Role::ListItem)
@@ -996,15 +1117,18 @@ impl Operator {
                         .aria_selected(Some(index) == confirmed)
                         .accessibility_id(format!("live-slide-{index}"))
                         .cursor_pointer()
-                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                            if matches!(event, gpui::ClickEvent::Keyboard(_))
-                                || event.is_right_click()
-                            {
-                                return;
-                            }
-                            this.click_live(index, event.click_count() >= 2);
-                            cx.notify();
-                        }))
+                        .on_click(
+                            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                if matches!(event, gpui::ClickEvent::Keyboard(_))
+                                    || event.is_right_click()
+                                {
+                                    return;
+                                }
+                                this.live_focus.focus(window, cx);
+                                this.click_live(index, event.click_count() >= 2);
+                                cx.notify();
+                            }),
+                        )
                 })
                 .collect::<Vec<_>>()
         });
@@ -1015,6 +1139,7 @@ impl Operator {
             footer,
             Some(lines),
             tiles,
+            Some(self.live_focus.clone()),
         )
     }
 }

@@ -18,6 +18,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod navigation;
+
 const FAKE_EXTENT: Extent = Extent {
     width: 640,
     height: 360,
@@ -3345,14 +3347,21 @@ fn the_cue_queue_is_bounded_and_refuses_with_a_message(cx: &mut TestAppContext) 
         assert_eq!(o.pending_cues.len(), LIVE_DEPTH);
         assert_eq!(
             o.live_message.as_deref(),
-            Some("Still preparing earlier slides; try again")
+            Some("Still preparing earlier slides; this one follows")
+        );
+        assert!(
+            o.deferred_send.is_some_and(|d| d.busy),
+            "the newest is held"
         );
     });
-    for _ in 0..LIVE_DEPTH {
+    // The queue plus the held newest request.
+    for _ in 0..=LIVE_DEPTH {
         open.send(()).unwrap();
     }
     settle(&mut cx, &operator, "queue drained", |o| {
-        o.pending_cues.is_empty() && o.on_screen() == Some("Signal Hymn · Chorus")
+        o.pending_cues.is_empty()
+            && o.deferred_send.is_none()
+            && o.on_screen() == Some("Signal Hymn · Chorus")
     });
     // The final selection is still accepted after the burst.
     open.send(()).unwrap();

@@ -182,8 +182,61 @@ impl Render for Operator {
                 this.toggle_mask(Mask::Clear);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &GoLive, _, cx| {
+            .on_action(cx.listener(|this, _: &GoLive, window, cx| {
                 this.go_live();
+                // Later PageDown/PageUp, arrows and label keys then drive
+                // Live, which is how a presenter remote advances.
+                if this.live.is_some() {
+                    this.live_focus.focus(window, cx);
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &LiveNextSlide, _, cx| {
+                this.step_live(true);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &LivePreviousSlide, _, cx| {
+                this.step_live(false);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &LiveFirstSlide, _, cx| {
+                this.live_edge(false);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &LiveLastSlide, _, cx| {
+                this.live_edge(true);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &LiveNextItem, _, cx| {
+                this.step_live_item(true);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &LivePreviousItem, _, cx| {
+                this.step_live_item(false);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, jump: &LabelJump, _, cx| {
+                this.jump_label(jump.key, jump.number);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ScheduleFirstItem, _, cx| {
+                this.select_schedule_edge(false);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ScheduleLastItem, _, cx| {
+                this.select_schedule_edge(true);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &PreviewPreviousSlide, window, cx| {
+                if let Some(index) = this.step_preview(false) {
+                    this.slide_rows[index].focus(window, cx);
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &PreviewNextSlide, window, cx| {
+                if let Some(index) = this.step_preview(true) {
+                    this.slide_rows[index].focus(window, cx);
+                }
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &OpenFileMenu, window, cx| {

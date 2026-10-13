@@ -39,6 +39,7 @@ mod controls;
 mod dialogs;
 mod layout;
 mod menus;
+mod navigation;
 mod options;
 mod polling;
 mod preview_live;
@@ -161,6 +162,9 @@ pub(super) struct DeferredSend {
     pub(super) generation: u64,
     pub(super) item: Version,
     pub(super) session: u64,
+    /// Held only because the preparer's live lane was full; retried as soon
+    /// as it drains, so rapid presses are never dropped.
+    pub(super) busy: bool,
 }
 
 pub(crate) enum Request {
@@ -298,6 +302,10 @@ pub(super) struct Operator {
     pub(super) song_message: Option<(String, bool)>,
     /// A library double-click waiting for its song to load.
     live_on_load: Option<Version>,
+    /// A PageDown/PageUp to another schedule item waiting for its preview.
+    pub(super) live_entry_on_load: Option<EntryId>,
+    /// Keyboard focus of the Live pane (context `SelaLivePane`).
+    pub(super) live_focus: FocusHandle,
     /// Song version whose face resolution is running on a background thread.
     font_job: Option<Version>,
     /// The in-flight resolution task; cleared when its result lands.
@@ -305,11 +313,15 @@ pub(super) struct Operator {
     /// A Go Live/Next/Previous cue deferred until the live item's fonts or
     /// its slide background land.
     pub(super) deferred_send: Option<DeferredSend>,
+    /// The newest cue failed to prepare; cleared by the next request.
+    pub(super) cue_failed: bool,
     /// Slide backgrounds fitted to the output extent (M1-05h).
     pub(super) backgrounds: images::BackgroundCache,
     /// At most one background job with the image worker, so an import still
     /// finds a free slot in its two-job queue.
     pub(super) background_job: Option<images::BackgroundKey>,
+    /// Decoded tile thumbnails by key; `None` marks one that failed to load.
+    pub(super) tile_images: Vec<(images::BackgroundKey, Option<Arc<gpui::RenderImage>>)>,
     /// One background catalog scan feeding the shared font store.
     _font_scan: Option<Task<()>>,
     _library_changed: Subscription,
@@ -517,11 +529,15 @@ impl Operator {
             song_bounds: Rc::default(),
             song_message: None,
             live_on_load: None,
+            live_entry_on_load: None,
+            live_focus: cx.focus_handle(),
             font_job: None,
             font_task: None,
             deferred_send: None,
+            cue_failed: false,
             backgrounds: images::BackgroundCache::new(images::BACKGROUND_BUDGET),
             background_job: None,
+            tile_images: Vec::new(),
             _font_scan: font_scan,
             _library_changed: library_changed,
             _search_observer: search_observer,

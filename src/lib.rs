@@ -6,6 +6,7 @@ pub mod fonts;
 pub mod format;
 pub mod i18n;
 pub mod images;
+pub mod labels;
 pub mod masks;
 pub mod output;
 pub mod preflight;
