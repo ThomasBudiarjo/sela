@@ -4,7 +4,7 @@ use crate::{
     delivery::{
         Acknowledgment, Counters, Delivery, DeliveryError, Epoch, Lane, LiveState, Outcome, Stamp,
     },
-    masks::Layer,
+    masks::{Layer, Submission, SubmissionState, Submissions, UNTAGGED},
     scene::{ContentVersion, Extent, PreparedCue, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
@@ -93,6 +93,9 @@ pub struct Supervisor {
     wanted: Option<Arc<PreparedCue>>,
     in_flight: Option<(Stamp, ContentVersion)>,
     rejected: Option<(ContentVersion, DeliveryError)>,
+    /// Ids of the scene requests above and their terminal receipts; unlike
+    /// the reusable `ContentVersion`, an id names exactly one operator request.
+    submissions: Submissions,
     wanted_mask: Option<Layer>,
     mask_in_flight: Option<(Stamp, Layer)>,
     mask_rejected: Option<(Layer, DeliveryError)>,
@@ -128,6 +131,7 @@ impl Supervisor {
             wanted: None,
             in_flight: None,
             rejected: None,
+            submissions: Submissions::default(),
             wanted_mask: None,
             mask_in_flight: None,
             mask_rejected: None,
@@ -232,6 +236,18 @@ impl Supervisor {
 
     /// Cue extent must equal the reported surface extent.
     pub fn present(&mut self, cue: Arc<PreparedCue>, now: Instant) -> Result<(), Refusal> {
+        self.present_submission(cue, UNTAGGED, now)
+    }
+
+    /// `present` for one operator request. Re-presenting the same submission
+    /// (a refresh or retry of that request) forgets its earlier receipt, so
+    /// only a receipt for this presentation can satisfy it.
+    pub fn present_submission(
+        &mut self,
+        cue: Arc<PreparedCue>,
+        submission: Submission,
+        now: Instant,
+    ) -> Result<(), Refusal> {
         let Status::Connected { extent, .. } = self.status else {
             return Err(Refusal::NotConnected);
         };
@@ -243,9 +259,17 @@ impl Supervisor {
         if self.rejected.is_some_and(|(v, _)| v == cue.version()) {
             self.rejected = None;
         }
+        self.submissions.want(submission);
         self.wanted = Some(cue);
         self.pump(now);
         Ok(())
+    }
+
+    /// Where one operator request stands. A request still being prepared,
+    /// replaced by a newer one, or lost with its session is `Waiting`: only
+    /// a terminal receipt for exactly this submission settles it.
+    pub fn submission(&self, submission: Submission) -> SubmissionState {
+        self.submissions.state(submission)
     }
 
     /// Returns true when observable state changed.
@@ -330,6 +354,7 @@ impl Supervisor {
             };
             if self.wanted.as_ref().is_some_and(|w| w.extent() != extent) {
                 self.wanted = None;
+                self.submissions.drop_wanted();
             }
             if self
                 .wanted_logo
@@ -365,6 +390,7 @@ impl Supervisor {
         {
             self.in_flight = None;
             settle(&mut self.rejected, version, ack.outcome);
+            self.submissions.receipt(ack.outcome == Outcome::Applied);
         } else if let Some((stamp, layer)) = self.mask_in_flight
             && stamp == ack.stamp
         {
@@ -408,6 +434,7 @@ impl Supervisor {
             }
         } else if let Some(cue) = self.wanted.take() {
             let version = cue.version();
+            self.submissions.send();
             match self.delivery.submit(cue, Lane::Cue, now, deadline) {
                 Ok(stamp) if self.send(now) => self.in_flight = Some((stamp, version)),
                 Ok(_) => {}
@@ -441,6 +468,7 @@ impl Supervisor {
         self.delivery.disconnect();
         self.wanted = None;
         self.in_flight = None;
+        self.submissions.lose();
         self.wanted_mask = None;
         self.mask_in_flight = None;
         self.wanted_logo = None;

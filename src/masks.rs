@@ -6,6 +6,139 @@
 //! navigation and output off/on keep the masks. Live double-click clearing
 //! every mask in a combined state is provisional (EW8-OBS-020).
 
+/// Identifies one explicit operator cue request across the supervisor, the
+/// wire stamp and its renderer receipt. Never reused and independent of
+/// `ContentVersion`; internal retries of a request keep its id.
+pub type Submission = u64;
+/// Submissions that no operator intent can own.
+pub const UNTAGGED: Submission = 0;
+
+/// Where one submission stands with the renderer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubmissionState {
+    /// Preparing, queued, in flight, superseded or lost: not settled.
+    Waiting,
+    /// A successful Applied receipt carried exactly this submission.
+    Applied,
+    /// A RenderFailed, Stale or other rejecting receipt carried it.
+    Failed,
+}
+
+/// Supervisor-side ledger of scene submissions: at most one wanted and one
+/// in flight (the renderer's cue lane), plus the newest terminal receipt by
+/// outcome. A receipt only ever describes the submission that was in flight.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Submissions {
+    wanted: Option<Submission>,
+    in_flight: Option<Submission>,
+    applied: Option<Submission>,
+    failed: Option<Submission>,
+}
+
+impl Submissions {
+    /// A (re-)submission replaces the wanted one and forgets its own earlier
+    /// receipt, so only a receipt for this presentation can settle it.
+    pub fn want(&mut self, submission: Submission) {
+        if self.applied == Some(submission) {
+            self.applied = None;
+        }
+        if self.failed == Some(submission) {
+            self.failed = None;
+        }
+        self.wanted = Some(submission);
+    }
+
+    /// The wanted cue no longer fits the surface and is dropped unsent.
+    pub fn drop_wanted(&mut self) {
+        self.wanted = None;
+    }
+
+    /// The wanted cue goes on the wire.
+    pub fn send(&mut self) {
+        self.in_flight = self.wanted.take();
+    }
+
+    /// The terminal receipt for the cue in flight.
+    pub fn receipt(&mut self, applied: bool) {
+        let Some(submission) = self.in_flight.take() else {
+            return;
+        };
+        if applied {
+            self.applied = Some(submission);
+        } else {
+            self.failed = Some(submission);
+        }
+    }
+
+    /// The session ended; nothing it carried can settle.
+    pub fn lose(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn state(&self, submission: Submission) -> SubmissionState {
+        if self.wanted == Some(submission) || self.in_flight == Some(submission) {
+            SubmissionState::Waiting
+        } else if self.applied == Some(submission) {
+            SubmissionState::Applied
+        } else if self.failed == Some(submission) {
+            SubmissionState::Failed
+        } else {
+            SubmissionState::Waiting
+        }
+    }
+}
+
+/// Double-click unmask intent, owned by exactly one submission. Only that
+/// submission's successful Applied receipt lifts the masks; anything else the
+/// operator does cancels it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnmaskIntent(Option<Submission>);
+
+impl UnmaskIntent {
+    pub fn armed(&self) -> Option<Submission> {
+        self.0
+    }
+
+    pub fn arm(&mut self, submission: Submission) {
+        self.0 = (submission != UNTAGGED).then_some(submission);
+    }
+
+    pub fn cancel(&mut self) {
+        self.0 = None;
+    }
+
+    /// The submission died before it could apply (refused, failed to
+    /// prepare, substituted).
+    pub fn drop_submission(&mut self, submission: Submission) {
+        if self.0 == Some(submission) {
+            self.0 = None;
+        }
+    }
+
+    /// Keeps the intent only if it belongs to `submission`.
+    pub fn retain_only(&mut self, submission: Submission) {
+        if self.0.is_some_and(|s| s != submission) {
+            self.0 = None;
+        }
+    }
+
+    /// Settles the intent against its submission's state; true when the
+    /// masks must lift now.
+    pub fn settle(&mut self, state: SubmissionState) -> bool {
+        match (self.0, state) {
+            (Some(_), SubmissionState::Applied) => {
+                self.0 = None;
+                true
+            }
+            (Some(_), SubmissionState::Failed) => {
+                self.0 = None;
+                false
+            }
+            _ => false,
+        }
+    }
+}
+
 /// What the audience shows over the applied slide.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Layer {
@@ -82,6 +215,9 @@ impl Masks {
         }
     }
 }
+
+#[cfg(test)]
+mod model;
 
 #[cfg(test)]
 mod tests {

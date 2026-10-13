@@ -246,8 +246,7 @@ impl Operator {
             return;
         }
         self.masks.toggle(mask);
-        self.unmask_on_present = None;
-        self.unmask_on_applied = None;
+        self.unmask.cancel();
         self.live_message = None;
         self.sync_show(Instant::now());
     }
@@ -262,7 +261,7 @@ impl Operator {
             .map(|d| d.index)
             .or_else(|| self.requested_slide());
         if double && latest == Some(index) {
-            self.unmask_on_present = None;
+            self.unmask.cancel();
         } else {
             self.send(index);
         }
@@ -275,14 +274,10 @@ impl Operator {
                 || self
                     .deferred_send
                     .is_some_and(|d| d.generation == generation && d.index == index);
-            if waiting {
-                // Presenting exactly this request cleanly lifts the mask
-                // (`poll_cues`).
-                self.unmask_on_present = Some(generation);
-            } else if self.presented == Some((generation, index, true)) {
-                // Accepted already: the mask lifts on its Applied receipt
-                // (`sync_show`).
-                self.arm_unmask_on_applied(index);
+            // The mask lifts only on the Applied receipt that carries this
+            // exact submission (`sync_show`), whichever stage it is in.
+            if waiting || self.presented == Some((generation, index, true)) {
+                self.unmask.arm(generation);
             }
         }
         self.sync_show(Instant::now());
@@ -493,8 +488,7 @@ impl Operator {
         self.live_slide = None;
         // Masks do carry over (EW8-OBS-017); a fresh renderer starts unmasked.
         self.sent_mask = self.output.as_ref().map(|_| Layer::None);
-        self.unmask_on_present = None;
-        self.unmask_on_applied = None;
+        self.unmask.cancel();
         self.logo_requested = None;
         self.logo_sent = None;
         self.sync_show(Instant::now());
@@ -513,7 +507,7 @@ impl Operator {
         if self.ready_for_cue() {
             if self.live.as_ref().map(|live| live.version) != Some(item.version) {
                 self.cancel_cues();
-                self.unmask_on_present = None;
+                self.unmask.cancel();
             }
             self.live = Some(item);
             self.send(index);
@@ -535,7 +529,7 @@ impl Operator {
         };
         // Boundary behavior across schedule items is unobserved; stop here.
         if target < count {
-            self.unmask_on_present = None;
+            self.unmask.cancel();
             self.send(target);
         }
     }
@@ -558,8 +552,7 @@ impl Operator {
         // A newer explicit request supersedes any double-click unmask intent,
         // including one already queued with the renderer.
         self.request_generation += 1;
-        self.unmask_on_present = None;
-        self.unmask_on_applied = None;
+        self.unmask.cancel();
         self.dispatch(index, self.request_generation);
     }
 
@@ -662,40 +655,6 @@ impl Operator {
         }
     }
 
-    /// The double-clicked request was accepted by the supervisor: the mask
-    /// stays on and the intent stays owned until the renderer's matching
-    /// Applied receipt (`sync_show`). A substituted background keeps the
-    /// mask on for good.
-    fn unmask_presented(
-        &mut self,
-        generation: u64,
-        version: Option<ContentVersion>,
-        substituted: bool,
-    ) {
-        if self.unmask_on_present != Some(generation) {
-            return;
-        }
-        self.unmask_on_present = None;
-        if !substituted {
-            self.unmask_on_applied = version;
-        }
-    }
-
-    /// The double-clicked slide is already with the renderer: lift the mask
-    /// once its Applied receipt is the confirmed scene (`sync_show`).
-    fn arm_unmask_on_applied(&mut self, index: usize) {
-        self.unmask_on_applied = self
-            .live
-            .as_ref()
-            .and_then(|item| slides::slide_version(item.version, index));
-    }
-
-    fn drop_unmask_intent(&mut self, generation: u64) {
-        if self.unmask_on_present == Some(generation) {
-            self.unmask_on_present = None;
-        }
-    }
-
     /// Presents cues that finished preparing. A failed cue leaves the current
     /// scene alone and only reports; results from cancelled requests never
     /// surface because the preparer fences them.
@@ -720,10 +679,10 @@ impl Operator {
                 CueEvent::Ready { cue, size_cap, .. } => {
                     self.size_cap = Some((pending.item, pending.extent, pending.sizing, size_cap));
                     let Some(output) = self.output.as_mut() else {
-                        self.drop_unmask_intent(pending.generation);
+                        self.unmask.drop_submission(pending.generation);
                         continue;
                     };
-                    match output.present(cue, Instant::now()) {
+                    match output.present_submission(cue, pending.generation, Instant::now()) {
                         Ok(()) => {
                             let version = slides::slide_version(pending.item, pending.index);
                             if let Some(version) = version {
@@ -736,11 +695,14 @@ impl Operator {
                             self.live_slide = Some(pending.index);
                             let clean = pending.warning.is_none();
                             self.presented = Some((pending.generation, pending.index, clean));
-                            self.unmask_presented(pending.generation, version, !clean);
+                            if !clean {
+                                // A substituted background keeps the mask on.
+                                self.unmask.drop_submission(pending.generation);
+                            }
                             self.live_message = pending.warning;
                         }
                         Err(refusal) => {
-                            self.drop_unmask_intent(pending.generation);
+                            self.unmask.drop_submission(pending.generation);
                             self.live_message = Some(match refusal {
                                 Refusal::NotConnected => t!(Msg::RefusalNotConnected).into(),
                                 Refusal::WrongExtent => t!(Msg::RefusalWrongExtent).into(),
@@ -749,7 +711,7 @@ impl Operator {
                     }
                 }
                 CueEvent::Failed { error, .. } => {
-                    self.drop_unmask_intent(pending.generation);
+                    self.unmask.drop_submission(pending.generation);
                     self.live_message = Some(t!(Msg::CueFailed, error = error.to_string()));
                 }
             }
@@ -791,9 +753,7 @@ impl Operator {
         };
         self.cancel_cues();
         self.dispatch(index, generation);
-        if self.unmask_on_present.is_some_and(|g| g != generation) {
-            self.unmask_on_present = None;
-        }
+        self.unmask.retain_only(generation);
     }
 
     /// The slide the operator last asked for: the newest cue in preparation,

@@ -348,17 +348,32 @@ Evidence: `.amp\in\artifacts\live-output-windows-masks{,-r1,-r2}\`.
 image background (see delivery).
 
 Unmask barrier: every explicit operator cue request (click, step, Go Live,
-Normalize) gets a new generation, and a Live double-click under a mask stores
-that generation as its unmask intent. The mask lifts only when the renderer's
-Applied receipt confirms exactly that request's slide version with a clean
-outcome (no image substitution, no failure); queue acceptance alone never
-lifts it. Any newer explicit request, mask toggle, item change or output
-toggle drops the intent at any stage — in preparation, queued with the
-supervisor, or awaiting the receipt — so an older cue may still complete
-under the mask but never lifts it, and neither does its late Applied receipt.
-A terminal renderer rejection keeps the mask over the retained scene;
-re-presenting the same slide clears the stale rejection report, so a repeated
-double-click retries and unmasks on success. Dependency retries of the same
+Normalize) gets a unique, monotonic submission id (`request_generation`; never
+reused, also across output sessions, and independent of the reusable
+`ContentVersion`). The id travels with the cue into the supervisor
+(`Supervisor::present_submission`), which records it against the wire stamp and
+keeps a `Submissions` ledger of the wanted and in-flight id and the newest
+Applied and failed ids. A Live double-click under a mask arms an `UnmaskIntent`
+for exactly that id. The mask lifts only when the ledger shows a successful
+Applied receipt carrying that id; a confirmation of the same slide that predates
+the double-click carries an older id and never counts, and neither does a
+receipt for another id or any RenderFailed/Stale/Rejected receipt. Queue
+acceptance alone never lifts it. Any newer explicit request, mask toggle, item
+change or output toggle cancels the intent at any stage — in preparation,
+queued with the supervisor, or awaiting the receipt — so an older cue (for
+example a delayed B) may still complete under the mask but never lifts it, and
+neither does its late Applied receipt. Internal retries of the same request
+(font/image deferral, surface/font refresh) re-use its id, and re-presenting an
+id forgets its earlier receipt. A failed receipt keeps the mask over the
+retained scene and kills the intent; a repeated double-click is a new request
+and unmasks on success. `src/masks/model.rs` drives the production `Masks`,
+`UnmaskIntent` and `Submissions` types through random (60 000 sequences) and
+exhaustive (all sequences up to four steps) interleavings of clicks, steps, Go
+Live, mask toggles, output toggles, refreshes, deferral, preparation
+outcomes and renderer receipts, asserting that masks only lift on a toggle or
+on the Applied receipt of the latest explicit request and that the audience
+then shows that request; a version-matched control proves the model catches
+the old bug. Dependency retries of the same
 request (fonts, background decode) and surface/font refreshes rebuild the
 newest request with its own slide and generation (`refresh_live_request`), so
 a refresh can never rebind the intent to the previous slide. If the first
@@ -377,7 +392,10 @@ Tests: `live_double_click_under_black_never_reveals_the_previous_slide`,
 `surface_refresh_keeps_the_masked_deferred_request`,
 `font_refresh_keeps_the_masked_deferred_request`,
 `newer_request_cancels_the_unmask_before_the_receipt`,
-`render_failed_double_click_keeps_the_mask_and_the_old_scene`.
+`render_failed_double_click_keeps_the_mask_and_the_old_scene`,
+`double_click_a_while_b_is_in_flight_never_exposes_b_or_the_stale_a`,
+`same_version_render_failed_retry_never_unmasks`, and the `masks::model`
+property tests.
 
 GPUI tests: `show_keys_toggle_masks_with_acknowledged_indicators`,
 `live_slide_clicks_apply_and_double_click_unmasks`,

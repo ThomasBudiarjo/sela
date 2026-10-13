@@ -26,7 +26,8 @@ const FAKE_EXTENT: Extent = Extent {
 /// Renderer protocol stand-in: Ready, one surface report, then Accepted and
 /// Applied (or a renderer failure in `reject` mode) for every cue. No GPU.
 /// Extra modes: `reject-scene:<n>` fails only the nth scene payload (1-based),
-/// `slow-scene:<ms>` delays every scene's terminal receipt by ms.
+/// `slow-scene:<ms>` delays every scene's terminal receipt by ms,
+/// `slow-scene-at:<n>:<ms>` only the nth scene's.
 #[test]
 #[ignore = "subprocess fixture for operator live-output tests"]
 fn fake_audience_child() {
@@ -39,6 +40,13 @@ fn fake_audience_child() {
     let slow_scene = mode
         .strip_prefix("slow-scene:")
         .map(|ms| Duration::from_millis(ms.parse().unwrap()));
+    let slow_scene_at = mode.strip_prefix("slow-scene-at:").map(|spec| {
+        let (n, ms) = spec.split_once(':').unwrap();
+        (
+            n.parse::<u64>().unwrap(),
+            Duration::from_millis(ms.parse().unwrap()),
+        )
+    });
     let caps = RendererCapabilities {
         max_texture_dimension: 2048,
     };
@@ -73,6 +81,11 @@ fn fake_audience_child() {
                             return Err(DeliveryError::RenderFailed);
                         }
                         if let Some(delay) = slow_scene {
+                            std::thread::sleep(delay);
+                        }
+                        if let Some((at, delay)) = slow_scene_at
+                            && at == scenes
+                        {
                             std::thread::sleep(delay);
                         }
                         Ok(())
@@ -3425,7 +3438,7 @@ fn failed_live_double_click_keeps_the_mask_and_reports(cx: &mut TestAppContext) 
         assert_eq!(o.masks.layer(), Layer::Black);
         assert_eq!(confirmed_mask(o), Some(Layer::Black));
         assert_eq!(o.indicator(Mask::Black), Indicator::On);
-        assert_eq!(o.unmask_on_present, None);
+        assert_eq!(o.unmask.armed(), None);
         assert_eq!(submitted(o), sent);
         assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
     });
@@ -3468,7 +3481,7 @@ fn double_click_after_the_first_cue_was_substituted_keeps_the_mask(cx: &mut Test
         assert_eq!(o.masks.layer(), Layer::Black, "intent stays Black");
         assert_eq!(confirmed_mask(o), Some(Layer::Black));
         assert_eq!(o.indicator(Mask::Black), Indicator::On);
-        assert_eq!(o.unmask_on_present, None);
+        assert_eq!(o.unmask.armed(), None);
     });
 }
 
@@ -3483,11 +3496,11 @@ fn newer_deferred_request_cancels_the_double_click_unmask(cx: &mut TestAppContex
     // B: a double-click in preparation; C: a newer step waiting on faces.
     operator.update(&mut cx, |o, _| o.click_live(1, true));
     let resolved = operator.update(&mut cx, |o, _| {
-        assert!(o.unmask_on_present.is_some());
+        assert!(o.unmask.armed().is_some());
         let resolved = o.live.as_mut().unwrap().resolved.take();
         o.send(2);
         assert!(o.deferred_send.is_some());
-        assert_eq!(o.unmask_on_present, None, "a newer request cancels it");
+        assert_eq!(o.unmask.armed(), None, "a newer request cancels it");
         resolved
     });
     open.send(()).unwrap();
@@ -3534,7 +3547,7 @@ fn same_request_retry_keeps_the_double_click_unmask(cx: &mut TestAppContext) {
     operator.read_with(&cx, |o, _| {
         assert!(o.deferred_send.is_some());
         assert!(
-            o.unmask_on_present.is_some(),
+            o.unmask.armed().is_some(),
             "the double-click adds no request"
         );
         assert_eq!(confirmed_mask(o), Some(Layer::Black));
@@ -3596,7 +3609,7 @@ fn masked_deferred_request_survives_a_refresh(cx: &mut TestAppContext, refresh: 
     let armed = operator.read_with(&cx, |o, _| {
         assert_eq!(o.deferred_send.map(|d| d.index), Some(1));
         assert_eq!(o.masks.layer(), Layer::Black);
-        o.unmask_on_present
+        o.unmask.armed()
     });
     assert!(armed.is_some());
 
@@ -3631,7 +3644,7 @@ fn masked_deferred_request_survives_a_refresh(cx: &mut TestAppContext, refresh: 
             Some(1),
             "the refresh keeps the double-clicked request"
         );
-        assert_eq!(o.unmask_on_present, armed, "the intent stays with it");
+        assert_eq!(o.unmask.armed(), armed, "the intent stays with it");
         assert_eq!(confirmed_mask(o), Some(Layer::Black));
     });
 
@@ -3795,6 +3808,122 @@ fn render_failed_double_click_keeps_the_mask_and_the_old_scene(cx: &mut TestAppC
         confirmed_mask(o) == Some(Layer::None) && o.on_screen() == Some("Signal Hymn · Chorus")
     });
     operator.read_with(&cx, |o, _| assert_eq!(o.masks.layer(), Layer::None));
+}
+
+fn masked_verse_with_mode(
+    cx: &mut TestAppContext,
+    dir: &tempfile::TempDir,
+    mode: &'static str,
+) -> (VisualTestContext, Entity<Operator>) {
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_song(dir)), mode);
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "faces resolved", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.slides.len() == 3 && p.resolved.is_some())
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black acknowledged", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+    (cx, operator)
+}
+
+/// Masked A -> delayed B -> double-click A: the OLD confirmation of A has a
+/// different submission id than the fresh A, so Black stays on until the
+/// fresh A applies. B completes under Black and is never shown unmasked
+/// (FOUNDATION-R4-PREP-01).
+#[gpui::test]
+fn double_click_a_while_b_is_in_flight_never_exposes_b_or_the_stale_a(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    // Scene 1 is A, scene 2 is B (delayed), scene 3 is the fresh A.
+    let (mut cx, operator) = masked_verse_with_mode(cx, &dir, "slow-scene-at:2:400");
+
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    settle(&mut cx, &operator, "B with the renderer", |o| {
+        o.output
+            .as_ref()
+            .is_some_and(|out| out.in_flight().is_some())
+    });
+    operator.update(&mut cx, |o, _| o.click_live(0, false));
+    operator.update(&mut cx, |o, _| o.click_live(0, true));
+    operator.read_with(&cx, |o, _| {
+        assert!(o.unmask.armed().is_some());
+        assert_eq!(
+            confirmed_mask(o),
+            Some(Layer::Black),
+            "the old confirmation of A does not satisfy the new intent"
+        );
+    });
+
+    let mut saw_b_masked = false;
+    let mut revealed_with = None;
+    for _ in 0..600 {
+        poll_for(&mut cx, &operator, 1);
+        operator.read_with(&cx, |o, _| {
+            if confirmed_mask(o) == Some(Layer::None) {
+                revealed_with = Some(o.on_screen().map(str::to_owned));
+            } else if o.on_screen() == Some("Signal Hymn · Chorus") {
+                saw_b_masked = true;
+            }
+        });
+        if revealed_with.is_some() {
+            break;
+        }
+    }
+    assert!(saw_b_masked, "B completed under Black");
+    assert_eq!(
+        revealed_with,
+        Some(Some("Signal Hymn · Verse 1".to_owned())),
+        "the mask lifts only over the fresh A"
+    );
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::None);
+        assert_eq!(o.unmask.armed(), None);
+    });
+}
+
+/// The same slide version confirmed before the double-click must not lift
+/// the mask when the fresh submission of it fails in the renderer
+/// (FOUNDATION-R4-PREP-01). A later successful double-click does.
+#[gpui::test]
+fn same_version_render_failed_retry_never_unmasks(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    // Scene 1 is A, scene 2 is the fresh A (fails), scene 3 succeeds.
+    let (mut cx, operator) = masked_verse_with_mode(cx, &dir, "reject-scene:2");
+
+    operator.update(&mut cx, |o, _| o.click_live(0, false));
+    operator.update(&mut cx, |o, _| o.click_live(0, true));
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(confirmed_mask(o), Some(Layer::Black), "old A is not enough");
+    });
+    settle(&mut cx, &operator, "fresh A rejected", |o| {
+        o.output
+            .as_ref()
+            .is_some_and(|out| out.rejected().is_some())
+    });
+    for _ in 0..60 {
+        poll_for(&mut cx, &operator, 1);
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.masks.layer(), Layer::Black);
+            assert_eq!(confirmed_mask(o), Some(Layer::Black), "never unmasked");
+        });
+    }
+    operator.read_with(&cx, |o, _| assert_eq!(o.unmask.armed(), None));
+
+    operator.update(&mut cx, |o, _| o.click_live(0, false));
+    operator.update(&mut cx, |o, _| o.click_live(0, true));
+    settle(&mut cx, &operator, "unmasked over A", |o| {
+        confirmed_mask(o) == Some(Layer::None) && o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
 }
 
 #[gpui::test]

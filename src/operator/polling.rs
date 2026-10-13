@@ -157,21 +157,15 @@ impl Operator {
 
     pub(crate) fn sync_show(&mut self, now: Instant) -> bool {
         let changed = self.sync_logo(now);
-        // The double-clicked slide lifts its mask only on its own Applied
-        // receipt. A terminal rejection keeps the mask over the retained
-        // scene; the intent just dies. A re-submission of the same slide
-        // still in flight is waited out.
-        if let Some(version) = self.unmask_on_applied {
+        // The double-clicked request lifts its mask only on the successful
+        // Applied receipt carrying its own submission id. A rejection keeps
+        // the mask over the retained scene and the intent dies; an older
+        // confirmation of the same slide never counts.
+        if let Some(submission) = self.unmask.armed() {
             let Some(output) = &self.output else {
                 return changed;
             };
-            let applied = matches!(output.live(), LiveState::Confirmed(v) if v == version);
-            let retrying = output.in_flight() == Some(version) || output.wanted() == Some(version);
-            let failed = !retrying && output.rejected().is_some_and(|(v, _)| v == version);
-            if applied || failed {
-                self.unmask_on_applied = None;
-            }
-            if applied {
+            if self.unmask.settle(output.submission(submission)) {
                 self.masks.live_double_click();
             }
         }

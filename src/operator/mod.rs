@@ -11,7 +11,7 @@ use sela::{
     fonts,
     i18n::{self, Language, Msg},
     images,
-    masks::{Layer, Mask, Masks},
+    masks::{Layer, Mask, Masks, UnmaskIntent},
     output::{Launch, Refusal, Status, Supervisor},
     preparation::{
         PreparationEvent, Preparer,
@@ -198,21 +198,18 @@ pub(super) struct Operator {
     pub(super) masks: Masks,
     /// Layer handed to this session's supervisor.
     sent_mask: Option<Layer>,
-    /// A Live double-click under a mask: the request generation whose clean
-    /// presentation lifts it. Any newer explicit request drops it, and the mask
-    /// stays on for failure, substitution or cancellation, so the previous
-    /// slide is never revealed.
-    pub(super) unmask_on_present: Option<u64>,
-    /// Generation of the newest explicit operator cue request. Retries of a
-    /// deferred or refreshed request reuse it.
+    /// A Live double-click under a mask, armed for exactly one submission
+    /// (`request_generation`). Only that submission's successful Applied
+    /// receipt lifts the masks; any newer explicit request, mask toggle, item
+    /// change or output toggle cancels it, and failure or substitution kills
+    /// it, so no other slide is ever revealed.
+    pub(super) unmask: UnmaskIntent,
+    /// Submission id of the newest explicit operator cue request: unique,
+    /// monotonic, never reused across output sessions and independent of
+    /// `ContentVersion`. Retries of a deferred or refreshed request reuse it.
     request_generation: u64,
-    /// The newest presented cue: (generation, slide, clean outcome).
+    /// The newest presented cue: (submission, slide, clean outcome).
     presented: Option<(u64, usize, bool)>,
-    /// The double-clicked slide was accepted by the supervisor; the mask
-    /// lifts only when the renderer acknowledges exactly this slide version
-    /// as applied. A terminal rejection keeps the mask over the old scene,
-    /// and any newer explicit request drops the intent.
-    pub(super) unmask_on_applied: Option<ContentVersion>,
     /// Counts output start/stop cycles; deferred cues never cross one.
     output_session: u64,
     pub(super) logo: Option<images::Logo>,
@@ -421,10 +418,9 @@ impl Operator {
             live_message: None,
             masks: Masks::default(),
             sent_mask: None,
-            unmask_on_present: None,
+            unmask: UnmaskIntent::default(),
             request_generation: 0,
             presented: None,
-            unmask_on_applied: None,
             output_session: 0,
             logo: None,
             logo_preparer: None,
