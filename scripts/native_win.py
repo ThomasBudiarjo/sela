@@ -43,6 +43,11 @@ user32.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
 user32.ClientToScreen.argtypes = [w.HWND, ctypes.POINTER(w.POINT)]
 user32.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.UINT]
 user32.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+user32.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+kernel32.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+kernel32.OpenProcess.restype = w.HANDLE
+kernel32.QueryFullProcessImageNameW.argtypes = [w.HANDLE, w.DWORD, w.LPWSTR, ctypes.POINTER(w.DWORD)]
+kernel32.CloseHandle.argtypes = [w.HANDLE]
 user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 user32.MonitorFromWindow.argtypes = [w.HWND, w.DWORD]
 user32.MonitorFromWindow.restype = w.HMONITOR
@@ -169,6 +174,55 @@ def activate(hwnd: int) -> None:
     raise Failure(f"window {hwnd:#x} never became foreground")
 
 
+def describe_window(hwnd) -> str:
+    """Class, title, PID and process image of a window, for foreground-thief logs."""
+    if not hwnd:
+        return "no foreground window"
+    cls = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, cls, 256)
+    pid = w.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    image = ""
+    handle = kernel32.OpenProcess(0x1000, False, pid.value)
+    if handle:
+        size = w.DWORD(520)
+        buffer = ctypes.create_unicode_buffer(520)
+        if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            image = buffer.value
+        kernel32.CloseHandle(handle)
+    return f"hwnd={int(hwnd):#x} class={cls.value!r} title={title(hwnd)!r} pid={pid.value} image={image!r}"
+
+
+THIEVES: list[str] = []
+
+
+def ensure_foreground(hwnd: int, what: str, timeout: float = 2.0) -> None:
+    """Verify (and, within a bounded retry, restore) the foreground before an input step.
+
+    Every theft is recorded in THIEVES and printed, so a flaky run names the window.
+    """
+    current = user32.GetForegroundWindow()
+    if current == hwnd:
+        return
+    thief = describe_window(current)
+    THIEVES.append(f"before {what}: {thief}")
+    print(f"[native_win] foreground thief before {what}: {thief}", flush=True)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            activate(hwnd)
+        except Failure:
+            pass
+        if user32.GetForegroundWindow() == hwnd:
+            time.sleep(0.05)
+            if user32.GetForegroundWindow() == hwnd:
+                return
+    raise Failure(
+        f"window {hwnd:#x} lost the foreground before {what}; "
+        f"foreground is {describe_window(user32.GetForegroundWindow())}"
+    )
+
+
 def chord(hwnd: int, keys: str) -> None:
     """Send e.g. 'ctrl+q' only while the PID window is verified foreground."""
     activate(hwnd)
@@ -179,17 +233,15 @@ def chord(hwnd: int, keys: str) -> None:
 
 
 def press(hwnd: int, keys: str) -> None:
-    """Like chord, but never re-activates: fails if the window lost the foreground."""
-    if user32.GetForegroundWindow() != hwnd:
-        raise Failure(f"window {hwnd:#x} lost the foreground before {keys!r}")
+    """Like chord, but re-asserts the foreground only after a logged theft."""
+    ensure_foreground(hwnd, repr(keys))
     codes = [_vk(k) for k in keys.split("+")]
     _send([_key_input(c, False) for c in codes] + [_key_input(c, True) for c in reversed(codes)])
 
 
 def click(hwnd: int, x: int, y: int) -> None:
     """Left click at physical client coordinates of the verified foreground window."""
-    if user32.GetForegroundWindow() != hwnd:
-        raise Failure(f"window {hwnd:#x} lost the foreground before a click")
+    ensure_foreground(hwnd, "a click")
     point = w.POINT(x, y)
     user32.ClientToScreen(hwnd, ctypes.byref(point))
     user32.SetCursorPos(point.x, point.y)
@@ -202,8 +254,7 @@ def click(hwnd: int, x: int, y: int) -> None:
 
 def type_text(hwnd: int, text: str) -> None:
     """Unicode character input (no layout dependence); never re-activates."""
-    if user32.GetForegroundWindow() != hwnd:
-        raise Failure(f"window {hwnd:#x} lost the foreground before typing")
+    ensure_foreground(hwnd, "typing")
     inputs = []
     for unit in struct.unpack(f"<{len(text.encode('utf-16-le')) // 2}H", text.encode("utf-16-le")):
         for up in (False, True):

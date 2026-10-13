@@ -3594,3 +3594,9 @@ PY
 - Checks: fmt, clippy -D warnings, ruff exit 0; `cargo test --locked --all-targets -- --test-threads=12` exit 0 three consecutive times (Black receipt 13.3/18.1/13.3 ms); prep-windows.py release PASS 3/3 on DISPLAY1 and 3/3 on DISPLAY6 (evidence .amp/in/artifacts/final/); live-output-windows.py PASS on the third attempt (first two: "lost the foreground" flake). No sela.exe left after any run.
 - Caveat: I could not reproduce the 313-422 ms laptop-panel failure after the first baseline (all 20+ baseline runs on the unfixed audience also passed at 109-157 ms), so the leaked-process and second-capture explanation is inferred from the capture timings, not observed failing.
 - Next: none.
+
+### fix-native-harness-foreground (test-harness reliability; no product change)
+- Instrumented scripts/native_win.py: describe_window() (class/title/PID/image of GetForegroundWindow) and ensure_foreground(), used by chord/press/click/type_text. A theft is printed as '[native_win] foreground thief before <step>: ...' and recorded in THIEVES; the helper re-activates (SendInput nudge, SetForegroundWindow, AttachThreadInput fallback) for up to 2 s and only then fails, naming the current foreground window.
+- Diagnosis: 15 consecutive runs (live-output x10, schedule x5) plus a11y and release prep all PASSED with zero thefts logged, so the flake did not reproduce with the audience window on DISPLAY1; Sela's audience is already non-activating (live-output asserts this). Thief unidentified; likely transient outside window (remote-control services/notifications). Any future occurrence now logs the thief and is retried.
+- Verification: live-output-windows.py 10/10 PASS, schedule-windows.py 5/5 PASS, a11y-windows.py PASS, prep-windows.py --binary target\release\sela.exe PASS, ruff clean. Rust unchanged, cargo gate not rerun.
+
