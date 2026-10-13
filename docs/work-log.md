@@ -3591,7 +3591,7 @@ PY
 - Changes: Cargo.toml `[profile.dev.package."*"] opt-level = 2` (cold rebuild of the dependency set ~12 min, cached afterwards); `src/audience.rs` wake-on-frame via EventLoopProxy, immediate redraw for accepted commands, idle frames not redrawn (1 s heartbeat); `src/timer.rs` timeBeginPeriod(1) in operator and audience; `src/transport.rs` `PipeWorkers::with_wake`, `Signal`, `inbound()`; `src/operator/mod.rs` receipt-wake poll task; `scripts/native_win.py` App.close kills the process tree (prep-windows.py failure paths use it); `scripts/prep-windows.py` records per-capture timings and wall-clock times.
 - Tests added in src/transport.rs: `signal_ignores_notifications_until_armed_then_coalesces`, `with_wake_runs_after_each_inbound_frame_is_queued`.
 - Upstream GPUI paths studied: see docs/delivery.md.
-- Checks: fmt, clippy -D warnings, ruff exit 0; `cargo test --locked --all-targets -- --test-threads=12` exit 0 three consecutive times (Black receipt 13.3/18.1/13.3 ms); prep-windows.py release PASS 3/3 on DISPLAY1 and 3/3 on DISPLAY6 (evidence .amp/in/artifacts/final/); live-output-windows.py PASS on the third attempt (first two: "lost the foreground" flake). No sela.exe left after any run.
+- Checks: fmt, clippy -D warnings, ruff exit 0; `cargo test --locked --all-targets -- --test-threads=12` exit 0 three consecutive times (Black receipt 13.3/18.1/13.3 ms); prep-windows.py release PASS 3/3 on what was reported as DISPLAY1 (CORRECTION: those runs used `--monitor secondary` and actually selected DISPLAY6; see fix-foundation-display1-latency-r4) and 3/3 on DISPLAY6 (evidence .amp/in/artifacts/final/); live-output-windows.py PASS on the third attempt (first two: "lost the foreground" flake). No sela.exe left after any run.
 - Caveat: I could not reproduce the 313-422 ms laptop-panel failure after the first baseline (all 20+ baseline runs on the unfixed audience also passed at 109-157 ms), so the leaked-process and second-capture explanation is inferred from the capture timings, not observed failing.
 - Next: none.
 
@@ -3609,3 +3609,11 @@ PY
 - Unexecuted: `scripts/prep-windows.py` (release, laptop panel; no product timing path changed).
 - Docs: docs/operator-shell.md barrier paragraph; mission library/preparation.md.
 - Next: none for this fix.
+
+### fix-foundation-display1-latency-r4 (foundation scrutiny round 4; FOUNDATION-R4-LATENCY-01, R4-FOREGROUND-02)
+- Scope: qualify the Black latency bound on the laptop panel DISPLAY1 for real, and harden the harness's monitor and foreground reporting. No product code changed.
+- Root cause: prep-windows.py defaulted to `--monitor secondary` = Sela's first-non-primary fallback. With DISPLAY5 primary the first non-primary monitor is DISPLAY6, so the earlier "DISPLAY1" passes were DISPLAY6 runs (1920x1080 captures). Sela's behavior is as documented (settings fallback rules and VAL-SETTINGS-002 unchanged); the script was wrong.
+- Changes: `scripts/native_win.py` `window_monitor()` (device, bounds, window rect, DPI, client extent, covers_monitor), `chord` now goes through `ensure_foreground`; strict foreground assertions in live-output, schedule, operator-menu and reference-w03 scripts now include `describe_window()` of the foreground window; `scripts/prep-windows.py` defaults to `name:\\.\DISPLAY1`, writes `requested_monitor`/`audience_monitor` into summary.json and fails on a mismatch.
+- Measured (release, DISPLAY1 verified, 2560x1600): observed/lit 203/219, 156/172, 188/204 ms, all under the unchanged 250 ms bound. DISPLAY6 62/78 ms. A `name:\\.\DISPLAY9` request fails with a mismatch message. The observation is one 156-203 ms full-panel BitBlt, so margin on DISPLAY1 is 30-95 ms; no product bottleneck found (audience path 3-5 ms), harness left capturing the whole panel so the real audience pixels are observed.
+- Checks: see commit; `scripts/live-output-windows.py` PASS (.amp/in/artifacts/live-output-r4). Docs corrected in docs/delivery.md.
+- Next: none.

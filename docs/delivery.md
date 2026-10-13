@@ -430,9 +430,12 @@ Black receipt of about 21 ms with a cue held in preparation.
 
 Timing breakdown along the safety lane, measured with a temporary
 wall-clock trace (removed) in the operator and audience processes. Native run
-= `scripts/prep-windows.py`, release binary, DISPLAY1 laptop panel 2560x1600.
+= `scripts/prep-windows.py`, release binary. The stage figures were measured with
+the audience on the 2560x1600 laptop panel before it was known that the later
+"DISPLAY1" qualification runs had actually selected DISPLAY6 (see the
+correction below).
 
-| Stage (native, DISPLAY1) | Measured |
+| Stage (native) | Measured |
 |---|---|
 | Ctrl+B key to `toggle_mask` in the operator | 20-80 ms (OS input path, not Sela) |
 | Operator send -> audience pipe read -> accept | about 1 ms |
@@ -468,12 +471,32 @@ leak `sela.exe`.
 
 After: unit fixture Black receipt 13.3, 18.1, 13.3 ms in three consecutive full
 `cargo test --locked --all-targets -- --test-threads=12` runs (bound 100 ms
-unchanged). Native `prep-windows.py --binary target\release\sela.exe`:
-DISPLAY1 observed/lit 109/203, 125/172, 141/172 ms; DISPLAY6 109/203,
-109/141, 109/156 ms (bound 250 ms unchanged); no `sela.exe` left after each
-run. The remaining 109-157 ms is the capture itself; the harness additionally
-records `audience_polls` (per-capture start and duration) and wall-clock key
-and observation times in `summary.json`.
+unchanged). Native `prep-windows.py --binary target\release\sela.exe`
+(bound 250 ms unchanged): the earlier "DISPLAY1 observed/lit 109/203, 125/172,
+141/172 ms" claim was WRONG. Those runs passed `--monitor secondary`, which is
+"the first non-primary monitor in winit order"; after DISPLAY5 became primary
+that resolved to DISPLAY6 (1920x1080 captures). Only the DISPLAY6 numbers were
+valid. Correction below.
+
+### DISPLAY1 qualification (fix-foundation-display1-latency-r4, 2026-10-13)
+
+Cause of the wrong monitor: the script's default `secondary` is Sela's
+documented "first non-primary monitor" fallback, not DISPLAY1; it is not a
+product bug (a saved name that is gone also falls back to `secondary`, per
+VAL-SETTINGS-002 the saved value is never rewritten). The script now defaults to
+`--monitor name:\\.\DISPLAY1`, records `requested_monitor` and `audience_monitor`
+(device, physical bounds, window rect, DPI, client extent) in `summary.json`
+via `native_win.window_monitor`, and FAILS when a `name:` request does not match
+the monitor the audience window covers (a request for a missing `DISPLAY9`
+fails with "audience is on DISPLAY6 ... requested DISPLAY9").
+
+Release `prep-windows.py` verified on `\\.\DISPLAY1` (bounds -2560,-146 ..
+0,1454, 2560x1600 client, 168 DPI): three consecutive runs black observed/lit
+203/219, 156/172, 188/204 ms (bound 250 ms unchanged). DISPLAY6 (1920x1080):
+62/78 ms. The remaining time is dominated by the harness BitBlt of the full
+panel (one 156-203 ms capture is the whole observation), so DISPLAY1 has a thin
+margin of 30-95 ms; Sela's own audience path is unchanged at 3-5 ms. Evidence:
+`.amp/in/artifacts/prep-d1-a|b|c`, `prep-d6`.
 
 Upstream GPUI paths inspected (zed rev a84689073d29): `crates/gpui_windows/src/
 dispatcher.rs` (threadpool timers, `increase_timer_resolution`),

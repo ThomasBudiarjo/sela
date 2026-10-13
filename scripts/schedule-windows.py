@@ -173,7 +173,9 @@ def main() -> int:
         spawned.add(pid)
         time.sleep(1.5)
         if nw.user32.GetForegroundWindow() != operator:
-            raise nw.Failure("the audience output took the foreground")
+            raise nw.Failure(
+                f"the audience output took the foreground; foreground is {nw.describe_window(nw.user32.GetForegroundWindow())}"
+            )
         blank = lo.digest(screen)
 
         # The selected item is the moved song 1 entry, now first.

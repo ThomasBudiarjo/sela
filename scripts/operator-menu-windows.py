@@ -63,7 +63,10 @@ def keys(hwnd: int, *sequence: str) -> None:
 def right_click(hwnd: int, x: int, y: int) -> None:
     """Right click at physical client coordinates of the foreground window."""
     if nw.user32.GetForegroundWindow() != hwnd:
-        raise nw.Failure(f"window {hwnd:#x} lost the foreground before a right click")
+        raise nw.Failure(
+            f"window {hwnd:#x} lost the foreground before a right click; "
+            f"foreground is {nw.describe_window(nw.user32.GetForegroundWindow())}"
+        )
     point = nw.w.POINT(x, y)
     nw.user32.ClientToScreen(hwnd, ctypes.byref(point))
     nw.user32.SetCursorPos(point.x, point.y)

@@ -223,11 +223,37 @@ def ensure_foreground(hwnd: int, what: str, timeout: float = 2.0) -> None:
     )
 
 
+class _MONITORINFOEX(ctypes.Structure):
+    _fields_ = [("cbSize", w.DWORD), ("rcMonitor", w.RECT), ("rcWork", w.RECT),
+                ("dwFlags", w.DWORD), ("szDevice", ctypes.c_wchar * 32)]
+
+
+user32.GetMonitorInfoW.argtypes = [w.HMONITOR, ctypes.POINTER(_MONITORINFOEX)]
+
+
+def window_monitor(hwnd: int) -> dict:
+    """Monitor that holds the window: device name, physical bounds, DPI, client extent."""
+    info = _MONITORINFOEX(cbSize=ctypes.sizeof(_MONITORINFOEX))
+    handle = user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+    if not user32.GetMonitorInfoW(handle, ctypes.byref(info)):
+        raise Failure("GetMonitorInfoW failed")
+    box = w.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(box))
+    width, height = client_size(hwnd)
+    m = info.rcMonitor
+    return {
+        "device": info.szDevice,
+        "bounds": [m.left, m.top, m.right, m.bottom],
+        "window": [box.left, box.top, box.right, box.bottom],
+        "dpi": dpi(hwnd),
+        "client_extent": [width, height],
+        "covers_monitor": [box.left, box.top, box.right, box.bottom] == [m.left, m.top, m.right, m.bottom],
+    }
+
+
 def chord(hwnd: int, keys: str) -> None:
     """Send e.g. 'ctrl+q' only while the PID window is verified foreground."""
-    activate(hwnd)
-    if user32.GetForegroundWindow() != hwnd:
-        raise Failure("focus changed before input")
+    ensure_foreground(hwnd, repr(keys))
     codes = [_vk(k) for k in keys.split("+")]
     _send([_key_input(c, False) for c in codes] + [_key_input(c, True) for c in reversed(codes)])
 

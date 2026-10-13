@@ -408,7 +408,8 @@ def main() -> int:
         time.sleep(1.5)
         if nw.user32.GetForegroundWindow() != operator:
             raise nw.Failure(
-                "the audience output took the foreground from the operator"
+                "the audience output took the foreground from the operator; "
+                f"foreground is {nw.describe_window(nw.user32.GetForegroundWindow())}"
             )
         summary["audience_client"] = nw.client_size(screen)
         width, height, pixels = run.save(screen, "audience-new-session")
@@ -501,7 +502,10 @@ def main() -> int:
             spawned_second.add(pid2)
             time.sleep(1.0)
             if nw.user32.GetForegroundWindow() != operator2:
-                raise nw.Failure("the formatted audience took the foreground")
+                raise nw.Failure(
+                    "the formatted audience took the foreground; "
+                    f"foreground is {nw.describe_window(nw.user32.GetForegroundWindow())}"
+                )
 
             # Go Live: bold bundled face, gold fill, right/bottom aligned,
             # with Outer outline and shadow (invisible on the black

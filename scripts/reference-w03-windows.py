@@ -256,7 +256,10 @@ class Observer:
         if name in KEYS:
             nw.activate(self.hwnd)
             if nw.user32.GetForegroundWindow() != self.hwnd:
-                raise nw.Failure("EasyWorship lost the foreground before a key")
+                raise nw.Failure(
+                    "EasyWorship lost the foreground before a key; "
+                    f"foreground is {nw.describe_window(nw.user32.GetForegroundWindow())}"
+                )
             codes = KEYS[name]
             nw._send(
                 [nw._key_input(c, False) for c in codes]

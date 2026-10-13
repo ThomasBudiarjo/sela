@@ -1,7 +1,7 @@
 """Windows native check: Black stays prompt while a heavy cue prepares (VAL-PREP-003).
 
 Usage: python scripts/prep-windows.py [--binary sela.exe] [--seed seed_library.exe]
-       [--monitor secondary] [--out DIR]
+       [--monitor name:\\\\.\\DISPLAY1] [--out DIR]
 
 Seeds a 100-slide song (28-line slides), turns Live output and Normalize text
 size on (every cue then fits all 100 slides), then presses Go Live and
@@ -29,6 +29,9 @@ import native_win as nw
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOUND_MS = 250
+# `secondary` means "first non-primary monitor in winit's order", which moved to
+# DISPLAY6 when the primary display changed; qualification names the panel.
+DEFAULT_MONITOR = r"name:\\.\DISPLAY1"
 
 spec = importlib.util.spec_from_file_location(
     "live_output", ROOT / "scripts" / "live-output-windows.py"
@@ -63,7 +66,7 @@ def main() -> int:
         type=pathlib.Path,
         default=ROOT / "target/debug/examples/seed_library.exe",
     )
-    parser.add_argument("--monitor", default="secondary")
+    parser.add_argument("--monitor", default=DEFAULT_MONITOR)
     parser.add_argument(
         "--out", type=pathlib.Path, default=ROOT / ".amp/in/artifacts/prep-windows"
     )
@@ -88,6 +91,16 @@ def main() -> int:
         if not found:
             raise nw.Failure("no audience window")
         _, screen = found
+        resolved = nw.window_monitor(screen)
+        summary["requested_monitor"] = args.monitor
+        summary["audience_monitor"] = resolved
+        if args.monitor.startswith("name:"):
+            wanted = args.monitor[len("name:") :]
+            if resolved["device"] != wanted or not resolved["covers_monitor"]:
+                raise nw.Failure(
+                    f"audience is on {resolved['device']} {resolved['window']}, "
+                    f"requested {wanted}"
+                )
         time.sleep(1.5)
         # Live output -> Go Live, Previous, Next, Logo, Black, Clear, Normalize.
         run.keys(*["tab"] * 7, "enter")
