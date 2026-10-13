@@ -12,6 +12,7 @@ pub mod preflight;
 pub mod preparation;
 pub mod scene;
 pub mod schedule;
+pub mod schedule_file;
 pub mod search;
 pub mod settings;
 pub mod slides;

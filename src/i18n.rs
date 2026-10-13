@@ -166,8 +166,8 @@ pub enum Msg {
     ButtonUp,
     ButtonDown,
     ButtonRemove,
-    LoadingSavedSchedules,
-    NoSavedSchedules,
+    ScheduleReadNotFound,
+    ScheduleReadCorrupt,
     PanePreview,
     PaneLive,
     NothingLive,
@@ -186,8 +186,9 @@ pub enum Msg {
     SavedSchedule,
     OpenedSchedule,
     ScheduleUnreadable,
-    ScheduleConflict,
+    ScheduleReadNewer,
     ScheduleStorageFailed,
+    ScheduleFileHeading,
     SelectSongFirst,
     DeletedSong,
     DeleteConflict,
@@ -265,24 +266,24 @@ pub enum Msg {
     LayerBlack,
     LayerLogo,
     // Dialogs.
-    DialogSaveAs,
-    DialogOpen,
-    DialogUnsavedOpen,
-    DialogUnsavedNew,
-    DialogUnsavedQuit,
+    ScheduleSaveFailed,
+    ScheduleReadTooLarge,
+    DialogUnsaved,
+    ScheduleReadTooMany,
+    ScheduleReadTitleLong,
     DialogRemoveTitled,
     DialogRemoveGeneric,
     DialogDeleteTitled,
     DialogDeleteGeneric,
     DialogDeleteNote,
     ConfirmSave,
-    ConfirmDiscard,
+    ConfirmDontSave,
     ConfirmRemove,
     ConfirmDelete,
     ButtonKeep,
     ButtonCancel,
     ButtonOk,
-    EnterScheduleTitle,
+    ScheduleReadUnreadable,
     // Options dialog.
     OptionsTitle,
     SectionMainOutput,
@@ -601,8 +602,8 @@ impl Msg {
         Msg::ButtonUp,
         Msg::ButtonDown,
         Msg::ButtonRemove,
-        Msg::LoadingSavedSchedules,
-        Msg::NoSavedSchedules,
+        Msg::ScheduleReadNotFound,
+        Msg::ScheduleReadCorrupt,
         Msg::PanePreview,
         Msg::PaneLive,
         Msg::NothingLive,
@@ -620,8 +621,9 @@ impl Msg {
         Msg::SavedSchedule,
         Msg::OpenedSchedule,
         Msg::ScheduleUnreadable,
-        Msg::ScheduleConflict,
+        Msg::ScheduleReadNewer,
         Msg::ScheduleStorageFailed,
+        Msg::ScheduleFileHeading,
         Msg::SelectSongFirst,
         Msg::DeletedSong,
         Msg::DeleteConflict,
@@ -694,24 +696,24 @@ impl Msg {
         Msg::LayerClear,
         Msg::LayerBlack,
         Msg::LayerLogo,
-        Msg::DialogSaveAs,
-        Msg::DialogOpen,
-        Msg::DialogUnsavedOpen,
-        Msg::DialogUnsavedNew,
-        Msg::DialogUnsavedQuit,
+        Msg::ScheduleSaveFailed,
+        Msg::ScheduleReadTooLarge,
+        Msg::DialogUnsaved,
+        Msg::ScheduleReadTooMany,
+        Msg::ScheduleReadTitleLong,
         Msg::DialogRemoveTitled,
         Msg::DialogRemoveGeneric,
         Msg::DialogDeleteTitled,
         Msg::DialogDeleteGeneric,
         Msg::DialogDeleteNote,
         Msg::ConfirmSave,
-        Msg::ConfirmDiscard,
+        Msg::ConfirmDontSave,
         Msg::ConfirmRemove,
         Msg::ConfirmDelete,
         Msg::ButtonKeep,
         Msg::ButtonCancel,
         Msg::ButtonOk,
-        Msg::EnterScheduleTitle,
+        Msg::ScheduleReadUnreadable,
         Msg::OptionsTitle,
         Msg::SectionMainOutput,
         Msg::SectionAlternateOutput,
@@ -1025,8 +1027,10 @@ impl Msg {
             Self::ButtonUp => "Up",
             Self::ButtonDown => "Down",
             Self::ButtonRemove => "Remove",
-            Self::LoadingSavedSchedules => "Loading saved schedules…",
-            Self::NoSavedSchedules => "No saved schedules",
+            Self::ScheduleReadNotFound => {
+                "“{name}” was not found. It was removed from Open Recent."
+            }
+            Self::ScheduleReadCorrupt => "“{name}” is damaged or is not a Sela schedule file.",
             Self::PanePreview => "Preview",
             Self::PaneLive => "Live",
             Self::NothingLive => "Nothing live",
@@ -1044,10 +1048,11 @@ impl Msg {
             Self::SavedSchedule => "Saved “{title}”",
             Self::OpenedSchedule => "Opened “{title}”",
             Self::ScheduleUnreadable => "The saved schedule could not be read",
-            Self::ScheduleConflict => {
-                "Not saved: this schedule was saved elsewhere since it was opened"
+            Self::ScheduleReadNewer => {
+                "“{name}” was saved by a newer version of Sela (file version {version}). Update Sela to open it."
             }
             Self::ScheduleStorageFailed => "Schedule storage failed ({error})",
+            Self::ScheduleFileHeading => "Schedule file",
             Self::SelectSongFirst => "Select a song in Songs first",
             Self::DeletedSong => "Deleted “{title}”",
             Self::DeleteConflict => "Not deleted: “{title}” was changed or deleted elsewhere",
@@ -1124,11 +1129,13 @@ impl Msg {
             Self::LayerClear => "Clear",
             Self::LayerBlack => "Black",
             Self::LayerLogo => "Logo",
-            Self::DialogSaveAs => "Save schedule as",
-            Self::DialogOpen => "Open schedule",
-            Self::DialogUnsavedOpen => "Open another schedule without saving changes?",
-            Self::DialogUnsavedNew => "Start a new schedule without saving changes?",
-            Self::DialogUnsavedQuit => "Quit without saving schedule changes?",
+            Self::ScheduleSaveFailed => "Could not save “{name}” ({error}). It stays unsaved.",
+            Self::ScheduleReadTooLarge => "“{name}” is too large to open (the limit is 8 MiB).",
+            Self::DialogUnsaved => {
+                "The current Schedule is not saved. Would you like to save it now?"
+            }
+            Self::ScheduleReadTooMany => "“{name}” has more than {max} items.",
+            Self::ScheduleReadTitleLong => "“{name}” has a title longer than {max} bytes.",
             Self::DialogRemoveTitled => "Remove “{title}” from the schedule?",
             Self::DialogRemoveGeneric => "Remove this item from the schedule?",
             Self::DialogDeleteTitled => "Delete “{title}” from the song library?",
@@ -1137,13 +1144,13 @@ impl Msg {
                 "Schedules that use this song keep their copy. Live output does not change."
             }
             Self::ConfirmSave => "Save",
-            Self::ConfirmDiscard => "Discard changes",
+            Self::ConfirmDontSave => "Don't Save",
             Self::ConfirmRemove => "Remove",
             Self::ConfirmDelete => "Delete",
             Self::ButtonKeep => "Keep",
             Self::ButtonCancel => "Cancel",
             Self::ButtonOk => "OK",
-            Self::EnterScheduleTitle => "Enter a title for the schedule",
+            Self::ScheduleReadUnreadable => "“{name}” could not be read ({error}).",
             Self::OptionsTitle => "Options",
             Self::SectionMainOutput => "Main Output",
             Self::SectionAlternateOutput => "Alternate Output",
@@ -1506,8 +1513,10 @@ impl Msg {
             Self::ButtonUp => "Naik",
             Self::ButtonDown => "Turun",
             Self::ButtonRemove => "Hapus",
-            Self::LoadingSavedSchedules => "Memuat jadwal tersimpan…",
-            Self::NoSavedSchedules => "Tidak ada jadwal tersimpan",
+            Self::ScheduleReadNotFound => {
+                "“{name}” tidak ditemukan. Berkas dihapus dari Buka yang Terakhir."
+            }
+            Self::ScheduleReadCorrupt => "“{name}” rusak atau bukan berkas jadwal Sela.",
             Self::PanePreview => "Pratinjau",
             Self::PaneLive => "Langsung",
             Self::NothingLive => "Tidak ada yang tayang",
@@ -1525,10 +1534,11 @@ impl Msg {
             Self::SavedSchedule => "“{title}” tersimpan",
             Self::OpenedSchedule => "“{title}” dibuka",
             Self::ScheduleUnreadable => "Jadwal tersimpan tidak dapat dibaca",
-            Self::ScheduleConflict => {
-                "Tidak tersimpan: jadwal ini disimpan di tempat lain sejak dibuka"
+            Self::ScheduleReadNewer => {
+                "“{name}” disimpan oleh Sela versi lebih baru (versi berkas {version}). Perbarui Sela untuk membukanya."
             }
             Self::ScheduleStorageFailed => "Penyimpanan jadwal gagal ({error})",
+            Self::ScheduleFileHeading => "Berkas jadwal",
             Self::SelectSongFirst => "Pilih lagu di tab Lagu terlebih dahulu",
             Self::DeletedSong => "“{title}” dihapus",
             Self::DeleteConflict => "Tidak dihapus: “{title}” diubah atau dihapus di tempat lain",
@@ -1611,11 +1621,13 @@ impl Msg {
             Self::LayerClear => "Kosong",
             Self::LayerBlack => "Hitam",
             Self::LayerLogo => "Logo",
-            Self::DialogSaveAs => "Simpan jadwal sebagai",
-            Self::DialogOpen => "Buka jadwal",
-            Self::DialogUnsavedOpen => "Buka jadwal lain tanpa menyimpan perubahan?",
-            Self::DialogUnsavedNew => "Mulai jadwal baru tanpa menyimpan perubahan?",
-            Self::DialogUnsavedQuit => "Keluar tanpa menyimpan perubahan jadwal?",
+            Self::ScheduleSaveFailed => {
+                "Gagal menyimpan “{name}” ({error}). Jadwal tetap belum disimpan."
+            }
+            Self::ScheduleReadTooLarge => "“{name}” terlalu besar untuk dibuka (batasnya 8 MiB).",
+            Self::DialogUnsaved => "Jadwal saat ini belum disimpan. Simpan sekarang?",
+            Self::ScheduleReadTooMany => "“{name}” memiliki lebih dari {max} item.",
+            Self::ScheduleReadTitleLong => "“{name}” memiliki judul lebih panjang dari {max} byte.",
             Self::DialogRemoveTitled => "Hapus “{title}” dari jadwal?",
             Self::DialogRemoveGeneric => "Hapus item ini dari jadwal?",
             Self::DialogDeleteTitled => "Hapus “{title}” dari pustaka lagu?",
@@ -1624,13 +1636,13 @@ impl Msg {
                 "Jadwal yang memakai lagu ini menyimpan salinannya. Output langsung tidak berubah."
             }
             Self::ConfirmSave => "Simpan",
-            Self::ConfirmDiscard => "Buang perubahan",
+            Self::ConfirmDontSave => "Jangan Simpan",
             Self::ConfirmRemove => "Hapus",
             Self::ConfirmDelete => "Hapus",
             Self::ButtonKeep => "Pertahankan",
             Self::ButtonCancel => "Batal",
             Self::ButtonOk => "OK",
-            Self::EnterScheduleTitle => "Masukkan judul untuk jadwal",
+            Self::ScheduleReadUnreadable => "“{name}” tidak dapat dibaca ({error}).",
             Self::OptionsTitle => "Opsi",
             Self::SectionMainOutput => "Output Utama",
             Self::SectionAlternateOutput => "Output Alternatif",
@@ -1976,7 +1988,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 420);
+        assert_eq!(Msg::ALL.len(), 421);
     }
 
     #[test]

@@ -4,15 +4,19 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Then {
     Open,
+    /// Open Recent entry (index into the recent list).
+    Recent(usize),
+    /// New Schedule and Close Schedule.
     New,
     Quit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Dialog {
-    SaveAs,
-    Open,
+    /// Save / Don't Save / Cancel before a command that would drop edits.
     Unsaved(Then),
+    /// A schedule file could not be saved or opened (ile_error).
+    FileError,
     Remove(EntryId),
     /// Delete a library song (Songs menu → Delete).
     DeleteSong(Version),
@@ -40,21 +44,8 @@ impl Operator {
         self.song_menu = None;
         self.bar_menu = None;
         self.new_menu = false;
-        if dialog == Dialog::SaveAs {
-            let input = self.title_input.get_or_insert_with(|| {
-                cx.new(|cx| {
-                    TextInput::new("", false, 1024, DIALOG_TAB_INDEX, cx)
-                        .expect("empty text is valid")
-                })
-            });
-            input.update(cx, |input, cx| {
-                let _ = input.set_text("", cx);
-            });
-            input.read(cx).focus_handle(cx).focus(window, cx);
-        } else {
-            // The non-destructive choice, so Enter never discards by accident.
-            self.controls[Control::DialogCancel].focus(window, cx);
-        }
+        // The non-destructive choice, so Enter never discards by accident.
+        self.controls[Control::DialogCancel].focus(window, cx);
     }
 
     pub(crate) fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -79,17 +70,8 @@ impl Operator {
 
     pub(crate) fn proceed(&mut self, then: Then, window: &mut Window, cx: &mut Context<Self>) {
         match then {
-            Then::Open => {
-                if self.worker.is_none() {
-                    self.schedule_message = Some(t!(Msg::NoLibraryOpen).into());
-                } else if self.queue(
-                    storage::Command::ScheduleCatalog(None),
-                    Request::ScheduleCatalog,
-                ) {
-                    self.saved_schedules = None;
-                    self.open_dialog(Dialog::Open, window, cx);
-                }
-            }
+            Then::Open => self.prompt_open(cx),
+            Then::Recent(index) => self.open_recent(index),
             Then::New => {
                 self.schedule.clear();
                 self.selected_entry = None;
@@ -106,11 +88,8 @@ impl Operator {
     pub(crate) fn dialog_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let dialog = self.dialog?;
         let heading = match dialog {
-            Dialog::SaveAs => t!(Msg::DialogSaveAs).to_string(),
-            Dialog::Open => t!(Msg::DialogOpen).into(),
-            Dialog::Unsaved(Then::Open) => t!(Msg::DialogUnsavedOpen).into(),
-            Dialog::Unsaved(Then::New) => t!(Msg::DialogUnsavedNew).into(),
-            Dialog::Unsaved(Then::Quit) => t!(Msg::DialogUnsavedQuit).into(),
+            Dialog::Unsaved(_) => t!(Msg::DialogUnsaved).to_string(),
+            Dialog::FileError => t!(Msg::ScheduleFileHeading).into(),
             Dialog::Remove(id) => match self.schedule.get(id) {
                 Some(entry) => t!(Msg::DialogRemoveTitled, title = entry.title),
                 None => t!(Msg::DialogRemoveGeneric).into(),
@@ -124,17 +103,25 @@ impl Operator {
             },
         };
         let confirm = match dialog {
-            Dialog::SaveAs => Some(t!(Msg::ConfirmSave)),
-            Dialog::Open => None,
-            Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDiscard)),
+            Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDontSave)),
             Dialog::Remove(_) => Some(t!(Msg::ConfirmRemove)),
             Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmDelete)),
-            Dialog::Options | Dialog::Preflight => None,
+            Dialog::Options | Dialog::Preflight | Dialog::FileError => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
         };
         let body = match dialog {
-            Dialog::SaveAs => self.title_input.clone().map(IntoElement::into_any_element),
-            Dialog::Open => Some(self.saved_list(cx)),
+            Dialog::FileError => self.file_error.clone().map(|message| {
+                div()
+                    .id("schedule-file-error")
+                    .debug_selector(|| "schedule-file-error".into())
+                    .role(Role::Label)
+                    .aria_label(message.clone())
+                    .accessibility_id("schedule-file-error")
+                    .text_size(px(TEXT_SMALL))
+                    .text_color(rgb(ERROR))
+                    .child(message)
+                    .into_any_element()
+            }),
             Dialog::Preflight => Some(self.preflight_body(cx)),
             Dialog::GoLiveMissing => Some(self.go_live_missing_body()),
             Dialog::DeleteSong(_) => Some(
@@ -167,13 +154,6 @@ impl Operator {
                 .border_color(rgb(BORDER))
                 .bg(rgb(SURFACE))
                 .shadow_md()
-                // Enter in the title field saves; the field itself ignores it.
-                .capture_action(cx.listener(|this, _: &text_input::Enter, window, cx| {
-                    if this.dialog == Some(Dialog::SaveAs) {
-                        cx.stop_propagation();
-                        this.activate(Control::DialogConfirm, window, cx);
-                    }
-                }))
                 .child(div().font_weight(FontWeight::MEDIUM).child(heading))
                 .children(body)
                 .children(self.dialog_message.clone().map(|message| {
@@ -187,6 +167,17 @@ impl Operator {
                         .flex()
                         .justify_end()
                         .gap_1()
+                        .when(matches!(dialog, Dialog::Unsaved(_)), |d| {
+                            d.child(
+                                self.button(
+                                    Control::DialogSave,
+                                    "dialog-save",
+                                    t!(Msg::ConfirmSave),
+                                    cx,
+                                )
+                                .text_color(rgb(TEXT)),
+                            )
+                        })
                         .children(confirm.map(|label| {
                             self.button(Control::DialogConfirm, "dialog-confirm", label, cx)
                                 .text_color(rgb(TEXT))
@@ -198,6 +189,8 @@ impl Operator {
                                 t!(Msg::ButtonKeep)
                             } else if dialog == Dialog::Preflight {
                                 t!(Msg::PreflightClose)
+                            } else if dialog == Dialog::FileError {
+                                t!(Msg::ButtonOk)
                             } else {
                                 t!(Msg::ButtonCancel)
                             },

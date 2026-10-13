@@ -1661,6 +1661,16 @@ fn live_item_identity_survives_reorder_duplicates_and_removal(cx: &mut TestAppCo
     );
 }
 
+/// Opens `path` through the toolbar Open button and the native dialog.
+fn open_file(cx: &mut VisualTestContext, operator: &Entity<Operator>, path: &std::path::Path) {
+    click(cx, "open-schedule");
+    assert!(cx.did_prompt_for_paths(), "Open asks for a file");
+    let path = path.to_path_buf();
+    cx.simulate_path_prompt_response(move |_| Some(vec![path]));
+    cx.run_until_parked();
+    let _ = operator;
+}
+
 #[gpui::test]
 fn save_and_reopen_pin_revisions_behind_an_unsaved_guard(cx: &mut TestAppContext) {
     use crate::operator::{Dialog, Then};
@@ -1674,26 +1684,42 @@ fn save_and_reopen_pin_revisions_behind_an_unsaved_guard(cx: &mut TestAppContext
     let pinned = operator.read_with(&cx, |o, _| o.schedule.entries()[0].version);
 
     cx.simulate_keystrokes("ctrl-s");
-    let input = operator.read_with(&cx, |o, _| {
-        assert_eq!(o.dialog, Some(Dialog::SaveAs));
-        o.title_input.clone().unwrap()
-    });
-    cx.update(|window, cx| assert!(input.read(cx).focus_handle(cx).is_focused(window)));
-    cx.simulate_keystrokes("enter");
-    assert_eq!(
-        operator.read_with(&cx, |o, _| o.dialog_message.clone()),
-        Some("Enter a title for the schedule".into())
+    assert!(
+        cx.did_prompt_for_new_path(),
+        "untitled: the native Save dialog"
     );
-    cx.update(|_, cx| input.update(cx, |i, cx| i.set_text("Sunday", cx).unwrap()));
-    cx.simulate_keystrokes("enter");
     assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+    operator.read_with(&cx, |o, _| {
+        assert!(o.schedule.path().is_none());
+        assert!(o.schedule.is_dirty(), "a cancelled dialog saves nothing");
+    });
+    assert!(std::fs::read_dir(dir.path()).unwrap().all(|e| {
+        e.unwrap()
+            .path()
+            .extension()
+            .is_none_or(|x| x != "selaschedule")
+    }));
+    cx.simulate_keystrokes("ctrl-s");
+    let file = dir.path().join("Sunday.selaschedule");
+    let typed = dir.path().join("Sunday");
+    cx.simulate_new_path_selection(move |_| Some(typed));
     assert_control(&mut cx, &operator, Control::AddToSchedule);
     settle(&mut cx, &operator, "saved", |o| {
-        o.schedule.saved().is_some() && !o.schedule.is_dirty()
+        o.schedule.path().is_some() && !o.schedule.is_dirty()
     });
     assert_eq!(
-        operator.read_with(&cx, |o, _| o.schedule.title().map(str::to_owned)),
-        Some("Sunday".into())
+        operator.read_with(&cx, |o, _| o
+            .schedule
+            .path()
+            .map(std::path::Path::to_path_buf)),
+        Some(file.clone()),
+        "the extension is added once"
+    );
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.window_title.clone()),
+        "Sunday.selaschedule — Sela"
     );
 
     // A library edit never updates the scheduled revision.
@@ -1719,15 +1745,14 @@ fn save_and_reopen_pin_revisions_behind_an_unsaved_guard(cx: &mut TestAppContext
     });
     click(&mut cx, "open-schedule");
     click(&mut cx, "dialog-confirm");
-    assert_eq!(operator.read_with(&cx, |o, _| o.dialog), Some(Dialog::Open));
-    settle(&mut cx, &operator, "saved list", |o| {
-        o.saved_schedules
-            .as_ref()
-            .is_some_and(|list| list.len() == 1 && list[0].1 == "Sunday")
+    assert!(cx.did_prompt_for_paths());
+    let picked = file.clone();
+    cx.simulate_path_prompt_response(move |options| {
+        assert!(options.files && !options.directories && !options.multiple);
+        Some(vec![picked])
     });
-    click(&mut cx, "saved-0");
     settle(&mut cx, &operator, "reopened", |o| {
-        o.schedule_message.as_deref() == Some("Opened “Sunday”")
+        o.schedule_message.as_deref() == Some("Opened “Sunday.selaschedule”")
     });
     operator.read_with(&cx, |o, _| {
         assert_eq!(entry_titles(o), ["Signal Hymn", SECOND_SONG]);
@@ -1743,23 +1768,17 @@ fn save_and_reopen_pin_revisions_behind_an_unsaved_guard(cx: &mut TestAppContext
         })
     });
 
-    // A saved schedule saves again without asking for a title.
+    // A saved schedule saves again without asking for a file name.
     click(&mut cx, "schedule-down");
-    let first = operator.read_with(&cx, |o, _| o.schedule.saved().unwrap());
     cx.simulate_keystrokes("ctrl-s");
+    assert!(!cx.did_prompt_for_new_path());
     assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
-    settle(&mut cx, &operator, "second revision", |o| {
-        o.schedule
-            .saved()
-            .is_some_and(|v| v.id == first.id && v.revision == first.revision + 1)
-            && !o.schedule.is_dirty()
+    settle(&mut cx, &operator, "saved again", |o| {
+        !o.schedule.is_dirty()
     });
-    let (stored, _) = Repository::open(&path)
-        .unwrap()
-        .schedule(operator.read_with(&cx, |o, _| o.schedule.saved().unwrap()))
-        .unwrap();
+    let stored = sela::schedule_file::read(&file).unwrap();
     assert_eq!(stored.title, "Sunday");
-    assert_eq!(stored.items[1], pinned);
+    assert_eq!(stored.items[1].source, pinned);
 }
 
 #[gpui::test]
@@ -1801,9 +1820,9 @@ fn quit_and_new_schedule_are_guarded(cx: &mut TestAppContext) {
     // A save in flight finishes before the window may close.
     add_song(&mut cx, &operator, "Signal Hymn");
     click(&mut cx, "save-schedule");
-    let input = operator.read_with(&cx, |o, _| o.title_input.clone().unwrap());
-    cx.update(|_, cx| input.update(cx, |i, cx| i.set_text("Evening", cx).unwrap()));
-    click(&mut cx, "dialog-confirm");
+    let evening = dir.path().join("Evening.selaschedule");
+    cx.simulate_new_path_selection(move |_| Some(evening));
+    cx.run_until_parked();
     assert!(!may_close(&mut cx));
     operator.read_with(&cx, |o, _| {
         assert_eq!(o.dialog, None);
@@ -1814,7 +1833,9 @@ fn quit_and_new_schedule_are_guarded(cx: &mut TestAppContext) {
                 .starts_with("Saving the schedule")
         );
     });
-    settle(&mut cx, &operator, "saved", |o| !o.schedule.is_dirty());
+    settle(&mut cx, &operator, "saved", |o| {
+        !o.schedule.is_dirty() && o.settings_idle()
+    });
     assert!(may_close(&mut cx));
 }
 
@@ -2264,17 +2285,17 @@ fn deleting_a_scheduled_live_song_keeps_snapshots_and_the_live_scene(cx: &mut Te
     // And it still saves and reopens from storage.
     cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
     cx.simulate_keystrokes("ctrl-s");
-    let input = operator.read_with(&cx, |o, _| o.title_input.clone().unwrap());
-    cx.update(|_, cx| input.update(cx, |i, cx| i.set_text("After delete", cx).unwrap()));
-    cx.simulate_keystrokes("enter");
+    let file = dir.path().join("After delete.selaschedule");
+    let target = file.clone();
+    cx.simulate_new_path_selection(move |_| Some(target));
     settle(&mut cx, &operator, "schedule saved", |o| {
-        o.schedule.saved().is_some() && !o.schedule.is_dirty()
+        o.schedule.path().is_some() && !o.schedule.is_dirty()
     });
-    let saved = operator.read_with(&cx, |o, _| o.schedule.saved().unwrap());
-    let (stored, songs) = Repository::open(&path).unwrap().schedule(saved).unwrap();
-    assert_eq!(stored.items, [pinned]);
-    assert_eq!(songs[0].title, "Signal Hymn");
-    assert_eq!(songs[0].sections[1].lyrics, "Original refrain");
+    let stored = sela::schedule_file::read(&file).unwrap();
+    assert_eq!(stored.items.len(), 1);
+    assert_eq!(stored.items[0].source, pinned);
+    assert_eq!(stored.items[0].song.title, "Signal Hymn");
+    assert_eq!(stored.items[0].song.sections[1].lyrics, "Original refrain");
 }
 
 #[gpui::test]
@@ -2352,6 +2373,7 @@ mod settings_ui {
             }),
             writer,
             loader: settings::default_loader(),
+            schedule_writer: sela::schedule_file::default_writer(),
         };
         (config, slot)
     }
@@ -3102,11 +3124,7 @@ mod menu_bar {
         let (mut cx, operator, seen) = fixture(cx);
         cx.simulate_resize(size(px(1280.), px(800.)));
         cx.simulate_keystrokes("alt-f");
-        for id in [
-            "bar-file-open-recent",
-            "bar-file-save-as",
-            "bar-file-reports",
-        ] {
+        for id in ["bar-file-open-recent", "bar-file-reports"] {
             click(&mut cx, id);
             assert_eq!(
                 operator.read_with(&cx, |o, _| o.bar_menu.map(|m| m.top)),
@@ -3141,22 +3159,13 @@ mod menu_bar {
         cx.simulate_resize(size(px(1280.), px(800.)));
         settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
 
-        cx.simulate_keystrokes("ctrl-s");
-        let input = operator.read_with(&cx, |o, _| {
-            assert_eq!(o.dialog, Some(Dialog::SaveAs));
-            o.title_input.clone().unwrap()
-        });
+        let input = operator.read_with(&cx, |o, _| o.search_input.clone());
+        cx.update(|window, cx| input.read(cx).focus_handle(cx).focus(window, cx));
         cx.simulate_keystrokes("f e l p v h");
         cx.update(|_, cx| assert_eq!(input.read(cx).text(), "felpvh"));
         cx.simulate_keystrokes("alt-f alt-l");
         assert_eq!(operator.read_with(&cx, |o, _| o.bar_menu), None);
-        assert_eq!(
-            operator.read_with(&cx, |o, _| o.dialog),
-            Some(Dialog::SaveAs)
-        );
         cx.update(|_, cx| assert_eq!(input.read(cx).text(), "felpvh"));
-        click(&mut cx, "dialog-cancel");
-        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
     }
 
     #[gpui::test]
@@ -4466,13 +4475,14 @@ mod preflight_ui {
     use crate::operator::Dialog;
     use sela::{
         background::{Background, ImageRef},
-        storage::{Repository, Schedule},
+        storage::Repository,
     };
     use sha2::Digest;
 
     struct Fixture {
         library: std::path::PathBuf,
         original: std::path::PathBuf,
+        schedule: std::path::PathBuf,
     }
 
     /// A saved schedule whose only song pins `pinned.png`, which is gone from
@@ -4506,25 +4516,30 @@ mod preflight_ui {
                 },
             )
             .unwrap();
-        repository
-            .save_schedule(
-                None,
-                Schedule {
-                    title: "Sunday".into(),
-                    items: vec![version],
-                },
-            )
-            .unwrap();
-        Fixture { library, original }
+        let schedule = dir.path().join("Sunday.selaschedule");
+        let song = repository.song(version).unwrap();
+        let file = sela::schedule_file::ScheduleFile {
+            title: "Sunday".into(),
+            items: vec![sela::schedule_file::Item {
+                source: version,
+                song,
+            }],
+        };
+        std::fs::write(&schedule, sela::schedule_file::encode(&file).unwrap()).unwrap();
+        Fixture {
+            library,
+            original,
+            schedule,
+        }
     }
 
-    fn open_saved(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+    fn open_saved(
+        cx: &mut VisualTestContext,
+        operator: &Entity<Operator>,
+        schedule: &std::path::Path,
+    ) {
         settle(cx, operator, "catalog", |o| o.catalog.len() == 1);
-        click(cx, "open-schedule");
-        settle(cx, operator, "saved list", |o| {
-            o.saved_schedules.as_ref().is_some_and(|l| l.len() == 1)
-        });
-        click(cx, "saved-0");
+        open_file(cx, operator, schedule);
     }
 
     fn report_shown(o: &Operator) -> bool {
@@ -4541,7 +4556,7 @@ mod preflight_ui {
         let fixture = vanished_image(&dir);
         let (mut cx, operator, _) = with_library(cx, Some(fixture.library.clone()), "apply");
         cx.simulate_resize(size(px(1280.), px(800.)));
-        open_saved(&mut cx, &operator);
+        open_saved(&mut cx, &operator, &fixture.schedule);
         settle(&mut cx, &operator, "report", report_shown);
         cx.run_until_parked();
         assert!(cx.debug_bounds("preflight-row-0").is_some());
@@ -4584,7 +4599,7 @@ mod preflight_ui {
         let fixture = vanished_image(&dir);
         let (mut cx, operator, _) = with_library(cx, Some(fixture.library), "apply");
         cx.simulate_resize(size(px(1280.), px(800.)));
-        open_saved(&mut cx, &operator);
+        open_saved(&mut cx, &operator, &fixture.schedule);
         settle(&mut cx, &operator, "report", report_shown);
         click(&mut cx, "dialog-cancel");
         assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
@@ -4687,5 +4702,227 @@ mod preflight_ui {
         assert!(cx.debug_bounds("import-notes").is_some());
         let after = sha2::Sha256::digest(std::fs::read(&source).unwrap());
         assert_eq!(before, after, "the original file is untouched");
+    }
+}
+
+mod schedule_files_ui {
+    use super::*;
+    use crate::operator::Dialog;
+    use sela::schedule_file::{self, Item, ScheduleFile};
+    use std::path::{Path, PathBuf};
+
+    fn save_new(cx: &mut VisualTestContext, operator: &Entity<Operator>, path: PathBuf) {
+        assert!(cx.did_prompt_for_new_path());
+        let expect = schedule_file::with_extension(&path);
+        cx.simulate_new_path_selection(move |_| Some(path));
+        settle(cx, operator, "saved", |o| {
+            o.schedule.path() == Some(expect.as_path())
+                && !o.schedule.is_dirty()
+                && o.settings_idle()
+        });
+    }
+
+    fn loaded(
+        cx: &mut TestAppContext,
+        dir: &tempfile::TempDir,
+    ) -> (VisualTestContext, Entity<Operator>) {
+        let (mut cx, operator, _) = with_library(cx, Some(library_with_songs(dir)), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+        (cx, operator)
+    }
+
+    fn recent(cx: &VisualTestContext, operator: &Entity<Operator>) -> Vec<PathBuf> {
+        operator.read_with(cx, |o, _| o.recent_schedules().to_vec())
+    }
+
+    #[gpui::test]
+    fn save_as_switches_the_file_and_leaves_the_old_one_alone(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        cx.simulate_keystrokes("ctrl-s");
+        let a = dir.path().join("A.selaschedule");
+        save_new(&mut cx, &operator, a.clone());
+        let before = std::fs::read(&a).unwrap();
+
+        add_song(&mut cx, &operator, SECOND_SONG);
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-save-as");
+        let b = dir.path().join("B");
+        save_new(&mut cx, &operator, b);
+        let b = dir.path().join("B.selaschedule");
+        assert_eq!(std::fs::read(&a).unwrap(), before);
+        assert_eq!(schedule_file::read(&b).unwrap().items.len(), 2);
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.schedule.path().map(Path::to_path_buf)),
+            Some(b.clone())
+        );
+        assert_eq!(recent(&cx, &operator), [b, a]);
+    }
+
+    #[gpui::test]
+    fn open_recent_lists_files_and_drops_a_missing_one(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        cx.simulate_keystrokes("ctrl-s");
+        let a = dir.path().join("A.selaschedule");
+        save_new(&mut cx, &operator, a.clone());
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-save-as");
+        let b = dir.path().join("B.selaschedule");
+        save_new(&mut cx, &operator, b.clone());
+        assert_eq!(recent(&cx, &operator), [b.clone(), a.clone()]);
+
+        // Open Recent picks A; it becomes the newest entry without a copy.
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-recent-1");
+        settle(&mut cx, &operator, "opened A", |o| {
+            o.schedule.path() == Some(a.as_path()) && o.settings_idle()
+        });
+        assert_eq!(recent(&cx, &operator), [a.clone(), b.clone()]);
+
+        std::fs::remove_file(&b).unwrap();
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-recent-1");
+        settle(&mut cx, &operator, "missing", |o| {
+            o.dialog == Some(Dialog::FileError) && o.settings_idle()
+        });
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.schedule.path(), Some(a.as_path()), "schedule unchanged");
+            assert_eq!(entry_titles(o), ["Signal Hymn"]);
+            assert!(o.live.is_none());
+        });
+        assert_eq!(recent(&cx, &operator), [a]);
+    }
+
+    #[gpui::test]
+    fn invalid_files_are_rejected_and_change_nothing(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        let good = dir.path().join("good.selaschedule");
+        cx.simulate_keystrokes("ctrl-s");
+        save_new(&mut cx, &operator, good.clone());
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&good).unwrap()).unwrap();
+        value["version"] = 2.into();
+        let cases = [
+            ("garbage", b"not a schedule".to_vec()),
+            ("truncated", std::fs::read(&good).unwrap()[..40].to_vec()),
+            ("newer", value.to_string().into_bytes()),
+        ];
+        for (name, bytes) in cases {
+            let path = dir.path().join(format!("{name}.selaschedule"));
+            std::fs::write(&path, &bytes).unwrap();
+            open_file(&mut cx, &operator, &path);
+            settle(&mut cx, &operator, name, |o| {
+                o.dialog == Some(Dialog::FileError)
+            });
+            operator.read_with(&cx, |o, _| {
+                assert_eq!(o.schedule.path(), Some(good.as_path()), "{name}");
+                assert_eq!(entry_titles(o), ["Signal Hymn"]);
+                assert!(!o.schedule.is_dirty());
+                assert!(o.live.is_none());
+            });
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            click(&mut cx, "dialog-cancel");
+            assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+        }
+        assert_eq!(recent(&cx, &operator), [good]);
+    }
+
+    #[gpui::test]
+    fn a_file_opens_with_its_slides_in_a_library_without_the_song(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        // The file comes from one library; the profile under test has another.
+        let source = library_with_song(&dir);
+        let mut repository = Repository::open(&source).unwrap();
+        let (version, title) = repository.catalog(None).unwrap().remove(0);
+        let song = repository.song(version).unwrap();
+        let file = dir.path().join("Sunday.selaschedule");
+        let document = ScheduleFile {
+            title: "Sunday".into(),
+            items: vec![Item {
+                source: version,
+                song,
+            }],
+        };
+        std::fs::write(&file, schedule_file::encode(&document).unwrap()).unwrap();
+
+        let (mut cx, operator, _) =
+            with_library(cx, Some(library_with_songs_named(&other)), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+        let before = operator.read_with(&cx, |o, _| o.catalog.clone());
+        open_file(&mut cx, &operator, &file);
+        settle(&mut cx, &operator, "opened", |o| {
+            o.schedule.path() == Some(file.as_path())
+        });
+        click(&mut cx, "schedule-item-0");
+        settle(&mut cx, &operator, "previewed", |o| {
+            o.preview
+                .as_ref()
+                .is_some_and(|p| p.title == title && !p.slides.is_empty())
+        });
+        cx.run_until_parked();
+        let after = operator.read_with(&cx, |o, _| o.catalog.clone());
+        assert_eq!(after, before, "Songs list unchanged");
+        assert!(operator.read_with(&cx, |o, _| o.live.is_none()));
+        // The same file opened again reuses the hidden revision.
+        open_file(&mut cx, &operator, &file);
+        settle(&mut cx, &operator, "reopened", |o| !o.schedule.is_dirty());
+        let _ = &mut repository;
+    }
+
+    fn library_with_songs_named(dir: &tempfile::TempDir) -> PathBuf {
+        let path = dir.path().join("library.sqlite");
+        let mut repository = Repository::open(&path).unwrap();
+        repository
+            .save_song(
+                None,
+                Song {
+                    title: "Different Song".into(),
+                    authors: String::new(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    variants: Vec::new(),
+                    sections: vec![Section {
+                        id: SectionId::allocate(),
+                        label: "Verse".into(),
+                        lyrics: "Different words".into(),
+                        format: Default::default(),
+                        background: None,
+                    }],
+                    master: None,
+                },
+            )
+            .unwrap();
+        path
+    }
+
+    #[gpui::test]
+    fn the_unsaved_guard_saves_then_continues(cx: &mut TestAppContext) {
+        use crate::operator::Then;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-close");
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.dialog),
+            Some(Dialog::Unsaved(Then::New))
+        );
+        click(&mut cx, "dialog-save");
+        let file = dir.path().join("Guarded.selaschedule");
+        assert!(cx.did_prompt_for_new_path());
+        let target = file.clone();
+        cx.simulate_new_path_selection(move |_| Some(target));
+        settle(&mut cx, &operator, "cleared", |o| {
+            o.schedule.entries().is_empty() && o.schedule.path().is_none()
+        });
+        assert_eq!(schedule_file::read(&file).unwrap().items.len(), 1);
     }
 }

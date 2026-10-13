@@ -6,6 +6,7 @@ use crate::background::Background;
 use crate::format::SlideFormat;
 use crate::search;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 use std::{
     path::PathBuf,
     sync::{
@@ -779,75 +780,57 @@ impl Repository {
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let v = advance(&tx, "songs", previous)?;
-        tx.execute(
-            "INSERT INTO song_revisions VALUES(?,?,?)",
-            params![&v.id.0[..], v.revision, song.encode()],
-        )?;
-        for (position, section) in song.sections.iter().enumerate() {
-            tx.execute(
-                "INSERT INTO section_ids VALUES(?,?,?,?)",
-                params![
-                    &v.id.0[..],
-                    v.revision,
-                    position as i64,
-                    &section.id.0.0[..]
-                ],
-            )?;
-            if !section.format.is_default() {
-                tx.execute(
-                    "INSERT INTO section_formats VALUES(?,?,?,?)",
-                    params![
-                        &v.id.0[..],
-                        v.revision,
-                        position as i64,
-                        section.format.encode()
-                    ],
-                )?;
-            }
-            if let Some(background) = &section.background {
-                tx.execute(
-                    "INSERT INTO section_backgrounds VALUES(?,?,?,?)",
-                    params![
-                        &v.id.0[..],
-                        v.revision,
-                        position as i64,
-                        background.encode()
-                    ],
-                )?;
-            }
-        }
-        if let Some(master) = &song.master {
-            tx.execute(
-                "INSERT INTO song_backgrounds VALUES(?,?,?)",
-                params![&v.id.0[..], v.revision, master.encode()],
-            )?;
-        }
-        for (position, variant) in song.variants.iter().enumerate() {
-            tx.execute(
-                "INSERT INTO variants VALUES(?,?,?,?,?)",
-                params![
-                    &v.id.0[..],
-                    v.revision,
-                    position as i64,
-                    &variant.id.0.0[..],
-                    variant.name
-                ],
-            )?;
-            for (position, occurrence) in variant.occurrences.iter().enumerate() {
-                tx.execute(
-                    "INSERT INTO occurrences VALUES(?,?,?,?,?,?)",
-                    params![
-                        &v.id.0[..],
-                        v.revision,
-                        &variant.id.0.0[..],
-                        position as i64,
-                        &occurrence.id.0.0[..],
-                        &occurrence.section.0.0[..]
-                    ],
-                )?;
-            }
-        }
+        insert_revision(&tx, v, &song)?;
         index_song(&tx, v.id, &song)?;
+        tx.commit()?;
+        Ok(v)
+    }
+    /// The song at each version, in order, for a schedule file to embed.
+    pub fn songs(&self, versions: &[Version]) -> Result<Vec<Song>> {
+        if versions.len() > MAX_ITEMS {
+            return Err(Error::Invalid);
+        }
+        versions.iter().map(|v| self.song(*v)).collect()
+    }
+    /// Resolves a schedule file's song to a library revision. An identical
+    /// revision already in the library is used as is. Otherwise the content
+    /// is stored as a hidden revision (a tombstoned song, never listed or
+    /// searched) under an id derived from the content, so opening the same
+    /// file again reuses it and the Songs list never changes.
+    pub fn import_hidden(&mut self, source: Version, song: &Song) -> Result<Version> {
+        song.validate()?;
+        if self.song(source).is_ok_and(|existing| &existing == song) {
+            return Ok(source);
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(b"sela-schedule-song-v1");
+        hasher.update(source.id.0);
+        hasher.update(source.revision.to_le_bytes());
+        hasher.update(crate::schedule_file::song_json(song).to_string());
+        let digest = hasher.finalize();
+        let v = Version {
+            id: Id(digest[..16].try_into().map_err(|_| Error::Corrupt)?),
+            revision: 1,
+        };
+        let present: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM songs WHERE id=?)",
+            params![&v.id.0[..]],
+            |r| r.get(0),
+        )?;
+        if present {
+            return match self.song(v) {
+                Ok(existing) if &existing == song => Ok(v),
+                _ => Err(Error::Corrupt),
+            };
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO songs(id,head,deleted) VALUES(?,1,1)",
+            params![&v.id.0[..]],
+        )?;
+        insert_revision(&tx, v, song)?;
         tx.commit()?;
         Ok(v)
     }
@@ -981,6 +964,77 @@ impl Repository {
         Ok(v)
     }
 }
+fn insert_revision(tx: &rusqlite::Transaction, v: Version, song: &Song) -> Result<()> {
+    tx.execute(
+        "INSERT INTO song_revisions VALUES(?,?,?)",
+        params![&v.id.0[..], v.revision, song.encode()],
+    )?;
+    for (position, section) in song.sections.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO section_ids VALUES(?,?,?,?)",
+            params![
+                &v.id.0[..],
+                v.revision,
+                position as i64,
+                &section.id.0.0[..]
+            ],
+        )?;
+        if !section.format.is_default() {
+            tx.execute(
+                "INSERT INTO section_formats VALUES(?,?,?,?)",
+                params![
+                    &v.id.0[..],
+                    v.revision,
+                    position as i64,
+                    section.format.encode()
+                ],
+            )?;
+        }
+        if let Some(background) = &section.background {
+            tx.execute(
+                "INSERT INTO section_backgrounds VALUES(?,?,?,?)",
+                params![
+                    &v.id.0[..],
+                    v.revision,
+                    position as i64,
+                    background.encode()
+                ],
+            )?;
+        }
+    }
+    if let Some(master) = &song.master {
+        tx.execute(
+            "INSERT INTO song_backgrounds VALUES(?,?,?)",
+            params![&v.id.0[..], v.revision, master.encode()],
+        )?;
+    }
+    for (position, variant) in song.variants.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO variants VALUES(?,?,?,?,?)",
+            params![
+                &v.id.0[..],
+                v.revision,
+                position as i64,
+                &variant.id.0.0[..],
+                variant.name
+            ],
+        )?;
+        for (position, occurrence) in variant.occurrences.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO occurrences VALUES(?,?,?,?,?,?)",
+                params![
+                    &v.id.0[..],
+                    v.revision,
+                    &variant.id.0.0[..],
+                    position as i64,
+                    &occurrence.id.0.0[..],
+                    &occurrence.section.0.0[..]
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
 fn read_id(bytes: Vec<u8>) -> Result<Id> {
     Ok(Id(bytes.try_into().map_err(|_| Error::Corrupt)?))
 }
@@ -1113,6 +1167,11 @@ pub enum Command {
     Song(Version),
     Arrangement(Version),
     Schedule(Version),
+    /// The songs at these revisions (a schedule file's content to save).
+    Songs(Vec<Version>),
+    /// Resolves a schedule file's songs to library revisions; see
+    /// `Repository::import_hidden`. The reply keeps the item order.
+    ImportSongs(Vec<(Version, Song)>),
     DeleteSong(Version),
     Heads {
         schedules: bool,
@@ -1142,6 +1201,8 @@ pub enum Reply {
     Song(Song),
     Arrangement(Arrangement),
     Schedule(Schedule, Vec<Song>),
+    Songs(Vec<Song>),
+    Imported(Vec<(Version, Song)>),
     Deleted,
     Heads(Vec<Version>),
     Catalog(Vec<(Version, String)>),
@@ -1164,6 +1225,12 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::Song(v) => repo.song(v).map(Reply::Song),
         Command::Arrangement(v) => repo.arrangement(v).map(Reply::Arrangement),
         Command::Schedule(v) => repo.schedule(v).map(|(s, songs)| Reply::Schedule(s, songs)),
+        Command::Songs(versions) => repo.songs(&versions).map(Reply::Songs),
+        Command::ImportSongs(items) => items
+            .into_iter()
+            .map(|(source, song)| Ok((repo.import_hidden(source, &song)?, song)))
+            .collect::<Result<Vec<_>>>()
+            .map(Reply::Imported),
         Command::DeleteSong(v) => repo.delete_song(v).map(|()| Reply::Deleted),
         Command::Heads { schedules, after } => repo.heads(schedules, after).map(Reply::Heads),
         Command::Catalog(after) => repo.catalog(after).map(Reply::Catalog),
@@ -1253,6 +1320,8 @@ impl Worker {
             Command::SaveSchedule(_, s) if s.items.len() > MAX_ITEMS || s.title.len() > 1024 => {
                 return Err(Error::Invalid);
             }
+            Command::Songs(v) if v.len() > MAX_ITEMS => return Err(Error::Invalid),
+            Command::ImportSongs(items) if items.len() > MAX_ITEMS => return Err(Error::Invalid),
             Command::BackupNew(p) if p.as_os_str().len() > 4096 => return Err(Error::Invalid),
             Command::RestoreNew {
                 source,
@@ -1962,6 +2031,39 @@ mod tests {
         let p = d.path().join("test.sqlite");
         let r = Repository::open(&p).unwrap();
         (d, p, r)
+    }
+    #[test]
+    fn schedule_file_songs_reuse_identical_revisions_or_import_hidden() {
+        let (_d, p, mut r) = fixture();
+        let original = song();
+        let v = r.save_song(None, original.clone()).unwrap();
+        assert_eq!(r.import_hidden(v, &original).unwrap(), v, "identical");
+        assert_eq!(r.songs(&[v, v]).unwrap(), [original.clone(), original]);
+
+        // A different library: the embedded content becomes a hidden revision.
+        let (_d2, p2, mut other) = fixture();
+        let mut foreign = song();
+        foreign.title = "Only in the file".into();
+        let hidden = other.import_hidden(v, &foreign).unwrap();
+        assert_ne!(hidden, v);
+        assert_eq!(other.song(hidden).unwrap(), foreign);
+        assert!(other.catalog(None).unwrap().is_empty(), "not listed");
+        assert!(
+            other.search("Only", 1).unwrap().hits.is_empty(),
+            "not searched"
+        );
+        assert_eq!(other.import_hidden(v, &foreign).unwrap(), hidden, "reused");
+        drop(other);
+        let mut reopened = Repository::open(&p2).unwrap();
+        assert_eq!(reopened.import_hidden(v, &foreign).unwrap(), hidden);
+        assert!(reopened.catalog(None).unwrap().is_empty());
+
+        // The source song deleted from its library: its content still resolves.
+        let mut repo = Repository::open(&p).unwrap();
+        let content = repo.song(v).unwrap();
+        repo.delete_song(v).unwrap();
+        assert_eq!(repo.import_hidden(v, &content).unwrap(), v);
+        assert!(repo.catalog(None).unwrap().is_empty());
     }
     #[test]
     fn reopen_unicode_duplicate_titles_and_snapshot_history() {

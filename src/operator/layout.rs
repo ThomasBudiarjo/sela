@@ -101,6 +101,8 @@ impl Operator {
 impl Render for Operator {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.focus_pending_dialog(window, cx);
+        self.resume_guarded(window, cx);
+        self.sync_window_title(window);
         if self.activation.is_none() {
             self.activation = Some(cx.observe_window_activation(window, |this, window, _| {
                 if window.is_window_active() {
@@ -127,8 +129,8 @@ impl Render for Operator {
                     window.remove_window();
                 }
             }))
-            .on_action(cx.listener(|this, _: &SaveSchedule, window, cx| {
-                this.save_schedule(window, cx);
+            .on_action(cx.listener(|this, _: &SaveSchedule, _, cx| {
+                this.save_schedule(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &OpenSchedule, window, cx| {

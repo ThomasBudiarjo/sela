@@ -115,7 +115,7 @@ impl Operator {
 
     /// Opens a dialog from `poll`, which has no window: it takes focus on the
     /// next render. Refuses while another dialog is open.
-    fn show_dialog_later(&mut self, dialog: Dialog) -> bool {
+    pub(crate) fn show_dialog_later(&mut self, dialog: Dialog) -> bool {
         if self.dialog.is_some() {
             return false;
         }

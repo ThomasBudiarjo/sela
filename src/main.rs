@@ -233,6 +233,7 @@ fn main() {
                     list_monitors: std::sync::Arc::new(list_monitors),
                     writer: sela::settings::default_writer(),
                     loader: sela::settings::default_loader(),
+                    schedule_writer: sela::schedule_file::default_writer(),
                 };
                 let operator = cx.new(|cx| {
                     Operator::with_settings(library, audience_launcher(slot), config, cx)

@@ -5188,6 +5188,7 @@ dependencies = [
  "image",
  "pollster 0.4.0",
  "rusqlite",
+ "serde_json",
  "sha2",
  "tempfile",
  "ttf-parser",

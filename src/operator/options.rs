@@ -35,6 +35,8 @@ pub(crate) struct SettingsConfig {
     pub(crate) list_monitors: MonitorLister,
     pub(crate) writer: settings::Writer,
     pub(crate) loader: settings::Loader,
+    /// Writes `.selaschedule` files on the schedule file worker.
+    pub(crate) schedule_writer: sela::schedule_file::Writer,
 }
 
 impl Default for SettingsConfig {
@@ -44,6 +46,7 @@ impl Default for SettingsConfig {
             list_monitors: Arc::new(Vec::new),
             writer: settings::default_writer(),
             loader: settings::default_loader(),
+            schedule_writer: sela::schedule_file::default_writer(),
         }
     }
 }
@@ -209,6 +212,29 @@ impl Operator {
             }
         }
         changed
+    }
+
+    /// Changes the stored settings (the recent schedule list) and writes them
+    /// through the settings worker. Skipped until the initial load replied, so
+    /// defaults never overwrite the stored file.
+    pub(crate) fn update_recent(&mut self, change: impl FnOnce(&mut Settings)) {
+        if !self.settings.loaded {
+            return;
+        }
+        change(&mut self.settings.current);
+        let Some(worker) = &self.settings.worker else {
+            return;
+        };
+        if worker.save(self.settings.current.clone()) {
+            self.settings.pending_saves += 1;
+        } else {
+            self.settings.save_error = Some(t!(Msg::SettingsQueueFull).into());
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn settings_idle(&self) -> bool {
+        self.settings.pending_saves == 0
     }
 
     /// Notes about the settings, shown until resolved or replaced.

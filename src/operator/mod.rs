@@ -1,5 +1,5 @@
 use super::*;
-use crate::text_input::{self, TextInput};
+use crate::text_input::TextInput;
 use crate::ui::theme::*;
 use gpui::{
     CursorStyle, Empty, Entity, Focusable, FontWeight, MouseButton, PathPromptOptions, Pixels,
@@ -19,6 +19,7 @@ use sela::{
     },
     scene::{ContentVersion, Extent, PrepareError, PreparedBackground, RendererCapabilities},
     schedule::{EntryId, Schedule},
+    schedule_file,
     slides::{self, Sizing, Slide},
     storage::{self, MAX_ITEMS, Reply, Version, Worker},
     t,
@@ -42,12 +43,13 @@ mod polling;
 mod preview_live;
 mod resources;
 mod schedule;
+mod schedule_files;
 
 use assets::{Assets, PREFLIGHT_DIALOG_W};
 pub(super) use controls::Control;
 use controls::{
-    ControlSet, DIALOG_TAB_INDEX, IMAGE_TAB_INDEX, SAVED_TAB_INDEX, SCHEDULE_TAB_INDEX,
-    SLIDE_TAB_INDEX, SONG_TAB_INDEX, mark_disabled,
+    ControlSet, DIALOG_TAB_INDEX, IMAGE_TAB_INDEX, SCHEDULE_TAB_INDEX, SLIDE_TAB_INDEX,
+    SONG_TAB_INDEX, mark_disabled,
 };
 pub(super) use dialogs::{Dialog, Then};
 pub(crate) use menus::{BarMenu, TopMenu};
@@ -165,9 +167,10 @@ pub(crate) enum Request {
     Search,
     Song(Version),
     DeleteSong(Version, String),
-    SaveSchedule(storage::Schedule),
-    ScheduleCatalog,
-    OpenSchedule(Version),
+    /// Reading the songs a schedule file save embeds.
+    SaveSchedule(schedule_files::SaveJob),
+    /// Resolving an opened schedule file's songs against the library.
+    ImportSchedule(PathBuf),
 }
 
 pub(super) struct Operator {
@@ -246,13 +249,24 @@ pub(super) struct Operator {
     pub(super) schedule_message: Option<String>,
     /// One schedule storage job waiting for the worker.
     queued: Option<(storage::Command, Request)>,
-    /// `None` while the saved list is loading.
-    pub(super) saved_schedules: Option<Vec<(Version, String)>>,
-    saved_rows: Vec<FocusHandle>,
+    /// Next step of a schedule file job; goes to the storage worker ahead of
+    /// `queued` so a half-finished open or save is never interleaved.
+    followup: Option<(storage::Command, Request)>,
+    /// Reads and writes `.selaschedule` files off the UI thread.
+    file_worker: Option<schedule_file::Worker>,
+    file_job: Option<schedule_files::FileJob>,
+    /// A native Open or Save dialog is showing.
+    file_prompt: Option<Task<()>>,
+    /// Guarded command that continues once a save from the unsaved prompt
+    /// lands; started from `render`, which has the window.
+    resume: Option<Then>,
+    /// Text of the schedule file error dialog.
+    pub(super) file_error: Option<String>,
+    /// Window title last handed to the platform.
+    pub(crate) window_title: String,
     pub(super) dialog: Option<Dialog>,
     dialog_return: Option<FocusHandle>,
     pub(super) dialog_message: Option<String>,
-    pub(super) title_input: Option<Entity<TextInput>>,
     item_menu: Option<(EntryId, Point<Pixels>)>,
     pub(super) song_menu: Option<SongMenu>,
     song_menu_focus: FocusHandle,
@@ -410,6 +424,7 @@ impl Operator {
                 }
             }
         });
+        let schedule_writer = config.schedule_writer.clone();
         let settings = SettingsState::start(profile.as_deref(), config, cx);
         Self {
             focus: cx.focus_handle(),
@@ -469,12 +484,16 @@ impl Operator {
             schedule_rows: Vec::new(),
             schedule_message: None,
             queued: None,
-            saved_schedules: None,
-            saved_rows: Vec::new(),
+            followup: None,
+            file_worker: schedule_file::Worker::start(schedule_writer).ok(),
+            file_job: None,
+            file_prompt: None,
+            resume: None,
+            file_error: None,
+            window_title: String::new(),
             dialog: None,
             dialog_return: None,
             dialog_message: None,
-            title_input: None,
             item_menu: None,
             song_menu: None,
             song_menu_focus: cx.focus_handle(),

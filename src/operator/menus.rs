@@ -326,17 +326,43 @@ impl TopMenu {
         }
     }
 
-    fn entries(self) -> &'static [BarEntry] {
+    /// Menu rows; File grows one row per recent schedule file.
+    fn entries(self, operator: &Operator) -> Vec<BarEntry> {
         match self {
-            TopMenu::File => FILE_MENU,
-            TopMenu::Edit => EDIT_MENU,
-            TopMenu::Live => LIVE_MENU,
-            TopMenu::Profiles => PROFILES_MENU,
-            TopMenu::View => VIEW_MENU,
-            TopMenu::Help => HELP_MENU,
+            TopMenu::File => {
+                let mut rows = Vec::with_capacity(FILE_MENU.len() + sela::settings::MAX_RECENT);
+                for entry in FILE_MENU {
+                    rows.push(*entry);
+                    if *entry == BarEntry::Item(BarItem::OpenRecent) {
+                        rows.extend(
+                            (0..operator.recent_schedules().len())
+                                .map(|index| BarEntry::Item(BarItem::Recent(index as u8))),
+                        );
+                    }
+                }
+                rows
+            }
+            TopMenu::Edit => EDIT_MENU.to_vec(),
+            TopMenu::Live => LIVE_MENU.to_vec(),
+            TopMenu::Profiles => PROFILES_MENU.to_vec(),
+            TopMenu::View => VIEW_MENU.to_vec(),
+            TopMenu::Help => HELP_MENU.to_vec(),
         }
     }
 }
+
+const RECENT_IDS: [&str; sela::settings::MAX_RECENT] = [
+    "bar-file-recent-0",
+    "bar-file-recent-1",
+    "bar-file-recent-2",
+    "bar-file-recent-3",
+    "bar-file-recent-4",
+    "bar-file-recent-5",
+    "bar-file-recent-6",
+    "bar-file-recent-7",
+    "bar-file-recent-8",
+    "bar-file-recent-9",
+];
 
 /// A menu row, or a separator between groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -355,6 +381,8 @@ pub(crate) enum BarItem {
     NewScheduleItem,
     OpenSchedule,
     OpenRecent,
+    /// One Open Recent entry, flattened under its header like File › New.
+    Recent(u8),
     SaveSchedule,
     SaveScheduleAs,
     ExportStandalone,
@@ -396,7 +424,7 @@ impl BarItem {
             BarItem::NewSong => Msg::BarNewSong,
             BarItem::NewScheduleItem => Msg::BarNewSchedule,
             BarItem::OpenSchedule => Msg::BarOpenSchedule,
-            BarItem::OpenRecent => Msg::BarOpenRecent,
+            BarItem::OpenRecent | BarItem::Recent(_) => Msg::BarOpenRecent,
             BarItem::SaveSchedule => Msg::BarSaveSchedule,
             BarItem::SaveScheduleAs => Msg::BarSaveScheduleAs,
             BarItem::ExportStandalone => Msg::BarExportStandalone,
@@ -453,6 +481,7 @@ impl BarItem {
             BarItem::NewScheduleItem => "bar-file-new-schedule",
             BarItem::OpenSchedule => "bar-file-open",
             BarItem::OpenRecent => "bar-file-open-recent",
+            BarItem::Recent(index) => RECENT_IDS[index as usize % RECENT_IDS.len()],
             BarItem::SaveSchedule => "bar-file-save",
             BarItem::SaveScheduleAs => "bar-file-save-as",
             BarItem::ExportStandalone => "bar-file-export",
@@ -496,6 +525,8 @@ impl BarItem {
             | BarItem::NewScheduleItem
             | BarItem::OpenSchedule
             | BarItem::SaveSchedule
+            | BarItem::SaveScheduleAs
+            | BarItem::CloseSchedule
             | BarItem::Exit
             | BarItem::Options
             | BarItem::GoLive
@@ -505,6 +536,8 @@ impl BarItem {
             // Mirrors the toolbar Logo button: usable only when a logo is
             // chosen or already showing.
             BarItem::LogoOnLive => !(operator.logo.is_none() && !operator.masks.is_on(Mask::Logo)),
+            BarItem::OpenRecent => !operator.recent_schedules().is_empty(),
+            BarItem::Recent(index) => (index as usize) < operator.recent_schedules().len(),
             _ => false,
         }
     }
@@ -528,6 +561,16 @@ impl BarItem {
                 | BarItem::ViewCombined
                 | BarItem::ViewResourcePreview
         )
+    }
+
+    /// Group rows that only head the flattened rows below them.
+    fn is_header(self) -> bool {
+        matches!(self, BarItem::NewHeader | BarItem::OpenRecent)
+    }
+
+    /// Rows the keyboard highlight can land on and Enter can run.
+    fn selectable(self, operator: &Operator) -> bool {
+        self.enabled(operator) && !self.is_header()
     }
 }
 
@@ -606,9 +649,9 @@ pub(crate) struct BarMenu {
 impl Operator {
     /// First enabled (selectable) entry index of a menu, if any.
     fn first_enabled(&self, top: TopMenu) -> Option<usize> {
-        top.entries()
+        top.entries(self)
             .iter()
-            .position(|e| matches!(e, BarEntry::Item(item) if item.enabled(self)))
+            .position(|e| matches!(e, BarEntry::Item(item) if item.selectable(self)))
     }
 
     /// Alt+mnemonic (`keyboard: true`) or label click. Keyboard opens
@@ -679,8 +722,8 @@ impl Operator {
         let Some(menu) = self.bar_menu else {
             return;
         };
-        let entries = menu.top.entries();
-        let selectable = |index: usize| matches!(entries.get(index), Some(BarEntry::Item(item)) if item.enabled(self));
+        let entries = menu.top.entries(self);
+        let selectable = |index: usize| matches!(entries.get(index), Some(BarEntry::Item(item)) if item.selectable(self));
         if !(0..entries.len()).any(&selectable) {
             return;
         }
@@ -736,7 +779,7 @@ impl Operator {
         let Some(menu) = self.bar_menu else {
             return;
         };
-        let Some(BarEntry::Item(item)) = menu.top.entries().get(index).copied() else {
+        let Some(BarEntry::Item(item)) = menu.top.entries(self).get(index).copied() else {
             return;
         };
         self.choose_bar_item(item, window, cx);
@@ -749,7 +792,7 @@ impl Operator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !item.enabled(self) {
+        if !item.selectable(self) {
             return;
         }
         self.dismiss_bar_menu(window, cx);
@@ -757,7 +800,10 @@ impl Operator {
             BarItem::NewSong => self.open_editor(None, cx),
             BarItem::NewScheduleItem => self.guard(Then::New, window, cx),
             BarItem::OpenSchedule => self.open_schedule(window, cx),
-            BarItem::SaveSchedule => self.save_schedule(window, cx),
+            BarItem::SaveSchedule => self.save_schedule(cx),
+            BarItem::SaveScheduleAs => self.save_schedule_as(cx),
+            BarItem::CloseSchedule => self.guard(Then::New, window, cx),
+            BarItem::Recent(index) => self.guard(Then::Recent(usize::from(index)), window, cx),
             BarItem::Exit => {
                 window.dispatch_action(Box::new(Quit), cx);
             }
@@ -857,9 +903,13 @@ impl Operator {
             .bar_menu
             .is_some_and(|menu| menu.highlight == Some(index));
         let checked = item.checked(self);
-        let label = item.label();
+        let label: SharedString = match item {
+            BarItem::Recent(index) => self.recent_label(usize::from(index)).into(),
+            _ => item.label().into(),
+        };
         let shortcut = item.shortcut();
-        let is_header = item == BarItem::NewHeader;
+        let is_header = item.is_header();
+        let recent = matches!(item, BarItem::Recent(_));
         div()
             .id(item.id())
             .debug_selector(move || item.id().into())
@@ -868,7 +918,7 @@ impl Operator {
             } else {
                 Role::MenuItem
             })
-            .aria_label(label)
+            .aria_label(label.clone())
             .accessibility_id(item.id())
             .when(!enabled, mark_disabled)
             .when(item.checkable(), |d| {
@@ -900,7 +950,8 @@ impl Operator {
                         this.choose_bar_item(item, window, cx);
                     }))
             })
-            .when(is_header, |d| d.child(label))
+            .when(is_header, |d| d.child(label.clone()))
+            .when(recent, |d| d.pl_4())
             .when(!is_header, |d| {
                 d.child(
                     div()
@@ -908,7 +959,7 @@ impl Operator {
                         .flex_shrink_0()
                         .child(if checked { "✓" } else { "" }),
                 )
-                .child(div().flex_1().min_w_0().child(label))
+                .child(div().flex_1().min_w_0().truncate().child(label))
                 .children(shortcut.map(|s| {
                     div()
                         .flex_shrink_0()
@@ -934,7 +985,7 @@ impl Operator {
             .unwrap_or(point(px(4.), px(MENU_BAR_H)));
         let rows: Vec<gpui::AnyElement> = menu
             .top
-            .entries()
+            .entries(self)
             .iter()
             .enumerate()
             .map(|(index, entry)| match entry {

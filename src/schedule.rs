@@ -2,7 +2,9 @@
 //! song revision. Entry IDs are session-local identities for selection and
 //! Live. They are not persisted, so reopening a schedule allocates fresh IDs
 //! that never match an entry from an earlier schedule in the same session.
-use crate::storage::{self, MAX_ITEMS, Version};
+//! The schedule's document is a `.selaschedule` file (see `schedule_file`).
+use crate::storage::{MAX_ITEMS, Version};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EntryId(u64);
@@ -26,8 +28,7 @@ pub enum Error {
 pub struct Schedule {
     entries: Vec<Entry>,
     next: u64,
-    title: Option<String>,
-    saved: Option<Version>,
+    path: Option<PathBuf>,
     /// Revisions as last saved or opened; differs from `entries` when dirty.
     baseline: Vec<Version>,
 }
@@ -37,13 +38,14 @@ impl Schedule {
         &self.entries
     }
 
-    /// `None` until the schedule has been saved or opened.
-    pub fn title(&self) -> Option<&str> {
-        self.title.as_deref()
+    /// The schedule file; `None` while untitled.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
-    pub fn saved(&self) -> Option<Version> {
-        self.saved
+    /// File name shown for the schedule; `None` while untitled.
+    pub fn name(&self) -> Option<String> {
+        self.path.as_deref().map(crate::schedule_file::display_name)
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -125,54 +127,41 @@ impl Schedule {
         self.entries.get(target).map(|e| e.id)
     }
 
-    pub fn snapshot(&self, title: &str) -> storage::Schedule {
-        storage::Schedule {
-            title: title.to_owned(),
-            items: self.entries.iter().map(|e| e.version).collect(),
-        }
+    /// The pinned revisions in order: what a save writes.
+    pub fn versions(&self) -> Vec<Version> {
+        self.entries.iter().map(|e| e.version).collect()
     }
 
-    /// Records a completed save of `snapshot`. Edits made while the save was in
-    /// flight stay dirty.
-    pub fn mark_saved(&mut self, version: Version, snapshot: storage::Schedule) {
-        self.saved = Some(version);
-        self.title = Some(snapshot.title);
-        self.baseline = snapshot.items;
+    /// Records a completed save of `versions` to `path`. Edits made while the
+    /// save was in flight stay dirty.
+    pub fn mark_saved(&mut self, path: PathBuf, versions: Vec<Version>) {
+        self.path = Some(path);
+        self.baseline = versions;
     }
 
-    /// Replaces the contents with a stored revision. `titles` are the titles
-    /// of the resolved songs, in item order.
-    pub fn open(
-        &mut self,
-        version: Version,
-        stored: storage::Schedule,
-        titles: Vec<String>,
-    ) -> Result<(), Error> {
-        if stored.items.len() != titles.len() || stored.items.len() > MAX_ITEMS {
+    /// Replaces the contents with a schedule file's items (`version`, song
+    /// title), in file order.
+    pub fn open(&mut self, path: PathBuf, items: Vec<(Version, String)>) -> Result<(), Error> {
+        if items.len() > MAX_ITEMS {
             return Err(Error::Invalid);
         }
-        let entries = stored
-            .items
-            .iter()
-            .zip(titles)
+        self.baseline = items.iter().map(|(version, _)| *version).collect();
+        self.entries = items
+            .into_iter()
             .map(|(version, title)| Entry {
                 id: self.allocate(),
-                version: *version,
+                version,
                 title,
             })
             .collect();
-        self.entries = entries;
-        self.saved = Some(version);
-        self.title = Some(stored.title);
-        self.baseline = stored.items;
+        self.path = Some(path);
         Ok(())
     }
 
-    /// An empty, never-saved schedule. Entry IDs keep counting.
+    /// An empty, untitled schedule. Entry IDs keep counting.
     pub fn clear(&mut self) {
         self.entries.clear();
-        self.title = None;
-        self.saved = None;
+        self.path = None;
         self.baseline.clear();
     }
 }
@@ -264,15 +253,14 @@ mod tests {
         let a = s.push(v(1, 1), "A".into()).unwrap();
         let b = s.push(v(2, 1), "B".into()).unwrap();
         assert!(s.is_dirty());
-        let snapshot = s.snapshot("Sunday");
+        let snapshot = s.versions();
         s.push(v(3, 1), "C".into()).unwrap();
-        s.mark_saved(v(9, 1), snapshot);
+        s.mark_saved(PathBuf::from("C:/x/Sunday.selaschedule"), snapshot);
         assert!(s.is_dirty(), "edit during the save stays unsaved");
         let c = s.neighbor(Some(b), true).unwrap();
         s.remove(c);
         assert!(!s.is_dirty());
-        assert_eq!(s.title(), Some("Sunday"));
-        assert_eq!(s.saved(), Some(v(9, 1)));
+        assert_eq!(s.name().as_deref(), Some("Sunday.selaschedule"));
         s.move_to(a, 1);
         assert!(s.is_dirty());
         s.move_to(a, 0);
@@ -283,33 +271,33 @@ mod tests {
     fn open_allocates_fresh_ids_and_validates() {
         let mut s = Schedule::default();
         let old = s.push(v(1, 1), "A".into()).unwrap();
-        let stored = storage::Schedule {
-            title: "Evening".into(),
-            items: vec![v(1, 1), v(1, 1), v(2, 3)],
-        };
+        let too_many = (0..=MAX_ITEMS).map(|n| (v(1, 1), n.to_string())).collect();
         assert_eq!(
-            s.open(v(8, 2), stored.clone(), vec!["A".into()]),
+            s.open(PathBuf::from("a.selaschedule"), too_many),
             Err(Error::Invalid)
         );
         assert_eq!(order(&s), [old], "failed open keeps contents");
         s.open(
-            v(8, 2),
-            stored.clone(),
-            vec!["A".into(), "A".into(), "B".into()],
+            PathBuf::from("Evening.selaschedule"),
+            vec![
+                (v(1, 1), "A".into()),
+                (v(1, 1), "A".into()),
+                (v(2, 3), "B".into()),
+            ],
         )
         .unwrap();
         assert!(!s.is_dirty());
-        assert_eq!(s.title(), Some("Evening"));
+        assert_eq!(s.name().as_deref(), Some("Evening.selaschedule"));
         assert!(
             s.get(old).is_none(),
             "IDs from another schedule never match"
         );
-        assert_eq!(s.snapshot("Evening"), stored);
+        assert_eq!(s.versions(), [v(1, 1), v(1, 1), v(2, 3)]);
         let ids = order(&s);
         assert_ne!(ids[0], ids[1]);
         s.clear();
         assert!(!s.is_dirty());
-        assert_eq!((s.title(), s.saved()), (None, None));
+        assert_eq!((s.path(), s.name()), (None, None));
         let fresh = s.push(v(1, 1), "A".into()).unwrap();
         assert!(!ids.contains(&fresh));
     }

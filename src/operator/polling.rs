@@ -5,7 +5,8 @@ impl Operator {
         let mut changed = self.poll_library(cx)
             | self.poll_images()
             | self.poll_preflight()
-            | self.poll_settings();
+            | self.poll_settings()
+            | self.poll_schedule_files();
         changed |= self.poll_cues();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());
@@ -200,6 +201,8 @@ impl Operator {
         let mut live_now = false;
         let mut resolve_now = false;
         let mut opened_songs = None;
+        let mut to_write = None;
+        let mut to_open = None;
         if let Some(reply) = worker.poll() {
             changed = true;
             match (self.request.take(), reply) {
@@ -272,43 +275,15 @@ impl Operator {
                     // of its slides can go live (M1-05g2b).
                     resolve_now = true;
                 }
-                (Some(Request::SaveSchedule(snapshot)), Ok(Reply::Saved(version))) => {
-                    self.schedule_message = Some(t!(Msg::SavedSchedule, title = snapshot.title));
-                    self.schedule.mark_saved(version, snapshot);
+                (Some(Request::SaveSchedule(job)), Ok(Reply::Songs(songs))) => {
+                    to_write = Some((job, songs));
                 }
-                (Some(Request::ScheduleCatalog), Ok(Reply::ScheduleCatalog(mut list))) => {
-                    list.sort_by_key(|a| a.1.to_lowercase());
-                    self.saved_schedules = Some(list);
+                (Some(Request::ImportSchedule(path)), Ok(Reply::Imported(items))) => {
+                    to_open = Some((path, items));
                 }
-                (Some(Request::OpenSchedule(version)), Ok(Reply::Schedule(stored, songs))) => {
-                    let title = stored.title.clone();
-                    let titles = songs.iter().map(|song| song.title.clone()).collect();
-                    self.schedule_message =
-                        Some(match self.schedule.open(version, stored, titles) {
-                            Ok(()) => {
-                                self.selected_entry = None;
-                                opened_songs = Some(songs);
-                                t!(Msg::OpenedSchedule, title = title)
-                            }
-                            Err(_) => t!(Msg::ScheduleUnreadable).into(),
-                        });
-                }
-                (Some(Request::SaveSchedule(_)), Err(storage::Error::Conflict)) => {
-                    self.schedule_message = Some(t!(Msg::ScheduleConflict).into());
-                }
-                (
-                    Some(
-                        Request::SaveSchedule(_)
-                        | Request::ScheduleCatalog
-                        | Request::OpenSchedule(_),
-                    ),
-                    Err(error),
-                ) => {
+                (Some(Request::SaveSchedule(_) | Request::ImportSchedule(_)), Err(error)) => {
                     self.schedule_message =
                         Some(t!(Msg::ScheduleStorageFailed, error = format!("{error:?}")));
-                    if self.dialog == Some(Dialog::Open) {
-                        self.saved_schedules = Some(Vec::new());
-                    }
                 }
                 (_, Err(error)) => self.library_error = Some(storage_message(error)),
                 _ => {}
@@ -320,7 +295,9 @@ impl Operator {
                     .as_ref()
                     .is_none_or(|p| (p.version, p.entry) != (*v, self.selected_entry))
             });
-            let request = if let Some(job) = self.queued.take() {
+            let request = if let Some(job) = self.followup.take() {
+                Some(job)
+            } else if let Some(job) = self.queued.take() {
                 Some(job)
             } else if let Some(version) = wanted {
                 Some((storage::Command::Song(version), Request::Song(version)))
@@ -336,7 +313,7 @@ impl Operator {
             if let Some((command, request)) = request {
                 let schedule = matches!(
                     request,
-                    Request::SaveSchedule(_) | Request::ScheduleCatalog | Request::OpenSchedule(_)
+                    Request::SaveSchedule(_) | Request::ImportSchedule(_)
                 );
                 match worker.submit(command) {
                     Ok(_) => self.request = Some(request),
@@ -356,6 +333,14 @@ impl Operator {
                     }
                 }
             }
+        }
+        if let Some((job, songs)) = to_write {
+            self.write_schedule(job, songs);
+            changed = true;
+        }
+        if let Some((path, items)) = to_open {
+            opened_songs = self.finish_open(path, items);
+            changed = true;
         }
         if let Some(songs) = opened_songs {
             self.start_schedule_check(songs);

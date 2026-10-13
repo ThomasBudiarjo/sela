@@ -42,16 +42,6 @@ impl Operator {
         }
     }
 
-    pub(crate) fn queue_save(&mut self, title: String) -> bool {
-        let snapshot = self.schedule.snapshot(&title);
-        let command = storage::Command::SaveSchedule(self.schedule.saved(), snapshot.clone());
-        let queued = self.queue(command, Request::SaveSchedule(snapshot));
-        if queued {
-            self.schedule_message = Some(t!(Msg::Saving).into());
-        }
-        queued
-    }
-
     pub(crate) fn queue(&mut self, command: storage::Command, request: Request) -> bool {
         if self.queued.is_some() || self.schedule_request() {
             self.schedule_message = Some(t!(Msg::WaitScheduleBusy).into());
@@ -62,54 +52,13 @@ impl Operator {
     }
 
     pub(crate) fn schedule_request(&self) -> bool {
-        matches!(
-            self.request,
-            Some(Request::SaveSchedule(_) | Request::ScheduleCatalog | Request::OpenSchedule(_))
-        )
-    }
-
-    pub(crate) fn open_schedule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.guard(Then::Open, window, cx);
-    }
-
-    pub(crate) fn save_schedule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.worker.is_none() {
-            self.schedule_message = Some(t!(Msg::NoLibraryOpen).into());
-            return;
-        }
-        match self.schedule.title().map(str::to_owned) {
-            Some(title) => {
-                self.queue_save(title);
-            }
-            None => self.open_dialog(Dialog::SaveAs, window, cx),
-        }
-    }
-
-    pub(crate) fn open_saved(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((version, title)) = self
-            .saved_schedules
-            .as_ref()
-            .and_then(|list| list.get(index))
-            .cloned()
-        else {
-            return;
-        };
-        if self.queue(
-            storage::Command::Schedule(version),
-            Request::OpenSchedule(version),
-        ) {
-            self.schedule_message = Some(t!(Msg::OpeningSchedule, title = title));
-            self.close_dialog(window, cx);
-        }
-        cx.notify();
+        self.schedule_busy()
     }
 
     /// Quit and window-close guard: unsaved schedule changes are confirmed
     /// first, and a save in progress finishes before the window closes.
     pub(crate) fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let saving = matches!(self.request, Some(Request::SaveSchedule(_)))
-            || matches!(self.queued, Some((_, Request::SaveSchedule(_))));
-        if saving {
+        if self.saving_file() {
             self.schedule_message = Some(t!(Msg::SavingWaitDone).into());
         } else if self.schedule.is_dirty() {
             self.open_dialog(Dialog::Unsaved(Then::Quit), window, cx);
@@ -139,10 +88,11 @@ impl Operator {
             .live_index(confirmed)
             .and(self.live.as_ref())
             .and_then(|item| item.entry);
-        let header = match self.schedule.title() {
-            Some(title) => t!(Msg::ScheduleTitled, title = title),
+        let header = match self.schedule.name() {
+            Some(name) => t!(Msg::ScheduleTitled, title = name),
             None => t!(Msg::PaneSchedule).into(),
         };
+        let dirty = self.schedule.is_dirty();
         let idle = self.selected_entry.is_none();
         let rows = self
             .schedule
@@ -260,14 +210,24 @@ impl Operator {
                     .bg(rgb(CHROME))
                     .child(
                         div()
+                            .id("schedule-title")
+                            .debug_selector(|| "schedule-title".into())
+                            .role(Role::Heading)
+                            .aria_label(header.clone())
+                            .accessibility_id("schedule-title")
                             .min_w_0()
                             .truncate()
                             .font_weight(FontWeight::MEDIUM)
                             .child(header),
                     )
-                    .when(self.schedule.is_dirty(), |d| {
+                    .when(dirty, |d| {
                         d.child(
                             div()
+                                .id("schedule-unsaved")
+                                .debug_selector(|| "schedule-unsaved".into())
+                                .role(Role::Label)
+                                .aria_label(t!(Msg::ScheduleUnsaved))
+                                .accessibility_id("schedule-unsaved")
                                 .flex_shrink_0()
                                 .text_size(px(TEXT_CAPTION))
                                 .text_color(rgb(MUTED))
@@ -363,72 +323,5 @@ impl Operator {
                         }),
                     ),
             )
-    }
-
-    pub(crate) fn saved_list(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let Some(list) = &self.saved_schedules else {
-            return div()
-                .text_color(rgb(MUTED))
-                .child(t!(Msg::LoadingSavedSchedules))
-                .into_any_element();
-        };
-        if list.is_empty() {
-            return div()
-                .text_color(rgb(MUTED))
-                .child(t!(Msg::NoSavedSchedules))
-                .into_any_element();
-        }
-        while self.saved_rows.len() < list.len() {
-            let index = self.saved_rows.len() as isize;
-            self.saved_rows.push(
-                cx.focus_handle()
-                    .tab_index(SAVED_TAB_INDEX + index)
-                    .tab_stop(true),
-            );
-        }
-        div()
-            .id("saved-schedules")
-            .role(Role::List)
-            .aria_label(t!(Msg::BarOpenSchedule))
-            .accessibility_id("saved-schedules")
-            .max_h(px(240.))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .border_1()
-            .border_color(rgb(BORDER))
-            .children(list.iter().enumerate().map(|(index, (_, title))| {
-                div()
-                    .id(("saved", index))
-                    .debug_selector(move || format!("saved-{index}"))
-                    .role(Role::ListItem)
-                    .aria_label(title.clone())
-                    .accessibility_id(format!("saved-{index}"))
-                    .track_focus(&self.saved_rows[index])
-                    .key_context("SelaControl")
-                    .flex_shrink_0()
-                    .h(px(28.))
-                    .px(px(PANE_PAD_X))
-                    .flex()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .cursor_pointer()
-                    .hover(|d| d.bg(rgb(HOVER)))
-                    .focus(|d| d.bg(rgb(FOCUS_BG)))
-                    .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
-                        window.prevent_default();
-                        this.open_saved(index, window, cx);
-                    }))
-                    .on_click(
-                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                            if !matches!(event, gpui::ClickEvent::Keyboard(_)) {
-                                this.open_saved(index, window, cx);
-                            }
-                        }),
-                    )
-                    .child(div().truncate().child(title.clone()))
-            }))
-            .into_any_element()
     }
 }

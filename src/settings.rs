@@ -20,6 +20,7 @@ pub const VERSION: u32 = 1;
 pub const FILE_NAME: &str = "settings.txt";
 const HEADER: &str = "sela-settings";
 const QUEUE: usize = 8;
+pub const MAX_RECENT: usize = 10;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
@@ -28,6 +29,24 @@ pub struct Settings {
     pub output_monitor: Option<String>,
     /// Operator UI language; the default (English) is not written to the file.
     pub language: Language,
+    /// Schedule files most recently saved or opened, newest first, at most
+    /// `MAX_RECENT` and without duplicates. Stored as `recent=<path>` lines
+    /// (a key added within version 1: older builds ignore it, and a file
+    /// without it loads with an empty list).
+    pub recent_schedules: Vec<PathBuf>,
+}
+
+impl Settings {
+    /// Moves `path` to the front of the recent schedules.
+    pub fn remember_recent(&mut self, path: PathBuf) {
+        self.recent_schedules.retain(|p| *p != path);
+        self.recent_schedules.insert(0, path);
+        self.recent_schedules.truncate(MAX_RECENT);
+    }
+
+    pub fn forget_recent(&mut self, path: &Path) {
+        self.recent_schedules.retain(|p| p != path);
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,6 +78,14 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
         } else if key == "language" {
             // Unknown codes are ignored like unknown keys: English applies.
             settings.language = Language::from_code(value).unwrap_or_default();
+        } else if key == "recent" && !value.is_empty() {
+            // Lines are newest first; keep the first occurrence of a path.
+            let path = PathBuf::from(value);
+            if settings.recent_schedules.len() < MAX_RECENT
+                && !settings.recent_schedules.contains(&path)
+            {
+                settings.recent_schedules.push(path);
+            }
         }
     }
     Ok(settings)
@@ -73,6 +100,14 @@ pub fn render(settings: &Settings) -> String {
     }
     if settings.language != Language::default() {
         text.push_str(&format!("language={}\n", settings.language.code()));
+    }
+    for path in settings.recent_schedules.iter().take(MAX_RECENT) {
+        let path: String = path
+            .to_string_lossy()
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect();
+        text.push_str(&format!("recent={path}\n"));
     }
     text
 }
@@ -340,6 +375,49 @@ mod tests {
         assert_eq!(
             parse("sela-settings 1\nlanguage=de\n"),
             Ok(Settings::default())
+        );
+    }
+
+    #[test]
+    fn recent_schedules_keep_ten_newest_first_without_duplicates() {
+        let mut settings = Settings::default();
+        for n in 0..12 {
+            settings.remember_recent(PathBuf::from(format!("C:/s/{n}.selaschedule")));
+        }
+        settings.remember_recent(PathBuf::from("C:/s/5.selaschedule"));
+        assert_eq!(settings.recent_schedules.len(), MAX_RECENT);
+        assert_eq!(
+            settings.recent_schedules[..2],
+            [
+                PathBuf::from("C:/s/5.selaschedule"),
+                PathBuf::from("C:/s/11.selaschedule")
+            ]
+        );
+        assert!(
+            !settings
+                .recent_schedules
+                .contains(&PathBuf::from("C:/s/0.selaschedule"))
+        );
+        assert_eq!(parse(&render(&settings)), Ok(settings.clone()));
+        settings.forget_recent(Path::new("C:/s/5.selaschedule"));
+        assert_eq!(settings.recent_schedules.len(), MAX_RECENT - 1);
+    }
+
+    #[test]
+    fn version_one_files_without_recent_keys_load_and_extra_lines_are_capped() {
+        let old = "sela-settings 1\noutput_monitor=X\nlanguage=id\n";
+        let loaded = parse(old).unwrap();
+        assert!(loaded.recent_schedules.is_empty());
+        assert_eq!(loaded.output_monitor.as_deref(), Some("X"));
+        let mut many = String::from("sela-settings 1\n");
+        for n in 0..30 {
+            many.push_str(&format!("recent=C:/s/{}.selaschedule\n", n % 15));
+        }
+        let loaded = parse(&many).unwrap();
+        assert_eq!(loaded.recent_schedules.len(), MAX_RECENT);
+        assert_eq!(
+            loaded.recent_schedules[0],
+            PathBuf::from("C:/s/0.selaschedule")
         );
     }
 

@@ -37,6 +37,7 @@ pub(crate) enum Control {
     MoveUp,
     MoveDown,
     RemoveItem,
+    DialogSave,
     DialogConfirm,
     DialogCancel,
     NewSchedule,
@@ -49,13 +50,12 @@ pub(crate) enum Control {
 /// any length keep their position between the controls around them.
 pub(crate) const SONG_TAB_INDEX: isize = 100;
 pub(crate) const SCHEDULE_TAB_INDEX: isize = 500;
-pub(crate) const SAVED_TAB_INDEX: isize = 700;
 pub(crate) const DIALOG_TAB_INDEX: isize = 900;
 pub(crate) const SLIDE_TAB_INDEX: isize = 1000;
 pub(crate) const IMAGE_TAB_INDEX: isize = 2000;
 
 impl Control {
-    pub(crate) const ALL: [Control; 34] = [
+    pub(crate) const ALL: [Control; 35] = [
         Self::ResetLayout,
         Self::Quit,
         Self::CollapseResources,
@@ -84,6 +84,7 @@ impl Control {
         Self::MoveUp,
         Self::MoveDown,
         Self::RemoveItem,
+        Self::DialogSave,
         Self::DialogConfirm,
         Self::DialogCancel,
         Self::NewSchedule,
@@ -138,8 +139,9 @@ impl Control {
     pub(crate) fn tab_position(self) -> isize {
         match self {
             Self::NewSchedule => 2 * 11 + 1,
-            Self::DialogConfirm => DIALOG_TAB_INDEX + 1,
-            Self::DialogCancel => DIALOG_TAB_INDEX + 2,
+            Self::DialogSave => DIALOG_TAB_INDEX + 1,
+            Self::DialogConfirm => DIALOG_TAB_INDEX + 2,
+            Self::DialogCancel => DIALOG_TAB_INDEX + 3,
             _ => 2 * (self.index() as isize + 1),
         }
     }
@@ -295,7 +297,7 @@ impl Operator {
                 }
             }
             Control::OpenSchedule => self.open_schedule(window, cx),
-            Control::SaveSchedule => self.save_schedule(window, cx),
+            Control::SaveSchedule => self.save_schedule(cx),
             Control::AddToSchedule if !self.collapsed && self.tab == 0 => {
                 match self
                     .selected_song
@@ -326,19 +328,14 @@ impl Operator {
                 self.controls[Control::NewMenu].focus(window, cx);
                 self.guard(Then::New, window, cx);
             }
+            Control::DialogSave => {
+                let Some(Dialog::Unsaved(then)) = self.dialog else {
+                    return;
+                };
+                self.close_dialog(window, cx);
+                self.save_then(Some(then), cx);
+            }
             Control::DialogConfirm => match self.dialog {
-                Some(Dialog::SaveAs) => {
-                    let title = self
-                        .title_input
-                        .as_ref()
-                        .map(|input| input.read(cx).text().trim().to_owned())
-                        .unwrap_or_default();
-                    if title.is_empty() {
-                        self.dialog_message = Some(t!(Msg::EnterScheduleTitle).into());
-                    } else if self.queue_save(title) {
-                        self.close_dialog(window, cx);
-                    }
-                }
                 Some(Dialog::Remove(id)) => {
                     self.close_dialog(window, cx);
                     self.remove_entry(id);
@@ -359,7 +356,7 @@ impl Operator {
                     self.close_dialog(window, cx);
                     self.go_live_anyway();
                 }
-                Some(Dialog::Open | Dialog::Preflight) | None => return,
+                Some(Dialog::Preflight | Dialog::FileError) | None => return,
             },
             Control::DialogCancel if self.dialog.is_some() => {
                 if self.dialog == Some(Dialog::Unsaved(Then::Quit)) {
