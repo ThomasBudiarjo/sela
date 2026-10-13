@@ -7,13 +7,14 @@ Seeds a new library with two original fixture songs and launches the operator
 with a private profile. By keyboard only, while asserting the operator keeps
 the foreground: Add to Schedule (twice, a duplicate) and once more for the
 second song; Down/Up select items; Ctrl+Del removes one; Up moves an item;
-Ctrl+S asks for a title, which is typed, and Enter saves. The saved schedule is
-read back from SQLite (title, item order, pinned revisions). With Live output
+Ctrl+S opens the native Save dialog, where a path without extension is typed;
+Sela adds .selaschedule. The saved file is read back as JSON (title, item order,
+song ids). With Live output
 on, Page Down sends the selected item and Down then Page Down the next one,
 each changing the captured audience output; Ctrl+Del on the live item leaves
 the audience frame unchanged. With unsaved changes, WM_CLOSE and Ctrl+Q both
-keep the window open behind a guard; Cancel keeps it, Discard quits. A second
-launch opens the saved schedule with Ctrl+O; removing one of its items makes
+keep the window open behind a guard; Cancel keeps it, Don't Save quits. A second
+launch opens the saved file with Ctrl+O and the native Open dialog; removing one of its items makes
 Ctrl+Q ask again, which shows the reopened schedule had items. Requires exclusive use of the
 keyboard and an unobstructed audience monitor while it runs. Mouse drag and
 drop is covered by GPUI tests only.
@@ -43,7 +44,7 @@ lo = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lo)
 
 WM_CLOSE = 0x0010
-TITLE = "sunday"
+NAME = "sunday"
 
 
 def keys(hwnd: int, *sequence: str) -> None:
@@ -58,25 +59,14 @@ def song_ids(library: pathlib.Path) -> list[bytes]:
         return [row[0] for row in db.execute("SELECT id FROM songs ORDER BY id")]
 
 
-def saved_schedules(library: pathlib.Path) -> list[tuple[str, list[bytes]]]:
-    with sqlite3.connect(library.as_uri() + "?mode=ro", uri=True) as db:
-        rows = db.execute(
-            "SELECT s.id, s.head, r.title FROM schedules s "
-            "JOIN schedule_revisions r ON r.id = s.id AND r.revision = s.head"
-        ).fetchall()
-        return [
-            (
-                title,
-                [
-                    item[0]
-                    for item in db.execute(
-                        "SELECT song FROM items WHERE id=? AND revision=? ORDER BY position",
-                        (sid, head),
-                    )
-                ],
-            )
-            for sid, head, title in rows
-        ]
+def saved_file(path: pathlib.Path) -> tuple[str, list[bytes]] | None:
+    """Title and pinned song ids of a saved .selaschedule document."""
+    if not path.is_file():
+        return None
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document["format"] != "sela-schedule" or document["version"] != 1:
+        raise nw.Failure(f"unexpected schedule document header in {path}")
+    return document["title"], [bytes.fromhex(i["song_id"]) for i in document["items"]]
 
 
 def wait_change(screen: int, before: str, name: str, summary: dict) -> str:
@@ -148,18 +138,20 @@ def main() -> int:
         save(operator, "operator-reordered")
 
         keys(operator, "ctrl+s")
-        time.sleep(0.3)
-        save(operator, "operator-save-as")
-        keys(operator, *TITLE, "enter")
+        time.sleep(0.8)
+        schedule_file = data / f"{NAME}.selaschedule"
+        nw.drive_file_dialog(app.process.pid, operator, str(data / NAME))
         deadline = time.monotonic() + 5
-        while not saved_schedules(library):
+        while saved_file(schedule_file) is None:
             if time.monotonic() > deadline:
-                raise nw.Failure("Ctrl+S did not save the schedule")
+                raise nw.Failure("Ctrl+S did not save the schedule file")
             time.sleep(0.05)
-        stored = saved_schedules(library)
-        summary["saved"] = [(title, len(items)) for title, items in stored]
-        if stored != [(TITLE, [second, first])]:
+        stored = saved_file(schedule_file)
+        summary["saved"] = [stored[0], len(stored[1])]
+        if stored != (NAME, [second, first]):
             raise nw.Failure(f"unexpected saved schedule {summary['saved']}")
+        if sorted(p.name for p in data.glob("*.selaschedule*")) != [schedule_file.name]:
+            raise nw.Failure("the saved file name was doubled or a temp file remains")
         time.sleep(0.3)
         save(operator, "operator-saved")
 
@@ -210,7 +202,7 @@ def main() -> int:
         time.sleep(1.0)
         if app.process.poll() is not None:
             raise nw.Failure("Ctrl+Q quit with unsaved schedule changes")
-        keys(operator, "shift+tab", "enter")  # Discard changes
+        keys(operator, "shift+tab", "enter")  # Don't Save
         summary["guarded_exit"] = app.wait_exit()
         if summary["guarded_exit"] != 0:
             raise nw.Failure(f"operator exit status {summary['guarded_exit']}")
@@ -224,8 +216,7 @@ def main() -> int:
         time.sleep(1.0)
         keys(operator, "ctrl+o")
         time.sleep(0.8)
-        save(operator, "operator-open-list")
-        keys(operator, "shift+tab", "enter")  # the only saved schedule
+        nw.drive_file_dialog(app.process.pid, operator, str(schedule_file))
         time.sleep(0.8)
         save(operator, "operator-reopened")
         # Removing a reopened item makes it unsaved, so Ctrl+Q asks first.
@@ -234,7 +225,7 @@ def main() -> int:
         if app.process.poll() is not None:
             raise nw.Failure("the reopened schedule had no item to remove")
         save(operator, "operator-reopened-guard")
-        keys(operator, "shift+tab", "enter")  # Discard changes
+        keys(operator, "shift+tab", "enter")  # Don't Save
         summary["reopened_exit"] = app.wait_exit()
         if summary["reopened_exit"] != 0:
             raise nw.Failure(

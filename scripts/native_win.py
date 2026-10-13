@@ -433,3 +433,54 @@ class App:
                 self.process.kill()
                 self.process.wait()
         self._log.close()
+
+
+def file_dialog(pid: int, owner: int, timeout: float = 10.0) -> int:
+    """The native Save/Open common dialog owned by `owner` (class #32770)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        found: list[int] = []
+
+        def visit(hwnd, _, found=found):
+            who = w.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(who))
+            if who.value != pid or not user32.IsWindowVisible(hwnd):
+                return True
+            cls = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(hwnd, cls, 64)
+            if cls.value == "#32770":
+                found.append(int(hwnd))
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(visit), 0)
+        if found:
+            return found[0]
+        time.sleep(0.1)
+    raise Failure("the native file dialog did not appear")
+
+
+def drive_file_dialog(pid: int, owner: int, path: str, cancel: bool = False) -> None:
+    """Type `path` into the dialog's file-name box (focused on open) and confirm."""
+    dialog = file_dialog(pid, owner)
+    time.sleep(0.6)
+    activate(dialog)
+    if cancel:
+        press(dialog, "escape")
+    else:
+        type_text(dialog, path)
+        time.sleep(0.2)
+        press(dialog, "enter")
+    start = time.monotonic()
+    retried = False
+    while user32.IsWindow(dialog) and user32.IsWindowVisible(dialog):
+        elapsed = time.monotonic() - start
+        if elapsed > 12:
+            raise Failure("the native file dialog did not close")
+        if elapsed > 4 and not retried and not cancel:
+            # A confirmation can be lost while the dialog is still settling.
+            retried = True
+            activate(dialog)
+            press(dialog, "enter")
+        time.sleep(0.1)
+    time.sleep(0.4)
+    activate(owner)

@@ -416,13 +416,16 @@ Implemented-unqualified on local `main`. Phase 4 of the approved 2026-10-06
 spec; a first slice of [M1-09](backlog.md#m1-09--schedule-editing-and-versioned-content-snapshots).
 The framework-free model is `src/schedule.rs`; saving and opening use the
 existing schedule tables through the storage worker, never the UI thread.
+Since the schedule-files change (owner decision 2026-10-13) the user-facing
+document is a `.selaschedule` file, described below; the DB schedule tables are
+no longer written by the operator.
 
 - **Items are pinned song revisions.** Add to Schedule (Songs footer) or a
   drag from Songs adds the song revision the library shows now. Editing the song
   later does not change the item; reopening a saved schedule resolves the saved
   revisions, not today's library. The same song can appear more than once.
   Up to 32 items (the storage limit); a full schedule says so and adds nothing.
-- **Schedule pane**: header "Schedule · title" (or "Schedule" when untitled)
+- **Schedule pane**: header "Schedule · file name" (or "Schedule" when untitled)
   and "Unsaved" while it differs from what was last saved or opened. Rows show
   a number and the song title. Selecting a row previews its slides; Page Down
   (Go Live) sends the preview slide as before. Down/Up select the next/previous
@@ -438,23 +441,37 @@ existing schedule tables through the storage worker, never the UI thread.
   "● Live" marks a row only once the renderer confirmed one of its slides.
   Removing or moving the live item never sends a cue: the audience keeps the
   current slide and Live shows "Live item is no longer in the schedule".
-- **Save / Open**: Ctrl+S or **Save** saves. An untitled schedule asks for a
-  title first (Enter confirms); a titled one saves a new revision in place.
-  Edits made while a save is in flight stay "Unsaved". If the schedule was saved
-  elsewhere since it was opened, the save is refused ("Not saved: this schedule
-  was saved elsewhere since it was opened"). Ctrl+O or **Open** lists saved
-  schedules by title (case-insensitive); click a title, or focus it and press
-  Enter, to open it.
-- **Unsaved guard**: Open, **New ▾ → New Schedule**, Ctrl+Q and closing the
-  window ask "… without saving schedule changes?" (Cancel or Discard changes)
-  when the schedule is unsaved. Quit waits while a save is in progress.
+- **Schedule files** (`.selaschedule`, see `src/schedule_file.rs` and
+  [storage](storage.md#schedule-files)): Ctrl+S or **Save** writes the current
+  file; an untitled schedule opens the native Save dialog first
+  (`cx.prompt_for_new_path`; `.selaschedule` is appended when missing and never
+  doubled; cancelling writes nothing). **File › Save Schedule As…** always asks
+  and switches the current file, leaving the old one unchanged. Ctrl+O, **Open**
+  and **File › Open Schedule** use the native Open dialog
+  (`cx.prompt_for_paths`, one file). **File › Open Recent** lists up to 10 paths
+  (newest first, no duplicates, kept as `recent=` lines in the settings file);
+  a missing file shows an error and is removed from the list. **File › Close
+  Schedule** clears to an untitled empty schedule. Reads (8 MiB, 32 items, 1024
+  byte title) and atomic writes (temp file beside the target, then rename) run on
+  the schedule-file worker. A corrupt, truncated, oversized, too-long-title or
+  newer-version file shows an error dialog (OK) and leaves the open schedule and
+  Live untouched. Edits made while a save is in flight stay "Unsaved". The
+  window title is "name.selaschedule — Sela" with `*` when unsaved ("Untitled
+  schedule* — Sela" before the first save). Opening a file whose song revisions
+  are not in the library stores them as schedule-only revisions hidden from the
+  Songs list, so the schedule renders and goes live in a fresh profile.
+- **Unsaved guard**: Open, Open Recent, **New ▾ → New Schedule**, Close
+  Schedule, Ctrl+Q and closing the window ask "The current Schedule is not
+  saved. Would you like to save it now?" with **Save** (writes the file, Save As
+  first when untitled, then continues), **Don't Save** and **Cancel** (default)
+  when the schedule is unsaved. Quit waits while a file save is in progress.
 - **Library double-click** goes straight to Live from the song's first slide
   (EasyWorship documents this); single-click still previews.
 - The save, open, remove dialogs and the item and New menus block clicks to the
   panes behind them. The same fix applies to the Media image menu.
 - Tab order adds Open, Save, Add to Schedule, Up, Down, Remove and New
   Schedule (while the New menu is open); schedule rows follow the song rows,
-  and the open dialog cycles its own saved titles and buttons. Ctrl+S, Ctrl+O, Up, Down and Ctrl+Delete are GPUI actions
+  and the unsaved dialog cycles Save, Don't Save and Cancel. Ctrl+S, Ctrl+O, Up, Down and Ctrl+Delete are GPUI actions
   in the `SelaShow && !SelaTextInput` context.
 
 Provisional (not observed in EasyWorship 8.0.49): the Up/Down move buttons,
@@ -576,9 +593,10 @@ equivalent; Options is Edit › Options).
 - **File**: New ▸ header with **Song…** and **Schedule** (the GPUI popover
   supports one level, so the ▸ submenu is flattened into an inert header row
   plus its two items, a documented deviation), Open Schedule (Ctrl+O), Open
-  Recent (disabled), Save Schedule (Ctrl+S), Save Schedule As… / Export
-  Standalone Schedule… / Close Schedule (disabled; not yet built), Reports
-  and Printing ▸ (disabled), Exit.
+  Recent (enabled once a schedule file was saved or opened; its up to 10 paths
+  follow as indented rows, `bar-file-recent-0..9`), Save Schedule (Ctrl+S), Save
+  Schedule As…, Close Schedule, Export Standalone Schedule… (disabled; not yet
+  built), Reports and Printing ▸ (disabled), Exit.
 - **Edit**: Cut, Copy, Paste, Delete, Select All (all disabled until
   text-editing targets exist) and **Options…**, which opens the existing
   Options dialog.
@@ -728,3 +746,27 @@ right while it holds text. Behavior, see [search](search.md) for the index:
   Every query takes a `search::Generations` value; a reply whose generation is
   not current is dropped. After a search is sent a 2 ms task picks up the
   reply instead of waiting for the 16 ms poll tick.
+
+### Schedule files — native evidence and open points (2026-10-15)
+
+Native, Windows 11 (secondary 2560x1600), one script at a time:
+`schedule-windows.py` types a path without extension into the native Save
+dialog's file-name box and reads `sunday.selaschedule` back (title, song ids in
+order, no doubled extension, no temp file); a second launch reopens it with
+Ctrl+O and the native Open dialog. `menu-bar-windows.py` drives File › Save
+Schedule, Open Schedule, Save Schedule As…, Open Recent and Close Schedule
+through the menu and the native dialogs (captures `file-saved.png`,
+`file-opened.png`, `file-open-recent.png` show the header with the file name and
+the two recent rows). `operator-menu-windows.py` saves after the scheduled song
+was deleted and checks the file embeds the song. `preflight-windows.py` opens a
+`seed_library --vanished-schedule` file (now written as `Sunday.selaschedule`).
+Dialog automation: `native_win.drive_file_dialog` finds the `#32770` dialog,
+types the path and presses Enter.
+
+UNOBSERVED (EasyWorship 8.0.49 was not run for this change; see
+`docs/reference-observations.md`): the title-bar format ("name.selaschedule —
+Sela" with `*` is a best guess), the default Save folder (beside the current or
+newest recent file, else `<profile>\Schedules`), and Open Recent labelling (file
+name only). Unsaved-changes wording is taken from the recorded EW exit prompt.
+Not built: Export Standalone Schedule, themes/assets inside the file (version
+bump), Indonesian visual pass of the new dialog.

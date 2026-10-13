@@ -444,3 +444,41 @@ Tests: storage `fts5_is_compiled_into_the_bundled_sqlite`,
 behavior tests listed in [search](search.md). The earlier migration tests
 that asserted schema 4 now expect schema 5, and the newer-version refusal
 tests use version 6.
+
+## Schedule files
+
+The user-facing schedule is a `.selaschedule` document (owner decision
+2026-10-13); `src/schedule_file.rs` is framework-free. The library database
+keeps song revisions only; the `schedules`/`items` tables and
+`Command::SaveSchedule/Schedule/ScheduleCatalog` remain for old data but the
+operator no longer writes them.
+
+- **Format v1**: UTF-8 JSON `{"format":"sela-schedule","version":1,"title":..,
+  "items":[{"kind":"song","song_id":hex,"revision":n,"song":{title,authors,
+  copyright,license,master?,sections:[{id,label,lyrics,format?,background?}],
+  variants:[..]}}]}`. Formats and backgrounds are hex of their library codecs.
+  Later item kinds, themes or asset snapshots bump `version`; a newer file is
+  rejected with its version number, version 0 and unknown kinds are corrupt.
+- **Limits**: 8 MiB file (checked from metadata, read capped at limit + 1), 32
+  items, 1024-byte title, same as the old storage limits. Violations return
+  `ReadError::{TooLarge,TooManyItems,TitleTooLong,Corrupt,Newer}` and change no
+  state.
+- **Worker**: `schedule_file::Worker` (queue 2, reads and writes on its own
+  thread, replies polled). A save first asks the storage worker for the pinned
+  revisions (`Command::Songs`), then the file worker writes. An open reads the
+  file, then `Command::ImportSongs` resolves each item.
+- **Atomic write**: `write_atomic_with` writes `<name>.tmp` beside the target,
+  syncs, then renames over it; any failure removes the temp file and leaves the
+  previous file byte-identical (read-only targets are refused first). Tests
+  inject a partial write, a failed rename and a read-only target. Last writer
+  wins; there is no lock.
+- **Hidden revisions**: `Repository::import_hidden` returns the source version
+  when an identical revision exists, otherwise stores the embedded content as a
+  tombstoned song (`deleted=1`, revision 1) whose id is the first 16 bytes of
+  SHA-256 over a prefix, the source id and revision and the song JSON. It never
+  appears in the catalog or search, opening the same file again reuses it, and
+  opening never changes the visible library.
+- **Recent files**: `recent=<path>` lines in the settings file (max 10, newest
+  first, deduplicated). The settings format version stays 1: the key is
+  additive, older builds ignore it, and a v1 file without the key loads empty
+  (covered by a settings test).

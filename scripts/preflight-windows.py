@@ -3,7 +3,7 @@
 Usage: python scripts/preflight-windows.py [--binary sela.exe] [--seed seed_library.exe]
        [--monitor secondary] [--out DIR]
 
-Seeds a library whose saved schedule pins an image that is gone from the
+Seeds a library whose schedule file (Sunday.selaschedule) pins an image that is gone from the
 managed folder (`seed_library --vanished-schedule`) and drives the operator by
 keyboard. Ctrl+O opens the schedule: the file report must appear on its own
 (operator capture differs from the one after Enter dismisses it, which is the
@@ -89,7 +89,7 @@ def main() -> int:
         save(operator, "operator-start")
         keys(operator, "ctrl+o")
         time.sleep(0.8)
-        keys(operator, "shift+tab", "enter")
+        nw.drive_file_dialog(app.process.pid, operator, str(data / "Sunday.selaschedule"))
         time.sleep(2.0)
         save(operator, "operator-report")
         with_report = operator_digest(operator)

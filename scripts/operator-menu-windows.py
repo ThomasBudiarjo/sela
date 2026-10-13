@@ -89,23 +89,14 @@ def deleted(library: pathlib.Path, song: bytes) -> bool:
         return flag == 1
 
 
-def saved_items(library: pathlib.Path) -> list[tuple[str, list[tuple[bytes, int]]]]:
-    with sqlite3.connect(library.as_uri() + "?mode=ro", uri=True) as db:
-        rows = db.execute(
-            "SELECT s.id, s.head, r.title FROM schedules s "
-            "JOIN schedule_revisions r ON r.id = s.id AND r.revision = s.head"
-        ).fetchall()
-        return [
-            (
-                title,
-                db.execute(
-                    "SELECT song, song_revision FROM items "
-                    "WHERE id=? AND revision=? ORDER BY position",
-                    (sid, head),
-                ).fetchall(),
-            )
-            for sid, head, title in rows
-        ]
+def saved_file(path: pathlib.Path) -> tuple[str, list[tuple[bytes, str]]] | None:
+    """Title and (song id, embedded song title) of a saved schedule file."""
+    if not path.is_file():
+        return None
+    document = json.loads(path.read_text(encoding="utf-8"))
+    return document["title"], [
+        (bytes.fromhex(i["song_id"]), i["song"]["title"]) for i in document["items"]
+    ]
 
 
 def changed_pixels(a: bytes, b: bytes) -> int:
@@ -263,19 +254,20 @@ def main() -> int:
 
         # The schedule still pins the deleted song's revision.
         keys(operator, "ctrl+s")
-        time.sleep(0.4)
-        keys(operator, *TITLE, "enter")
+        time.sleep(0.8)
+        schedule_file = data / f"{TITLE}.selaschedule"
+        nw.drive_file_dialog(app.process.pid, operator, str(data / TITLE))
         deadline = time.monotonic() + 5
-        while not saved_items(library):
+        while saved_file(schedule_file) is None:
             if time.monotonic() > deadline:
-                raise nw.Failure("Ctrl+S did not save the schedule")
+                raise nw.Failure("Ctrl+S did not save the schedule file")
             time.sleep(0.05)
-        stored = saved_items(library)
-        summary["saved"] = [(title, len(items)) for title, items in stored]
-        if [(title, [s for s, _ in items]) for title, items in stored] != [
-            (TITLE, [first])
-        ]:
+        stored = saved_file(schedule_file)
+        summary["saved"] = [stored[0], len(stored[1])]
+        if stored[0] != TITLE or [s for s, _ in stored[1]] != [first]:
             raise nw.Failure(f"unexpected saved schedule {summary['saved']}")
+        if not stored[1][0][1]:
+            raise nw.Failure("the saved file embeds no song content")
         save(operator, "08-schedule-saved")
 
         keys(operator, "ctrl+q")
@@ -286,7 +278,7 @@ def main() -> int:
         print(
             "PASS: Shift+F10/Escape, keyboard and right-click Edit Song… open the "
             "row's song; Delete asks, Keep keeps, Delete deletes; the saved "
-            "schedule still pins the deleted song; Ctrl+Q exits cleanly"
+            "schedule file still embeds the deleted song; Ctrl+Q exits cleanly"
         )
         return 0
     except (nw.Failure, AssertionError) as error:

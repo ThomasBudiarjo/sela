@@ -13,7 +13,7 @@ use sela::{
     arrangement::SectionId,
     background::{Aspect, Background, ImageRef},
     format::{Align, Outline, Shadow, Size, SlideFormat, VAlign},
-    storage::{Repository, Schedule, Section, Song},
+    storage::{Repository, Section, Song},
 };
 use sha2::Digest;
 
@@ -145,15 +145,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
             )
             .map_err(|e| format!("{e:?}"))?;
-        repository
-            .save_schedule(
-                None,
-                Schedule {
-                    title: "Sunday".into(),
-                    items: vec![version],
-                },
-            )
-            .map_err(|e| format!("{e:?}"))?;
+        let song = repository.song(version).map_err(|e| format!("{e:?}"))?;
+        let document = sela::schedule_file::ScheduleFile {
+            title: "Sunday".into(),
+            items: vec![sela::schedule_file::Item {
+                source: version,
+                song,
+            }],
+        };
+        let bytes = sela::schedule_file::encode(&document).map_err(|e| format!("{e:?}"))?;
+        std::fs::write(folder.join("Sunday.selaschedule"), bytes)?;
         return Ok(());
     }
     if background {

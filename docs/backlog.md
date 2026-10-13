@@ -758,6 +758,17 @@ identity) is **implemented-unqualified**; see
 multi-item move, autoscroll, theme/asset references and explicit library
 refresh remain open.
 
+Schedule files (**implemented-unqualified**, owner decision 2026-10-13): the
+user-facing schedule is a `.selaschedule` file with Save, Save As, Open, Open
+Recent (10), Close Schedule, native dialogs, bounded reads, atomic writes and
+hidden schedule-only song revisions; see
+[storage](storage.md#schedule-files) and
+[operator shell](operator-shell.md#schedule-files--native-evidence-and-open-points-2026-10-15).
+Open: EW title-bar/default-folder observation (UNOBSERVED EW8-OBS-067..069),
+Export Standalone Schedule, theme/asset snapshots in the file.
+
+- [x] Schedule documents: Save/Save As/Open/Open Recent/Close, versioned JSON,
+  limits, atomic worker writes, hidden revisions (VAL-SCHFILE-001..007).
 - [ ] Add/remove/reorder/duplicate items and observed context/drag-drop actions,
   including correct insertion target, autoscroll and canceled drag.
 - [ ] Persist song/theme versions and asset/font references in schedule snapshots.

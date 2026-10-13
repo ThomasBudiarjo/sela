@@ -664,3 +664,16 @@ direction.
   metadata field details and full build-specific interactions still need lawful
   installed observations. The missing capabilities stay in the compatibility
   inventory/future tickets; no full editor/workflow-parity finding made.
+
+### Schedule files — UNOBSERVED best guesses (2026-10-15, schedule-files)
+
+EasyWorship 8.0.49 was not run for the schedule-files change. Nothing below is
+an observation; each item is a reversible best guess to check in the next EW
+session (observe only; never save in EW; cancelling a Save dialog is fine).
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-067 | UNOBSERVED | Main-window title bar with a saved/unsaved schedule file. Sela shows "name.selaschedule — Sela" with `*` after the name when unsaved and "Untitled schedule* — Sela" before the first save. |
+| EW8-OBS-068 | UNOBSERVED | Default folder of the native Save/Open schedule dialogs. Sela starts beside the current file, else beside the newest recent file, else `<profile>\Schedules`. |
+| EW8-OBS-069 | UNOBSERVED | Open Recent labelling and count (Sela: file name only, up to 10, newest first). EW8-OBS-053 records only that the item exists. |
+| EW8-OBS-070 | observed text, reused | Unsaved-changes wording "The current Schedule is not saved. Would you like to save it now?" comes from the recorded EW exit prompt (Yes/No/Cancel); Sela's buttons are Save / Don't Save / Cancel with Cancel as the default. |

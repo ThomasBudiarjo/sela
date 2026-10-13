@@ -358,22 +358,45 @@ def main() -> int:
         keys(operator, "enter")  # Cancel is the default focus
         time.sleep(0.5)
 
-        # 8. File > Save Schedule names the empty schedule; File > Open
-        #    Schedule lists and reopens it.
+        # 8. File > Save Schedule asks for a file (native Save dialog, the
+        #    extension is added); Open, Save As..., Open Recent and Close
+        #    Schedule then work on those files. Rows are counted over the
+        #    selectable ones: New Song, Open, [Recent...], Save, Save As,
+        #    Close, Exit (New Schedule Item is disabled).
+        pid = app.process.pid
+        first_file = data / "Menu Set.selaschedule"
+        second_file = data / "Menu Set 2.selaschedule"
         keys(operator, "alt+f", "down", "down", "down", "enter")
-        time.sleep(0.5)
-        save(args.out, operator, "file-save-as")
-        nw.type_text(operator, "Menu Set")
-        keys(operator, "enter")
+        time.sleep(0.8)
+        nw.drive_file_dialog(pid, operator, str(data / "Menu Set"))
         time.sleep(1.0)
-        summary["save_as_from_menu"] = True
+        if not first_file.is_file():
+            raise nw.Failure("File > Save Schedule wrote no .selaschedule file")
+        save(args.out, operator, "file-saved")
+        summary["save_from_menu"] = True
         keys(operator, "alt+f", "down", "down", "enter")
         time.sleep(0.8)
-        save(args.out, operator, "file-open-dialog")
-        keys(operator, "shift+tab", "enter")  # the only saved schedule
+        nw.drive_file_dialog(pid, operator, str(first_file))
         time.sleep(1.0)
         save(args.out, operator, "file-opened")
         summary["open_from_menu"] = True
+        keys(operator, "alt+f", "down", "down", "down", "down", "down", "enter")
+        time.sleep(0.8)
+        nw.drive_file_dialog(pid, operator, str(second_file))
+        time.sleep(1.0)
+        if not second_file.is_file():
+            raise nw.Failure("File > Save Schedule As... wrote no file")
+        summary["save_as_from_menu"] = True
+        keys(operator, "alt+f", "down", "down", "down")
+        time.sleep(0.4)
+        save(args.out, operator, "file-open-recent")
+        keys(operator, "enter")  # Recent 0: Menu Set 2
+        time.sleep(1.0)
+        summary["open_recent_from_menu"] = True
+        keys(operator, "alt+f", *["down"] * 7, "enter")  # Close Schedule
+        time.sleep(0.8)
+        save(args.out, operator, "file-closed")
+        summary["close_from_menu"] = True
 
         # 9. File > Exit quits cleanly and takes the audience output down.
         keys(operator, "alt+f", "up", "enter")
