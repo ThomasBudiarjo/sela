@@ -278,6 +278,68 @@ def click(hwnd: int, x: int, y: int) -> None:
     _send([down, up])
 
 
+def _mouse_button(flag: int) -> None:
+    item = INPUT(type=0)
+    item.u.mi = MOUSEINPUT(dwFlags=flag)
+    _send([item])
+
+
+def _screen_point(hwnd: int, x: int, y: int) -> tuple[int, int]:
+    point = w.POINT(x, y)
+    user32.ClientToScreen(hwnd, ctypes.byref(point))
+    return point.x, point.y
+
+
+def mouse_move(hwnd: int, x: int, y: int) -> None:
+    """Move the pointer to client coordinates (works while a button is held)."""
+    ensure_foreground(hwnd, "a pointer move")
+    user32.SetCursorPos(*_screen_point(hwnd, x, y))
+    # SetCursorPos alone does not raise a hardware mouse-move; a zero-delta
+    # relative move does, so the app sees the new position.
+    item = INPUT(type=0)
+    item.u.mi = MOUSEINPUT(dwFlags=0x0001)
+    _send([item])
+
+
+def mouse_down(hwnd: int, x: int, y: int, right: bool = False) -> None:
+    mouse_move(hwnd, x, y)
+    time.sleep(0.05)
+    _mouse_button(0x0008 if right else 0x0002)
+
+
+def mouse_up(right: bool = False) -> None:
+    _mouse_button(0x0010 if right else 0x0004)
+
+
+def right_click(hwnd: int, x: int, y: int) -> None:
+    mouse_down(hwnd, x, y, right=True)
+    mouse_up(right=True)
+
+
+def drag_to(hwnd: int, x: int, y: int, step: int = 12, pause: float = 0.02) -> None:
+    """Move the held pointer to (x, y) through intermediate points."""
+    start = w.POINT()
+    user32.GetCursorPos(ctypes.byref(start))
+    fx, fy = _screen_point(hwnd, 0, 0)
+    sx, sy = start.x - fx, start.y - fy
+    count = max(2, int(max(abs(x - sx), abs(y - sy)) / step))
+    for i in range(1, count + 1):
+        mouse_move(hwnd, sx + (x - sx) * i // count, sy + (y - sy) * i // count)
+        time.sleep(pause)
+
+
+def click_with(hwnd: int, modifiers: str, x: int, y: int) -> None:
+    """Click with e.g. 'ctrl' or 'shift' held (modifier down, click, modifier up)."""
+    codes = [_vk(k) for k in modifiers.split("+")]
+    ensure_foreground(hwnd, "a modified click")
+    _send([_key_input(c, False) for c in codes])
+    try:
+        time.sleep(0.05)
+        click(hwnd, x, y)
+    finally:
+        _send([_key_input(c, True) for c in reversed(codes)])
+
+
 def type_text(hwnd: int, text: str) -> None:
     """Unicode character input (no layout dependence); never re-activates."""
     ensure_foreground(hwnd, "typing")

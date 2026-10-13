@@ -1,7 +1,7 @@
 //! Creates a new song library with original fixture songs for native checks
 //! (`scripts/live-output-windows.py`, `scripts/schedule-windows.py`). Refuses
 //! to touch an existing file. `--second-song` adds a one-slide song;
-//! `--formatted-song` seeds a single-song library whose three slides
+//! `--extra-songs N` adds N one-slide songs "Study Hymn k"\n//! (`scripts/schedule-remainder-windows.py`); `--formatted-song` seeds a single-song library whose three slides
 //! exercise the M1-05g2 rendering path (bold bundled face, synth italic,
 //! underline, color, right/bottom alignment, Outer outline, shadow, an
 //! installed family); `--background-song` seeds a single-song library whose
@@ -17,7 +17,7 @@ use sela::{
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule]";
 
 /// `scripts/live-output-windows.py` samples these.
 const BANDS: [[u8; 3]; 3] = [[200, 40, 40], [40, 160, 60], [40, 60, 200]];
@@ -64,12 +64,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut path = None;
     let (mut second, mut formatted, mut background, mut heavy, mut vanished) =
         (false, false, false, false, false);
-    for arg in args {
+    let mut extra = 0usize;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
         match arg {
             flag if flag == "--second-song" => second = true,
             flag if flag == "--formatted-song" => formatted = true,
             flag if flag == "--background-song" => background = true,
             flag if flag == "--heavy-song" => heavy = true,
+            flag if flag == "--extra-songs" => {
+                extra = args
+                    .next()
+                    .and_then(|n| n.to_string_lossy().parse().ok())
+                    .ok_or(USAGE)?;
+            }
             flag if flag == "--vanished-schedule" => vanished = true,
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
@@ -290,6 +298,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     license: String::new(),
                     variants: Vec::new(),
                     sections: vec![section("Verse 1", "A quiet original canticle")],
+                    master: None,
+                },
+            )
+            .map_err(|e| format!("{e:?}"))?;
+    }
+    for k in 1..=extra {
+        repository
+            .save_song(
+                None,
+                Song {
+                    title: format!("Study Hymn {k}"),
+                    authors: String::new(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    variants: Vec::new(),
+                    sections: vec![section("Verse 1", &format!("Study original line {k}"))],
                     master: None,
                 },
             )
