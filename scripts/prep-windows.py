@@ -96,13 +96,23 @@ def main() -> int:
 
         nw.press(operator, "pagedown")  # Go Live: normalized fit of 100 slides
         sent = time.monotonic()
+        pressed_wall = time.time()
         nw.press(operator, "ctrl+b")
         pressed = time.monotonic()
-        while lo.brightest(nw.capture_client(screen)[2]) > 16:
+        audience_polls = []
+        while True:
+            began = time.monotonic()
+            level = lo.brightest(nw.capture_client(screen)[2])
+            audience_polls.append((round((began - pressed) * 1000), round((time.monotonic() - began) * 1000), level))
+            if level <= 16:
+                break
             if time.monotonic() - pressed > 3:
                 raise nw.Failure("the audience did not go black within 3 s")
             time.sleep(0.01)
+        summary["audience_polls"] = audience_polls
         black_ms = round((time.monotonic() - pressed) * 1000)
+        summary["key_wall_us"] = round(pressed_wall * 1e6)
+        summary["black_seen_wall_us"] = round(time.time() * 1e6)
         polls = []
         while True:
             began = time.monotonic()
@@ -113,7 +123,8 @@ def main() -> int:
             if time.monotonic() - pressed > 3:
                 raise nw.Failure("the Black button never lit")
             time.sleep(0.01)
-        summary['polls'] = polls
+        summary["polls"] = polls
+        summary["lit_seen_wall_us"] = round(time.time() * 1e6)
         lit_ms = round((time.monotonic() - pressed) * 1000)
         summary.update(black_observed_ms=black_ms, black_lit_ms=lit_ms)
         run.save(operator, "operator-black")

@@ -588,6 +588,52 @@ fn get_stamp(b: &[u8]) -> Stamp {
 /// plus one executing per worker. No unbounded event/log queue. Dropping this
 /// handle does not join potentially stuck OS I/O: owner must terminate/reap the
 /// child and retire its pipes before creating another session.
+/// Level-triggered wake-up that a foreground task can await while any thread
+/// signals it; coalesces repeated notifications.
+#[derive(Default)]
+pub struct Signal {
+    state: std::sync::Mutex<(bool, Option<std::task::Waker>)>,
+    armed: AtomicBool,
+}
+impl Signal {
+    /// Notifications are ignored until armed: GPUI's deterministic test
+    /// scheduler rejects wake-ups from foreign threads.
+    pub fn arm(&self) {
+        self.armed.store(true, Ordering::Release);
+    }
+    pub fn notify(&self) {
+        if !self.armed.load(Ordering::Acquire) {
+            return;
+        }
+        let waker = {
+            let mut state = self.state.lock().unwrap();
+            state.0 = true;
+            state.1.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+    pub fn wait(&self) -> impl std::future::Future<Output = ()> + '_ {
+        std::future::poll_fn(move |cx| {
+            let mut state = self.state.lock().unwrap();
+            if std::mem::take(&mut state.0) {
+                std::task::Poll::Ready(())
+            } else {
+                state.1 = Some(cx.waker().clone());
+                std::task::Poll::Pending
+            }
+        })
+    }
+}
+
+/// Notified whenever any `PipeWorkers` reader queues a frame, so the operator
+/// can pick up renderer receipts without waiting for its poll timer.
+pub fn inbound() -> &'static Signal {
+    static INBOUND: std::sync::OnceLock<Signal> = std::sync::OnceLock::new();
+    INBOUND.get_or_init(Signal::default)
+}
+
 pub struct PipeWorkers {
     outgoing: SyncSender<Frame>,
     incoming: Receiver<Frame>,
@@ -597,6 +643,15 @@ impl PipeWorkers {
     pub fn new(
         reader: impl Read + Send + 'static,
         writer: impl Write + Send + 'static,
+    ) -> io::Result<Self> {
+        Self::with_wake(reader, writer, || inbound().notify())
+    }
+    /// `wake` runs on the reader thread after each inbound frame is queued, so
+    /// an event loop sleeping between ticks can poll immediately.
+    pub fn with_wake(
+        reader: impl Read + Send + 'static,
+        writer: impl Write + Send + 'static,
+        wake: impl Fn() + Send + 'static,
     ) -> io::Result<Self> {
         let (outgoing, writes) = mpsc::sync_channel::<Frame>(4);
         let (reads, incoming) = mpsc::sync_channel(2);
@@ -621,6 +676,7 @@ impl PipeWorkers {
                     if reads.send(frame).is_err() {
                         break;
                     }
+                    wake();
                 }
             })?;
         Ok(Self {
@@ -677,6 +733,41 @@ mod tests {
         d.submit(Arc::new(cue), Lane::Cue, now, now + Duration::from_secs(2))
             .unwrap();
         d.take_next().unwrap()
+    }
+    fn ready(signal: &Signal) -> bool {
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        std::pin::pin!(signal.wait()).poll(&mut cx).is_ready()
+    }
+    #[test]
+    fn signal_ignores_notifications_until_armed_then_coalesces() {
+        let signal = Signal::default();
+        signal.notify();
+        assert!(!ready(&signal), "unarmed notify is dropped");
+        signal.arm();
+        signal.notify();
+        signal.notify();
+        assert!(ready(&signal));
+        assert!(!ready(&signal), "repeated notifies coalesce into one wake");
+    }
+    #[test]
+    fn with_wake_runs_after_each_inbound_frame_is_queued() {
+        let mut wire = Vec::new();
+        Frame::ready(Epoch(7), 2048).write(&mut wire).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let workers = PipeWorkers::with_wake(
+            wire.as_slice().to_vec().leak() as &[u8],
+            io::sink(),
+            move || {
+                tx.send(()).unwrap();
+            },
+        )
+        .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            workers.poll().unwrap().is_some(),
+            "frame is queued before the wake"
+        );
     }
     #[test]
     fn round_trip_and_failed_resource_preserves_prior() {

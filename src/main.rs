@@ -91,6 +91,7 @@ fn audience_main(args: &[std::ffi::OsString]) -> ! {
         );
         std::process::exit(2);
     };
+    sela::timer::raise_resolution();
     let result = audience::run(audience::Config {
         epoch: sela::delivery::Epoch(epoch),
         backend,
@@ -191,6 +192,8 @@ fn main() {
             std::process::exit(2);
         }
     };
+    sela::timer::raise_resolution();
+    sela::transport::inbound().arm();
     zlog::init();
     zlog::init_output_stderr();
     gpui_platform::application().run(move |cx: &mut App| {

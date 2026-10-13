@@ -16,4 +16,5 @@ pub mod search;
 pub mod settings;
 pub mod slides;
 pub mod storage;
+pub mod timer;
 pub mod transport;

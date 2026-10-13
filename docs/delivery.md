@@ -425,3 +425,59 @@ about 520 ms because painting 100 slide tiles in an unoptimized build takes
 hundreds of ms per frame, unrelated to preparation (audience black still 156 ms).
 Test `black_applies_within_the_bound_while_a_heavy_cue_prepares` measured a
 Black receipt of about 21 ms with a cue held in preparation.
+
+### Black/Clear/Logo latency fix (fix-foundation-black-latency, 2026-10-13)
+
+Timing breakdown along the safety lane, measured with a temporary
+wall-clock trace (removed) in the operator and audience processes. Native run
+= `scripts/prep-windows.py`, release binary, DISPLAY1 laptop panel 2560x1600.
+
+| Stage (native, DISPLAY1) | Measured |
+|---|---|
+| Ctrl+B key to `toggle_mask` in the operator | 20-80 ms (OS input path, not Sela) |
+| Operator send -> audience pipe read -> accept | about 1 ms |
+| Audience accept -> composite -> present | 2-3 ms |
+| Audience present -> operator receipt applied (before) | 12-24 ms (16 ms poll timer rounded to 2 x 15.6 ms ticks) |
+| Operator repaint with lit button | 2-3 ms render |
+| Harness `BitBlt` of the 2560x1600 audience panel | 109-157 ms per capture, one capture is the whole "observed" figure |
+
+Findings: Sela's own audience path is 3-5 ms; the 250 ms "observed" figure is
+dominated by the harness screen capture, and a run that misses the black frame
+in its first capture pays a second one (about 140 ms), which is how 313-422 ms
+readings occurred. Failed harness runs also left `sela --audience` children
+(fullscreen, redrawing at 60 Hz) running, loading the GPUs and slowing the next
+capture. Unit fixture (`black_applies_within_...`, 12 test threads): 83-355 ms
+across runs (bound 100 ms); trace showed `simulate_keystrokes` 113-154 ms and the
+settle poll 60-170 ms, both GPUI draws of the operator in an opt-level 0
+build. 12 separate processes running the same test took 30-52 ms, 2 test
+threads in one process 62 ms and 12 threads 232 ms, so the cost was
+in-process contention of unoptimized dependency code (gpui, cosmic-text),
+not the fake child or IPC.
+
+Fixes (all measured): `[profile.dev.package."*"] opt-level = 2` (unit
+fixture 175-355 ms -> 13-18 ms at 12 threads; 25 ms standalone -> 9 ms); audience
+event loop is woken by the pipe reader and the prepare worker (winit
+`EventLoopProxy`) and redraws immediately for an accepted command instead of
+waiting for the next 16.7 ms tick; idle frames are no longer redrawn (1 s
+heartbeat, resize/occlusion/pending command trigger a redraw); `timeBeginPeriod(1)`
+in both processes (`src/timer.rs`); the operator polls on every inbound renderer
+frame (`transport::inbound()` signal, armed only by `main`, because the GPUI
+test scheduler rejects foreign-thread wakes); `scripts/native_win.py`
+`App.close` now kills the whole process tree so failed native runs no longer
+leak `sela.exe`.
+
+After: unit fixture Black receipt 13.3, 18.1, 13.3 ms in three consecutive full
+`cargo test --locked --all-targets -- --test-threads=12` runs (bound 100 ms
+unchanged). Native `prep-windows.py --binary target\release\sela.exe`:
+DISPLAY1 observed/lit 109/203, 125/172, 141/172 ms; DISPLAY6 109/203,
+109/141, 109/156 ms (bound 250 ms unchanged); no `sela.exe` left after each
+run. The remaining 109-157 ms is the capture itself; the harness additionally
+records `audience_polls` (per-capture start and duration) and wall-clock key
+and observation times in `summary.json`.
+
+Upstream GPUI paths inspected (zed rev a84689073d29): `crates/gpui_windows/src/
+dispatcher.rs` (threadpool timers, `increase_timer_resolution`),
+`crates/gpui/src/platform_scheduler.rs` (timer resolution only raised while
+blocking), `crates/gpui_windows/src/platform.rs` (`WM_GPUI_TASK_DISPATCHED_ON_
+MAIN_THREAD` wake), `crates/gpui/src/platform/test/platform.rs` (Noop text
+system; test scheduler panics on foreign-thread activity).

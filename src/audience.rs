@@ -25,7 +25,7 @@ use std::{
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::{Window, WindowId},
 };
 
@@ -124,7 +124,15 @@ struct Audience {
     pipes: PipeWorkers,
     session: RendererSession,
     start: Instant,
+    /// Earliest instant the next redraw may be requested.
     next: Instant,
+    /// Idle heartbeat: a static scene is re-presented only this often.
+    refresh_at: Instant,
+    /// Something changed that a fresh present must show; idle frames are not
+    /// redrawn, so the GPU and compositor stay quiet between cues.
+    redraw_wanted: bool,
+    /// Wakes the event loop from the pipe and preparation threads.
+    wake: EventLoopProxy<()>,
     compositor: Option<Arc<compositor::Compositor>>,
     preparation: Option<SyncSender<Frame>>,
     waiting: Option<Frame>,
@@ -140,6 +148,8 @@ struct Audience {
     failure: Option<String>,
 }
 const SURFACE_SETTLE: Duration = Duration::from_millis(250);
+const FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
+const IDLE_REFRESH: Duration = Duration::from_secs(1);
 struct Completion {
     stamp: Stamp,
     lane: Lane,
@@ -447,6 +457,7 @@ impl ApplicationHandler for Audience {
         let (jobs, work) = mpsc::sync_channel::<Frame>(1);
         let (results, completions) = mpsc::sync_channel(1);
         let worker = compositor.clone();
+        let wake = self.wake.clone();
         let spawned = std::thread::Builder::new()
             .name("audience-prepare".into())
             .spawn(move || {
@@ -473,6 +484,7 @@ impl ApplicationHandler for Audience {
                     {
                         break;
                     }
+                    let _ = wake.send_event(());
                     if fatal {
                         break;
                     } // Never accumulate uploads after a failed GPU wait.
@@ -508,6 +520,10 @@ impl ApplicationHandler for Audience {
                 g.config.height = s.height;
                 g.surface.configure(&g.device, &g.config);
                 self.resized_at = Instant::now();
+                self.redraw_wanted = true;
+            }
+            WindowEvent::Occluded(false) | WindowEvent::ScaleFactorChanged { .. } => {
+                self.redraw_wanted = true;
             }
             WindowEvent::RedrawRequested => {
                 let size = g.window.inner_size();
@@ -528,6 +544,7 @@ impl ApplicationHandler for Audience {
                         return;
                     }
                 };
+                self.redraw_wanted = reconfigure;
                 if !self.detached && self.session.pending().is_some() {
                     let stamp = self.session.pending().unwrap().stamp();
                     let Some((prepared_stamp, ready)) = self.ready.pop_front() else {
@@ -654,11 +671,32 @@ impl ApplicationHandler for Audience {
         }
         self.report_surface(el);
         let now = Instant::now();
-        if now >= self.next {
-            self.gpu.as_ref().unwrap().window.request_redraw();
-            self.next = now + Duration::from_micros(16_667);
+        let settling =
+            self.config.report_surface && self.gpu.as_ref().map(Gpu::extent) != self.reported;
+        if now >= self.refresh_at {
+            self.redraw_wanted = true;
         }
-        el.set_control_flow(ControlFlow::WaitUntil(self.next));
+        let wanted = self.redraw_wanted || self.session.pending().is_some();
+        if wanted && now >= self.next {
+            self.gpu.as_ref().unwrap().window.request_redraw();
+            self.next = now + FRAME_INTERVAL;
+            self.refresh_at = now + IDLE_REFRESH;
+        }
+        let mut wake_at = if wanted {
+            self.next
+        } else if settling {
+            now + SURFACE_SETTLE / 5
+        } else {
+            self.refresh_at
+        };
+        if let Some(lifetime) = self.config.lifetime {
+            wake_at = wake_at.min(self.start + lifetime);
+        }
+        el.set_control_flow(ControlFlow::WaitUntil(wake_at));
+    }
+    fn user_event(&mut self, _: &ActiveEventLoop, _: ()) {
+        // A frame or a prepared cue arrived; about_to_wait polls it next.
+        self.next = Instant::now();
     }
 }
 impl Audience {
@@ -793,7 +831,12 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(124);
             })?;
     }
-    let pipes = PipeWorkers::new(io::stdin(), io::stdout())?;
+    let event_loop = EventLoop::new()?;
+    let wake = event_loop.create_proxy();
+    let reader_wake = wake.clone();
+    let pipes = PipeWorkers::with_wake(io::stdin(), io::stdout(), move || {
+        let _ = reader_wake.send_event(());
+    })?;
     let mut app = Audience {
         session: RendererSession::new(config.epoch),
         config,
@@ -801,6 +844,9 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         pipes,
         start,
         next: start,
+        refresh_at: start,
+        redraw_wanted: true,
+        wake,
         compositor: None,
         preparation: None,
         waiting: None,
@@ -816,7 +862,7 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         resized_at: start,
         failure: None,
     };
-    EventLoop::new()?.run_app(&mut app)?;
+    event_loop.run_app(&mut app)?;
     match app.failure {
         Some(message) => Err(message.into()),
         None => Ok(()),

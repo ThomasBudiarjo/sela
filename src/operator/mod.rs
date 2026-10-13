@@ -285,6 +285,7 @@ pub(super) struct Operator {
     _font_scan: Option<Task<()>>,
     _library_changed: Subscription,
     _poller: Option<Task<()>>,
+    _receipt_waker: Option<Task<()>>,
 }
 
 impl Operator {
@@ -381,6 +382,15 @@ impl Operator {
                 }
             }
         });
+        // Renderer receipts poll immediately instead of on the next timer tick.
+        let receipt_waker = cx.spawn(async move |this, cx| {
+            loop {
+                sela::transport::inbound().wait().await;
+                if this.update(cx, |this, cx| this.poll(cx)).is_err() {
+                    break;
+                }
+            }
+        });
         let settings = SettingsState::start(profile.as_deref(), config, cx);
         Self {
             focus: cx.focus_handle(),
@@ -463,6 +473,7 @@ impl Operator {
             _font_scan: font_scan,
             _library_changed: library_changed,
             _poller: Some(poller),
+            _receipt_waker: Some(receipt_waker),
         }
     }
 }

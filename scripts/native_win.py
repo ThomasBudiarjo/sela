@@ -345,10 +345,13 @@ class App:
         return self.log_path.read_text(errors="replace")[-4000:]
 
     def close(self) -> None:
+        # The operator owns a `sela --audience` child; terminating only the
+        # operator orphans it with its fullscreen window, so reap the tree.
         if self.process.poll() is None:
-            self.process.terminate()
+            subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             try:
-                self.process.wait(2)
+                self.process.wait(5)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
