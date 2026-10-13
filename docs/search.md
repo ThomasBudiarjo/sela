@@ -1,10 +1,13 @@
 # M1-07a — song search index (schema 5)
 
-State: **implemented-unqualified**. Backend slice of M1-07 only: the index,
-query handling, worker commands and a database-latency benchmark. There is no
-search box yet, and EasyWorship 8.0.49's search behavior (which fields it
-searches, prefix/substring matching, ranking, live filtering) is **unobserved**.
-Everything below is a provisional Sela choice until the W04 observation.
+State: **implemented-unqualified**. M1-07a is the index, query handling,
+worker commands and a database-latency benchmark; M1-07b (below, "Operator
+search box") adds the Songs search box and the end-to-end measurement.
+EasyWorship 8.0.49's behavior was observed in RUN-W07A (EW8-OBS-044..047):
+case-insensitive word-prefix matching over title, labels and lyric words,
+live filtering from one character, no ranking visible. Ranking and
+normalization below are still Sela choices; the two-character minimum is an
+owner decision that deliberately differs from EW.
 
 ## Index
 
@@ -68,7 +71,10 @@ song id`.
   above a lyric-only match.
 - Ties break deterministically by title ignoring ASCII case (SQLite `NOCASE`
   folds ASCII only), then exact title, then the stable song id. Duplicate
-  titles therefore keep a fixed order.
+  titles therefore keep a fixed order. Since M1-07b the ranking and `LIMIT`
+  run inside the FTS scan (a subquery that returns the kept rows' `rowid`)
+  and only those rows are joined to `songs`; the cut at the 200-hit limit
+  breaks a last tie by FTS rowid, the final order by song id.
 
 ## Worker API and stale results
 
@@ -180,15 +186,75 @@ Other costs to watch:
 - No measurement without the index was taken, so the index's share of save
   time is unknown.
 
+## Operator search box (M1-07b)
+
+Implemented-unqualified. See [operator-shell](operator-shell.md#m1-07b--songs-search-box-operator)
+for the behavior list. Code: `src/operator/resources/song_search.rs` (pure
+controller: trimmed query, `Generations`, one pending-submission slot, newest
+accepted hits) and `songs.rs` (box, clear button, no-results row, Esc).
+
+Differences from EasyWorship 8.0.49 (RUN-W07A):
+
+| EW | Sela | Why |
+| --- | --- | --- |
+| Filters from one character | Filters from two; one character shows the full list and issues no query | owner decision (bounds the one-letter p95 of 109 ms measured in M1-07a) |
+| Word-prefix over title, slide labels, lyric words | FTS over title, lyrics (section labels are not indexed) and metadata, last term a prefix | slide-label search is not indexed; recorded gap |
+| Empty list for no results | Empty list with a "No songs found" line | clearer for the operator |
+| Title echoed in the box when the pane first opens | Plain empty field | EW8-OBS-044 best guess |
+
+Not observed in EW and set by best guess (EW8-OBS-047): Ctrl+B/L/C and
+plain B/C/L typed in the box never toggle masks. Clearing the box with Ctrl+A
+and Backspace, the clear button and Esc all restore the list.
+
+### End-to-end latency (VAL-SEARCH-010)
+
+Machine: Windows 11 Home, Intel i7-14650HX, 48 GB RAM, NVMe SSD, 2026-10-13,
+release build, audience on the secondary monitor. Library: the 20,000-song
+`search_bench --keep` corpus (seed `0x5e1a0007`, 61.5 MiB).
+
+Method (`scripts/search-windows.py --latency-library PATH --binary
+target\release\sela.exe`): the real operator is driven with SendInput. Each
+of 30 distinct two-letter prefixes is typed: first letter, wait 0.4 s, then
+the clock starts at the second letter's SendInput and stops at the first screen
+capture of the Songs list (400x200 px patch, small-region BitBlt, about 1 ms a
+poll) that differs from the unfiltered list. This is keystroke to painted
+(composited) list, and it includes the app's text-input handling, the storage
+worker query, the reply pickup, the 200-row layout and the present.
+
+Results (three runs of 30 queries, `.amp/in/artifacts/search-latency-run1..3`):
+
+| Run | p50 | p95 | max |
+| --- | ---: | ---: | ---: |
+| 1 | 66.5 ms | 81.5 ms | 84.8 ms |
+| 2 | 66.4 ms | 83.8 ms | 84.7 ms |
+| 3 | 65.7 ms | 82.4 ms | 89.2 ms |
+
+All below the 100 ms p95 ceiling, above the provisional 30 ms target (the
+database query itself is most of it: two-letter prefixes match most of the
+library and bm25 ranks every match). Steps that moved it, same corpus and
+method: first measurement with a full-window capture per poll 107 ms p50 /
+136 ms p95 (the capture cost, about 20 ms a poll, dominated); the small patch
+alone 80 / 96 ms; the 2 ms reply pickup 78 / 96 ms (single run); ranking and
+`LIMIT` inside the FTS scan 66 / 82 ms.
+
+Database-only re-run after the query change (`cargo run --locked --release
+--example search_bench`, same corpus): pooled p50 11.8 ms, p95 61.9 ms, max
+113 ms; two-letter prefix p50 50.2 / p95 58.3 ms; one-letter prefix p95 91.7 ms
+(not queried by the UI any more).
+
+Limits: one machine, one corpus, synthetic text; the harness samples the
+screen so a frame the compositor delays shows as latency; not measured on the
+older integrated-GPU laptop or with Live output driving the GPU. The unfiltered
+20,000-row list is still built in full on every frame (existing behavior), so
+clearing the box on a very large library is slow; not part of the two-character
+latency but a known cost.
+
 ## Open
 
-- Search box UI in the operator Library: live filtering, keyboard focus
-  ownership so typing never fires live shortcuts, empty, loading and error
-  states, stale-reply rejection with `Generations`. This needs the W04 EW
-  observation of search behavior.
-- Searching on the field choice EW offers (title only, lyrics, all), once
-  observed.
-- End-to-end latency (keystroke to rendered list) once the UI exists.
-- Short-prefix ranking cost (above).
+- Searching slide labels (EW matches them) and the field choice, if EW
+  exposes one.
+- Loading and error states of the box beyond the existing library error line.
+- Truncation hint when more than 200 songs match.
+- Virtualizing the unfiltered list for very large libraries.
 - Linux and macOS runs, and a run on an older integrated-GPU laptop for the
   M1-15 rehearsal machine.

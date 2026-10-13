@@ -71,23 +71,42 @@ def song_list_rect(hwnd: int) -> tuple[int, int, int, int]:
     found = a11y.nodes_by_id(a11y.uia(hwnd))
     node = found["song-list"]
     ox, oy = a11y.client_origin(hwnd)
-    return (
-        node["x"] - ox,
-        node["y"] - oy,
-        node["width"],
-        max(1, node["height"] - 4),
-    )
+    # Rows start at the top of the list; a 400x200 patch holds six of them.
+    return (node["x"] - ox, node["y"] - oy, min(400, node["width"]), min(200, node["height"]))
 
 
 def region_digest(hwnd: int, rect: tuple[int, int, int, int]) -> int:
-    width, _, pixels = nw.capture_client(hwnd)
-    x, y, w, h = rect
-    crc = 0
-    for row in range(y, y + h):
-        start = (row * width + x) * 4
-        crc = zlib.crc32(pixels[start : start + w * 4], crc)
-    return crc
-
+    """CRC of a small client-area rectangle; a cheap BitBlt (about 1 ms) so the
+    polling loop adds little to the latency it measures."""
+    x, y, width, height = rect
+    origin = nw.w.POINT(0, 0)
+    nw.user32.ClientToScreen(hwnd, nw.ctypes.byref(origin))
+    screen = nw.user32.GetDC(None)
+    memory = nw.gdi32.CreateCompatibleDC(screen)
+    bitmap = nw.gdi32.CreateCompatibleBitmap(screen, width, height)
+    previous = nw.gdi32.SelectObject(memory, bitmap)
+    try:
+        nw.gdi32.BitBlt(
+            memory, 0, 0, width, height, screen, origin.x + x, origin.y + y,
+            0x00CC0020 | 0x40000000,
+        )  # fmt: skip
+        header = nw.BITMAPINFOHEADER(
+            biSize=nw.ctypes.sizeof(nw.BITMAPINFOHEADER),
+            biWidth=width,
+            biHeight=-height,
+            biPlanes=1,
+            biBitCount=32,
+            biCompression=0,
+        )
+        pixels = nw.ctypes.create_string_buffer(width * height * 4)
+        info = nw.ctypes.create_string_buffer(bytes(header) + b"\0" * 16)
+        nw.gdi32.GetDIBits(memory, bitmap, 0, height, pixels, info, 0)
+        return zlib.crc32(pixels.raw)
+    finally:
+        nw.gdi32.SelectObject(memory, previous)
+        nw.gdi32.DeleteObject(bitmap)
+        nw.gdi32.DeleteDC(memory)
+        nw.user32.ReleaseDC(None, screen)
 
 def percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
@@ -109,11 +128,13 @@ def measure_latency(hwnd: int, queries: list[str], summary: dict, box: dict) -> 
         nw.press(hwnd, query[1])
         deadline = started + 3.0
         elapsed = None
+        polls = 0
         while time.perf_counter() < deadline:
+            polls += 1
             if region_digest(hwnd, rect) != before:
                 elapsed = (time.perf_counter() - started) * 1000
                 break
-        samples.append({"query": query, "ms": elapsed})
+        samples.append({"query": query, "ms": elapsed, "polls": polls})
         time.sleep(0.2)
     values = [s["ms"] for s in samples if s["ms"] is not None]
     summary["latency"] = {

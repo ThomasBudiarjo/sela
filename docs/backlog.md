@@ -707,13 +707,16 @@ unchanged: GPUI tests plus the four native scripts pass, and the 13 live-output
 operator captures are byte-identical before and after. Windows qualification
 beyond those scripts stays open.
 
-M1-07b (**planned**): operator library search box. Searching starts at 2
-characters, typing never triggers live shortcuts, stale results are dropped
-by generation, and Esc/clear restore the full list.
+M1-07b (**implemented-unqualified**, [search](search.md#operator-search-box-m1-07b)):
+operator library search box. Searching starts at 2 characters (owner decision),
+typing never triggers live shortcuts, stale results are dropped by generation,
+and Esc/clear restore the full list. Measured on a 20k library: keystroke to
+painted list p95 81.5-83.8 ms (three runs of 30 two-letter queries, release).
+Open: slide-label search, truncation hint, Narrator and older-hardware runs.
 
-- [ ] Add indexed/FTS search for observed title/lyrics/metadata queries and filters.
-  (Index and query over title, lyrics and metadata done in M1-07a; EW's
-  searched fields and filters are unobserved, and there is no UI yet.)
+- [x] Add indexed/FTS search for observed title/lyrics/metadata queries and filters.
+  (Index in M1-07a, Songs search box in M1-07b; EW also matches slide labels,
+  which Sela does not index yet, and no filter UI exists in EW 8.0.49.)
 - [x] Define normalization, escaping, ranking and deterministic tie handling;
   keep display text unchanged.
 - [ ] Maintain indexes transactionally on edits/deletes/imports and support rebuild.
@@ -721,9 +724,10 @@ by generation, and Esc/clear restore the full list.
   import maintenance is unproven until M1-14 saves through `save_song`.)
 - [x] Test punctuation, diacritics, Indonesian text, duplicate titles, empty queries,
   corrupt index recovery and canceled requests.
-- [ ] Benchmark a synthetic 20k-song corpus, separating database query latency
+- [x] Benchmark a synthetic 20k-song corpus, separating database query latency
   from end-to-end rendered result latency; profile before optimizing.
-  (Database latency measured in M1-07a; end-to-end waits for the UI.)
+  (Database latency in M1-07a, re-run in M1-07b; end-to-end p95 81.5-83.8 ms
+  on one machine, not on older hardware.)
 
 Acceptance: correct ranked results and reproducible measurements against the
 provisional 30 ms target/100 ms p95 ceiling, not an unqualified speed claim.

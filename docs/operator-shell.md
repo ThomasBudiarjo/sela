@@ -695,6 +695,36 @@ not a bug.
 
 Native run **PASS** (`.amp/in/artifacts/a11y-windows/summary.json` + dumps
 01–07, menu popup and per-stop walk captures, several viewed). Open:
-Narrator/screen-reader qualification (M5-03), the library search box Edit
-exposure (blocked on the pending library-search-box feature), mixed-DPI
-runs, and Live-tile keyboard activation policy.
+Narrator/screen-reader qualification (M5-03), mixed-DPI runs, and Live-tile
+keyboard activation policy.
+
+M1-07b added the Songs search box: `TextInput` gained `set_accessible`, which
+gives it Role `SearchInput` (UIA Edit), id `song-search` and the localized name
+"Search songs" / "Cari lagu"; the clear button is a Button `song-search-clear`
+("Clear search" / "Hapus pencarian"). The box is one Tab stop (tab index 499,
+after the last song row and before the schedule), so the 25 tabs to the first
+song row are unchanged. `scripts/a11y-windows.py` now expects the Edit in
+English and Indonesian and PASSES (VAL-A11Y-001 complete).
+
+## M1-07b — Songs search box (operator)
+
+The box sits under the Songs list (EW8-OBS-044) with a clear button at its
+right while it holds text. Behavior, see [search](search.md) for the index:
+
+- Two or more characters (after trimming) filter the list through
+  `storage::Command::Search`; shorter text shows the full list and sends no
+  query (owner decision; EasyWorship filters from one character, EW8-OBS-045).
+- The box is a `SelaTextInput`, so the `SelaShow && !SelaTextInput` bindings
+  (Ctrl+B/L/C, Page Down, Up/Down) never fire while it has focus, and plain
+  letters are text. Esc (context `SelaSongSearch`) and the clear button empty
+  it and keep focus in the box.
+- No-results shows "No songs found" (EW shows an empty list, EW8-OBS-045).
+- Selecting a result previews it. If the selected library song drops out of a
+  new result set the selection clears; Preview keeps its content and no other
+  song is previewed. A schedule-entry selection is left alone.
+- Saving or deleting a song reloads the catalog and re-runs the active query.
+- Search jobs share the single storage worker slot with Song/Catalog loads, so
+  only the newest query waits for it (older ones are replaced, never queued).
+  Every query takes a `search::Generations` value; a reply whose generation is
+  not current is dropped. After a search is sent a 2 ms task picks up the
+  reply instead of waiting for the 16 ms poll tick.

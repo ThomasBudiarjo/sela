@@ -5,6 +5,7 @@ actions!(operator, [NextSongRow, PreviousSongRow, ClearSongSearch]);
 /// After the song rows (100+) and before the schedule (500), matching its
 /// place under the list; adds no stop before the first song row.
 pub(crate) const SEARCH_TAB_INDEX: isize = 499;
+const SEARCH_WAKE: std::time::Duration = std::time::Duration::from_millis(2);
 
 impl Operator {
     /// Down/Up with a Songs row focused: move the song selection (and its
@@ -83,8 +84,27 @@ impl Operator {
         let text = self.search_input.read(cx).text().to_string();
         if self.search.set_text(&text) {
             self.poll(cx);
+            self.watch_search(cx);
             cx.notify();
         }
+    }
+
+    /// Picks up the worker's search reply every 2 ms instead of waiting for the
+    /// 16 ms poll tick, until the newest query has been answered.
+    fn watch_search(&mut self, cx: &mut Context<Self>) {
+        let executor = cx.background_executor().clone();
+        self._search_waker = Some(cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(SEARCH_WAKE).await;
+                let busy = this.update(cx, |this, cx| {
+                    this.poll(cx);
+                    this.search.pending() || matches!(this.request, Some(Request::Search))
+                });
+                if !busy.unwrap_or(false) {
+                    break;
+                }
+            }
+        }));
     }
 
     pub(crate) fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {

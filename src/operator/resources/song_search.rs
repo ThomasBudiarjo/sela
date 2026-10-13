@@ -61,6 +61,10 @@ impl SongSearch {
         }
     }
 
+    pub(crate) fn pending(&self) -> bool {
+        self.wanted.is_some()
+    }
+
     pub(crate) fn take_command(&mut self) -> Option<Command> {
         let (query, generation) = self.wanted.take()?;
         #[cfg(test)]

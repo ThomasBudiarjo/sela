@@ -285,6 +285,7 @@ pub(super) struct Operator {
     _font_scan: Option<Task<()>>,
     _library_changed: Subscription,
     _search_observer: Subscription,
+    pub(super) _search_waker: Option<Task<()>>,
     _poller: Option<Task<()>>,
     _receipt_waker: Option<Task<()>>,
 }
@@ -487,6 +488,7 @@ impl Operator {
             _font_scan: font_scan,
             _library_changed: library_changed,
             _search_observer: search_observer,
+            _search_waker: None,
             _poller: Some(poller),
             _receipt_waker: Some(receipt_waker),
         }
