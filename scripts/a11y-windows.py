@@ -11,9 +11,8 @@ natively:
   non-empty, correct English name for each critical control: menu bar and
   its six menus, Go Live, Black, Clear, Logo, Live previous/next, Live
   output, the five Resources tabs, and the Songs/Schedule/Preview/Live
-  lists with their rows and slide tiles. The library search box (Edit) is
-  a known gap until the library-search-box feature lands; it is reported,
-  not failed.
+  lists with their rows and slide tiles, and the Songs search box (Edit,
+  "Search songs").
 - VAL-A11Y-002: after Ctrl+B the Black button's UIA toggle state is On and
   Clear/Logo stay Off; a second Ctrl+B turns it off again.
 - VAL-A11Y-003: after Options > General > Language > Bahasa Indonesia the
@@ -73,6 +72,7 @@ EXPECTED = [
     ("Preview", "List", "Preview", "Pratinjau"),
     ("Live", "List", "Live", "Langsung"),
     ("song-list", "List", "Songs", "Lagu"),
+    ("song-search", "Edit", "Search songs", "Cari lagu"),
     ("Songs", "TabItem", "Songs", "Lagu"),
     ("Scriptures", "TabItem", "Scriptures", "Alkitab"),
     ("Media", "TabItem", "Media", "Media"),
@@ -339,14 +339,10 @@ def main() -> int:
         check.expect_controls(doc, 2, "en")
         found = nodes_by_id(doc)
         edit_nodes = [n for n in doc["nodes"] if n["controlType"] == "Edit"]
-        if edit_nodes:
-            check.expect(True, "library search box exposed as Edit")
-        else:
-            summary["library_search_box"] = (
-                "missing: the library-search-box feature is still pending; "
-                "VAL-A11Y-001's Edit expectation is blocked on it"
-            )
-            print("note: no Edit control yet (library-search-box feature pending)")
+        check.expect(
+            [n["automationId"] for n in edit_nodes] == ["song-search"],
+            f"the library search box is the only Edit: {[n['automationId'] for n in edit_nodes]}",
+        )
         # Menu titles expose Expanded/Collapsed.
         for top in (
             "bar-file",

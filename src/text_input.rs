@@ -268,6 +268,7 @@ pub struct TextInput {
     typing: Option<TypingHook>,
     flow: Option<Flow>,
     placeholder: Option<&'static str>,
+    accessible: Option<(&'static str, &'static str)>,
     multiline: bool,
     max: usize,
     tab_index: isize,
@@ -294,6 +295,7 @@ impl TextInput {
             typing: None,
             flow: None,
             placeholder: None,
+            accessible: None,
             multiline,
             max: max_bytes.min(HARD_BYTES),
             tab_index,
@@ -342,6 +344,12 @@ impl TextInput {
     #[allow(dead_code)] // Standalone input_check has no hints.
     pub fn set_placeholder(&mut self, placeholder: &'static str) {
         self.placeholder = Some(placeholder);
+    }
+    /// Exposes the field to UI Automation as an Edit with a stable id and a
+    /// localized name; call again after a language change.
+    #[allow(dead_code)] // Standalone input_check is not scripted through UI Automation.
+    pub fn set_accessible(&mut self, id: &'static str, name: &'static str) {
+        self.accessible = Some((id, name));
     }
     /// Document-cell mode: no border, height follows the rows, wheel scrolling
     /// goes to the enclosing list. Up on the first row, Down on the last row,
@@ -782,12 +790,18 @@ impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.focus.is_focused(window);
         let flow = self.flow;
+        let accessible = self.accessible;
         let placeholder = self
             .placeholder
             .filter(|_| self.buffer.text.is_empty() && self.buffer.marked.is_none());
         div()
             .id(("text-input", self.tab_index as usize))
             .key_context("SelaTextInput")
+            .when_some(accessible, |d, (id, name)| {
+                d.role(Role::SearchInput)
+                    .aria_label(name)
+                    .accessibility_id(id)
+            })
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
             .w_full()

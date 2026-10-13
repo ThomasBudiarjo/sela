@@ -205,8 +205,18 @@ impl Operator {
                     self.catalog = catalog;
                     self.library_error = None;
                 }
+                (Some(Request::Search), Ok(Reply::Search(results))) => {
+                    // A stale generation changes nothing and is not shown.
+                    changed = self.search.apply(
+                        results,
+                        self.selected_entry.is_some(),
+                        &mut self.selected_song,
+                    );
+                }
+                (Some(Request::Search), Err(storage::Error::Canceled)) => {}
                 (Some(Request::DeleteSong(version, title)), Ok(Reply::Deleted)) => {
                     self.catalog.retain(|(v, _)| *v != version);
+                    self.search.forget(version);
                     // Preview keeps the slides it already prepared (provisional).
                     if self.selected_song == Some(version) && self.selected_entry.is_none() {
                         self.selected_song = None;
@@ -300,8 +310,11 @@ impl Operator {
                 Some(job)
             } else if let Some(version) = wanted {
                 Some((storage::Command::Song(version), Request::Song(version)))
+            } else if let Some(command) = self.search.take_command() {
+                Some((command, Request::Search))
             } else if self.catalog_stale {
                 self.catalog_stale = false;
+                self.search.refresh();
                 Some((storage::Command::Catalog(None), Request::Catalog))
             } else {
                 None

@@ -143,7 +143,7 @@ impl Operator {
     /// Double-click in Songs goes straight to Live (documented), from the
     /// first slide (provisional).
     pub(crate) fn song_to_live(&mut self, index: usize) {
-        let Some((version, _)) = self.catalog.get(index).cloned() else {
+        let Some((version, _)) = self.songs().get(index).cloned() else {
             return;
         };
         // A library Go Live is a newer explicit request even while its song is

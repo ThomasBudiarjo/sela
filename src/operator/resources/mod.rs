@@ -5,10 +5,12 @@ use super::*;
 mod media;
 mod presentations;
 mod scriptures;
+mod song_search;
 mod songs;
 mod themes;
 
-pub(super) use songs::{NextSongRow, PreviousSongRow};
+pub(super) use song_search::SongSearch;
+pub(super) use songs::{ClearSongSearch, NextSongRow, PreviousSongRow, SEARCH_TAB_INDEX};
 
 /// Tab labels, translated at render time.
 pub(crate) const TABS: [Msg; 5] = [

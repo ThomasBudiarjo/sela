@@ -90,7 +90,7 @@ impl Operator {
         if self.dialog.is_some() {
             return;
         }
-        let Some((version, _)) = self.catalog.get(index).cloned() else {
+        let Some((version, _)) = self.songs().get(index).cloned() else {
             return;
         };
         self.select_song(index, cx);
@@ -123,7 +123,7 @@ impl Operator {
         };
         if self.song_menu_focus.is_focused(window) {
             match self
-                .catalog
+                .songs()
                 .iter()
                 .position(|(v, _)| *v == menu.version)
                 .and_then(|index| self.song_rows.get(index))

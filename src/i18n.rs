@@ -199,6 +199,10 @@ pub enum Msg {
     SongsNoLibraryHint,
     SongsEmptyTitle,
     SongsEmptyHint,
+    SongSearchLabel,
+    SongSearchPlaceholder,
+    SongSearchClear,
+    SongSearchNoResults,
     NoUserDataDir,
     DeleteBusy,
     Deleting,
@@ -597,6 +601,10 @@ impl Msg {
         Msg::SongsNoLibraryHint,
         Msg::SongsEmptyTitle,
         Msg::SongsEmptyHint,
+        Msg::SongSearchLabel,
+        Msg::SongSearchPlaceholder,
+        Msg::SongSearchClear,
+        Msg::SongSearchNoResults,
         Msg::NoUserDataDir,
         Msg::DeleteBusy,
         Msg::Deleting,
@@ -991,6 +999,10 @@ impl Msg {
             Self::SongsNoLibraryHint => "Launch Sela without arguments to use the default library.",
             Self::SongsEmptyTitle => "Songs · offline library",
             Self::SongsEmptyHint => "No songs yet. Use + New Song to create one.",
+            Self::SongSearchLabel => "Search songs",
+            Self::SongSearchPlaceholder => "Search",
+            Self::SongSearchClear => "Clear search",
+            Self::SongSearchNoResults => "No songs found",
             Self::NoUserDataDir => "No user data directory. Launch with --library DATABASE_PATH.",
             Self::DeleteBusy => "Not deleted: wait for the library to finish the previous change",
             Self::Deleting => "Deleting…",
@@ -1428,6 +1440,10 @@ impl Msg {
             Self::SongsNoLibraryHint => "Jalankan Sela tanpa argumen untuk memakai pustaka bawaan.",
             Self::SongsEmptyTitle => "Lagu · pustaka luring",
             Self::SongsEmptyHint => "Belum ada lagu. Gunakan + Lagu Baru untuk membuatnya.",
+            Self::SongSearchLabel => "Cari lagu",
+            Self::SongSearchPlaceholder => "Cari",
+            Self::SongSearchClear => "Hapus pencarian",
+            Self::SongSearchNoResults => "Tidak ada lagu ditemukan",
             Self::NoUserDataDir => {
                 "Tidak ada folder data pengguna. Jalankan dengan --library DATABASE_PATH."
             }
@@ -1819,7 +1835,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 386);
+        assert_eq!(Msg::ALL.len(), 390);
     }
 
     #[test]

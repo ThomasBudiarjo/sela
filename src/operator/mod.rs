@@ -58,7 +58,7 @@ use menus::{
 pub(super) use menus::{SONG_MENU, SongItem, TOP_MENUS};
 use options::SettingsState;
 pub(super) use options::{MonitorSlot, SettingsConfig};
-use resources::{NextSongRow, PreviousSongRow, TAB_IDS, TABS};
+use resources::{ClearSongSearch, NextSongRow, PreviousSongRow, SongSearch, TAB_IDS, TABS};
 
 const POLL: Duration = Duration::from_millis(16);
 const LABELS: usize = 8;
@@ -160,6 +160,7 @@ pub(super) struct DeferredSend {
 pub(crate) enum Request {
     Open,
     Catalog,
+    Search,
     Song(Version),
     DeleteSong(Version, String),
     SaveSchedule(storage::Schedule),
@@ -182,6 +183,8 @@ pub(super) struct Operator {
     request: Option<Request>,
     catalog_stale: bool,
     pub(super) catalog: Vec<(Version, String)>,
+    pub(super) search: SongSearch,
+    pub(super) search_input: Entity<TextInput>,
     pub(super) song_rows: Vec<FocusHandle>,
     slide_rows: Vec<FocusHandle>,
     pub(super) selected_song: Option<Version>,
@@ -281,6 +284,7 @@ pub(super) struct Operator {
     /// One background catalog scan feeding the shared font store.
     _font_scan: Option<Task<()>>,
     _library_changed: Subscription,
+    _search_observer: Subscription,
     _poller: Option<Task<()>>,
     _receipt_waker: Option<Task<()>>,
 }
@@ -342,6 +346,7 @@ impl Operator {
             KeyBinding::new("enter", MenuConfirm, Some("SelaSongMenu")),
             KeyBinding::new("space", MenuConfirm, Some("SelaSongMenu")),
             KeyBinding::new("escape", MenuDismiss, Some("SelaSongMenu")),
+            KeyBinding::new("escape", ClearSongSearch, Some("SelaSongSearch")),
         ]);
         // Main menu bar (M1-02/M1-03): Alt+mnemonics open the six menus
         // (EW8-OBS-010; only Alt+L observed, the rest are first-letter best
@@ -370,6 +375,17 @@ impl Operator {
                 this.catalog_stale = true;
                 cx.notify();
             });
+        let search_input = cx.new(|cx| {
+            TextInput::new(
+                "",
+                false,
+                sela::search::MAX_QUERY_BYTES,
+                resources::SEARCH_TAB_INDEX,
+                cx,
+            )
+            .expect("empty text is valid")
+        });
+        let search_observer = cx.observe(&search_input, |this, _, cx| this.search_text_changed(cx));
         let executor = cx.background_executor().clone();
         let poller = cx.spawn(async move |this, cx| {
             loop {
@@ -404,6 +420,8 @@ impl Operator {
             request,
             catalog_stale: false,
             catalog: Vec::new(),
+            search: SongSearch::default(),
+            search_input,
             song_rows: Vec::new(),
             slide_rows: Vec::new(),
             selected_song: None,
@@ -468,6 +486,7 @@ impl Operator {
             background_job: None,
             _font_scan: font_scan,
             _library_changed: library_changed,
+            _search_observer: search_observer,
             _poller: Some(poller),
             _receipt_waker: Some(receipt_waker),
         }

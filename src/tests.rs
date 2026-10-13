@@ -4246,3 +4246,218 @@ fn heavy_cue_ui_thread_time(cx: &mut TestAppContext) {
     }
     eprintln!("go_live UI-thread ms: {samples:?}");
 }
+
+mod song_search_ui {
+    use super::*;
+    use gpui::EntityInputHandler;
+    use sela::search::{Hit, Results};
+
+    fn type_search(cx: &mut VisualTestContext, operator: &Entity<Operator>, text: &str) {
+        let input = operator.read_with(cx, |o, _| o.search_input.clone());
+        cx.update(|window, cx| {
+            input.update(cx, |field, cx| {
+                let end = field.text().encode_utf16().count();
+                field.replace_text_in_range(Some(0..end), text, window, cx);
+            });
+        });
+        cx.run_until_parked();
+    }
+
+    fn shown(o: &Operator) -> Vec<String> {
+        let mut titles: Vec<_> = o.songs().iter().map(|(_, t)| t.clone()).collect();
+        titles.sort();
+        titles
+    }
+
+    fn settle_hits(cx: &mut VisualTestContext, operator: &Entity<Operator>, titles: &[&str]) {
+        let want: Vec<String> = titles.iter().map(|t| t.to_string()).collect();
+        settle(cx, operator, "search results", |o| {
+            o.search.hits().is_some() && shown(o) == want
+        });
+    }
+
+    fn loaded(cx: &mut TestAppContext) -> (VisualTestContext, Entity<Operator>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, _) = with_library(cx, Some(library_with_songs(&dir)), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+        (cx, operator, dir)
+    }
+
+    #[gpui::test]
+    fn two_characters_filter_by_title_and_words_and_one_character_queries_nothing(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut cx, operator, _dir) = loaded(cx);
+        type_search(&mut cx, &operator, "s");
+        for _ in 0..3 {
+            operator.update(&mut cx, |o, cx| o.poll(cx));
+            cx.run_until_parked();
+        }
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.search.submitted(), 0, "one character issues no FTS query");
+            assert!(o.search.hits().is_none());
+            assert_eq!(shown(o), ["Quiet Canticle", "Signal Hymn"]);
+        });
+        type_search(&mut cx, &operator, "si");
+        operator.read_with(&cx, |o, _| assert_eq!(o.search.submitted(), 1));
+        settle_hits(&mut cx, &operator, &["Signal Hymn"]);
+        // Lyric words, not only the title.
+        type_search(&mut cx, &operator, "refrain");
+        settle_hits(&mut cx, &operator, &["Signal Hymn"]);
+        type_search(&mut cx, &operator, "orig");
+        settle_hits(&mut cx, &operator, &["Quiet Canticle", "Signal Hymn"]);
+        // Back to one character: unfiltered again, no new query.
+        let before = operator.read_with(&cx, |o, _| o.search.submitted());
+        type_search(&mut cx, &operator, "o");
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.search.submitted(), before);
+            assert!(o.search.hits().is_none());
+            assert_eq!(shown(o).len(), 2);
+        });
+    }
+
+    #[gpui::test]
+    fn no_results_state_clear_button_and_escape(cx: &mut TestAppContext) {
+        let (mut cx, operator, _dir) = loaded(cx);
+        type_search(&mut cx, &operator, "zzqx");
+        settle(&mut cx, &operator, "empty hits", |o| {
+            o.search.hits().is_some_and(<[_]>::is_empty)
+        });
+        assert!(cx.debug_bounds("song-no-results").is_some());
+        click(&mut cx, "song-search-clear");
+        operator.read_with(&cx, |o, cx| {
+            assert_eq!(o.search_input.read(cx).text(), "");
+            assert!(o.search.hits().is_none());
+            assert_eq!(shown(o).len(), 2);
+        });
+        assert!(cx.debug_bounds("song-no-results").is_none());
+        // Esc empties the box too and keeps focus in it.
+        type_search(&mut cx, &operator, "sig");
+        settle_hits(&mut cx, &operator, &["Signal Hymn"]);
+        cx.update(|window, cx| {
+            let focus = operator.read(cx).search_input.read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        cx.simulate_keystrokes("escape");
+        operator.read_with(&cx, |o, cx| {
+            assert_eq!(o.search_input.read(cx).text(), "");
+            assert_eq!(shown(o).len(), 2);
+        });
+        cx.update(|window, cx| {
+            let focus = operator.read(cx).search_input.read(cx).focus_handle(cx);
+            assert!(focus.is_focused(window), "focus stays in the box");
+        });
+    }
+
+    #[gpui::test]
+    fn typing_in_the_box_never_toggles_masks_or_goes_live(cx: &mut TestAppContext) {
+        let (mut cx, operator, _dir) = loaded(cx);
+        click(&mut cx, "live-output");
+        settle(&mut cx, &operator, "output connection", connected);
+        let submitted_before = operator.read_with(&cx, |o, _| submitted(o));
+        cx.update(|window, cx| {
+            let focus = operator.read(cx).search_input.read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        cx.simulate_keystrokes("b c l shift-b shift-c shift-l ctrl-b ctrl-l pagedown right");
+        operator.read_with(&cx, |o, cx| {
+            assert_eq!(o.search_input.read(cx).text(), "bclBCL");
+            assert!(!o.masks.is_on(Mask::Black));
+            assert!(!o.masks.is_on(Mask::Clear));
+            assert!(!o.masks.is_on(Mask::Logo));
+            assert!(o.live.is_none());
+            assert_eq!(submitted(o), submitted_before, "no new renderer cue");
+        });
+    }
+
+    #[gpui::test]
+    fn selection_survives_a_matching_query_and_clears_without_replacing_preview(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut cx, operator, _dir) = loaded(cx);
+        let row = song_row(&mut cx, &operator, "Signal Hymn");
+        click(&mut cx, row);
+        let signal = operator.read_with(&cx, |o, _| version_of(o, "Signal Hymn"));
+        settle(&mut cx, &operator, "preview", |o| {
+            o.preview.as_ref().is_some_and(|p| p.version == signal)
+        });
+        type_search(&mut cx, &operator, "sig");
+        settle_hits(&mut cx, &operator, &["Signal Hymn"]);
+        type_search(&mut cx, &operator, "sign");
+        settle_hits(&mut cx, &operator, &["Signal Hymn"]);
+        operator.read_with(&cx, |o, _| assert_eq!(o.selected_song, Some(signal)));
+        // The selected song drops out: no selection, Preview unchanged, and
+        // the remaining song is not silently previewed.
+        type_search(&mut cx, &operator, "quiet");
+        settle_hits(&mut cx, &operator, &["Quiet Canticle"]);
+        for _ in 0..3 {
+            operator.update(&mut cx, |o, cx| o.poll(cx));
+            cx.run_until_parked();
+        }
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.selected_song, None);
+            assert_eq!(o.preview.as_ref().unwrap().title, "Signal Hymn");
+        });
+        // A click on the result previews that song.
+        click(&mut cx, "song-0");
+        settle(&mut cx, &operator, "result previewed", |o| {
+            o.preview.as_ref().is_some_and(|p| p.title == SECOND_SONG)
+        });
+    }
+
+    #[gpui::test]
+    fn results_refresh_after_a_song_is_saved(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = library_with_songs(&dir);
+        let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+        type_search(&mut cx, &operator, "grace");
+        settle(&mut cx, &operator, "empty hits", |o| {
+            o.search.hits().is_some_and(<[_]>::is_empty)
+        });
+        let canticle = operator.read_with(&cx, |o, _| version_of(o, SECOND_SONG));
+        let mut repository = Repository::open(&path).unwrap();
+        let mut song = repository.song(canticle).unwrap();
+        song.sections[0].lyrics = "Amazing grace".into();
+        repository.save_song(Some(canticle), song.clone()).unwrap();
+        cx.update(|_, cx| cx.default_global::<crate::song_library::LibraryChanged>().0 += 1);
+        settle_hits(&mut cx, &operator, &["Quiet Canticle"]);
+        // Renaming it so that it no longer matches removes it again.
+        let head = operator.read_with(&cx, |o, _| version_of(o, SECOND_SONG));
+        song.sections[0].lyrics = "Quiet line".into();
+        repository.save_song(Some(head), song).unwrap();
+        cx.update(|_, cx| cx.default_global::<crate::song_library::LibraryChanged>().0 += 1);
+        settle(&mut cx, &operator, "song left the results", |o| {
+            o.search.hits().is_some_and(<[_]>::is_empty)
+        });
+    }
+
+    #[gpui::test]
+    fn a_late_reply_for_an_older_query_never_overwrites_a_newer_one(cx: &mut TestAppContext) {
+        let (mut cx, operator, _dir) = loaded(cx);
+        type_search(&mut cx, &operator, "sig");
+        settle_hits(&mut cx, &operator, &["Signal Hymn"]);
+        let older = operator.read_with(&cx, |o, _| o.songs()[0].0);
+        type_search(&mut cx, &operator, "quiet");
+        settle_hits(&mut cx, &operator, &["Quiet Canticle"]);
+        // The first query's reply finally arrives, under its old generation.
+        let applied = operator.update(&mut cx, |o, _| {
+            o.search.apply(
+                Results {
+                    generation: 1,
+                    hits: vec![Hit {
+                        version: older,
+                        title: "Signal Hymn".into(),
+                    }],
+                    truncated: false,
+                },
+                false,
+                &mut None,
+            )
+        });
+        assert!(!applied);
+        assert_eq!(operator.read_with(&cx, |o, _| shown(o)), ["Quiet Canticle"]);
+    }
+}
