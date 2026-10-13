@@ -13,11 +13,11 @@ use sela::{
     arrangement::SectionId,
     background::{Aspect, Background, ImageRef},
     format::{Align, Outline, Shadow, Size, SlideFormat, VAlign},
-    storage::{Repository, Section, Song},
+    storage::{Repository, Schedule, Section, Song},
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--formatted-song] [--background-song] [--heavy-song]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule]";
 
 /// `scripts/live-output-windows.py` samples these.
 const BANDS: [[u8; 3]; 3] = [[200, 40, 40], [40, 160, 60], [40, 60, 200]];
@@ -62,13 +62,15 @@ fn backdrop(path: &std::path::Path) -> Result<ImageRef, Box<dyn std::error::Erro
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let mut path = None;
-    let (mut second, mut formatted, mut background, mut heavy) = (false, false, false, false);
+    let (mut second, mut formatted, mut background, mut heavy, mut vanished) =
+        (false, false, false, false, false);
     for arg in args {
         match arg {
             flag if flag == "--second-song" => second = true,
             flag if flag == "--formatted-song" => formatted = true,
             flag if flag == "--background-song" => background = true,
             flag if flag == "--heavy-song" => heavy = true,
+            flag if flag == "--vanished-schedule" => vanished = true,
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -116,6 +118,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     variants: Vec::new(),
                     sections,
                     master: None,
+                },
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        return Ok(());
+    }
+    if vanished {
+        let image = backdrop(path)?;
+        let folder = path.parent().ok_or("database has no folder")?;
+        let managed = sela::images::images_dir(folder).join(&image.name);
+        std::fs::rename(&managed, folder.join("original-backdrop.png"))?;
+        let version = repository
+            .save_song(
+                None,
+                Song {
+                    title: "Vanished Hymn".into(),
+                    authors: String::new(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    variants: Vec::new(),
+                    sections: vec![Section {
+                        background: Some(Background::image(image)),
+                        ..section("Verse 1", "Verse 1 original line")
+                    }],
+                    master: Some(Background::color(MASTER)),
+                },
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        repository
+            .save_schedule(
+                None,
+                Schedule {
+                    title: "Sunday".into(),
+                    items: vec![version],
                 },
             )
             .map_err(|e| format!("{e:?}"))?;

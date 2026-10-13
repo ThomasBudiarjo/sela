@@ -509,6 +509,20 @@ impl Operator {
             return;
         }
         let index = self.preview_slide.min(item.slides.len() - 1);
+        if !self.ready_for_cue() {
+            return;
+        }
+        // A slide with an image waits for their check; a missing or damaged
+        // file asks before anything goes live, so the audience never gets a
+        // black slide the operator did not choose.
+        if self.hold_go_live_for_check(&item, index) {
+            return;
+        }
+        self.go_live_item(item, index);
+    }
+
+    /// The Go Live cue itself, once any file check has passed or been waived.
+    pub(crate) fn go_live_item(&mut self, item: Item, index: usize) {
         if self.ready_for_cue() {
             if self.live.as_ref().map(|live| live.version) != Some(item.version) {
                 self.cancel_cues();

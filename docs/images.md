@@ -184,14 +184,83 @@ assembled by hand). Permission denial runs for real: `#[cfg(unix)]` with
 `chmod`, and on Windows an ignored test that adds and removes deny entries
 with `icacls` (`cargo test --lib images::tests::permission -- --ignored`).
 
+## M1-11b — preflight UI and photo downscale
+
+### Large photos are downscaled at import
+
+A photo whose decoded size exceeds the 64 MiB decode budget (about 16.7 MP,
+so a 24 MP camera JPEG) is no longer refused. `images::import_fitted(profile,
+source, fit, cancel)` decodes it off the UI thread, applies Exif orientation,
+scales it down with a Triangle filter to fit `fit` (the operator passes the
+output extent; `DEFAULT_FIT` is 1920×1080 for callers without one), keeping
+the aspect ratio and never upscaling, and stores the result as the managed
+copy in the source's format (JPEG at quality 90, PNG stays PNG). The
+original file is only read: its bytes and modification time are unchanged.
+The `Imported` result carries `downscaled_from`; the Media footer shows the
+note "Downscaled from W×H to W×H to fit the output" next to the other notes
+(reused, rotated, color profile ignored). A re-import of the same source
+produces the same bytes and is reused.
+
+Bounds for the shrink path only: 48 MP declared dimensions and 48 MiB of
+file bytes; anything larger, truncated, or undecodable is refused with the
+usual side-specific error and leaves no file. Cancelling mid-shrink leaves
+no file either. Files inside the budget import byte for byte as before.
+
+### Preflight in the operator
+
+- Opening a saved schedule starts a `preflight::Worker` check of its songs.
+  If anything needs attention, the Files need attention dialog opens on its
+  own (default button Close) and the Schedule pane shows
+  "N schedule items have missing or changed files" with a Review files
+  button that reopens it.
+- The report lists each affected item and, per image, the problem:
+  Missing, Changed, Too large or Corrupt. A pinned file whose hash no longer
+  matches is Corrupt when it cannot be decoded (`images::verify`), otherwise
+  Changed. Fonts, the logo and the unchecked counts are listed as captions.
+- Locate… opens the platform file prompt and submits `Request::Relink`. A
+  file with other bytes is refused with a message and nothing changes; a
+  match is copied under the pinned name, the shown backgrounds are rebuilt
+  and the schedule is checked again, so the row disappears.
+- Go Live checks the image of the slide being sent on the preflight worker
+  (`Request::Images`, which never supersedes a schedule check). If it is
+  missing, changed, too large or corrupt, the Go Live with a missing file
+  dialog names it and offers Go Live anyway or Cancel (the default). Cancel
+  leaves the audience on the current scene and says so; Go Live anyway sends
+  the usual cue, which shows black with the warning. Slides without an image
+  are never held, and if the worker is gone the cue is sent unchecked.
+- Import shows "Importing NAME…" with a Cancel button in the Media footer
+  while the worker runs. Cancel calls `Worker::cancel_imports`; the copy is
+  abandoned and the library and image list are unchanged. Import is
+  disabled while one is in flight.
+
+Policy choice: the whole-schedule check happens on open; at Go Live only the
+slide being sent is checked, so a missing image on a later slide does not
+interrupt the current one (it warns when it is reached).
+
+### Tests (M1-11b)
+
+`cargo test --lib images:: preflight::` adds: a 6000×4000 JPEG shrunk to the
+fit with the source bytes and mtime unchanged and a reused re-import; an
+Exif-oriented shrink and a PNG that stays PNG; within-budget files
+untouched; cancelled and corrupt shrinks leaving no file; `target()`
+arithmetic; corrupt versus changed versus missing in preflight;
+`check_images` and the worker's image check. GPUI tests (`preflight_ui` in
+`src/tests.rs`): the report appears for a missing image, a wrong file is
+refused and the right one relinks and clears the row; Go Live asks, Cancel
+keeps the scene, Go Live anyway sends; Cancel import leaves no managed file;
+a 6000×4000 JPEG imports with the downscale note and an unchanged source
+hash. `scripts/preflight-windows.py` drives the report and the Go Live
+warning on Windows.
+
 ### Open
 
-- M1-11b operator UI: run preflight when a schedule opens or before Live,
-  show the report, Locate… with a file prompt that submits
-  `Request::Relink`, Cancel import, and show `Imported` notes (reused,
-  rotated, color profile ignored).
+- The Locate… native file chooser, the 24 MP import and Cancel import are
+  not driven natively (GPUI and unit tests only).
+- Corrupt-but-hash-matching files are not detected at schedule open
+  (hash only); they are caught when decoded for display.
+- The shrink re-encodes JPEG at quality 90; a lossless PNG of a very large
+  screenshot is shrunk to PNG at the same cost. No EW observation yet.
 - EasyWorship observation of media import, duplicates and missing-media
   handling; supported formats beyond PNG/JPEG (M2 for video).
-- Larger photos (decoded budget), stale temporary cleanup, thumbnails at
-  scale and metadata (M1-11 checklist), Linux/macOS runs of the permission
-  test, and native checks.
+- Stale temporary cleanup, thumbnails at scale and metadata (M1-11
+  checklist), and Linux/macOS runs of the permission test.

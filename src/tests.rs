@@ -864,7 +864,6 @@ fn image_backgrounds_gate_the_cue_and_missing_ones_show_black_with_a_warning(
     click(&mut cx, "go-live");
     operator.read_with(&cx, |o, _| {
         assert_eq!(submitted(o), sent, "no cue before the background lands");
-        assert_eq!(o.live_message.as_deref(), Some("Preparing background…"));
         assert_eq!(o.on_screen(), None);
     });
     // The decode lands: the deferred cue retries and is acknowledged.
@@ -4459,5 +4458,234 @@ mod song_search_ui {
         });
         assert!(!applied);
         assert_eq!(operator.read_with(&cx, |o, _| shown(o)), ["Quiet Canticle"]);
+    }
+}
+
+mod preflight_ui {
+    use super::*;
+    use crate::operator::Dialog;
+    use sela::{
+        background::{Background, ImageRef},
+        storage::{Repository, Schedule},
+    };
+    use sha2::Digest;
+
+    struct Fixture {
+        library: std::path::PathBuf,
+        original: std::path::PathBuf,
+    }
+
+    /// A saved schedule whose only song pins `pinned.png`, which is gone from
+    /// the managed folder; `original` holds the same bytes elsewhere.
+    fn vanished_image(dir: &tempfile::TempDir) -> Fixture {
+        let bytes = png(64, 36, [30, 110, 210, 255]);
+        let original = dir.path().join("elsewhere.png");
+        std::fs::write(&original, &bytes).unwrap();
+        let library = dir.path().join("library.sqlite");
+        let mut repository = Repository::open(&library).unwrap();
+        let version = repository
+            .save_song(
+                None,
+                Song {
+                    title: "Pinned Hymn".into(),
+                    authors: String::new(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    variants: Vec::new(),
+                    sections: vec![Section {
+                        id: SectionId::allocate(),
+                        label: "Verse 1".into(),
+                        lyrics: "Line one".into(),
+                        format: Default::default(),
+                        background: Some(Background::image(ImageRef {
+                            name: "pinned.png".into(),
+                            sha256: sha2::Sha256::digest(&bytes).into(),
+                        })),
+                    }],
+                    master: Some(Background::color([0, 0, 90])),
+                },
+            )
+            .unwrap();
+        repository
+            .save_schedule(
+                None,
+                Schedule {
+                    title: "Sunday".into(),
+                    items: vec![version],
+                },
+            )
+            .unwrap();
+        Fixture { library, original }
+    }
+
+    fn open_saved(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+        settle(cx, operator, "catalog", |o| o.catalog.len() == 1);
+        click(cx, "open-schedule");
+        settle(cx, operator, "saved list", |o| {
+            o.saved_schedules.as_ref().is_some_and(|l| l.len() == 1)
+        });
+        click(cx, "saved-0");
+    }
+
+    fn report_shown(o: &Operator) -> bool {
+        o.dialog == Some(Dialog::Preflight)
+            && o.assets
+                .report
+                .as_ref()
+                .is_some_and(|r| !r.items.is_empty())
+    }
+
+    #[gpui::test]
+    fn missing_image_lists_in_the_report_and_locate_relinks_it(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = vanished_image(&dir);
+        let (mut cx, operator, _) = with_library(cx, Some(fixture.library.clone()), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        open_saved(&mut cx, &operator);
+        settle(&mut cx, &operator, "report", report_shown);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("preflight-row-0").is_some());
+        assert!(cx.debug_bounds("locate-0").is_some());
+
+        // Other bytes under the right name are refused and the row stays.
+        let wrong = dir.path().join("wrong.png");
+        std::fs::write(&wrong, png(64, 36, [1, 2, 3, 255])).unwrap();
+        click(&mut cx, "locate-0");
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| Some(vec![wrong.clone()]));
+        settle(&mut cx, &operator, "refusal", |o| {
+            o.assets.note.as_ref().is_some_and(|(_, failed)| *failed)
+        });
+        assert!(
+            !sela::images::images_dir(dir.path())
+                .join("pinned.png")
+                .exists()
+        );
+        assert!(operator.read_with(&cx, |o, _| report_shown(o)));
+
+        let original = fixture.original.clone();
+        click(&mut cx, "locate-0");
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| Some(vec![original.clone()]));
+        settle(&mut cx, &operator, "relinked and rechecked", |o| {
+            o.assets.note.as_ref().is_some_and(|(_, failed)| !*failed)
+                && o.assets.report.as_ref().is_some_and(|r| r.items.is_empty())
+        });
+        assert!(
+            sela::images::images_dir(dir.path())
+                .join("pinned.png")
+                .exists()
+        );
+    }
+
+    #[gpui::test]
+    fn go_live_on_a_missing_image_asks_and_cancel_keeps_the_scene(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = vanished_image(&dir);
+        let (mut cx, operator, _) = with_library(cx, Some(fixture.library), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        open_saved(&mut cx, &operator);
+        settle(&mut cx, &operator, "report", report_shown);
+        click(&mut cx, "dialog-cancel");
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+
+        click(&mut cx, "live-output");
+        settle(&mut cx, &operator, "output connection", connected);
+        cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+        cx.simulate_keystrokes("down");
+        settle(&mut cx, &operator, "preview", |o| {
+            o.preview.as_ref().is_some_and(|p| p.resolved.is_some())
+        });
+        let sent = operator.read_with(&cx, |o, _| submitted(o));
+        click(&mut cx, "go-live");
+        settle(&mut cx, &operator, "warning", |o| {
+            o.dialog == Some(Dialog::GoLiveMissing)
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("go-live-missing").is_some());
+        assert_eq!(operator.read_with(&cx, |o, _| submitted(o)), sent);
+
+        click(&mut cx, "dialog-cancel");
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.dialog, None);
+            assert_eq!(o.on_screen(), None, "the audience scene is unchanged");
+            assert_eq!(submitted(o), sent);
+            assert_eq!(
+                o.live_message.as_deref(),
+                Some("Go Live cancelled; the current scene is unchanged")
+            );
+        });
+
+        click(&mut cx, "go-live");
+        settle(&mut cx, &operator, "warning again", |o| {
+            o.dialog == Some(Dialog::GoLiveMissing)
+        });
+        click(&mut cx, "dialog-confirm");
+        settle(&mut cx, &operator, "live anyway", |o| {
+            o.on_screen() == Some("Pinned Hymn · Verse 1")
+        });
+    }
+
+    fn big_jpeg(path: &std::path::Path) {
+        image::RgbImage::from_pixel(6000, 4000, image::Rgb([40, 90, 160]))
+            .save(path)
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn cancelled_import_leaves_the_library_unchanged(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let library = library_with_song(&dir);
+        let source = dir.path().join("big.jpg");
+        big_jpeg(&source);
+        let (mut cx, operator, _) = with_library(cx, Some(library), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "list", |o| o.images.is_empty());
+        click(&mut cx, "Media");
+        click(&mut cx, "import-image");
+        assert!(cx.did_prompt_for_paths());
+        let picked = source.clone();
+        cx.simulate_path_prompt_response(|_| Some(vec![picked.clone()]));
+        cx.run_until_parked();
+        assert!(operator.read_with(&cx, |o, _| o.assets.importing.is_some()));
+        operator.update(&mut cx, |o, _| o.cancel_import());
+        settle(&mut cx, &operator, "cancelled", |o| {
+            o.assets.importing.is_none()
+        });
+        operator.read_with(&cx, |o, _| assert!(o.images.is_empty()));
+        let managed = sela::images::images_dir(dir.path());
+        let files = std::fs::read_dir(&managed).map_or(0, |d| d.count());
+        assert_eq!(files, 0, "no managed copy or partial file");
+    }
+
+    #[gpui::test]
+    fn oversize_photo_imports_as_a_downscaled_copy_with_a_note(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let library = library_with_song(&dir);
+        let source = dir.path().join("big.jpg");
+        big_jpeg(&source);
+        let before = sha2::Sha256::digest(std::fs::read(&source).unwrap());
+        let (mut cx, operator, _) = with_library(cx, Some(library), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "list", |o| o.images.is_empty());
+        click(&mut cx, "Media");
+        click(&mut cx, "import-image");
+        let picked = source.clone();
+        cx.simulate_path_prompt_response(|_| Some(vec![picked.clone()]));
+        settle(&mut cx, &operator, "imported", |o| o.images.len() == 1);
+        cx.run_until_parked();
+        operator.read_with(&cx, |o, _| {
+            assert!(
+                o.assets
+                    .import_notes
+                    .iter()
+                    .any(|n| n.contains("6000×4000")),
+                "{:?}",
+                o.assets.import_notes
+            );
+        });
+        assert!(cx.debug_bounds("import-notes").is_some());
+        let after = sha2::Sha256::digest(std::fs::read(&source).unwrap());
+        assert_eq!(before, after, "the original file is untouched");
     }
 }

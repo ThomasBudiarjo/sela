@@ -100,6 +100,7 @@ impl Operator {
 
 impl Render for Operator {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.focus_pending_dialog(window, cx);
         if self.activation.is_none() {
             self.activation = Some(cx.observe_window_activation(window, |this, window, _| {
                 if window.is_window_active() {
@@ -497,7 +498,27 @@ impl Render for Operator {
                     )
                 })
                 .when(self.tab == 2, |d| {
-                    d.child(
+                    d.when(!self.assets.import_notes.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .id("import-notes")
+                                .debug_selector(|| "import-notes".into())
+                                .role(Role::Status)
+                                .aria_label(t!(Msg::ImportImage))
+                                .accessibility_id("import-notes")
+                                .flex_shrink_0()
+                                .flex()
+                                .flex_col()
+                                .px_3()
+                                .py_1()
+                                .border_t_1()
+                                .border_color(rgb(BORDER))
+                                .text_size(px(TEXT_CAPTION))
+                                .text_color(rgb(MUTED))
+                                .children(self.assets.import_notes.iter().cloned()),
+                        )
+                    })
+                    .child(
                         div()
                             .h(px(STATUS_BAR_H))
                             .flex_shrink_0()
@@ -506,12 +527,25 @@ impl Render for Operator {
                             .gap_1()
                             .border_t_1()
                             .border_color(rgb(BORDER))
-                            .child(self.button(
-                                Control::ImportImage,
-                                "import-image",
-                                t!(Msg::ImportImage),
-                                cx,
-                            ))
+                            .child(
+                                self.button(
+                                    Control::ImportImage,
+                                    "import-image",
+                                    t!(Msg::ImportImage),
+                                    cx,
+                                )
+                                .when(self.assets.importing.is_some(), |d| {
+                                    mark_disabled(d).text_color(rgb(DISABLED))
+                                }),
+                            )
+                            .when(self.assets.importing.is_some(), |d| {
+                                d.child(self.button(
+                                    Control::CancelImport,
+                                    "cancel-import",
+                                    t!(Msg::ImportCancel),
+                                    cx,
+                                ))
+                            })
                             .child(
                                 self.button(
                                     Control::UseAsLogo,

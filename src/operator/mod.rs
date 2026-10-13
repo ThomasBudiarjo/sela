@@ -32,6 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod assets;
 mod controls;
 mod dialogs;
 mod layout;
@@ -42,6 +43,7 @@ mod preview_live;
 mod resources;
 mod schedule;
 
+use assets::{Assets, PREFLIGHT_DIALOG_W};
 pub(super) use controls::Control;
 use controls::{
     ControlSet, DIALOG_TAB_INDEX, IMAGE_TAB_INDEX, SAVED_TAB_INDEX, SCHEDULE_TAB_INDEX,
@@ -223,6 +225,8 @@ pub(super) struct Operator {
     profile: Option<PathBuf>,
     pub(super) settings: SettingsState,
     image_worker: Option<images::Worker>,
+    /// Preflight worker and report, Go Live hold, import notes (M1-11b).
+    pub(super) assets: Assets,
     pub(super) images: Vec<String>,
     image_rows: Vec<FocusHandle>,
     pub(super) selected_image: Option<String>,
@@ -307,6 +311,7 @@ impl Operator {
             .and_then(Path::parent)
             .filter(|p| !p.as_os_str().is_empty())
             .map(Path::to_path_buf);
+        let assets = Assets::start(profile.as_deref());
         let mut media_message = None;
         let image_worker = profile.clone().and_then(|profile| {
             let worker = images::Worker::start(profile).ok();
@@ -449,6 +454,7 @@ impl Operator {
             profile,
             settings,
             image_worker,
+            assets,
             images: Vec::new(),
             image_rows: Vec::new(),
             selected_image: None,

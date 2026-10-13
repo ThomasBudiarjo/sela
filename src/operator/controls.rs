@@ -41,6 +41,8 @@ pub(crate) enum Control {
     DialogCancel,
     NewSchedule,
     ItemMenuRemove,
+    CancelImport,
+    ReviewFiles,
 }
 
 /// First tab index of each focus band. Rows are placed by band so lists of
@@ -53,7 +55,7 @@ pub(crate) const SLIDE_TAB_INDEX: isize = 1000;
 pub(crate) const IMAGE_TAB_INDEX: isize = 2000;
 
 impl Control {
-    pub(crate) const ALL: [Control; 32] = [
+    pub(crate) const ALL: [Control; 34] = [
         Self::ResetLayout,
         Self::Quit,
         Self::CollapseResources,
@@ -86,6 +88,8 @@ impl Control {
         Self::DialogCancel,
         Self::NewSchedule,
         Self::ItemMenuRemove,
+        Self::CancelImport,
+        Self::ReviewFiles,
     ];
 
     pub(crate) const COUNT: usize = Self::ALL.len();
@@ -121,6 +125,7 @@ impl Control {
                 | Self::NewMenu
                 | Self::NewSongItem
                 | Self::ImportImage
+                | Self::CancelImport
                 | Self::UseAsLogo
                 | Self::ImageMenuLogo
                 | Self::Normalize
@@ -265,6 +270,8 @@ impl Operator {
             Control::Black => self.toggle_mask(Mask::Black),
             Control::Clear => self.toggle_mask(Mask::Clear),
             Control::ImportImage => self.prompt_import(cx),
+            Control::CancelImport => self.cancel_import(),
+            Control::ReviewFiles => self.review_files(window, cx),
             Control::UseAsLogo => self.use_as_logo(),
             Control::ImageMenuLogo => {
                 self.image_menu = None;
@@ -348,11 +355,18 @@ impl Operator {
                     self.apply_options(cx);
                     self.close_dialog(window, cx);
                 }
-                Some(Dialog::Open) | None => return,
+                Some(Dialog::GoLiveMissing) => {
+                    self.close_dialog(window, cx);
+                    self.go_live_anyway();
+                }
+                Some(Dialog::Open | Dialog::Preflight) | None => return,
             },
             Control::DialogCancel if self.dialog.is_some() => {
                 if self.dialog == Some(Dialog::Unsaved(Then::Quit)) {
                     self.cancel_close_request();
+                }
+                if self.dialog == Some(Dialog::GoLiveMissing) {
+                    self.hold_go_live_back();
                 }
                 self.close_dialog(window, cx);
             }

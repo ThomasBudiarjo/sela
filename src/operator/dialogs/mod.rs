@@ -18,6 +18,10 @@ pub(crate) enum Dialog {
     DeleteSong(Version),
     /// Options (Edit › Options in EW8-OBS-053); drawn by `options_overlay`.
     Options,
+    /// Missing, changed or corrupt files found by the schedule preflight.
+    Preflight,
+    /// Go Live on an item whose images cannot be shown as chosen.
+    GoLiveMissing,
 }
 
 impl Operator {
@@ -112,6 +116,8 @@ impl Operator {
                 None => t!(Msg::DialogRemoveGeneric).into(),
             },
             Dialog::Options => return None,
+            Dialog::Preflight => t!(Msg::PreflightHeading).into(),
+            Dialog::GoLiveMissing => t!(Msg::GoLiveMissingHeading).into(),
             Dialog::DeleteSong(version) => match self.catalog.iter().find(|(v, _)| *v == version) {
                 Some((_, title)) => t!(Msg::DialogDeleteTitled, title = shown_title(title)),
                 None => t!(Msg::DialogDeleteGeneric).into(),
@@ -123,11 +129,14 @@ impl Operator {
             Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDiscard)),
             Dialog::Remove(_) => Some(t!(Msg::ConfirmRemove)),
             Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmDelete)),
-            Dialog::Options => None,
+            Dialog::Options | Dialog::Preflight => None,
+            Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
         };
         let body = match dialog {
             Dialog::SaveAs => self.title_input.clone().map(IntoElement::into_any_element),
             Dialog::Open => Some(self.saved_list(cx)),
+            Dialog::Preflight => Some(self.preflight_body(cx)),
+            Dialog::GoLiveMissing => Some(self.go_live_missing_body()),
             Dialog::DeleteSong(_) => Some(
                 div()
                     .text_size(px(TEXT_SMALL))
@@ -144,7 +153,11 @@ impl Operator {
                 .absolute()
                 .top(px(MENU_BAR_H + 44.))
                 .left(px(8.))
-                .w(px(380.))
+                .w(px(if dialog == Dialog::Preflight {
+                    PREFLIGHT_DIALOG_W
+                } else {
+                    380.
+                }))
                 .p(px(DIALOG_PAD))
                 .flex()
                 .flex_col()
@@ -183,6 +196,8 @@ impl Operator {
                             "dialog-cancel",
                             if matches!(dialog, Dialog::Remove(_) | Dialog::DeleteSong(_)) {
                                 t!(Msg::ButtonKeep)
+                            } else if dialog == Dialog::Preflight {
+                                t!(Msg::PreflightClose)
                             } else {
                                 t!(Msg::ButtonCancel)
                             },

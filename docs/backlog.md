@@ -818,8 +818,11 @@ ICC ignored (sRGB), APNG refused, identical re-import reused, cancellable
 atomic copy. Next: M1-11b, the operator preflight report, Locate…/relink and
 import cancel UI.
 
-M1-11b (**planned**): operator preflight UI (missing-file report, Locate…,
-Cancel) and downscaling of large photos at import.
+M1-11b (**implemented-unqualified**): operator preflight UI (missing-file
+report on schedule open, Locate…, Go Live warning, Cancel import, import
+notes) and downscaling of large photos at import; see
+[images](images.md#m1-11b--preflight-ui-and-photo-downscale). Open: native
+Locate… chooser and import runs, thumbnails, EW media observation.
 
 - [x] Import supported still-image formats on bounded workers; document supported
   dimensions, byte limits, orientation, color handling and animated-file policy.
@@ -827,9 +830,10 @@ Cancel) and downscaling of large photos at import.
 - [x] Store media outside SQLite with stable identity and managed/reference policy.
   (Managed copies only, pinned by name and SHA-256; no reference mode.)
 - [ ] Add original thumbnail pipeline and lazy loading without decoding in frames.
-- [ ] Preflight a schedule for missing/corrupt files and fonts; provide locate/repair
+- [x] Preflight a schedule for missing/corrupt files and fonts; provide locate/repair
   actions without silently replacing unrelated assets.
-  (M1-11a: report and relink APIs on a worker; operator UI is M1-11b.)
+  (M1-11a APIs; M1-11b operator report, Locate…, Go Live warning. Native
+  Locate… chooser not driven.)
 - [x] Test moved files, same-name different bytes, decompression bombs, permission
   denied, metadata rotation and cancellation mid-import.
   (Permission denial ran on Windows through an ignored `icacls` test; the

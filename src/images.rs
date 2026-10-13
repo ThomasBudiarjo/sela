@@ -23,6 +23,15 @@ use std::{
     },
 };
 
+mod downscale;
+
+/// Where a photo over the decode budget is fitted when the caller knows no
+/// output size (the Song Editor's import).
+pub const DEFAULT_FIT: Extent = Extent {
+    width: 1920,
+    height: 1080,
+};
+
 pub const IMAGES: &str = "Resources/Images";
 pub const LOGO_FILE: &str = "logo.txt";
 const MAX_NAME: usize = 255;
@@ -215,21 +224,25 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, Error> {
 }
 
 fn read_bounded_at(path: &Path, side: Side) -> Result<Vec<u8>, Error> {
+    read_up_to(path, side, MAX_FILE_BYTES)
+}
+
+fn read_up_to(path: &Path, side: Side, limit: usize) -> Result<Vec<u8>, Error> {
     let error = |e| io_at(e, side);
     let metadata = fs::metadata(path).map_err(error)?;
     if !metadata.is_file() {
         return Err(Error::Io(io::ErrorKind::InvalidInput));
     }
-    if metadata.len() > MAX_FILE_BYTES as u64 {
+    if metadata.len() > limit as u64 {
         return Err(Error::TooLarge);
     }
     let mut bytes = Vec::new();
     File::open(path)
         .map_err(error)?
-        .take(MAX_FILE_BYTES as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(error)?;
-    if bytes.len() > MAX_FILE_BYTES {
+    if bytes.len() > limit {
         return Err(Error::TooLarge);
     }
     Ok(bytes)
@@ -250,12 +263,25 @@ fn check_image(bytes: &[u8]) -> Result<(), Error> {
 struct Inspected {
     orientation: image::metadata::Orientation,
     icc: bool,
+    /// The decoded size exceeds `MAX_DECODED_BYTES`, so the image can only
+    /// be stored downscaled (`downscale::fit`).
+    over_budget: bool,
 }
 
 /// Header-only checks: format, animation, declared dimensions and metadata.
 /// Declared dimensions are bounded here, before any pixel buffer exists.
-fn inspect(bytes: &[u8]) -> Result<Inspected, Error> {
-    fn read(decoder: &mut impl image::ImageDecoder) -> Result<Inspected, Error> {
+/// `downscalable` widens the pixel bound from the decode budget to
+/// `downscale::MAX_SOURCE_PIXELS` for images that will be shrunk.
+fn inspect(bytes: &[u8], downscalable: bool) -> Result<Inspected, Error> {
+    let (max_pixels, max_buffer) = if downscalable {
+        (
+            downscale::MAX_SOURCE_PIXELS,
+            downscale::MAX_SOURCE_PIXELS * 8,
+        )
+    } else {
+        (MAX_DECODED_BYTES as u64 / 4, MAX_DECODED_BYTES as u64)
+    };
+    let read = |decoder: &mut dyn image::ImageDecoder| -> Result<Inspected, Error> {
         let (width, height) = decoder.dimensions();
         if width == 0 || height == 0 {
             return Err(Error::Corrupt);
@@ -263,16 +289,18 @@ fn inspect(bytes: &[u8]) -> Result<Inspected, Error> {
         // `total_bytes` is the decoder's own buffer, twice RGBA for 16-bit PNGs.
         if width > MAX_EDGE
             || height > MAX_EDGE
-            || u64::from(width) * u64::from(height) * 4 > MAX_DECODED_BYTES as u64
-            || decoder.total_bytes() > MAX_DECODED_BYTES as u64
+            || u64::from(width) * u64::from(height) > max_pixels
+            || decoder.total_bytes() > max_buffer
         {
             return Err(Error::Dimensions);
         }
         Ok(Inspected {
             orientation: decoder.orientation().map_err(|_| Error::Corrupt)?,
             icc: decoder.icc_profile().map_err(|_| Error::Corrupt)?.is_some(),
+            over_budget: u64::from(width) * u64::from(height) * 4 > MAX_DECODED_BYTES as u64
+                || decoder.total_bytes() > MAX_DECODED_BYTES as u64,
         })
-    }
+    };
     let limited = |error: image::ImageError| match error {
         image::ImageError::Limits(_) => Error::Dimensions,
         _ => Error::Corrupt,
@@ -282,7 +310,7 @@ fn inspect(bytes: &[u8]) -> Result<Inspected, Error> {
             let mut limits = image::Limits::default();
             limits.max_image_width = Some(MAX_EDGE);
             limits.max_image_height = Some(MAX_EDGE);
-            limits.max_alloc = Some(MAX_DECODED_BYTES as u64);
+            limits.max_alloc = Some(max_buffer);
             let mut png = image::codecs::png::PngDecoder::with_limits(Cursor::new(bytes), limits)
                 .map_err(limited)?;
             if png.is_apng().map_err(|_| Error::Corrupt)? {
@@ -311,6 +339,10 @@ pub struct Imported {
     pub oriented: bool,
     /// An embedded ICC color profile is ignored; samples are shown as sRGB.
     pub icc_ignored: bool,
+    /// The photo exceeded the decode budget, so the stored copy is a shrunk
+    /// re-encoding; this is the source's displayed size. The source file is
+    /// never modified.
+    pub downscaled_from: Option<Extent>,
 }
 
 impl Imported {
@@ -325,7 +357,7 @@ impl Imported {
 /// Copies a PNG/JPEG into the profile without replacing an existing image;
 /// a clashing name gets a " (2)" style suffix. Returns the stored name.
 pub fn import(profile: &Path, source: &Path) -> Result<String, Error> {
-    import_with(profile, source, &mut || false).map(|imported| imported.name)
+    import_with(profile, source, DEFAULT_FIT, &mut || false).map(|imported| imported.name)
 }
 
 /// `import` with cancellation and the full result. Blocking: background
@@ -335,7 +367,18 @@ pub fn import_checked(
     source: &Path,
     cancel: &AtomicBool,
 ) -> Result<Imported, Error> {
-    import_with(profile, source, &mut || cancel.load(Ordering::Acquire))
+    import_fitted(profile, source, DEFAULT_FIT, cancel)
+}
+
+/// `import_checked` where a photo over the decode budget is shrunk to fit
+/// inside `fit` (the output size), keeping its aspect.
+pub fn import_fitted(
+    profile: &Path,
+    source: &Path,
+    fit: Extent,
+    cancel: &AtomicBool,
+) -> Result<Imported, Error> {
+    import_with(profile, source, fit, &mut || cancel.load(Ordering::Acquire))
 }
 
 fn numbered(stem: &str, attempt: u32, ext: &str) -> String {
@@ -351,6 +394,7 @@ fn numbered(stem: &str, attempt: u32, ext: &str) -> String {
 fn import_with(
     profile: &Path,
     source: &Path,
+    fit: Extent,
     cancel: &mut dyn FnMut() -> bool,
 ) -> Result<Imported, Error> {
     let name = source
@@ -365,24 +409,36 @@ fn import_with(
         .collect();
     let stem = stem.trim().trim_start_matches('.');
     let stem = if stem.is_empty() { "image" } else { stem };
-    let bytes = read_bounded_at(source, Side::Source)?;
+    let mut bytes = read_up_to(source, Side::Source, downscale::MAX_SOURCE_BYTES)?;
     if cancel() {
         return Err(Error::Cancelled);
     }
-    let inspected = inspect(&bytes)?;
+    let inspected = inspect(&bytes, true)?;
+    let mut downscaled_from = None;
     // The full bounded decode proves the pixel data is intact, so an imported
     // image never renders black for corruption later.
-    let (extent, _) = scene::decode_image(
-        &bytes,
-        SOURCE_CAPS,
-        MAX_DECODED_BYTES,
-        &AtomicBool::new(false),
-    )
-    .map_err(|error| match error {
-        PrepareError::TooLarge => Error::Dimensions,
-        PrepareError::UnsupportedImage => Error::Unsupported,
-        _ => Error::Corrupt,
-    })?;
+    let extent = if inspected.over_budget {
+        let shrunk = downscale::fit(&bytes, fit, cancel)?;
+        downscaled_from = Some(shrunk.from);
+        bytes = shrunk.bytes;
+        shrunk.extent
+    } else {
+        if bytes.len() > MAX_FILE_BYTES {
+            return Err(Error::TooLarge);
+        }
+        scene::decode_image(
+            &bytes,
+            SOURCE_CAPS,
+            MAX_DECODED_BYTES,
+            &AtomicBool::new(false),
+        )
+        .map_err(|error| match error {
+            PrepareError::TooLarge => Error::Dimensions,
+            PrepareError::UnsupportedImage => Error::Unsupported,
+            _ => Error::Corrupt,
+        })?
+        .0
+    };
     if cancel() {
         return Err(Error::Cancelled);
     }
@@ -392,8 +448,10 @@ fn import_with(
         sha256,
         extent,
         reused,
-        oriented: inspected.orientation != image::metadata::Orientation::NoTransforms,
+        oriented: downscaled_from.is_none()
+            && inspected.orientation != image::metadata::Orientation::NoTransforms,
         icc_ignored: inspected.icc,
+        downscaled_from,
     };
     let dir = images_dir(profile);
     fs::create_dir_all(&dir).map_err(io_error)?;
@@ -576,6 +634,27 @@ pub fn content_hash(profile: &Path, name: &str) -> Result<[u8; 32], Substitute> 
             Error::TooLarge => Substitute::TooLarge,
             _ => Substitute::Invalid,
         })
+}
+
+/// Whether a profile image still decodes within the usual bounds. Preflight
+/// uses it to tell a damaged replacement from an ordinary changed file.
+pub fn verify(profile: &Path, name: &str) -> Result<(), Substitute> {
+    let bytes = read_bounded(&images_dir(profile).join(name)).map_err(|error| match error {
+        Error::Missing => Substitute::Missing,
+        Error::TooLarge => Substitute::TooLarge,
+        _ => Substitute::Invalid,
+    })?;
+    scene::decode_image(
+        &bytes,
+        SOURCE_CAPS,
+        MAX_SCENE_BYTES,
+        &AtomicBool::new(false),
+    )
+    .map(|_| ())
+    .map_err(|error| match error {
+        PrepareError::TooLarge => Substitute::TooLarge,
+        _ => Substitute::Invalid,
+    })
 }
 
 /// Hashes a profile image for preparation. The version derives from content.
@@ -848,7 +927,9 @@ impl BackgroundCache {
 
 pub enum Job {
     Scan,
-    Import(PathBuf),
+    /// Copy a file in; a photo over the decode budget is shrunk to fit the
+    /// given output size.
+    Import(PathBuf, Extent),
     /// Validate, hash and persist an image as the logo.
     UseAsLogo(String),
     /// Read `logo.txt` and hash the image it names.
@@ -859,7 +940,7 @@ pub enum Job {
 
 pub enum Reply {
     Images(Result<Vec<String>, Error>),
-    Imported(Result<String, Error>),
+    Imported(Result<Imported, Error>),
     Logo(Result<Option<Logo>, Error>),
     Background(BackgroundKey, Fitted),
 }
@@ -887,12 +968,10 @@ impl Worker {
                 while let Ok(job) = incoming.recv() {
                     let reply = match job {
                         Job::Scan => Reply::Images(list(&profile)),
-                        Job::Import(source) => {
+                        Job::Import(source, fit) => {
                             imports += 1;
                             let mut cancelled = || cancel.load(Ordering::Acquire) >= imports;
-                            Reply::Imported(
-                                import_with(&profile, &source, &mut cancelled).map(|i| i.name),
-                            )
+                            Reply::Imported(import_with(&profile, &source, fit, &mut cancelled))
                         }
                         Job::UseAsLogo(name) => Reply::Logo(
                             load(&profile, name)
@@ -922,7 +1001,7 @@ impl Worker {
     }
 
     pub fn submit(&self, job: Job) -> Result<(), Error> {
-        let import = matches!(job, Job::Import(_));
+        let import = matches!(job, Job::Import(..));
         self.jobs.try_send(job).map_err(|error| match error {
             TrySendError::Full(_) => Error::Busy,
             TrySendError::Disconnected(_) => Error::Disconnected,
@@ -1269,8 +1348,8 @@ mod tests {
         };
         worker.submit(Job::LoadLogo).unwrap();
         assert!(matches!(wait(), Reply::Logo(Ok(None))));
-        worker.submit(Job::Import(source)).unwrap();
-        assert!(matches!(wait(), Reply::Imported(Ok(name)) if name == "logo.png"));
+        worker.submit(Job::Import(source, DEFAULT_FIT)).unwrap();
+        assert!(matches!(wait(), Reply::Imported(Ok(i)) if i.name == "logo.png"));
         worker.submit(Job::UseAsLogo("logo.png".into())).unwrap();
         assert!(matches!(wait(), Reply::Logo(Ok(Some(logo))) if logo.name == "logo.png"));
         worker.submit(Job::LoadLogo).unwrap();
@@ -1375,6 +1454,26 @@ mod tests {
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 95)
             .write_image(&rgb, 32, 16, image::ExtendedColorType::Rgb8)
             .unwrap();
+        with_orientation(&encoded, orientation)
+    }
+
+    /// A smooth `width` × `height` JPEG (red grows to the right, green
+    /// downwards), Exif orientation in APP1.
+    fn gradient_jpeg(width: u32, height: u32, orientation: u16) -> Vec<u8> {
+        let mut rgb = Vec::with_capacity((width * height * 3) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                rgb.extend_from_slice(&[(x * 255 / width) as u8, (y * 255 / height) as u8, 90]);
+            }
+        }
+        let mut encoded = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 85)
+            .write_image(&rgb, width, height, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        with_orientation(&encoded, orientation)
+    }
+
+    fn with_orientation(encoded: &[u8], orientation: u16) -> Vec<u8> {
         // APP1 goes after SOI and the JFIF APP0 segment, if any.
         let mut at = 2;
         if encoded[2..4] == [0xFF, 0xE0] {
@@ -1494,7 +1593,7 @@ mod tests {
             (100_000, 100_000),
             (16_385, 1),
             (1, 16_385),
-            (4_097, 4_096),
+            (7_000, 7_000),
             (16_000, 16_000),
         ] {
             let bomb = dir.path().join(format!("bomb-{width}x{height}.png"));
@@ -1512,11 +1611,17 @@ mod tests {
         let short = dir.path().join("short.png");
         fs::write(&short, declaring(4_096, 4_096)).unwrap();
         assert_eq!(import(&profile, &short), Err(Error::Corrupt));
-        // 16-bit samples need 8 bytes a pixel while decoding: 3000 × 3000 is
-        // 72 000 000 bytes, over the 67 108 864-byte budget.
+        // 16-bit samples need 8 bytes a pixel while decoding: 7000 × 7000 is
+        // 392 000 000 bytes, over the 384 000 000-byte bound for images that
+        // would be shrunk.
         let deep = dir.path().join("deep.png");
-        fs::write(&deep, declaring_depth(3_000, 3_000, 16)).unwrap();
+        fs::write(&deep, declaring_depth(7_000, 7_000, 16)).unwrap();
         assert_eq!(import(&profile, &deep), Err(Error::Dimensions));
+        // Over the decode budget but within the shrink bound: it is shrunk, so
+        // a header with no pixel data is damaged, not too large.
+        let over = dir.path().join("over.png");
+        fs::write(&over, declaring(4_097, 4_096)).unwrap();
+        assert_eq!(import(&profile, &over), Err(Error::Corrupt));
         assert!(entries(&images_dir(&profile)).is_empty());
         // The renderer path refuses the same file if one is placed by hand.
         let placed = pinned(&profile, "bomb.png", &declaring(100_000, 100_000));
@@ -1524,6 +1629,160 @@ mod tests {
             decode_background(&profile, &placed).err(),
             Some(Substitute::TooLarge)
         );
+    }
+
+    fn dimensions(bytes: &[u8]) -> Extent {
+        let (width, height) = image::ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .unwrap()
+            .into_dimensions()
+            .unwrap();
+        Extent { width, height }
+    }
+
+    #[test]
+    fn photo_over_the_decode_budget_is_shrunk_and_the_source_is_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile");
+        let source = dir.path().join("IMG_0001.jpg");
+        let original = gradient_jpeg(6000, 4000, 1);
+        assert!(original.len() <= downscale::MAX_SOURCE_BYTES);
+        fs::write(&source, &original).unwrap();
+        let stamp = fs::metadata(&source).unwrap().modified().unwrap();
+        let fit = Extent {
+            width: 1920,
+            height: 1080,
+        };
+        let imported = import_fitted(&profile, &source, fit, &AtomicBool::new(false)).unwrap();
+        let shrunk = Extent {
+            width: 1620,
+            height: 1080,
+        };
+        assert_eq!(imported.name, "IMG_0001.jpg");
+        assert_eq!(
+            imported.downscaled_from,
+            Some(Extent {
+                width: 6000,
+                height: 4000
+            })
+        );
+        assert_eq!(imported.extent, shrunk);
+        assert!(!imported.oriented && !imported.reused);
+        let stored = fs::read(images_dir(&profile).join(&imported.name)).unwrap();
+        assert!(stored.len() <= MAX_FILE_BYTES);
+        assert_eq!(dimensions(&stored), shrunk);
+        assert_eq!(imported.sha256, <[u8; 32]>::from(Sha256::digest(&stored)));
+        // The managed copy is what the renderer decodes and what pins match.
+        assert_eq!(
+            decode_background(&profile, &imported.image_ref())
+                .unwrap()
+                .0,
+            shrunk
+        );
+        // The source is read only: same bytes, same timestamp.
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert_eq!(fs::metadata(&source).unwrap().modified().unwrap(), stamp);
+        // Shrinking is deterministic, so importing again reuses the copy.
+        let again = import_fitted(&profile, &source, fit, &AtomicBool::new(false)).unwrap();
+        assert_eq!((again.name.as_str(), again.reused), ("IMG_0001.jpg", true));
+        assert_eq!(entries(&images_dir(&profile)), ["IMG_0001.jpg"]);
+    }
+
+    #[test]
+    fn shrinking_applies_the_exif_orientation_and_keeps_png_a_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile");
+        let fit = Extent {
+            width: 1920,
+            height: 1080,
+        };
+        let never = AtomicBool::new(false);
+        // A portrait photo stored sideways: displayed 4000 × 6000.
+        let sideways = dir.path().join("portrait.jpg");
+        fs::write(&sideways, gradient_jpeg(6000, 4000, 6)).unwrap();
+        let portrait = import_fitted(&profile, &sideways, fit, &never).unwrap();
+        assert_eq!(
+            portrait.downscaled_from,
+            Some(Extent {
+                width: 4000,
+                height: 6000
+            })
+        );
+        assert_eq!(
+            portrait.extent,
+            Extent {
+                width: 720,
+                height: 1080
+            }
+        );
+        assert!(!portrait.oriented, "the rotation is baked into the copy");
+        // 5000 × 4000 = 20 MP as PNG with alpha.
+        let wide = dir.path().join("wide.png");
+        let mut rgba = vec![200u8; 5000 * 4000 * 4];
+        for (i, value) in rgba.iter_mut().enumerate().step_by(4) {
+            *value = (i / 4 % 5000 * 255 / 5000) as u8;
+        }
+        let mut encoded = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut encoded)
+            .write_image(&rgba, 5000, 4000, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        fs::write(&wide, &encoded).unwrap();
+        let png = import_fitted(&profile, &wide, fit, &never).unwrap();
+        assert_eq!(png.name, "wide.png");
+        assert_eq!(
+            png.extent,
+            Extent {
+                width: 1350,
+                height: 1080
+            }
+        );
+        let stored = fs::read(images_dir(&profile).join("wide.png")).unwrap();
+        assert_eq!(
+            image::guess_format(&stored).unwrap(),
+            image::ImageFormat::Png
+        );
+        assert_eq!(fs::read(&wide).unwrap(), encoded);
+    }
+
+    #[test]
+    fn photos_within_the_decode_budget_are_stored_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile");
+        let source = dir.path().join("small.jpg");
+        let original = gradient_jpeg(4000, 3000, 1);
+        fs::write(&source, &original).unwrap();
+        let imported = import_checked(&profile, &source, &AtomicBool::new(false)).unwrap();
+        assert_eq!(imported.downscaled_from, None);
+        assert_eq!(
+            fs::read(images_dir(&profile).join(&imported.name)).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn a_cancelled_or_corrupt_shrink_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile");
+        let source = dir.path().join("big.jpg");
+        let mut bytes = gradient_jpeg(5000, 4000, 1);
+        fs::write(&source, &bytes).unwrap();
+        let fit = Extent {
+            width: 1920,
+            height: 1080,
+        };
+        assert_eq!(
+            import_fitted(&profile, &source, fit, &AtomicBool::new(true)),
+            Err(Error::Cancelled)
+        );
+        // Headers only: the decoder pads a partly missing scan, but cannot
+        // produce an image with none.
+        bytes.truncate(400);
+        fs::write(&source, &bytes).unwrap();
+        assert!(matches!(
+            import_fitted(&profile, &source, fit, &AtomicBool::new(false)),
+            Err(Error::Corrupt)
+        ));
+        assert!(entries(&images_dir(&profile)).is_empty());
     }
 
     #[test]
@@ -1624,7 +1883,7 @@ mod tests {
             written
         };
         assert_eq!(
-            import_with(&profile, &source, &mut cancel),
+            import_with(&profile, &source, DEFAULT_FIT, &mut cancel),
             Err(Error::Cancelled)
         );
         assert!(partial.get(), "cancelled while copying");
@@ -1669,15 +1928,15 @@ mod tests {
         for _ in 0..3 {
             submit(|_| Job::Scan);
         }
-        submit(|source| Job::Import(source.to_owned()));
+        submit(|source| Job::Import(source.to_owned(), DEFAULT_FIT));
         worker.cancel_imports();
         for _ in 0..3 {
             assert!(matches!(wait(), Reply::Images(Ok(_))));
         }
         assert!(matches!(wait(), Reply::Imported(Err(Error::Cancelled))));
         assert!(entries(&images_dir(&profile)).is_empty());
-        submit(|source| Job::Import(source.to_owned()));
-        assert!(matches!(wait(), Reply::Imported(Ok(name)) if name == "a.png"));
+        submit(|source| Job::Import(source.to_owned(), DEFAULT_FIT));
+        assert!(matches!(wait(), Reply::Imported(Ok(i)) if i.name == "a.png"));
     }
 
     #[test]

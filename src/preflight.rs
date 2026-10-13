@@ -101,6 +101,70 @@ impl Report {
     }
 }
 
+enum Verdict {
+    Fine,
+    Problem(Substitute),
+    /// Past `MAX_IMAGE_CHECKS` distinct names.
+    Unchecked,
+}
+
+/// Per-name results of one check, so a name is read at most once.
+#[derive(Default)]
+struct Verdicts {
+    hashes: HashMap<String, Result<[u8; 32], Substitute>>,
+    /// Why a file whose bytes differ from every pin cannot be decoded.
+    damage: HashMap<String, Option<Substitute>>,
+}
+
+impl Verdicts {
+    fn judge(&mut self, profile: &Path, image: &ImageRef) -> Verdict {
+        if !self.hashes.contains_key(&image.name) {
+            if self.hashes.len() >= MAX_IMAGE_CHECKS {
+                return Verdict::Unchecked;
+            }
+            let hash = images::content_hash(profile, &image.name);
+            self.hashes.insert(image.name.clone(), hash);
+        }
+        match self.hashes[&image.name] {
+            Ok(hash) if hash == image.sha256 => Verdict::Fine,
+            Err(problem) => Verdict::Problem(problem),
+            // Different bytes: replaced by another image (changed) or by
+            // something that no longer decodes (corrupt).
+            Ok(_) => {
+                let damage = *self
+                    .damage
+                    .entry(image.name.clone())
+                    .or_insert_with(|| images::verify(profile, &image.name).err());
+                Verdict::Problem(damage.unwrap_or(Substitute::Changed))
+            }
+        }
+    }
+}
+
+/// Checks only the given pinned images, as Go Live does for one item.
+/// Returns the problems in input order; `None` when `cancelled` turned true.
+pub fn check_images(
+    profile: &Path,
+    refs: &[ImageRef],
+    cancelled: &dyn Fn() -> bool,
+) -> Option<Vec<(ImageRef, Substitute)>> {
+    let mut verdicts = Verdicts::default();
+    let mut problems = Vec::new();
+    for image in refs {
+        if cancelled() {
+            return None;
+        }
+        match verdicts.judge(profile, image) {
+            Verdict::Problem(problem) => problems.push((image.clone(), problem)),
+            // An unchecked image is reported as unreadable rather than
+            // assumed fine.
+            Verdict::Unchecked => problems.push((image.clone(), Substitute::Invalid)),
+            Verdict::Fine => {}
+        }
+    }
+    Some(problems)
+}
+
 /// Checks a schedule's resolved songs (in item order, as `storage::Reply::
 /// Schedule` returns them) against the profile and the font store. Images
 /// are hashed, not decoded. `None` when `cancelled` turned true. Blocking.
@@ -114,7 +178,7 @@ pub fn check(
         fonts_checked: fonts.catalog().is_some(),
         ..Report::default()
     };
-    let mut hashes: HashMap<String, Result<[u8; 32], Substitute>> = HashMap::new();
+    let mut verdicts = Verdicts::default();
     let mut families: HashMap<String, bool> = HashMap::new();
     for (index, song) in songs.iter().enumerate() {
         if cancelled() {
@@ -137,18 +201,13 @@ pub fn check(
                 Some((Use::Slide(i), image))
             }));
         for (at, image) in uses {
-            if !hashes.contains_key(&image.name) {
-                if hashes.len() >= MAX_IMAGE_CHECKS {
+            let problem = match verdicts.judge(profile, image) {
+                Verdict::Fine => continue,
+                Verdict::Unchecked => {
                     report.unchecked_images += 1;
                     continue;
                 }
-                let hash = images::content_hash(profile, &image.name);
-                hashes.insert(image.name.clone(), hash);
-            }
-            let problem = match hashes[&image.name] {
-                Ok(hash) if hash == image.sha256 => continue,
-                Ok(_) => Substitute::Changed,
-                Err(problem) => problem,
+                Verdict::Problem(problem) => problem,
             };
             match item.images.iter_mut().find(|i| i.image == *image) {
                 Some(issue) => issue.uses.push(at),
@@ -221,6 +280,8 @@ pub enum Request {
     Check(Vec<Song>),
     /// Copy a located file in as `ImageRef` if, and only if, its hash matches.
     Relink(ImageRef, PathBuf),
+    /// Check just these pinned images (Go Live on one item).
+    Images(Vec<ImageRef>),
 }
 
 pub enum Reply {
@@ -228,6 +289,9 @@ pub enum Reply {
     /// cancelled and do not reply.
     Checked(u64, Report),
     Relinked(ImageRef, Result<Relinked, images::Error>),
+    /// The generation `check_images` returned and the images that cannot be
+    /// shown as pinned (empty: all fine).
+    ImagesChecked(u64, Vec<(ImageRef, Substitute)>),
 }
 
 /// One thread, two queued requests and two buffered replies; never blocks
@@ -266,6 +330,10 @@ impl Worker {
                                 None => continue,
                             }
                         }
+                        Request::Images(refs) => match check_images(&profile, &refs, &|| false) {
+                            Some(problems) => Reply::ImagesChecked(generation, problems),
+                            None => continue,
+                        },
                         Request::Relink(image, source) => {
                             let result =
                                 images::relink(&profile, &image, &source, &AtomicBool::new(false));
@@ -302,6 +370,12 @@ impl Worker {
         let generation = self.submit(Request::Check(songs))?;
         self.latest.store(generation, Ordering::Release);
         Ok(generation)
+    }
+
+    /// Queues a check of just these images; the reply carries the returned
+    /// generation. Never supersedes a schedule check.
+    pub fn check_images(&mut self, refs: Vec<ImageRef>) -> Result<u64, images::Error> {
+        self.submit(Request::Images(refs))
     }
 
     pub fn relink(&mut self, image: ImageRef, source: PathBuf) -> Result<(), images::Error> {
@@ -598,5 +672,85 @@ mod tests {
         assert_eq!(grace.index, 1);
         assert!(grace.images.iter().all(|issue| issue.image != f.moved));
         assert_eq!(grace.images.len(), 1);
+    }
+
+    #[test]
+    fn corrupt_replacements_are_reported_apart_from_missing_and_changed() {
+        let f = fixture();
+        let images = images::images_dir(&f.profile);
+        // Random bytes and a truncated PNG replace pinned images: corrupt,
+        // neither "missing" nor "changed".
+        let truncated = png(8, 8);
+        fs::write(images.join("Present.png"), b"not an image at all").unwrap();
+        fs::write(images.join("Edited.png"), &truncated[..truncated.len() / 2]).unwrap();
+        let report = check(&f.profile, &f.songs, &f.fonts, &|| false).unwrap();
+        let problems: Vec<(&str, Substitute)> = report
+            .items
+            .iter()
+            .flat_map(|item| &item.images)
+            .map(|issue| (issue.image.name.as_str(), issue.problem))
+            .collect();
+        assert_eq!(
+            problems,
+            [
+                ("Present.png", Substitute::Invalid),
+                ("Moved.png", Substitute::Missing),
+                ("Edited.png", Substitute::Invalid),
+                ("Edited.png", Substitute::Invalid),
+                ("Present.png", Substitute::Invalid),
+            ]
+        );
+        assert_eq!(report.items[0].index, 0);
+        fs::write(images.join("Present.png"), b"").unwrap();
+        let present = pin("Present.png", &png(4, 2));
+        let found = check_images(&f.profile, std::slice::from_ref(&present), &|| false).unwrap();
+        assert_eq!(found, [(present, Substitute::Invalid)]);
+    }
+
+    #[test]
+    fn check_images_reports_only_the_given_pins() {
+        let f = fixture();
+        let present = pin("Present.png", &png(4, 2));
+        let all = [present.clone(), f.moved.clone(), f.edited.clone()];
+        assert_eq!(
+            check_images(&f.profile, &all, &|| false).unwrap(),
+            [
+                (f.moved.clone(), Substitute::Missing),
+                (f.edited.clone(), Substitute::Changed)
+            ]
+        );
+        assert!(
+            check_images(&f.profile, &[present], &|| false)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(check_images(&f.profile, &all, &|| true), None);
+    }
+
+    #[test]
+    fn worker_checks_just_the_images_without_superseding_a_schedule_check() {
+        let f = fixture();
+        let mut worker = Worker::start(f.profile.clone()).unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        let first = worker.check(f.songs.clone()).unwrap();
+        let second = worker.check_images(vec![f.moved.clone()]).unwrap();
+        assert!(second > first);
+        let mut seen = Vec::new();
+        while seen.len() < 2 {
+            match worker.poll() {
+                Some(reply) => seen.push(reply.unwrap()),
+                None => {
+                    assert!(Instant::now() < end, "bounded wait");
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+        }
+        assert!(
+            seen.iter()
+                .any(|r| matches!(r, Reply::Checked(g, _) if *g == first))
+        );
+        assert!(seen.iter().any(|r| matches!(r,
+            Reply::ImagesChecked(g, problems)
+                if *g == second && problems == &[(f.moved.clone(), Substitute::Missing)])));
     }
 }

@@ -320,6 +320,22 @@ impl Operator {
                     .truncate()
                     .child(message)
             }))
+            .when(self.assets.needs_review(), |d| {
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .flex()
+                        .px_1()
+                        .border_t_1()
+                        .border_color(rgb(BORDER))
+                        .child(self.button(
+                            Control::ReviewFiles,
+                            "review-files",
+                            t!(Msg::PreflightReview),
+                            cx,
+                        )),
+                )
+            })
             .child(
                 div()
                     .h(px(STATUS_BAR_H))

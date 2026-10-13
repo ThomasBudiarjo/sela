@@ -316,6 +316,37 @@ pub enum Msg {
     BgImageChanged,
     BgImageTooLarge,
     BgImageUnreadable,
+    // Schedule preflight, Go Live warning and image import notes (M1-11b).
+    PreflightHeading,
+    PreflightIntro,
+    PreflightChecking,
+    PreflightProblemMissing,
+    PreflightProblemChanged,
+    PreflightProblemCorrupt,
+    PreflightProblemTooLarge,
+    PreflightUsedBy,
+    PreflightLocate,
+    PreflightLocatePrompt,
+    PreflightClose,
+    PreflightRelinked,
+    PreflightRelinkFailed,
+    PreflightFont,
+    PreflightLogo,
+    PreflightUnchecked,
+    PreflightAttention,
+    PreflightReview,
+    PreflightAllClear,
+    GoLiveMissingHeading,
+    GoLiveMissingBody,
+    GoLiveAnyway,
+    GoLiveHeld,
+    ImportingName,
+    ImportCancel,
+    ImportCancelling,
+    ImportNoteDownscaled,
+    ImportNoteReused,
+    ImportNoteOriented,
+    ImportNoteIcc,
     // Song editor window.
     AllSlidesSelected,
     ApplyToSchedule,
@@ -712,6 +743,36 @@ impl Msg {
         Msg::BgImageChanged,
         Msg::BgImageTooLarge,
         Msg::BgImageUnreadable,
+        Msg::PreflightHeading,
+        Msg::PreflightIntro,
+        Msg::PreflightChecking,
+        Msg::PreflightProblemMissing,
+        Msg::PreflightProblemChanged,
+        Msg::PreflightProblemCorrupt,
+        Msg::PreflightProblemTooLarge,
+        Msg::PreflightUsedBy,
+        Msg::PreflightLocate,
+        Msg::PreflightLocatePrompt,
+        Msg::PreflightClose,
+        Msg::PreflightRelinked,
+        Msg::PreflightRelinkFailed,
+        Msg::PreflightFont,
+        Msg::PreflightLogo,
+        Msg::PreflightUnchecked,
+        Msg::PreflightAttention,
+        Msg::PreflightReview,
+        Msg::PreflightAllClear,
+        Msg::GoLiveMissingHeading,
+        Msg::GoLiveMissingBody,
+        Msg::GoLiveAnyway,
+        Msg::GoLiveHeld,
+        Msg::ImportingName,
+        Msg::ImportCancel,
+        Msg::ImportCancelling,
+        Msg::ImportNoteDownscaled,
+        Msg::ImportNoteReused,
+        Msg::ImportNoteOriented,
+        Msg::ImportNoteIcc,
         Msg::AllSlidesSelected,
         Msg::ApplyToSchedule,
         Msg::CannotBeShown,
@@ -1118,6 +1179,46 @@ impl Msg {
             }
             Self::BgImageTooLarge => "Background image ‘{name}’ is too large; showing black",
             Self::BgImageUnreadable => "Background image ‘{name}’ cannot be read; showing black",
+            Self::PreflightHeading => "Files need attention",
+            Self::PreflightIntro => {
+                "These files are used by the schedule but cannot be shown as chosen. \
+                 Slides that use them show black."
+            }
+            Self::PreflightChecking => "Checking files…",
+            Self::PreflightProblemMissing => "Missing",
+            Self::PreflightProblemChanged => "Changed",
+            Self::PreflightProblemCorrupt => "Corrupt",
+            Self::PreflightProblemTooLarge => "Too large",
+            Self::PreflightUsedBy => "Used by {title}",
+            Self::PreflightLocate => "Locate…",
+            Self::PreflightLocatePrompt => "Locate the original file",
+            Self::PreflightClose => "Close",
+            Self::PreflightRelinked => "Restored {name}",
+            Self::PreflightRelinkFailed => "Could not restore {name}: {error}",
+            Self::PreflightFont => {
+                "Font ‘{family}’ is not installed ({title}); DejaVu Sans is used instead"
+            }
+            Self::PreflightLogo => "The logo image cannot be shown: {error}",
+            Self::PreflightUnchecked => "Some files were not checked",
+            Self::PreflightAttention => "{count} schedule items have missing or changed files",
+            Self::PreflightReview => "Review files",
+            Self::PreflightAllClear => "All files are in place",
+            Self::GoLiveMissingHeading => "Go Live with a missing file?",
+            Self::GoLiveMissingBody => {
+                "{name}: {problem}. The audience keeps the current scene unless you go \
+                 live anyway; this slide then shows black."
+            }
+            Self::GoLiveAnyway => "Go Live anyway",
+            Self::GoLiveHeld => "Go Live cancelled; the current scene is unchanged",
+            Self::ImportingName => "Importing {name}…",
+            Self::ImportCancel => "Cancel",
+            Self::ImportCancelling => "Cancelling import…",
+            Self::ImportNoteDownscaled => {
+                "Downscaled from {from} to {to} to fit the output; the original file is unchanged"
+            }
+            Self::ImportNoteReused => "Already in the library; nothing was copied",
+            Self::ImportNoteOriented => "Rotated to match its Exif orientation",
+            Self::ImportNoteIcc => "Embedded color profile ignored; shown as sRGB",
             Self::AllSlidesSelected => "All slides selected · formatting applies to every slide",
             Self::ApplyToSchedule => "Apply changes to items in schedule",
             Self::CannotBeShown => "Cannot be shown",
@@ -1571,6 +1672,46 @@ impl Msg {
             Self::BgImageUnreadable => {
                 "Gambar latar ‘{name}’ tidak dapat dibaca; menampilkan hitam"
             }
+            Self::PreflightHeading => "Berkas perlu diperiksa",
+            Self::PreflightIntro => {
+                "Berkas ini dipakai jadwal tetapi tidak dapat ditampilkan seperti yang \
+                 dipilih. Slide yang memakainya tampil hitam."
+            }
+            Self::PreflightChecking => "Memeriksa berkas…",
+            Self::PreflightProblemMissing => "Hilang",
+            Self::PreflightProblemChanged => "Berubah",
+            Self::PreflightProblemCorrupt => "Rusak",
+            Self::PreflightProblemTooLarge => "Terlalu besar",
+            Self::PreflightUsedBy => "Dipakai oleh {title}",
+            Self::PreflightLocate => "Cari…",
+            Self::PreflightLocatePrompt => "Cari berkas asli",
+            Self::PreflightClose => "Tutup",
+            Self::PreflightRelinked => "{name} dipulihkan",
+            Self::PreflightRelinkFailed => "Tidak dapat memulihkan {name}: {error}",
+            Self::PreflightFont => {
+                "Font ‘{family}’ tidak terpasang ({title}); DejaVu Sans dipakai sebagai gantinya"
+            }
+            Self::PreflightLogo => "Gambar logo tidak dapat ditampilkan: {error}",
+            Self::PreflightUnchecked => "Sebagian berkas belum diperiksa",
+            Self::PreflightAttention => "{count} item jadwal memiliki berkas hilang atau berubah",
+            Self::PreflightReview => "Tinjau berkas",
+            Self::PreflightAllClear => "Semua berkas tersedia",
+            Self::GoLiveMissingHeading => "Tayangkan dengan berkas hilang?",
+            Self::GoLiveMissingBody => {
+                "{name}: {problem}. Penonton tetap melihat adegan saat ini kecuali Anda \
+                 tetap menayangkan; slide ini lalu tampil hitam."
+            }
+            Self::GoLiveAnyway => "Tayangkan saja",
+            Self::GoLiveHeld => "Tayang dibatalkan; adegan saat ini tidak berubah",
+            Self::ImportingName => "Mengimpor {name}…",
+            Self::ImportCancel => "Batal",
+            Self::ImportCancelling => "Membatalkan impor…",
+            Self::ImportNoteDownscaled => {
+                "Diperkecil dari {from} ke {to} agar sesuai keluaran; berkas asli tidak diubah"
+            }
+            Self::ImportNoteReused => "Sudah ada di pustaka; tidak ada yang disalin",
+            Self::ImportNoteOriented => "Diputar sesuai orientasi Exif",
+            Self::ImportNoteIcc => "Profil warna tertanam diabaikan; ditampilkan sebagai sRGB",
             Self::AllSlidesSelected => "Semua slide dipilih · format berlaku untuk setiap slide",
             Self::ApplyToSchedule => "Terapkan perubahan ke item di jadwal",
             Self::CannotBeShown => "Tidak dapat ditampilkan",
@@ -1835,7 +1976,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 390);
+        assert_eq!(Msg::ALL.len(), 420);
     }
 
     #[test]

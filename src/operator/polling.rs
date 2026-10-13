@@ -2,7 +2,10 @@ use super::*;
 
 impl Operator {
     pub(crate) fn poll(&mut self, cx: &mut Context<Self>) {
-        let mut changed = self.poll_library(cx) | self.poll_images() | self.poll_settings();
+        let mut changed = self.poll_library(cx)
+            | self.poll_images()
+            | self.poll_preflight()
+            | self.poll_settings();
         changed |= self.poll_cues();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());
@@ -42,6 +45,7 @@ impl Operator {
             match reply {
                 Err(error) => {
                     self.media_message = Some(error.to_string());
+                    self.assets.importing = None;
                     self.image_worker = None;
                     // Waiting cues now substitute black instead.
                     self.background_job = None;
@@ -71,13 +75,21 @@ impl Operator {
                     self.media_message =
                         Some(t!(Msg::ImagesUnavailable, error = error.to_string()));
                 }
-                Ok(images::Reply::Imported(Ok(name))) => {
-                    self.media_message = Some(t!(Msg::ImportedImage, name = name));
-                    self.selected_image = Some(name);
+                Ok(images::Reply::Imported(Ok(imported))) => {
+                    self.assets.importing = None;
+                    self.assets.import_notes = assets::import_notes(&imported);
+                    self.media_message = Some(t!(Msg::ImportedImage, name = imported.name));
+                    self.selected_image = Some(imported.name);
                     rescan = true;
                 }
                 Ok(images::Reply::Imported(Err(error))) => {
-                    self.media_message = Some(t!(Msg::ImportFailed, error = error.to_string()));
+                    self.assets.importing = None;
+                    self.assets.import_notes.clear();
+                    self.media_message = Some(if error == images::Error::Cancelled {
+                        error.to_string()
+                    } else {
+                        t!(Msg::ImportFailed, error = error.to_string())
+                    });
                 }
                 Ok(images::Reply::Logo(Ok(logo))) => {
                     self.logo = logo;
@@ -187,6 +199,7 @@ impl Operator {
         let mut changed = false;
         let mut live_now = false;
         let mut resolve_now = false;
+        let mut opened_songs = None;
         if let Some(reply) = worker.poll() {
             changed = true;
             match (self.request.take(), reply) {
@@ -269,11 +282,12 @@ impl Operator {
                 }
                 (Some(Request::OpenSchedule(version)), Ok(Reply::Schedule(stored, songs))) => {
                     let title = stored.title.clone();
-                    let titles = songs.into_iter().map(|song| song.title).collect();
+                    let titles = songs.iter().map(|song| song.title.clone()).collect();
                     self.schedule_message =
                         Some(match self.schedule.open(version, stored, titles) {
                             Ok(()) => {
                                 self.selected_entry = None;
+                                opened_songs = Some(songs);
                                 t!(Msg::OpenedSchedule, title = title)
                             }
                             Err(_) => t!(Msg::ScheduleUnreadable).into(),
@@ -342,6 +356,9 @@ impl Operator {
                     }
                 }
             }
+        }
+        if let Some(songs) = opened_songs {
+            self.start_schedule_check(songs);
         }
         if live_now {
             self.go_live();

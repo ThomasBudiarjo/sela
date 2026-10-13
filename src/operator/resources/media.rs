@@ -16,6 +16,9 @@ impl Operator {
             self.media_message = Some(t!(Msg::NoProfileImport).into());
             return;
         }
+        if self.assets.importing.is_some() {
+            return;
+        }
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -30,11 +33,32 @@ impl Operator {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.submit_image_job(images::Job::Import(path));
+                this.start_import(path);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Queues an import that fits a large photo to the output size. The
+    /// footer shows progress with Cancel until the worker replies.
+    pub(crate) fn start_import(&mut self, path: PathBuf) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let Some(worker) = &self.image_worker else {
+            self.media_message = Some(t!(Msg::NoProfileImages).into());
+            return;
+        };
+        match worker.submit(images::Job::Import(path, self.background_extent())) {
+            Ok(()) => {
+                self.media_message = Some(t!(Msg::ImportingName, name = name));
+                self.assets.importing = Some(name);
+                self.assets.import_notes.clear();
+            }
+            Err(error) => self.media_message = Some(error.to_string()),
+        }
     }
 
     pub(crate) fn use_as_logo(&mut self) {
