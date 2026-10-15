@@ -7,7 +7,10 @@ const MAX_THUMBNAILS: usize = 32;
 /// GPUI draws BGRA; the fitted background is RGBA.
 fn render_image(rgba: &[u8], extent: Extent) -> Option<Arc<gpui::RenderImage>> {
     let mut bgra = rgba.to_vec();
-    bgra.chunks_exact_mut(4).for_each(|px| px.swap(0, 2));
+    bgra.as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .for_each(|px| px.swap(0, 2));
     let buffer = image::RgbaImage::from_raw(extent.width, extent.height, bgra)?;
     Some(Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
         buffer,
@@ -117,7 +120,7 @@ pub(crate) fn slide_pane(
                 .join("; ");
             div()
                 .id(status_id.clone())
-                .role(Role::Label)
+                .role(Role::Group)
                 .aria_label(spoken)
                 .accessibility_id(status_id.clone())
                 .debug_selector(move || format!("{id}-status"))

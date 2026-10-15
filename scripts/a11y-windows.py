@@ -231,6 +231,31 @@ def wait_for(timeout: float, condition) -> bool:
     return False
 
 
+def live_status(hwnd: int) -> str:
+    """The Live pane status lines (joined), as the operator announces them."""
+    node = nodes_by_id(uia(hwnd)).get("Live-status")
+    return node["name"] if node else ""
+
+
+def wait_live_status(
+    hwnd: int, needle: str, timeout: float, what: str, unless: str = ""
+) -> str:
+    """Waits (bounded) until the Live status contains `needle` and not
+    `unless`; on timeout the failure carries the operator's own state so a
+    flake is diagnosable."""
+    deadline = time.monotonic() + timeout
+    while True:
+        status = live_status(hwnd)
+        if needle in status and not (unless and unless in status):
+            return status
+        if time.monotonic() >= deadline:
+            raise nw.Failure(
+                f"{what}: Live status never showed {needle!r} within "
+                f"{timeout:.0f}s; operator state: {status!r}"
+            )
+        time.sleep(0.3)
+
+
 def stable_digest(hwnd: int, timeout: float = 5.0) -> str:
     """The audience frame digest once it stops changing (Go Live fades in)."""
     deadline = time.monotonic() + timeout

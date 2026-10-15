@@ -153,14 +153,30 @@ def main() -> int:
         if not found:
             raise nw.Failure("no audience window after Live output on")
         audience_pid, audience_hwnd = found
-        time.sleep(1.0)
+        # The audience window exists before the renderer reports Ready, and a
+        # Go Live in that gap is refused ("Live output is still starting").
+        # Wait for the operator's connected status ("Live output WxH") first.
+        summary["operator_state"] = a11y.wait_live_status(
+            run.hwnd, "×", 30, "audience output never became ready"
+        )
         run.keys("pagedown")
-        time.sleep(1.0)
-        before = lo.digest(audience_hwnd)
+        # Then wait for the renderer's acknowledgement before judging ink.
+        summary["operator_state"] = a11y.wait_live_status(
+            run.hwnd,
+            "On screen:",
+            15,
+            "Go Live was never acknowledged",
+            unless="nothing confirmed",
+        )
+        if not a11y.wait_for(5.0, lambda: a11y.audience_ink(audience_hwnd)):
+            summary["operator_state"] = a11y.live_status(run.hwnd)
+            raise nw.Failure(
+                "Go Live showed nothing on the audience output "
+                f"(operator state: {summary['operator_state']!r})"
+            )
+        before = a11y.stable_digest(audience_hwnd)
         width, height, pixels = nw.capture_client(audience_hwnd)
         nw.write_png(args.out / "02-audience-before.png", width, height, pixels)
-        if lo.ink_box(width, height, pixels) is None:
-            raise nw.Failure("Go Live showed nothing on the audience output")
         run.save("03-english-live")
 
         run.open_options(from_start=False)
