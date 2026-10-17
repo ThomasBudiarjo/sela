@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
@@ -50,6 +51,8 @@ OPERATOR_TITLE = "Sela — Technical preview"
 # Options toolbar button moved to the Edit menu (M1-02), shortening the
 # pre-songs traversal by one.
 TABS_TO_FIRST_SONG = 25
+NEXT = "click:live-next"
+PREVIOUS = "click:live-previous"
 # Original fixture logo: one opaque color, neither black nor text white.
 LOGO_RGB = (30, 110, 210)
 # Formatted song slide 1: bold gold fill, right/bottom aligned.
@@ -237,10 +240,35 @@ def seed_logo(profile: pathlib.Path) -> None:
 class Run:
     def __init__(self, operator: int, out: pathlib.Path, summary: dict):
         self.operator, self.out, self.summary = operator, out, summary
+        self.targets: dict[str, tuple[int, int]] = {}
+
+    def control_point(self, aid: str) -> tuple[int, int]:
+        """Client-area center of a control found by its UIA AutomationId."""
+        if aid not in self.targets:
+            spec = importlib.util.spec_from_file_location(
+                "a11y_windows", pathlib.Path(__file__).with_name("a11y-windows.py")
+            )
+            a11y = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(a11y)
+            node = a11y.nodes_by_id(a11y.uia(self.operator)).get(aid)
+            if node is None:
+                raise nw.Failure(f"control {aid} missing from the UIA tree")
+            origin_x, origin_y = a11y.client_origin(self.operator)
+            self.targets[aid] = (
+                node["x"] + node["width"] // 2 - origin_x,
+                node["y"] + node["height"] // 2 - origin_y,
+            )
+        return self.targets[aid]
 
     def keys(self, *sequence: str) -> None:
+        # "click:<id>" presses a control by AutomationId. Go Live leaves focus
+        # on the Live pane, so counted Tabs to Previous/Next are not stable.
         for keys in sequence:
-            nw.press(self.operator, keys)
+            if keys.startswith("click:"):
+                x, y = self.control_point(keys[6:])
+                nw.click(self.operator, x, y)
+            else:
+                nw.press(self.operator, keys)
             time.sleep(0.12)
 
     def save(self, hwnd: int, name: str) -> tuple[int, int, bytes]:
@@ -421,15 +449,13 @@ def main() -> int:
         # Page Down is Go Live from any non-text control (EW8-OBS-018).
         first = run.change(screen, blank, "pagedown", "go_live")
         run.save(operator, "operator-go-live")
-        run.keys("tab", "tab", "tab")  # Next
-        second = run.change(screen, first, "enter", "next_1")
-        third = run.change(screen, second, "enter", "next_2")
-        run.keys("enter")
+        second = run.change(screen, first, NEXT, "next_1")
+        third = run.change(screen, second, NEXT, "next_2")
+        run.keys(NEXT)
         time.sleep(1.0)
         if digest(screen) != third:
             raise nw.Failure("Next past the last slide changed the audience output")
-        run.keys("shift+tab")  # Previous
-        back = run.change(screen, third, "enter", "previous")
+        back = run.change(screen, third, PREVIOUS, "previous")
         if back != second:
             summary["previous_matches_second"] = False
             raise nw.Failure("Previous did not restore the second slide's output")
@@ -543,8 +569,7 @@ def main() -> int:
             gold_frame = digest(screen2)
 
             # Next: synth italic + underline, centered white fill.
-            run2.keys("tab", "tab", "tab")  # Next
-            italic = run2.change(screen2, gold_frame, "enter", "formatted-italic")
+            italic = run2.change(screen2, gold_frame, NEXT, "formatted-italic")
             box = summary["formatted-italic_ink_box"]
             midpoint = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
             if not (
@@ -554,8 +579,8 @@ def main() -> int:
                 raise nw.Failure(f"formatted-italic: not centered: {box}")
 
             # Next: Arial bold italic resolved from the installed catalog.
-            arial = run2.change(screen2, italic, "enter", "formatted-arial")
-            run2.keys("enter")
+            arial = run2.change(screen2, italic, NEXT, "formatted-arial")
+            run2.keys(NEXT)
             time.sleep(1.0)
             if digest(screen2) != arial:
                 raise nw.Failure(
@@ -609,23 +634,23 @@ def main() -> int:
                     {"top_left": green, "bottom_right": green},
                 ),
                 (
-                    "enter",
+                    NEXT,
                     "backdrop-maintain",
                     {"top_left": black, "middle_left": red, "middle_right": blue},
                 ),
                 (
-                    "enter",
+                    NEXT,
                     "backdrop-missing",
                     {"top_left": black, "middle_left": black},
                 ),
                 (
-                    "enter",
+                    NEXT,
                     "backdrop-master",
                     {"top_left": MASTER_RGB, "middle_right": MASTER_RGB},
                 ),
             ]
             frame = digest(screen3)
-            for index, (keys, name, expected) in enumerate(steps):
+            for keys, name, expected in steps:
                 sent = time.monotonic()
                 run3.keys(keys)
                 while digest(screen3) == frame:
@@ -639,8 +664,6 @@ def main() -> int:
                 frame = digest(screen3)
                 # The missing image's warning shows in the Live status.
                 run3.save(operator3, f"operator-{name}")
-                if index == 0:
-                    run3.keys("tab", "tab", "tab")  # Next
 
             run3.keys("ctrl+q")
             summary["backdrop_operator_exit"] = third_app.wait_exit()

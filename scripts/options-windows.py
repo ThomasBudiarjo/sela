@@ -1,7 +1,7 @@
 """Windows native check: Options dialog and settings store (M1-16 settings slice).
 
 Usage: python scripts/options-windows.py [--binary sela.exe]
-       [--seed seed_library.exe] [--out DIR] [--target \\\\.\\DISPLAY6]
+       [--seed seed_library.exe] [--out DIR] [--target \\\\.\\DISPLAYn]
 
 Uses a private profile and no SELA_AUDIENCE_MONITOR override. Run 1: Live
 output on (audience on the default non-primary monitor), Options via the
@@ -144,7 +144,11 @@ def main() -> int:
     parser.add_argument(
         "--out", type=pathlib.Path, default=ROOT / ".amp/in/artifacts/options-windows"
     )
-    parser.add_argument("--target", default=r"\\.\DISPLAY6")
+    parser.add_argument(
+        "--target",
+        default=None,
+        help="monitor name; default is the spare non-primary, non-DISPLAY1 screen",
+    )
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     for path in (args.binary, args.seed):
@@ -159,7 +163,13 @@ def main() -> int:
     try:
         screens = monitors(args.binary)
         summary["monitors"] = screens
-        target = next(m for m in screens if m["name"] == args.target)
+        target = (
+            next(m for m in screens if m["name"] == args.target)
+            if args.target
+            else nw.spare_monitor(screens)
+        )
+        args.target = target["name"]
+        summary["target"] = args.target
         secondary = next(m for m in screens if not m["primary"])
         other = next(m for m in screens if not m["primary"] and m is not target)
         data = pathlib.Path(tempfile.mkdtemp(prefix="sela-options-"))

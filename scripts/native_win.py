@@ -546,3 +546,17 @@ def drive_file_dialog(pid: int, owner: int, path: str, cancel: bool = False) -> 
         time.sleep(0.1)
     time.sleep(0.4)
     activate(owner)
+
+
+AUDIENCE_PANEL = r"\\.\DISPLAY1"
+
+
+def spare_monitor(screens: list[dict]) -> dict:
+    """Non-primary screen that is not the audience panel DISPLAY1.
+
+    Windows renumbers external monitors after a reconnect, so pick by role.
+    """
+    for screen in screens:
+        if not screen["primary"] and screen["name"] != AUDIENCE_PANEL:
+            return screen
+    raise Failure("no spare monitor (non-primary, not DISPLAY1)")
