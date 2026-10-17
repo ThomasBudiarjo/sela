@@ -6,7 +6,8 @@ use crate::{
     text_input::{self, Redo, TextInput, Undo},
 };
 use gpui::{prelude::*, *};
-use sela::arrangement::{Occurrence, OccurrenceId, SectionId};
+use sela::arrangement::{MAX_OCCURRENCES, Occurrence, OccurrenceId, SectionId};
+use sela::arrangement_edit;
 use sela::background::{Aspect, ImageRef, Plan, plan};
 use sela::i18n::Msg;
 use sela::images::Substitute;
@@ -151,6 +152,7 @@ fn layout_sample() -> &'static str {
 }
 /// EW8-OBS-024: the Slides tab narrows the left pane to a thumbnail column.
 const SLIDES_PANE: f32 = 264.;
+const ARRANGEMENT_PANE: f32 = 340.;
 const THUMBNAIL_WIDTH: f32 = 204.;
 const THUMBNAIL_SCALE: u32 = 4;
 /// Slides-tab thumbnail raster: 225 KiB each, at most one per slide (128)
@@ -532,7 +534,7 @@ pub(crate) struct Library {
     field_edits: [u64; 4],
     /// Label and lyrics cell per section; always parallel to `draft.sections`.
     cells: Vec<[Entity<TextInput>; 2]>,
-    buttons: [FocusHandle; 20],
+    buttons: [FocusHandle; 32],
     subscriptions: Vec<Subscription>,
     task: Option<Task<()>>,
     worker: Option<Worker>,
@@ -583,6 +585,13 @@ pub(crate) struct Library {
     layouts: bool,
     /// A saved revision to load once the catalog has loaded (Edit Song…).
     open_version: Option<Version>,
+    /// The Arrangement tab. It is a Slides-mode pane (`slides` stays true, so
+    /// no word cells exist) that edits arrangement `variant`; `entry` is the
+    /// selected reference in it.
+    arrangement: bool,
+    variant: usize,
+    entry: Option<usize>,
+    entry_focus: Vec<FocusHandle>,
 }
 
 impl Library {
@@ -677,6 +686,10 @@ impl Library {
             all_focus: None,
             layouts: false,
             open_version: None,
+            arrangement: false,
+            variant: 0,
+            entry: None,
+            entry_focus: Vec::new(),
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
@@ -975,6 +988,8 @@ impl Library {
         self.history = History::default();
         self.version = version;
         self.section = 0;
+        self.variant = 0;
+        self.entry = None;
         self.confirm_delete = false;
         self.confirm_close = false;
         self.load_fields(cx);
@@ -1101,12 +1116,24 @@ impl Library {
                 self.exit_all(cx);
                 self.layouts = false;
                 self.slides = false;
+                self.arrangement = false;
             }
             17 => {
                 self.layouts = false;
                 self.slides = true;
+                self.arrangement = false;
             }
-            19 => self.edit_layouts(false, window, cx),
+            20 => {
+                self.exit_all(cx);
+                self.layouts = false;
+                self.slides = true;
+                self.arrangement = true;
+            }
+            21..=28 => self.arrangement_action(index, cx),
+            19 => {
+                self.arrangement = false;
+                self.edit_layouts(false, window, cx);
+            }
             15 => {
                 self.action(1, window, cx);
                 self.close_after_save = matches!(self.pending, Some(Pending::Save(_)));
@@ -1176,6 +1203,99 @@ impl Library {
             _ => self.set_status(t!(Msg::SaveBeforeDelete)),
         }
         cx.notify();
+    }
+
+    /// The arrangement the tab edits, clamped to what the draft has.
+    fn active_variant(&self) -> usize {
+        self.variant
+            .min(self.draft.variants.len().saturating_sub(1))
+    }
+
+    /// One arrangement change (button 21..=28): applied whole to a copy,
+    /// refused when the copy would not validate, one undo step.
+    fn arrangement_action(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.exit_all(cx);
+        let song = self.current(cx);
+        let mut candidate = song.clone();
+        let variant = self.active_variant();
+        let mut next_variant = variant;
+        let mut next_entry = self.entry;
+        let entries = song
+            .variants
+            .get(variant)
+            .map_or(song.sections.len(), |v| v.occurrences.len());
+        let needs_entry = matches!(index, 26..=28);
+        if needs_entry && self.entry.is_none_or(|e| e >= entries) {
+            self.set_status(t!(Msg::ArrangementNothingSelected));
+            return;
+        }
+        let changed = match index {
+            21 => {
+                arrangement_edit::ensure_variant(&mut candidate);
+                arrangement_edit::new_variant(&mut candidate, Some(variant)).is_some_and(|i| {
+                    next_variant = i;
+                    next_entry = None;
+                    true
+                })
+            }
+            22 => {
+                next_entry = None;
+                arrangement_edit::delete_variant(&mut candidate, variant)
+            }
+            23 => arrangement_edit::make_active(&mut candidate, variant).is_some_and(|i| {
+                next_variant = i;
+                true
+            }),
+            24 => {
+                next_variant = (variant + 1) % song.variants.len().max(1);
+                next_entry = None;
+                next_variant != variant
+            }
+            25 => {
+                arrangement_edit::ensure_variant(&mut candidate);
+                let at = self.entry.map_or(usize::MAX, |e| e + 1);
+                let appended = at.min(candidate.variants[variant].occurrences.len());
+                next_entry = Some(appended);
+                arrangement_edit::insert(&mut candidate, variant, at, self.section)
+            }
+            26 | 27 => {
+                arrangement_edit::ensure_variant(&mut candidate);
+                let from = self.entry.unwrap_or(0);
+                let to = if index == 26 {
+                    from.saturating_sub(1)
+                } else {
+                    from + 1
+                };
+                next_entry = Some(to);
+                arrangement_edit::move_to(&mut candidate, variant, from, to)
+            }
+            _ => {
+                arrangement_edit::ensure_variant(&mut candidate);
+                let at = self.entry.unwrap_or(0);
+                next_entry = at.checked_sub(1).or(Some(0));
+                arrangement_edit::remove(&mut candidate, variant, at)
+            }
+        };
+        if index == 24 {
+            if changed {
+                self.variant = next_variant;
+                self.entry = None;
+            }
+            return;
+        }
+        if !changed || !valid_draft(&candidate) {
+            self.set_status(t!(Msg::ArrangementRefused));
+            return;
+        }
+        self.history.record(Document {
+            song,
+            section: self.section,
+        });
+        self.confirm_delete = false;
+        self.draft = candidate;
+        self.variant = next_variant;
+        self.entry = next_entry;
+        self.set_status(t!(Msg::ArrangementChanged));
     }
 
     /// `+` appends an empty unlabeled slide and puts the caret in its label
@@ -1553,10 +1673,18 @@ impl Library {
         }
         let cell = self.cells.get(self.section)?;
         let stored = self.draft.sections.get(self.section);
+        // Overflow is shown as the audience gets it: page one here, with the
+        // footer counting the pages.
+        let text = cell[LYRICS].read(cx).text();
+        let mut pages = sela::slides::paginate(text);
         let section = Section {
             id: SectionId(Id([0; 16])),
             label: String::new(),
-            lyrics: cell[LYRICS].read(cx).text().into(),
+            lyrics: if pages.len() > 1 {
+                pages.swap_remove(0)
+            } else {
+                text.into()
+            },
             format: stored.map_or_else(Default::default, |s| s.format.clone()),
             background: stored.and_then(|s| s.background.clone()),
         };
@@ -1833,6 +1961,156 @@ impl Library {
             )
     }
 
+    fn section_name(&self, id: SectionId) -> String {
+        match self.draft.sections.iter().position(|s| s.id == id) {
+            Some(i) => match self.draft.sections[i].label.as_str() {
+                "" => t!(Msg::SlideN, index = i + 1).to_owned(),
+                label => label.to_owned(),
+            },
+            None => "?".into(),
+        }
+    }
+
+    /// The Arrangement tab: the active arrangement's ordered references (the
+    /// stored slide order stands in while the song has none) and the slides
+    /// to pick from.
+    fn arrangement_panel(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let variant = self.active_variant();
+        let current = self.draft.variants.get(variant);
+        let names: Vec<String> = match current {
+            Some(v) => v
+                .occurrences
+                .iter()
+                .map(|o| self.section_name(o.section))
+                .collect(),
+            None => self
+                .draft
+                .sections
+                .iter()
+                .map(|s| self.section_name(s.id))
+                .collect(),
+        };
+        let title = t!(
+            Msg::ArrangementTitle,
+            name = current.map_or("", |v| v.name.as_str()),
+            active = if variant == 0 && current.is_some() {
+                t!(Msg::ArrangementActiveMark)
+            } else {
+                ""
+            }
+        );
+        let button = |index: usize, label: &'static str, cx: &mut Context<Self>| {
+            self.framed(index, label, true, cx)
+        };
+        div()
+            .id("arrangement-pane")
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .p_2()
+            .gap_1()
+            .child(div().id("arrangement-title").child(title))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .child(button(21, t!(Msg::ArrangementNew), cx))
+                    .child(button(22, t!(Msg::ArrangementDelete), cx))
+                    .child(button(23, t!(Msg::ArrangementMakeActive), cx))
+                    .child(button(24, t!(Msg::ArrangementNext), cx)),
+            )
+            .child(
+                div()
+                    .id("arrangement-entries")
+                    .debug_selector(|| "arrangement-entries".into())
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .border_1()
+                    .border_color(rgb(theme::BORDER))
+                    .bg(rgb(0xffffff))
+                    .children(names.iter().enumerate().map(|(i, name)| {
+                        let selected = self.entry == Some(i);
+                        div()
+                            .id(("arrangement-entry", i))
+                            .debug_selector(move || format!("arrangement-entry-{i}"))
+                            .track_focus(&self.entry_focus[i])
+                            .key_context("SelaControl")
+                            .px_2()
+                            .py_1()
+                            .cursor_pointer()
+                            .when(selected, |d| d.bg(rgb(theme::SELECTED_ROW)))
+                            .focus(|d| d.bg(rgb(theme::FOCUS_BG)))
+                            .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
+                                w.prevent_default();
+                                s.entry = Some(i);
+                                cx.notify();
+                            }))
+                            .on_click(cx.listener(move |s, e, w, cx| {
+                                if matches!(e, ClickEvent::Keyboard(_)) {
+                                    return;
+                                }
+                                s.entry_focus[i].focus(w, cx);
+                                s.entry = Some(i);
+                                cx.notify();
+                            }))
+                            .child(t!(Msg::ArrangementRow, number = i + 1, name = name))
+                    }))
+                    .when(names.is_empty(), |d| {
+                        d.child(div().p_2().child(t!(Msg::ArrangementEmpty)))
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .child(button(26, t!(Msg::ArrangementUp), cx))
+                    .child(button(27, t!(Msg::ArrangementDown), cx))
+                    .child(button(28, t!(Msg::ArrangementRemove), cx))
+                    .child(button(25, t!(Msg::ArrangementAdd), cx)),
+            )
+            .child(
+                div()
+                    .id("arrangement-slides")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .border_1()
+                    .border_color(rgb(theme::BORDER))
+                    .bg(rgb(0xffffff))
+                    .children(self.draft.sections.iter().enumerate().map(|(i, s)| {
+                        div()
+                            .id(("arrangement-slide", i))
+                            .track_focus(&self.section_focus[i])
+                            .key_context("SelaControl")
+                            .px_2()
+                            .py_1()
+                            .cursor_pointer()
+                            .when(i == self.section, |d| d.bg(rgb(theme::SELECTED_ROW)))
+                            .focus(|d| d.bg(rgb(theme::FOCUS_BG)))
+                            .on_action(cx.listener(move |s, _: &ActivateControl, w, cx| {
+                                w.prevent_default();
+                                s.select_section(i, w, cx);
+                            }))
+                            .on_click(cx.listener(move |s, e, w, cx| {
+                                if matches!(e, ClickEvent::Keyboard(_)) {
+                                    return;
+                                }
+                                s.section_focus[i].focus(w, cx);
+                                s.select_section(i, w, cx);
+                            }))
+                            .child(t!(
+                                Msg::ArrangementRow,
+                                number = i + 1,
+                                name = self.section_name(s.id)
+                            ))
+                    })),
+            )
+    }
+
     fn control(
         &self,
         index: usize,
@@ -2072,7 +2350,16 @@ impl Render for Library {
         let viewport = window.viewport_size();
         let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
         let catalog_width = if self.show_catalog { 220. } else { 0. };
-        let words_width = if self.slides {
+        while self.entry_focus.len() < MAX_OCCURRENCES {
+            let handle = cx
+                .focus_handle()
+                .tab_stop(true)
+                .tab_index(600 + self.entry_focus.len() as isize);
+            self.entry_focus.push(handle);
+        }
+        let words_width = if self.arrangement {
+            ARRANGEMENT_PANE
+        } else if self.slides {
             SLIDES_PANE
         } else {
             ((width - catalog_width) * 0.34).max(330.)
@@ -2088,6 +2375,11 @@ impl Render for Library {
             .collect();
         let groups = groups(labels.iter().map(String::as_str));
         let empty = self.preview_slide(cx).is_some_and(|s| s.text.is_empty());
+        let pages = self
+            .cells
+            .get(self.section)
+            .filter(|_| !self.layouts)
+            .map_or(1, |c| sela::slides::page_count(c[LYRICS].read(cx).text()));
         let rejected = self.preview.as_ref().is_some_and(|p| p.image.is_none());
         let image = self.preview.as_ref().and_then(|p| p.image.clone());
         let format_pane = show_format.then(|| self.format_pane(window, cx));
@@ -2335,7 +2627,12 @@ impl Render for Library {
                                             (
                                                 17,
                                                 t!(Msg::EditorSlides),
-                                                self.slides && !self.layouts,
+                                                self.slides && !self.layouts && !self.arrangement,
+                                            ),
+                                            (
+                                                20,
+                                                t!(Msg::EditorArrangement),
+                                                self.arrangement && !self.layouts,
                                             ),
                                         ]
                                         .map(
@@ -2377,6 +2674,8 @@ impl Render for Library {
                                     .into_any_element()
                             } else if self.layouts {
                                 self.layout_list().into_any_element()
+                            } else if self.arrangement {
+                                self.arrangement_panel(cx).into_any_element()
                             } else if self.slides {
                                 div()
                                     .id("slide-list")
@@ -2526,6 +2825,13 @@ impl Render for Library {
                                                     count = self.cells.len()
                                                 )
                                             })
+                                            .children((pages > 1).then(|| {
+                                                div()
+                                                    .id("split-badge")
+                                                    .debug_selector(|| "split-badge".into())
+                                                    .text_color(rgb(0xb36b00))
+                                                    .child(t!(Msg::SlideSplitBadge, count = pages))
+                                            }))
                                             // A named family that fell back to
                                             // the bundled face (M1-05g2b).
                                             .children(
@@ -4533,5 +4839,171 @@ mod tests {
             Some(()),
             "the pane still names the image"
         );
+    }
+
+    fn arrangement_song() -> Song {
+        let mut song = blank();
+        song.title = "Arranged".into();
+        song.sections[0].label = "Verse".into();
+        song.sections[0].lyrics = "v".into();
+        for (label, lyrics) in [("Chorus", "c"), ("Bridge", "b")] {
+            song.sections.push(Section {
+                id: SectionId::allocate(),
+                label: label.into(),
+                lyrics: lyrics.into(),
+                format: Default::default(),
+                background: None,
+            });
+        }
+        song
+    }
+    fn sequence(cx: &VisualTestContext, view: &Entity<Library>, variant: usize) -> Vec<String> {
+        view.read_with(cx, |v, _| {
+            let song = &v.draft;
+            song.variants[variant]
+                .occurrences
+                .iter()
+                .map(|o| {
+                    song.sections
+                        .iter()
+                        .find(|s| s.id == o.section)
+                        .unwrap()
+                        .lyrics
+                        .clone()
+                })
+                .collect()
+        })
+    }
+    fn pick(cx: &mut VisualTestContext, view: &Entity<Library>, section: usize, entry: usize) {
+        cx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.section = section;
+                v.entry = Some(entry);
+                cx.notify();
+            })
+        });
+    }
+
+    #[gpui::test]
+    fn arrangement_tab_adds_removes_and_reorders_references_and_persists(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let first = Repository::open(&path)
+            .unwrap()
+            .save_song(None, arrangement_song())
+            .unwrap();
+        let (mut cx, view) = fixture(cx, path.clone());
+        cx.simulate_resize(size(px(1400.), px(900.)));
+        cx.update(|_, cx| view.update(cx, |v, cx| v.select(first, cx)));
+        wait(&mut cx, &view);
+        action(&mut cx, &view, 20);
+        cx.run_until_parked();
+        assert!(view.read_with(&cx, |v, _| v.arrangement));
+        assert!(cx.debug_bounds("arrangement-entries").is_some());
+
+        // The song has no arrangement yet: the first edit starts one from the
+        // stored order, then repeats the chorus at the end.
+        pick(&mut cx, &view, 1, 2);
+        action(&mut cx, &view, 25);
+        assert_eq!(
+            sequence(&cx, &view, 0),
+            ["v", "c", "b", "c"].map(String::from)
+        );
+        // Move the repeated chorus up by two, then drop the verse.
+        action(&mut cx, &view, 26);
+        action(&mut cx, &view, 26);
+        assert_eq!(
+            sequence(&cx, &view, 0),
+            ["v", "c", "c", "b"].map(String::from)
+        );
+        pick(&mut cx, &view, 0, 0);
+        action(&mut cx, &view, 28);
+        assert_eq!(sequence(&cx, &view, 0), ["c", "c", "b"].map(String::from));
+        pick(&mut cx, &view, 0, 0);
+        action(&mut cx, &view, 27);
+        assert_eq!(sequence(&cx, &view, 0), ["c", "c", "b"].map(String::from));
+        pick(&mut cx, &view, 0, 2);
+        action(&mut cx, &view, 26);
+        assert_eq!(sequence(&cx, &view, 0), ["c", "b", "c"].map(String::from));
+
+        let ids: Vec<_> = view.read_with(&cx, |v, _| {
+            v.draft.variants[0]
+                .occurrences
+                .iter()
+                .map(|o| o.id)
+                .collect()
+        });
+        assert_eq!(
+            ids.iter()
+                .map(|i| i.0.0)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3,
+            "repeated slides are distinct references"
+        );
+
+        // Without a selected reference, move/remove are refused untouched.
+        let before = view.read_with(&cx, |v, cx| v.current(cx));
+        cx.update(|_, cx| view.update(cx, |v, _| v.entry = None));
+        action(&mut cx, &view, 28);
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), before);
+
+        action(&mut cx, &view, 1);
+        wait(&mut cx, &view);
+        let version = view.read_with(&cx, |v, _| v.version.unwrap());
+        assert_ne!(version, first, "saving writes a new revision");
+        let stored = Repository::open(&path).unwrap().song(version).unwrap();
+        assert_eq!(stored, before);
+        assert_eq!(stored.variants[0].occurrences.len(), 3);
+
+        // One undo step per change; the active arrangement is the first.
+        cx.update(|w, cx| view.read(cx).buttons[8].clone().focus(w, cx));
+        cx.simulate_keystrokes("ctrl-z");
+        assert_eq!(sequence(&cx, &view, 0), ["c", "c", "b"].map(String::from));
+    }
+
+    #[gpui::test]
+    fn arrangements_can_be_created_chosen_activated_and_deleted(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
+        cx.simulate_resize(size(px(1400.), px(900.)));
+        cx.update(|_, cx| view.update(cx, |v, cx| v.begin(arrangement_song(), None, cx)));
+        action(&mut cx, &view, 20);
+        action(&mut cx, &view, 21);
+        assert_eq!(
+            view.read_with(&cx, |v, _| (v.draft.variants.len(), v.variant)),
+            (2, 1)
+        );
+        pick(&mut cx, &view, 0, 0);
+        action(&mut cx, &view, 28);
+        assert_eq!(sequence(&cx, &view, 1), ["c", "b"].map(String::from));
+        assert_eq!(sequence(&cx, &view, 0), ["v", "c", "b"].map(String::from));
+        action(&mut cx, &view, 23);
+        assert_eq!(sequence(&cx, &view, 0), ["c", "b"].map(String::from));
+        assert_eq!(view.read_with(&cx, |v, _| v.variant), 0);
+        action(&mut cx, &view, 24);
+        assert_eq!(view.read_with(&cx, |v, _| v.variant), 1);
+        action(&mut cx, &view, 22);
+        assert_eq!(view.read_with(&cx, |v, _| v.draft.variants.len()), 1);
+        assert_eq!(sequence(&cx, &view, 0), ["c", "b"].map(String::from));
+    }
+
+    #[gpui::test]
+    fn long_text_shows_page_one_and_a_split_badge(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
+        cx.simulate_resize(size(px(1400.), px(900.)));
+        field(&mut cx, &view, 0, "Long");
+        let lines: Vec<String> = (1..=40).map(|n| format!("Line {n}")).collect();
+        type_cell(&mut cx, &view, 0, LYRICS, &lines.join("\n"));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("split-badge").is_some());
+        let shown = cx.update(|_, cx| view.read(cx).preview_slide(cx).unwrap().text);
+        let pages = sela::slides::paginate(&lines.join("\n"));
+        assert!(pages.len() > 1);
+        assert_eq!(shown, pages[0]);
+        type_cell(&mut cx, &view, 0, LYRICS, "Short");
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("split-badge").is_none());
     }
 }

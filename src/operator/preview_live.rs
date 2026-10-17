@@ -23,6 +23,7 @@ fn render_image(rgba: &[u8], extent: Extent) -> Option<Arc<gpui::RenderImage>> {
 pub(crate) fn tile(
     slide: &Slide,
     index: usize,
+    page: Option<slides::Page>,
     border: u32,
     thumb: Option<Arc<gpui::RenderImage>>,
 ) -> gpui::Div {
@@ -75,16 +76,19 @@ pub(crate) fn tile(
                 .text_size(px(TEXT_CAPTION))
                 .text_color(rgb(CANVAS_TEXT))
                 .truncate()
-                .child(format!("{} · {}", index + 1, slide_name(index, slide))),
+                .child(slide_caption(index, slide, page)),
         )
 }
 
+// Each argument is a distinct pane region; a struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn slide_pane(
     id: &'static str,
     title: String,
     width: f32,
     footer: String,
     status: Option<Vec<(String, u32)>>,
+    toolbar: Option<gpui::AnyElement>,
     tiles: Option<Vec<gpui::Stateful<gpui::Div>>>,
     focus: Option<FocusHandle>,
 ) -> impl IntoElement {
@@ -112,6 +116,7 @@ pub(crate) fn slide_pane(
                 .bg(rgb(CHROME))
                 .child(title),
         )
+        .children(toolbar)
         .children(status.map(|lines| {
             let spoken = lines
                 .iter()
@@ -951,16 +956,18 @@ impl Operator {
                 .enumerate()
                 .map(|(index, slide)| {
                     let selected = index == self.preview_slide;
+                    let page = item.pages.get(index).copied().flatten();
                     tile(
                         slide,
                         index,
+                        page,
                         if selected { ACCENT } else { CANVAS },
                         self.thumbnail(slide),
                     )
                     .id(("preview-slide", index))
                     .debug_selector(move || format!("preview-slide-{index}"))
                     .role(Role::ListItem)
-                    .aria_label(format!("{} · {}", index + 1, slide_name(index, slide)))
+                    .aria_label(slide_caption(index, slide, page))
                     .aria_selected(selected)
                     .accessibility_id(format!("preview-slide-{index}"))
                     .track_focus(&self.slide_rows[index])
@@ -984,13 +991,27 @@ impl Operator {
                 })
                 .collect::<Vec<_>>()
         });
-        let warning = self.preview_warning().map(|w| vec![(w, DARK_ERROR)]);
+        let mut notes = Vec::new();
+        if let Some(page) = self
+            .preview
+            .as_ref()
+            .and_then(|item| item.pages.get(self.preview_slide).copied().flatten())
+        {
+            notes.push((
+                t!(Msg::SlideSplitNote, number = page.number, count = page.of),
+                DARK_MUTED,
+            ));
+        }
+        notes.extend(self.preview_warning().map(|w| (w, DARK_ERROR)));
+        let warning = (!notes.is_empty()).then_some(notes);
+        let toolbar = self.arrangement_button(cx);
         slide_pane(
             "Preview",
             t!(Msg::PanePreview).to_string(),
             width,
             footer,
             warning,
+            toolbar,
             tiles,
             None,
         )
@@ -1112,11 +1133,12 @@ impl Operator {
                     } else {
                         CANVAS
                     };
-                    tile(slide, index, border, self.thumbnail(slide))
+                    let page = item.pages.get(index).copied().flatten();
+                    tile(slide, index, page, border, self.thumbnail(slide))
                         .id(("live-slide", index))
                         .debug_selector(move || format!("live-slide-{index}"))
                         .role(Role::ListItem)
-                        .aria_label(format!("{} · {}", index + 1, slide_name(index, slide)))
+                        .aria_label(slide_caption(index, slide, page))
                         .aria_selected(Some(index) == confirmed)
                         .accessibility_id(format!("live-slide-{index}"))
                         .cursor_pointer()
@@ -1141,6 +1163,7 @@ impl Operator {
             width,
             footer,
             Some(lines),
+            None,
             tiles,
             Some(self.live_focus.clone()),
         )

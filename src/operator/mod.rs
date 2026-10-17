@@ -7,6 +7,7 @@ use gpui::{
     Toggled, anchored, deferred, point,
 };
 use sela::{
+    arrangement::VariantId,
     background::{self, Plan},
     delivery::{Epoch, LiveState},
     fonts,
@@ -19,7 +20,7 @@ use sela::{
         cue::{CueEvent, CueJob, CuePreparer, Lane, Ticket},
     },
     scene::{ContentVersion, Extent, PrepareError, PreparedBackground, RendererCapabilities},
-    schedule::{EntryId, Schedule},
+    schedule::{EntryId, Pin, Schedule},
     schedule_file,
     slides::{self, Sizing, Slide},
     storage::{self, MAX_ITEMS, Reply, Version, Worker},
@@ -137,9 +138,25 @@ pub(super) struct Item {
     pub(super) entry: Option<EntryId>,
     pub(super) title: String,
     pub(super) slides: Arc<[Slide]>,
+    /// Per slide: its page when the section was split by overflow.
+    pub(super) pages: Arc<[Option<slides::Page>]>,
+    /// The song's arrangements, for the schedule entry's choice.
+    pub(super) arrangements: Arc<[(VariantId, String)]>,
+    /// The entry's stored choice these slides were built for.
+    pub(super) chosen: Option<VariantId>,
     /// Per-slide face resolution, `None` until the background resolver lands.
     /// Until then the current live scene stays and a deferred cue waits.
     pub(super) resolved: Option<Arc<[fonts::Resolved]>>,
+}
+
+impl Item {
+    /// Position of the arrangement these slides follow: the stored choice
+    /// when the song has it, else the first.
+    pub(super) fn chosen_index(&self) -> usize {
+        self.chosen
+            .and_then(|id| self.arrangements.iter().position(|(v, _)| *v == id))
+            .unwrap_or(0)
+    }
 }
 
 /// A live cue being prepared off the UI thread.
@@ -176,7 +193,7 @@ pub(crate) enum Request {
     /// Reading the songs a schedule file save embeds.
     SaveSchedule(schedule_files::SaveJob),
     /// Resolving an opened schedule file's songs against the library.
-    ImportSchedule(PathBuf),
+    ImportSchedule(PathBuf, Vec<Option<VariantId>>),
     /// Loading the old and new revision of each outdated entry's song;
     /// `versions` names the songs in reply order.
     UpdateScan {
@@ -557,6 +574,22 @@ fn shown_title(title: &str) -> String {
         t!(Msg::Untitled).to_string()
     } else {
         title.to_string()
+    }
+}
+
+/// Tile caption and accessible name: number, label and, for a split section,
+/// which page of how many.
+fn slide_caption(index: usize, slide: &Slide, page: Option<slides::Page>) -> String {
+    let name = slide_name(index, slide);
+    match page {
+        Some(page) => t!(
+            Msg::SlideCaptionPaged,
+            index = index + 1,
+            name = name,
+            number = page.number,
+            count = page.of
+        ),
+        None => format!("{} · {}", index + 1, name),
     }
 }
 

@@ -1,8 +1,10 @@
 //! Provisional song-to-slide projection and text cue construction. No GPUI types.
-//! One slide per section occurrence of the song's first arrangement, else per
-//! stored section. Arrangement selection, pagination and themes are not
+//! One slide per section occurrence of the chosen arrangement (default: the
+//! first), else per stored section. A section whose text overflows the
+//! minimum font size becomes several slides (`paginate`). Themes are not
 //! implemented.
 use crate::{
+    arrangement::{Variant, VariantId},
     background::{self, Background},
     fonts::Resolved,
     format::{Align, Size, SlideFormat, VAlign},
@@ -42,10 +44,95 @@ pub enum Sizing {
     Normalized,
 }
 
-/// The first arrangement's order if it has occurrences and all of them
-/// resolve; otherwise stored section order, so no lyrics are hidden.
+/// One audience slide of a section that was split because its text does not
+/// fit at the minimum font size: page `number` of `of` (both 1-based).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Page {
+    pub number: u16,
+    pub of: u16,
+}
+
+/// A song's audience slides plus, per slide, its page when the section was
+/// split. Both vectors always have the same length.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Projection {
+    pub slides: Vec<Slide>,
+    pub pages: Vec<Option<Page>>,
+}
+
+/// Minimum font size, in 1080-line reference pixels, a paginated slide may
+/// need. Pagination uses the reference canvas rather than the output size, so
+/// breaks are identical for every output and in the editor preview.
+const MIN_FONT: f32 = 48.;
+/// Lines that fit the reference text area at `MIN_FONT`.
+pub const PAGE_LINES: usize = {
+    let area = (REFERENCE_HEIGHT - 2 * INSET) as f32;
+    (area / (MIN_FONT * LINE_HEIGHT)) as usize
+};
+/// Per-page byte budget, under the audience preparer's text limit.
+const PAGE_BYTES: usize = MAX_TEXT_BYTES - 96;
+
+/// Splits slide text that does not fit at the minimum font size into pages:
+/// whole lines, balanced so no page is a one-line orphan. A single line over
+/// the byte budget is cut at grapheme cluster boundaries, so a base letter
+/// never loses its combining marks. Pure and deterministic: the same text
+/// always gives the same pages.
+pub fn paginate(text: &str) -> Vec<String> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut lines: Vec<&str> = Vec::new();
+    for line in text.split('\n') {
+        if line.len() <= PAGE_BYTES {
+            lines.push(line);
+            continue;
+        }
+        let mut start = 0;
+        let mut end = 0;
+        for (offset, cluster) in line.grapheme_indices(true) {
+            if offset + cluster.len() - start > PAGE_BYTES && end > start {
+                lines.push(&line[start..end]);
+                start = end;
+            }
+            end = offset + cluster.len();
+        }
+        lines.push(&line[start..]);
+    }
+    let mut pages = lines.len().div_ceil(PAGE_LINES).max(1);
+    loop {
+        let (base, extra) = (lines.len() / pages, lines.len() % pages);
+        let mut out = Vec::with_capacity(pages);
+        let mut at = 0;
+        for page in 0..pages {
+            let take = base + usize::from(page < extra);
+            out.push(lines[at..at + take].join("\n"));
+            at += take;
+        }
+        if pages >= lines.len().max(1) || out.iter().all(|p| p.len() <= PAGE_BYTES) {
+            return out
+                .into_iter()
+                .map(|page| page.trim_matches('\n').to_owned())
+                .collect();
+        }
+        pages += 1;
+    }
+}
+
+/// The arrangement `chosen` names when the song has it, else the first one.
+pub fn variant_of(song: &Song, chosen: Option<VariantId>) -> Option<&Variant> {
+    chosen
+        .and_then(|id| song.variants.iter().find(|v| v.id == id))
+        .or_else(|| song.variants.first())
+}
+
+/// The slides of the first arrangement.
 pub fn slides(song: &Song) -> Vec<Slide> {
-    let ordered = song.variants.first().and_then(|variant| {
+    project(song, None).slides
+}
+
+/// The chosen arrangement's order if it has occurrences and all of them
+/// resolve; otherwise stored section order, so no lyrics are hidden. Each
+/// section that overflows the minimum font size becomes consecutive pages.
+pub fn project(song: &Song, chosen: Option<VariantId>) -> Projection {
+    let ordered = variant_of(song, chosen).and_then(|variant| {
         variant
             .occurrences
             .iter()
@@ -54,10 +141,36 @@ pub fn slides(song: &Song) -> Vec<Slide> {
             .filter(|sections| !sections.is_empty())
     });
     let sections = ordered.unwrap_or_else(|| song.sections.iter().collect());
-    sections
-        .into_iter()
-        .map(|section| section_slide(section, song.master.as_ref()))
-        .collect()
+    let mut out = Projection {
+        slides: Vec::new(),
+        pages: Vec::new(),
+    };
+    for section in sections {
+        let slide = section_slide(section, song.master.as_ref());
+        let split = paginate(&slide.text);
+        if split.len() < 2 {
+            out.slides.push(slide);
+            out.pages.push(None);
+            continue;
+        }
+        let of = u16::try_from(split.len()).unwrap_or(u16::MAX);
+        for (index, text) in split.into_iter().enumerate() {
+            out.slides.push(Slide {
+                text,
+                ..slide.clone()
+            });
+            out.pages.push(Some(Page {
+                number: u16::try_from(index + 1).unwrap_or(u16::MAX),
+                of,
+            }));
+        }
+    }
+    out
+}
+
+/// How many audience slides the section's text becomes.
+pub fn page_count(slide_text: &str) -> usize {
+    paginate(slide_text).len()
 }
 
 /// One section's slide: trailing spaces and surrounding blank lines dropped.
@@ -828,5 +941,107 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fixed_cue.text().unwrap().font_size(), 20);
+    }
+
+    fn numbered(count: usize) -> String {
+        (1..=count)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn text_that_fits_is_one_page_and_overflow_splits_into_balanced_pages() {
+        assert_eq!(PAGE_LINES, 16);
+        assert_eq!(paginate(""), [""]);
+        assert_eq!(paginate(&numbered(16)).len(), 1);
+        let pages = paginate(&numbered(17));
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].lines().count(), 9);
+        assert_eq!(pages[1].lines().count(), 8);
+        let joined = pages.join("\n");
+        assert_eq!(joined, numbered(17), "no line lost or reordered");
+        assert_eq!(paginate(&numbered(33)).len(), 3);
+    }
+
+    #[test]
+    fn pagination_is_deterministic_and_every_page_is_showable() {
+        let text = numbered(40);
+        assert_eq!(paginate(&text), paginate(&text));
+        for page in paginate(&text) {
+            assert!(page.lines().count() <= PAGE_LINES);
+            assert!(page.len() <= MAX_TEXT_BYTES);
+            assert!(page.lines().count() <= MAX_LINES);
+        }
+        let wide = vec!["x".repeat(600); 12].join("\n");
+        let pages = paginate(&wide);
+        assert!(pages.len() > 1, "byte budget forces a split");
+        assert!(pages.iter().all(|p| p.len() <= PAGE_BYTES));
+        assert_eq!(pages.join("\n"), wide);
+    }
+
+    #[test]
+    fn a_long_line_is_cut_between_grapheme_clusters_not_inside_them() {
+        let cluster = "e\u{301}\u{323}";
+        let line = cluster.repeat(PAGE_BYTES);
+        let pages = paginate(&line);
+        assert!(pages.len() > 1);
+        for page in &pages {
+            assert!(page.len() <= PAGE_BYTES);
+            assert!(!page.starts_with('\u{301}') && !page.starts_with('\u{323}'));
+            assert_eq!(page.matches('e').count(), page.matches('\u{301}').count());
+            assert_eq!(page.matches('e').count(), page.matches('\u{323}').count());
+        }
+        assert_eq!(pages.concat(), line);
+        // CJK and emoji ZWJ sequences stay whole too.
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}";
+        let pages = paginate(&family.repeat(PAGE_BYTES / 4));
+        assert!(
+            pages
+                .iter()
+                .all(|p| p.matches('\u{1f468}').count() * 2 == p.matches('\u{200d}').count())
+        );
+    }
+
+    #[test]
+    fn projection_follows_the_chosen_arrangement_and_marks_pages() {
+        use crate::arrangement::{Occurrence, OccurrenceId, Variant, VariantId};
+        let long = numbered(20);
+        let mut song = song(&[
+            ("Verse 1", "v1"),
+            ("Chorus", long.as_str()),
+            ("Verse 2", "v2"),
+        ]);
+        let [v1, c, v2] = [0, 1, 2].map(|i| song.sections[i].id);
+        let variant = |name: &str, order: &[SectionId]| Variant {
+            id: VariantId(SectionId::allocate().0),
+            name: name.into(),
+            occurrences: order
+                .iter()
+                .map(|section| Occurrence {
+                    id: OccurrenceId(SectionId::allocate().0),
+                    section: *section,
+                })
+                .collect(),
+        };
+        let full = variant("Full", &[v1, c, v2, c]);
+        let short = variant("Short", &[v2, v1]);
+        song.variants = vec![full.clone(), short.clone()];
+        let default = project(&song, None);
+        assert_eq!(default.slides.len(), default.pages.len());
+        let labels: Vec<_> = default.slides.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["Verse 1", "Chorus", "Chorus", "Verse 2", "Chorus", "Chorus"]
+        );
+        assert_eq!(default.pages[0], None);
+        assert_eq!(default.pages[1], Some(Page { number: 1, of: 2 }));
+        assert_eq!(default.pages[2], Some(Page { number: 2, of: 2 }));
+        let chosen = project(&song, Some(short.id));
+        assert_eq!(texts(&chosen.slides), ["v2", "v1"]);
+        assert_eq!(chosen.pages, [None, None]);
+        let unknown = project(&song, Some(VariantId(SectionId::allocate().0)));
+        assert_eq!(unknown, default, "an unknown arrangement falls back");
+        assert_eq!(slides(&song), default.slides);
     }
 }

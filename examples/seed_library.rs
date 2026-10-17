@@ -159,6 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             items: vec![sela::schedule_file::Item {
                 source: version,
                 song,
+                arrangement: None,
             }],
         };
         let bytes = sela::schedule_file::encode(&document).map_err(|e| format!("{e:?}"))?;

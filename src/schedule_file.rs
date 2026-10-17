@@ -1,11 +1,13 @@
 //! Schedule documents: `.selaschedule` files, like EasyWorship's `.ews`.
 //!
-//! The file is versioned UTF-8 JSON: `{"format":"sela-schedule","version":1,
+//! The file is versioned UTF-8 JSON: `{"format":"sela-schedule","version":2,
 //! "title":..,"items":[..]}`. Each item embeds the full pinned song revision
 //! (text, arrangement, formats, backgrounds, metadata) next to the source song
-//! id and revision, so a file opens against any library. A later version adds
-//! item kinds, themes or asset snapshots; readers reject a version they do not
-//! know instead of guessing. Formats and backgrounds are embedded as hex of
+//! id and revision, so a file opens against any library. Version 2 adds the
+//! item's chosen `arrangement` (a variant id of its embedded song); version 1
+//! files still open, with every item on the song's first arrangement. A later
+//! version adds item kinds, themes or asset snapshots; readers reject a version
+//! they do not know instead of guessing. Formats and backgrounds are embedded as hex of
 //! their own library codecs (`SlideFormat::encode`, `Background::encode`).
 //!
 //! All I/O here is blocking. Use `Worker`, which owns a thread, from the UI.
@@ -26,7 +28,7 @@ use std::{
 };
 
 pub const FORMAT: &str = "sela-schedule";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const EXTENSION: &str = "selaschedule";
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_TITLE_BYTES: usize = 1024;
@@ -37,6 +39,8 @@ pub struct Item {
     /// The library song and revision the item was saved from.
     pub source: Version,
     pub song: Song,
+    /// The arrangement this occurrence plays; None is the song's first.
+    pub arrangement: Option<VariantId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,6 +242,9 @@ pub fn encode(file: &ScheduleFile) -> Result<Vec<u8>, WriteError> {
             value.insert("song_id".into(), id_hex(item.source.id).into());
             value.insert("revision".into(), item.source.revision.into());
             value.insert("song".into(), song_json(&item.song));
+            if let Some(arrangement) = item.arrangement {
+                value.insert("arrangement".into(), id_hex(arrangement.0).into());
+            }
             Value::Object(value).to_string()
         })
         .collect();
@@ -295,12 +302,20 @@ pub fn decode(bytes: &[u8]) -> Result<ScheduleFile, ReadError> {
                 return None;
             }
             let revision = item.get("revision")?.as_i64().filter(|r| *r > 0)?;
+            let song = song_from_json(item.get("song")?)?;
+            // A choice the embedded song does not have is dropped, not an error.
+            let arrangement = match item.get("arrangement").filter(|_| version >= 2) {
+                Some(value) => Some(VariantId(id_from(value)?)),
+                None => None,
+            }
+            .filter(|id| song.variants.iter().any(|v| v.id == *id));
             Some(Item {
                 source: Version {
                     id: id_from(item.get("song_id")?)?,
                     revision,
                 },
-                song: song_from_json(item.get("song")?)?,
+                song,
+                arrangement,
             })
         })
         .collect::<Option<Vec<_>>>()

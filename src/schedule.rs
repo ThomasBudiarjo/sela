@@ -3,6 +3,7 @@
 //! Live. They are not persisted, so reopening a schedule allocates fresh IDs
 //! that never match an entry from an earlier schedule in the same session.
 //! The schedule's document is a `.selaschedule` file (see `schedule_file`).
+use crate::arrangement::VariantId;
 use crate::storage::{MAX_ITEMS, Version};
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,17 @@ pub struct Entry {
     pub id: EntryId,
     pub version: Version,
     pub title: String,
+    /// The arrangement this occurrence plays; None is the song's first. It
+    /// belongs to the entry, never to the library song, so a duplicate can
+    /// differ from its original.
+    pub arrangement: Option<VariantId>,
+}
+
+/// What a saved schedule remembers about one entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pin {
+    pub version: Version,
+    pub arrangement: Option<VariantId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,7 +42,7 @@ pub struct Schedule {
     next: u64,
     path: Option<PathBuf>,
     /// Revisions as last saved or opened; differs from `entries` when dirty.
-    baseline: Vec<Version>,
+    baseline: Vec<Pin>,
 }
 
 impl Schedule {
@@ -49,10 +61,7 @@ impl Schedule {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.entries
-            .iter()
-            .map(|e| e.version)
-            .ne(self.baseline.iter().copied())
+        self.pins().ne(self.baseline.iter().copied())
     }
 
     pub fn index(&self, id: EntryId) -> Option<usize> {
@@ -76,7 +85,15 @@ impl Schedule {
         }
         let id = self.allocate();
         let at = at.min(self.entries.len());
-        self.entries.insert(at, Entry { id, version, title });
+        self.entries.insert(
+            at,
+            Entry {
+                id,
+                version,
+                title,
+                arrangement: None,
+            },
+        );
         Ok(id)
     }
 
@@ -199,6 +216,17 @@ impl Schedule {
         }
     }
 
+    /// Chooses the arrangement for one entry only. False for an unknown entry.
+    pub fn set_arrangement(&mut self, id: EntryId, arrangement: Option<VariantId>) -> bool {
+        match self.entries.iter_mut().find(|e| e.id == id) {
+            Some(entry) => {
+                entry.arrangement = arrangement;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// One step towards the start (`up`) or the end. False at the boundary.
     pub fn move_by(&mut self, id: EntryId, up: bool) -> bool {
         match self.index(id) {
@@ -227,26 +255,35 @@ impl Schedule {
         self.entries.iter().map(|e| e.version).collect()
     }
 
-    /// Records a completed save of `versions` to `path`. Edits made while the
-    /// save was in flight stay dirty.
-    pub fn mark_saved(&mut self, path: PathBuf, versions: Vec<Version>) {
-        self.path = Some(path);
-        self.baseline = versions;
+    /// Entries as a save writes them: revision plus chosen arrangement.
+    pub fn pins(&self) -> impl Iterator<Item = Pin> + '_ {
+        self.entries.iter().map(|e| Pin {
+            version: e.version,
+            arrangement: e.arrangement,
+        })
     }
 
-    /// Replaces the contents with a schedule file's items (`version`, song
-    /// title), in file order.
-    pub fn open(&mut self, path: PathBuf, items: Vec<(Version, String)>) -> Result<(), Error> {
+    /// Records a completed save of `pins` to `path`. Edits made while the
+    /// save was in flight stay dirty.
+    pub fn mark_saved(&mut self, path: PathBuf, pins: Vec<Pin>) {
+        self.path = Some(path);
+        self.baseline = pins;
+    }
+
+    /// Replaces the contents with a schedule file's items (pin, song title),
+    /// in file order.
+    pub fn open(&mut self, path: PathBuf, items: Vec<(Pin, String)>) -> Result<(), Error> {
         if items.len() > MAX_ITEMS {
             return Err(Error::Invalid);
         }
-        self.baseline = items.iter().map(|(version, _)| *version).collect();
+        self.baseline = items.iter().map(|(pin, _)| *pin).collect();
         self.entries = items
             .into_iter()
-            .map(|(version, title)| Entry {
+            .map(|(pin, title)| Entry {
                 id: self.allocate(),
-                version,
+                version: pin.version,
                 title,
+                arrangement: pin.arrangement,
             })
             .collect();
         self.path = Some(path);
@@ -270,6 +307,13 @@ mod tests {
         Version {
             id: Id([n; 16]),
             revision,
+        }
+    }
+
+    fn pin(n: u8, revision: i64) -> Pin {
+        Pin {
+            version: v(n, revision),
+            arrangement: None,
         }
     }
 
@@ -388,6 +432,33 @@ mod tests {
     }
 
     #[test]
+    fn arrangement_belongs_to_the_entry_and_is_part_of_the_saved_state() {
+        let (mut s, ids) = six();
+        let (full, short) = (VariantId(Id([7; 16])), VariantId(Id([8; 16])));
+        assert!(s.set_arrangement(ids[1], Some(full)));
+        let copies = s.duplicate(&[ids[1]]).unwrap();
+        assert_eq!(
+            s.get(copies[0]).unwrap().arrangement,
+            Some(full),
+            "copy starts equal"
+        );
+        assert!(s.set_arrangement(copies[0], Some(short)));
+        assert_eq!(s.get(ids[1]).unwrap().arrangement, Some(full));
+        assert_eq!(s.get(copies[0]).unwrap().arrangement, Some(short));
+        assert!(!s.set_arrangement(EntryId(999), None));
+        let saved: Vec<Pin> = s.pins().collect();
+        s.mark_saved(PathBuf::from("C:/x/A.selaschedule"), saved);
+        assert!(!s.is_dirty());
+        s.set_arrangement(copies[0], Some(full));
+        assert!(
+            s.is_dirty(),
+            "changing only the arrangement is an unsaved change"
+        );
+        s.set_arrangement(copies[0], Some(short));
+        assert!(!s.is_dirty());
+    }
+
+    #[test]
     fn duplicate_is_all_or_nothing_at_the_limit() {
         let mut s = Schedule::default();
         let ids: Vec<_> = (0..MAX_ITEMS - 1)
@@ -422,7 +493,7 @@ mod tests {
         let a = s.push(v(1, 1), "A".into()).unwrap();
         let b = s.push(v(2, 1), "B".into()).unwrap();
         assert!(s.is_dirty());
-        let snapshot = s.versions();
+        let snapshot: Vec<Pin> = s.pins().collect();
         s.push(v(3, 1), "C".into()).unwrap();
         s.mark_saved(PathBuf::from("C:/x/Sunday.selaschedule"), snapshot);
         assert!(s.is_dirty(), "edit during the save stays unsaved");
@@ -440,7 +511,9 @@ mod tests {
     fn open_allocates_fresh_ids_and_validates() {
         let mut s = Schedule::default();
         let old = s.push(v(1, 1), "A".into()).unwrap();
-        let too_many = (0..=MAX_ITEMS).map(|n| (v(1, 1), n.to_string())).collect();
+        let too_many = (0..=MAX_ITEMS)
+            .map(|n| (pin(1, 1), n.to_string()))
+            .collect();
         assert_eq!(
             s.open(PathBuf::from("a.selaschedule"), too_many),
             Err(Error::Invalid)
@@ -449,9 +522,9 @@ mod tests {
         s.open(
             PathBuf::from("Evening.selaschedule"),
             vec![
-                (v(1, 1), "A".into()),
-                (v(1, 1), "A".into()),
-                (v(2, 3), "B".into()),
+                (pin(1, 1), "A".into()),
+                (pin(1, 1), "A".into()),
+                (pin(2, 3), "B".into()),
             ],
         )
         .unwrap();

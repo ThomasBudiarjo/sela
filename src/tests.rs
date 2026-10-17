@@ -4532,6 +4532,7 @@ mod preflight_ui {
             items: vec![sela::schedule_file::Item {
                 source: version,
                 song,
+                arrangement: None,
             }],
         };
         std::fs::write(&schedule, sela::schedule_file::encode(&file).unwrap()).unwrap();
@@ -4851,7 +4852,7 @@ mod schedule_files_ui {
         save_new(&mut cx, &operator, good.clone());
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&good).unwrap()).unwrap();
-        value["version"] = 2.into();
+        value["version"] = 3.into();
         let cases = [
             ("garbage", b"not a schedule".to_vec()),
             ("truncated", std::fs::read(&good).unwrap()[..40].to_vec()),
@@ -4892,6 +4893,7 @@ mod schedule_files_ui {
             items: vec![Item {
                 source: version,
                 song,
+                arrangement: None,
             }],
         };
         std::fs::write(&file, schedule_file::encode(&document).unwrap()).unwrap();
@@ -5397,5 +5399,179 @@ mod schedule_remainder_ui {
                     && submitted(o) == sent + 1
             },
         );
+    }
+}
+
+mod arrangements {
+    use super::*;
+    use sela::arrangement::{Occurrence, OccurrenceId, Variant, VariantId};
+    use sela::schedule_file;
+
+    /// A song with sections v, c, b and two arrangements: "Full" (v c b) and
+    /// "Short" (c c).
+    fn library_with_arrangements(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        let path = dir.path().join("library.sqlite");
+        let section = |label: &str, lyrics: &str| Section {
+            id: SectionId::allocate(),
+            label: label.into(),
+            lyrics: lyrics.into(),
+            format: Default::default(),
+            background: None,
+        };
+        let sections = vec![
+            section("Verse", "verse words"),
+            section("Chorus", "chorus words"),
+            section("Bridge", "bridge words"),
+        ];
+        let variant = |name: &str, order: &[usize]| Variant {
+            id: VariantId(SectionId::allocate().0),
+            name: name.into(),
+            occurrences: order
+                .iter()
+                .map(|n| Occurrence {
+                    id: OccurrenceId(SectionId::allocate().0),
+                    section: sections[*n].id,
+                })
+                .collect(),
+        };
+        let variants = vec![variant("Full", &[0, 1, 2]), variant("Short", &[1, 1])];
+        Repository::open(&path)
+            .unwrap()
+            .save_song(
+                None,
+                Song {
+                    title: "Arranged".into(),
+                    authors: String::new(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    variants,
+                    sections,
+                    master: None,
+                },
+            )
+            .unwrap();
+        path
+    }
+
+    fn order_of(
+        cx: &VisualTestContext,
+        operator: &Entity<Operator>,
+    ) -> Vec<sela::schedule::EntryId> {
+        operator.read_with(cx, |o, _| {
+            o.schedule.entries().iter().map(|e| e.id).collect()
+        })
+    }
+
+    fn texts(o: &Operator) -> Vec<String> {
+        o.preview
+            .as_ref()
+            .map(|p| p.slides.iter().map(|s| s.text.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    #[gpui::test]
+    fn each_schedule_item_keeps_its_own_arrangement_through_save_and_reopen(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, _) =
+            with_library(cx, Some(library_with_arrangements(&dir)), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+        add_song(&mut cx, &operator, "Arranged");
+        settle(&mut cx, &operator, "original", |o| texts(o).len() == 3);
+        right_click(&mut cx, "schedule-item-0");
+        click(&mut cx, "item-menu-duplicate");
+        settle(&mut cx, &operator, "copy", |o| {
+            o.preview.as_ref().and_then(|p| p.entry) == o.selected_entry
+                && o.schedule.entries().len() == 2
+                && texts(o).len() == 3
+        });
+        click(&mut cx, "preview-arrangement");
+        settle(&mut cx, &operator, "short", |o| texts(o).len() == 2);
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(texts(o), ["chorus words", "chorus words"]);
+            assert_eq!(o.schedule.entries()[0].arrangement, None);
+            assert!(o.schedule.entries()[1].arrangement.is_some());
+            assert!(o.schedule.is_dirty(), "choosing an arrangement is an edit");
+        });
+        click(&mut cx, "schedule-item-0");
+        settle(&mut cx, &operator, "original again", |o| {
+            texts(o).len() == 3
+        });
+
+        cx.simulate_keystrokes("ctrl-s");
+        let file = dir.path().join("Two.selaschedule");
+        assert!(cx.did_prompt_for_new_path());
+        let target = file.clone();
+        cx.simulate_new_path_selection(move |_| Some(target));
+        settle(&mut cx, &operator, "saved", |o| {
+            o.schedule.path() == Some(file.as_path()) && !o.schedule.is_dirty()
+        });
+        let saved = schedule_file::read(&file).unwrap();
+        assert_eq!(saved.items[0].arrangement, None);
+        assert_eq!(
+            saved.items[1].arrangement,
+            operator.read_with(&cx, |o, _| o.schedule.entries()[1].arrangement)
+        );
+
+        // Closing and reopening restores each item's own slides.
+        let before = order_of(&cx, &operator);
+        open_file(&mut cx, &operator, &file);
+        settle(&mut cx, &operator, "reopened", |o| {
+            o.schedule.entries().len() == 2
+                && !o.schedule.is_dirty()
+                && o.schedule
+                    .entries()
+                    .iter()
+                    .map(|e| e.id)
+                    .collect::<Vec<_>>()
+                    != before
+        });
+        // The rows are rebuilt for the new entries on the next frame.
+        cx.simulate_resize(size(px(1281.), px(800.)));
+        click(&mut cx, "schedule-item-1");
+        settle(&mut cx, &operator, "copy slides", |o| {
+            texts(o) == ["chorus words", "chorus words"]
+        });
+        click(&mut cx, "schedule-item-0");
+        settle(&mut cx, &operator, "original slides", |o| {
+            texts(o) == ["verse words", "chorus words", "bridge words"]
+        });
+        assert!(!operator.read_with(&cx, |o, _| o.schedule.is_dirty()));
+    }
+
+    #[gpui::test]
+    fn live_keeps_the_audience_slides_until_the_item_is_sent_again(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, _) =
+            with_library(cx, Some(library_with_arrangements(&dir)), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+        add_song(&mut cx, &operator, "Arranged");
+        click(&mut cx, "schedule-item-0");
+        settle(&mut cx, &operator, "preview", |o| {
+            texts(o).len() == 3 && o.preview.as_ref().and_then(|p| p.entry).is_some()
+        });
+        click(&mut cx, "live-output");
+        settle(&mut cx, &operator, "output connection", connected);
+        click(&mut cx, "go-live");
+        settle(&mut cx, &operator, "verse on screen", |o| {
+            o.on_screen() == Some("Arranged · Verse")
+        });
+        let live = operator.read_with(&cx, |o, _| o.live.as_ref().unwrap().slides.len());
+        assert_eq!(live, 3);
+
+        click(&mut cx, "preview-arrangement");
+        settle(&mut cx, &operator, "short preview", |o| texts(o).len() == 2);
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.live.as_ref().unwrap().slides.len(), 3, "Live is stable");
+            assert_eq!(o.on_screen(), Some("Arranged · Verse"));
+        });
+        click(&mut cx, "go-live");
+        settle(&mut cx, &operator, "short live", |o| {
+            o.live.as_ref().is_some_and(|l| l.slides.len() == 2)
+                && o.on_screen() == Some("Arranged · Chorus")
+        });
     }
 }

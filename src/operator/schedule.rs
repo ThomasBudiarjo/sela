@@ -37,6 +37,13 @@ fn drop_line(top: bool) -> gpui::Div {
     if top { line.top_0() } else { line.bottom_0() }
 }
 
+/// The arrangement a schedule entry stores; `None` for a library song.
+pub(crate) fn entry_arrangement(schedule: &Schedule, entry: Option<EntryId>) -> Option<VariantId> {
+    entry
+        .and_then(|id| schedule.get(id))
+        .and_then(|entry| entry.arrangement)
+}
+
 impl Operator {
     pub(crate) fn is_entry_selected(&self, id: EntryId) -> bool {
         self.view.selected.contains(&id)
@@ -298,6 +305,48 @@ impl Operator {
             Some(id) => self.remove_entry(id),
             None => self.schedule_message = Some(t!(Msg::SelectScheduleItem).into()),
         }
+    }
+
+    /// Switches the previewed schedule entry to its song's next arrangement.
+    /// Only the entry changes: not the library song, other entries or Live.
+    pub(crate) fn cycle_arrangement(&mut self) {
+        let target = self.preview.as_ref().and_then(|item| {
+            let entry = item.entry.filter(|id| self.selected_entry == Some(*id))?;
+            (item.arrangements.len() > 1).then_some((entry, item))
+        });
+        let Some((entry, item)) = target else {
+            self.schedule_message = Some(t!(Msg::ArrangementPickItem).into());
+            return;
+        };
+        let current = item.chosen_index();
+        let next = item.arrangements[(current + 1) % item.arrangements.len()].0;
+        self.schedule.set_arrangement(entry, Some(next));
+        self.schedule_message = None;
+    }
+
+    /// The Preview toolbar button naming the entry's arrangement.
+    pub(crate) fn arrangement_button(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let item = self.preview.as_ref()?;
+        item.entry.filter(|id| self.selected_entry == Some(*id))?;
+        (item.arrangements.len() > 1).then_some(())?;
+        let index = item.chosen_index();
+        let label = t!(
+            Msg::ArrangementButton,
+            name = item.arrangements[index].1,
+            number = index + 1,
+            count = item.arrangements.len()
+        );
+        Some(
+            div()
+                .flex_shrink_0()
+                .px(px(PANE_PAD_X))
+                .py_1()
+                .border_b_1()
+                .border_color(rgb(CANVAS_BORDER))
+                .bg(rgb(CANVAS))
+                .child(self.button(Control::Arrangement, "preview-arrangement", label, cx))
+                .into_any_element(),
+        )
     }
 
     pub(crate) fn queue(&mut self, command: storage::Command, request: Request) -> bool {

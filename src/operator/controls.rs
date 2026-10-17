@@ -45,6 +45,7 @@ pub(crate) enum Control {
     CancelImport,
     ReviewFiles,
     ItemMenuDuplicate,
+    Arrangement,
 }
 
 /// First tab index of each focus band. Rows are placed by band so lists of
@@ -56,7 +57,7 @@ pub(crate) const SLIDE_TAB_INDEX: isize = 1000;
 pub(crate) const IMAGE_TAB_INDEX: isize = 2000;
 
 impl Control {
-    pub(crate) const ALL: [Control; 36] = [
+    pub(crate) const ALL: [Control; 37] = [
         Self::ResetLayout,
         Self::Quit,
         Self::CollapseResources,
@@ -93,6 +94,7 @@ impl Control {
         Self::CancelImport,
         Self::ReviewFiles,
         Self::ItemMenuDuplicate,
+        Self::Arrangement,
     ];
 
     pub(crate) const COUNT: usize = Self::ALL.len();
@@ -300,6 +302,7 @@ impl Operator {
                     self.send(index);
                 }
             }
+            Control::Arrangement => self.cycle_arrangement(),
             Control::OpenSchedule => self.open_schedule(window, cx),
             Control::SaveSchedule => self.save_schedule(cx),
             Control::AddToSchedule if !self.collapsed && self.tab == 0 => {

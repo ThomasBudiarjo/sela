@@ -44,6 +44,7 @@ fn item(n: u8, title: &str) -> Item {
             revision: i64::from(n),
         },
         song: song(title),
+        arrangement: None,
     }
 }
 
@@ -75,7 +76,7 @@ fn round_trips_empty_schedule() {
 fn document_declares_format_and_version() {
     let v = value(&file(vec![item(1, "A")]));
     assert_eq!(v["format"], "sela-schedule");
-    assert_eq!(v["version"], 1);
+    assert_eq!(v["version"], 2);
     assert_eq!(v["items"][0]["kind"], "song");
     assert_eq!(v["items"][0]["song"]["title"], "A");
 }
@@ -92,8 +93,43 @@ fn background_and_master_round_trip() {
             revision: 2,
         },
         song: s,
+        arrangement: None,
     }]);
     assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
+}
+
+#[test]
+fn each_item_keeps_its_own_arrangement_and_version_1_still_opens() {
+    let chosen = VariantId(Id([9; 16]));
+    let mut copy = item(1, "Same");
+    copy.arrangement = Some(chosen);
+    let original = file(vec![item(1, "Same"), copy]);
+    let written = value(&original);
+    assert!(written["items"][0].get("arrangement").is_none());
+    assert_eq!(written["items"][1]["arrangement"], id_hex(chosen.0));
+    assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
+
+    let mut old = written.clone();
+    old["version"] = 1.into();
+    let opened = decode(old.to_string().as_bytes()).unwrap();
+    assert_eq!(
+        opened.items[1].arrangement, None,
+        "v1 has no arrangement choice"
+    );
+    assert_eq!(opened.items[1].song, original.items[1].song);
+
+    let mut stale = written;
+    stale["items"][1]["arrangement"] = id_hex(Id([42; 16])).into();
+    let opened = decode(stale.to_string().as_bytes()).unwrap();
+    assert_eq!(
+        opened.items[1].arrangement, None,
+        "unknown variant is dropped"
+    );
+    stale["items"][1]["arrangement"] = 5.into();
+    assert_eq!(
+        decode(stale.to_string().as_bytes()),
+        Err(ReadError::Corrupt)
+    );
 }
 
 #[test]
@@ -112,8 +148,8 @@ fn extension_is_added_once() {
 #[test]
 fn newer_version_is_rejected_with_its_number() {
     let mut v = value(&file(Vec::new()));
-    v["version"] = 2.into();
-    assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Newer(2)));
+    v["version"] = 3.into();
+    assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Newer(3)));
     v["version"] = 0.into();
     assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Corrupt));
 }

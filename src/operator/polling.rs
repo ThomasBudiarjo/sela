@@ -266,11 +266,20 @@ impl Operator {
                 (Some(Request::Song(version)), Ok(Reply::Song(song)))
                     if self.selected_song == Some(version) =>
                 {
+                    let chosen = schedule::entry_arrangement(&self.schedule, self.selected_entry);
+                    let projection = slides::project(&song, chosen);
                     self.preview = Some(Item {
                         version,
                         entry: self.selected_entry,
                         title: song.title.clone(),
-                        slides: slides::slides(&song).into(),
+                        slides: projection.slides.into(),
+                        pages: projection.pages.into(),
+                        arrangements: song
+                            .variants
+                            .iter()
+                            .map(|v| (v.id, v.name.clone()))
+                            .collect(),
+                        chosen,
                         resolved: None,
                     });
                     self.preview_slide = 0;
@@ -291,8 +300,8 @@ impl Operator {
                 (Some(Request::SaveSchedule(job)), Ok(Reply::Songs(songs))) => {
                     to_write = Some((job, songs));
                 }
-                (Some(Request::ImportSchedule(path)), Ok(Reply::Imported(items))) => {
-                    to_open = Some((path, items));
+                (Some(Request::ImportSchedule(path, arrangements)), Ok(Reply::Imported(items))) => {
+                    to_open = Some((path, items, arrangements));
                 }
                 (Some(Request::UpdateScan { pairs, versions }), Ok(Reply::Songs(songs))) => {
                     scanned = Some((pairs, versions, songs));
@@ -300,7 +309,7 @@ impl Operator {
                 (
                     Some(
                         Request::SaveSchedule(_)
-                        | Request::ImportSchedule(_)
+                        | Request::ImportSchedule(..)
                         | Request::UpdateScan { .. },
                     ),
                     Err(error),
@@ -314,9 +323,14 @@ impl Operator {
         }
         if self.request.is_none() {
             let wanted = self.selected_song.filter(|v| {
-                self.preview
-                    .as_ref()
-                    .is_none_or(|p| (p.version, p.entry) != (*v, self.selected_entry))
+                self.preview.as_ref().is_none_or(|p| {
+                    (p.version, p.entry, p.chosen)
+                        != (
+                            *v,
+                            self.selected_entry,
+                            schedule::entry_arrangement(&self.schedule, self.selected_entry),
+                        )
+                })
             });
             let request = if let Some(job) = self.followup.take() {
                 Some(job)
@@ -337,7 +351,7 @@ impl Operator {
                 let schedule = matches!(
                     request,
                     Request::SaveSchedule(_)
-                        | Request::ImportSchedule(_)
+                        | Request::ImportSchedule(..)
                         | Request::UpdateScan { .. }
                 );
                 match worker.submit(command) {
@@ -370,8 +384,8 @@ impl Operator {
             self.write_schedule(job, songs);
             changed = true;
         }
-        if let Some((path, items)) = to_open {
-            opened_songs = self.finish_open(path, items);
+        if let Some((path, items, arrangements)) = to_open {
+            opened_songs = self.finish_open(path, items, arrangements);
             changed = true;
         }
         if let Some(songs) = opened_songs {

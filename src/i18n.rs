@@ -424,6 +424,27 @@ pub enum Msg {
     SlideInUse,
     SlideRejectedNote,
     SlideSplit,
+    SlideSplitBadge,
+    ArrangementRow,
+    ArrangementNothingSelected,
+    ArrangementRefused,
+    ArrangementChanged,
+    ArrangementEmpty,
+    ArrangementRemove,
+    ArrangementDown,
+    ArrangementUp,
+    ArrangementAdd,
+    ArrangementNext,
+    ArrangementMakeActive,
+    ArrangementDelete,
+    ArrangementNew,
+    ArrangementActiveMark,
+    ArrangementTitle,
+    EditorArrangement,
+    ArrangementPickItem,
+    ArrangementButton,
+    SlideCaptionPaged,
+    SlideSplitNote,
     SlidesJoined,
     SongExceedsLimits,
     SongMaster,
@@ -863,6 +884,27 @@ impl Msg {
         Msg::SlideInUse,
         Msg::SlideRejectedNote,
         Msg::SlideSplit,
+        Msg::SlideSplitBadge,
+        Msg::ArrangementRow,
+        Msg::ArrangementNothingSelected,
+        Msg::ArrangementRefused,
+        Msg::ArrangementChanged,
+        Msg::ArrangementEmpty,
+        Msg::ArrangementRemove,
+        Msg::ArrangementDown,
+        Msg::ArrangementUp,
+        Msg::ArrangementAdd,
+        Msg::ArrangementNext,
+        Msg::ArrangementMakeActive,
+        Msg::ArrangementDelete,
+        Msg::ArrangementNew,
+        Msg::ArrangementActiveMark,
+        Msg::ArrangementTitle,
+        Msg::EditorArrangement,
+        Msg::ArrangementPickItem,
+        Msg::ArrangementButton,
+        Msg::SlideCaptionPaged,
+        Msg::SlideSplitNote,
         Msg::SlidesJoined,
         Msg::SongExceedsLimits,
         Msg::SongMaster,
@@ -1337,6 +1379,33 @@ impl Msg {
                 "This slide cannot be shown: a line is too long or uses a character the bundled font lacks."
             }
             Self::SlideSplit => "Slide split · Undo restores it",
+            Self::SlideSplitBadge => "Splits into {count} audience slides",
+            Self::ArrangementRow => "{number}. {name}",
+            Self::ArrangementNothingSelected => "Select an entry in the arrangement first",
+            Self::ArrangementRefused => "That arrangement change is not allowed",
+            Self::ArrangementChanged => "Arrangement changed · Undo restores it",
+            Self::ArrangementEmpty => {
+                "No slides yet. Pick a slide on the left, then press Add slide."
+            }
+            Self::ArrangementRemove => "Remove",
+            Self::ArrangementDown => "Move down",
+            Self::ArrangementUp => "Move up",
+            Self::ArrangementAdd => "Add slide",
+            Self::ArrangementNext => "Next arrangement",
+            Self::ArrangementMakeActive => "Make active",
+            Self::ArrangementDelete => "Delete",
+            Self::ArrangementNew => "New",
+            Self::ArrangementActiveMark => " (active)",
+            Self::ArrangementTitle => "Arrangement: {name}{active}",
+            Self::EditorArrangement => "Arrangement",
+            Self::ArrangementPickItem => {
+                "Select a schedule item whose song has several arrangements"
+            }
+            Self::ArrangementButton => "Arrangement: {name} ({number} of {count})",
+            Self::SlideCaptionPaged => "{index} · {name} ({number}/{count})",
+            Self::SlideSplitNote => {
+                "Split slide {number} of {count}: this section is too long for one slide"
+            }
             Self::SlidesJoined => "Slides joined · Undo restores them",
             Self::SongExceedsLimits => {
                 "This song exceeds the editor's line limits or has multiline metadata. Original unchanged."
@@ -1854,6 +1923,31 @@ impl Msg {
                 "Slide ini tidak dapat ditampilkan: ada baris yang terlalu panjang atau memakai karakter yang tidak dimiliki fon bawaan."
             }
             Self::SlideSplit => "Slide dipisah · Urungkan memulihkannya",
+            Self::SlideSplitBadge => "Terbagi menjadi {count} slide untuk audiens",
+            Self::ArrangementRow => "{number}. {name}",
+            Self::ArrangementNothingSelected => "Pilih entri dalam aransemen dulu",
+            Self::ArrangementRefused => "Perubahan aransemen itu tidak diizinkan",
+            Self::ArrangementChanged => "Aransemen diubah · Urungkan memulihkannya",
+            Self::ArrangementEmpty => {
+                "Belum ada slide. Pilih slide di kiri, lalu tekan Tambah slide."
+            }
+            Self::ArrangementRemove => "Buang",
+            Self::ArrangementDown => "Turun",
+            Self::ArrangementUp => "Naik",
+            Self::ArrangementAdd => "Tambah slide",
+            Self::ArrangementNext => "Aransemen berikutnya",
+            Self::ArrangementMakeActive => "Jadikan aktif",
+            Self::ArrangementDelete => "Hapus",
+            Self::ArrangementNew => "Baru",
+            Self::ArrangementActiveMark => " (aktif)",
+            Self::ArrangementTitle => "Aransemen: {name}{active}",
+            Self::EditorArrangement => "Aransemen",
+            Self::ArrangementPickItem => "Pilih item jadwal yang lagunya punya beberapa aransemen",
+            Self::ArrangementButton => "Aransemen: {name} ({number} dari {count})",
+            Self::SlideCaptionPaged => "{index} · {name} ({number}/{count})",
+            Self::SlideSplitNote => {
+                "Slide terbagi {number} dari {count}: bagian ini terlalu panjang untuk satu slide"
+            }
             Self::SlidesJoined => "Slide digabung · Urungkan memulihkannya",
             Self::SongExceedsLimits => {
                 "Lagu ini melebihi batas baris editor atau memiliki metadata multibaris. Naskah asli tidak berubah."
@@ -2040,7 +2134,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 434);
+        assert_eq!(Msg::ALL.len(), 455);
     }
 
     #[test]

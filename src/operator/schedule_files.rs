@@ -9,6 +9,7 @@ use sela::schedule_file::{ReadError, ScheduleFile, WriteError};
 pub(crate) struct SaveJob {
     pub(crate) path: PathBuf,
     pub(crate) versions: Vec<Version>,
+    pub(crate) pins: Vec<Pin>,
     /// Guarded command to continue with once the file is written.
     pub(crate) then: Option<Then>,
 }
@@ -38,11 +39,11 @@ impl Operator {
             || self.file_prompt.is_some()
             || matches!(
                 self.request,
-                Some(Request::SaveSchedule(_) | Request::ImportSchedule(_))
+                Some(Request::SaveSchedule(_) | Request::ImportSchedule(..))
             )
             || matches!(
                 self.queued,
-                Some((_, Request::SaveSchedule(_) | Request::ImportSchedule(_)))
+                Some((_, Request::SaveSchedule(_) | Request::ImportSchedule(..)))
             )
     }
 
@@ -128,6 +129,7 @@ impl Operator {
         let job = SaveJob {
             path,
             versions: versions.clone(),
+            pins: self.schedule.pins().collect(),
             then,
         };
         if self.queue(
@@ -208,9 +210,11 @@ impl Operator {
             .versions
             .iter()
             .zip(songs)
-            .map(|(source, song)| schedule_file::Item {
+            .zip(&job.pins)
+            .map(|((source, song), pin)| schedule_file::Item {
                 source: *source,
                 song,
+                arrangement: pin.arrangement,
             })
             .collect();
         let queued = self
@@ -234,11 +238,19 @@ impl Operator {
         &mut self,
         path: PathBuf,
         items: Vec<(Version, storage::Song)>,
+        arrangements: Vec<Option<VariantId>>,
     ) -> Option<Vec<storage::Song>> {
         let name = schedule_file::display_name(&path);
         let entries = items
             .iter()
-            .map(|(version, song)| (*version, song.title.clone()))
+            .zip(arrangements)
+            .map(|((version, song), arrangement)| {
+                let pin = Pin {
+                    version: *version,
+                    arrangement,
+                };
+                (pin, song.title.clone())
+            })
             .collect();
         match self.schedule.open(path.clone(), entries) {
             Ok(()) => {
@@ -283,7 +295,7 @@ impl Operator {
         let name = schedule_file::display_name(&path);
         match result {
             Ok(()) => {
-                self.schedule.mark_saved(path.clone(), job.versions);
+                self.schedule.mark_saved(path.clone(), job.pins);
                 self.remember_recent(path);
                 self.schedule_message = Some(t!(Msg::SavedSchedule, title = name));
                 self.resume = job.then;
@@ -303,6 +315,7 @@ impl Operator {
         let name = schedule_file::display_name(&path);
         match result {
             Ok(file) => {
+                let arrangements = file.items.iter().map(|item| item.arrangement).collect();
                 let items = file
                     .items
                     .into_iter()
@@ -310,7 +323,7 @@ impl Operator {
                     .collect();
                 self.followup = Some((
                     storage::Command::ImportSongs(items),
-                    Request::ImportSchedule(path),
+                    Request::ImportSchedule(path, arrangements),
                 ));
             }
             Err(error) => {
