@@ -7,7 +7,8 @@
 //! installed family); `--background-song` seeds a single-song library whose
 //! four slides exercise M1-05h backgrounds: a 4:1 profile image (red, green,
 //! blue bands) with Zoom, the same image with Maintain, a missing image, and
-//! the song master's color; --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
+//! the song master's color; `--metadata-songs` seeds "Metadata Hymn" (author,
+//! copyright, administrator, song number) and "Plain Hymn" (none); --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
 use image::ImageEncoder;
 use sela::{
     arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId},
@@ -17,7 +18,7 @@ use sela::{
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs]";
 
 /// `scripts/live-output-windows.py` samples these.
 const BANDS: [[u8; 3]; 3] = [[200, 40, 40], [40, 160, 60], [40, 60, 200]];
@@ -64,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut path = None;
     let (mut second, mut formatted, mut background, mut heavy, mut vanished, mut arranged) =
         (false, false, false, false, false, false);
+    let mut metadata = false;
     let mut extra = 0usize;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -80,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             flag if flag == "--vanished-schedule" => vanished = true,
             flag if flag == "--arranged-song" => arranged = true,
+            flag if flag == "--metadata-songs" => metadata = true,
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -106,6 +109,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format,
         background: None,
     };
+    if metadata {
+        // "Metadata Hymn" carries every song property; "Plain Hymn" has no
+        // copyright text, so it must show no strip (VAL-SONG-002).
+        let song = |title: &str, authors: &str, copyright: &str, admin: &str, number: &str| Song {
+            title: title.into(),
+            authors: authors.into(),
+            copyright: copyright.into(),
+            license: String::new(),
+            administrator: admin.into(),
+            song_number: number.into(),
+            variants: Vec::new(),
+            sections: vec![
+                section("Verse 1", &format!("{title} first original line")),
+                section("Chorus", &format!("{title} original refrain")),
+                section("Bridge", &format!("{title} last original line")),
+            ],
+            master: None,
+        };
+        for (title, authors, copyright, admin, number) in [
+            (
+                "Metadata Hymn",
+                "Quill Author",
+                "Synthetic Copyright 2026",
+                "Acme Administration",
+                "7654321",
+            ),
+            ("Plain Hymn", "", "", "", ""),
+        ] {
+            repository
+                .save_song(None, song(title, authors, copyright, admin, number))
+                .map_err(|e| format!("{e:?}"))?;
+        }
+        return Ok(());
+    }
     if heavy {
         let line = "Original heavy line of lyrics for the fitting measurement";
         let sections = (0..100)
