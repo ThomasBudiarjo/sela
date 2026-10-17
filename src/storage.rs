@@ -5,6 +5,7 @@ use crate::arrangement::{
 use crate::background::Background;
 use crate::format::SlideFormat;
 use crate::search;
+use crate::song_order::{SongOrder, SongSort};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{
@@ -20,7 +21,7 @@ use std::{
 const APP: i64 = 0x53454c41;
 pub const MAX_SONG_BYTES: usize = 256 * 1024;
 pub const MAX_ITEMS: usize = 32;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Id(pub [u8; 16]);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Version {
@@ -471,6 +472,39 @@ impl Repository {
             .into_iter()
             .map(|version| Ok((version, self.song(version)?.title)))
             .collect()
+    }
+    /// Every current song with its title, in `order`, for the Songs list.
+    /// Titles come from the search index, so no song payload is decoded.
+    /// "Modified" is the index row order: a save moves the song's row to the
+    /// end, so the order is that of the last save, not a clock time, and a
+    /// rebuilt index (corruption repair) restarts it in id order.
+    pub fn library(&self, order: SongOrder) -> Result<Vec<(Version, String)>> {
+        let direction = if order.descending { "DESC" } else { "ASC" };
+        let sql = match order.sort {
+            SongSort::Title => format!(
+                "SELECT s.id,s.head,f.title FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY f.title COLLATE NOCASE {direction},f.title {direction},s.id"
+            ),
+            SongSort::Modified => format!(
+                "SELECT s.id,s.head,f.title FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY m.row {direction}"
+            ),
+        };
+        let mut statement = self.db.prepare_cached(&sql)?;
+        let mut rows = statement.query([])?;
+        let mut songs = Vec::new();
+        while let Some(row) = rows.next()? {
+            let title: String = row.get(2)?;
+            if title.len() > 1024 {
+                return Err(Error::Corrupt);
+            }
+            songs.push((
+                Version {
+                    id: read_id(row.get(0)?)?,
+                    revision: row.get(1)?,
+                },
+                title,
+            ));
+        }
+        Ok(songs)
     }
     /// Saved schedules at their current revision, with titles; items are not
     /// resolved. Same paging as `heads`.
@@ -1066,9 +1100,18 @@ fn index_song(db: &Connection, id: Id, song: &Song) -> Result<()> {
         )
         .optional()?;
     let row = match row {
-        Some(row) => {
-            db.execute("DELETE FROM song_search WHERE rowid=?", params![row])?;
-            row
+        // Moving the row to the end keeps `library` Modified order.
+        Some(old) => {
+            db.execute("DELETE FROM song_search WHERE rowid=?", params![old])?;
+            db.execute(
+                "UPDATE search_rows SET row=(SELECT MAX(row)+1 FROM search_rows) WHERE song=?",
+                params![&id.0[..]],
+            )?;
+            db.query_row(
+                "SELECT row FROM search_rows WHERE song=?",
+                params![&id.0[..]],
+                |r| r.get(0),
+            )?
         }
         None => {
             db.execute(
@@ -1179,6 +1222,8 @@ pub enum Command {
         after: Option<Id>,
     },
     Catalog(Option<Id>),
+    /// The whole Songs list in one reply (see `Repository::library`).
+    Library(SongOrder),
     ScheduleCatalog(Option<Id>),
     BackupNew(PathBuf),
     RestoreNew {
@@ -1235,6 +1280,7 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::DeleteSong(v) => repo.delete_song(v).map(|()| Reply::Deleted),
         Command::Heads { schedules, after } => repo.heads(schedules, after).map(Reply::Heads),
         Command::Catalog(after) => repo.catalog(after).map(Reply::Catalog),
+        Command::Library(order) => repo.library(order).map(Reply::Catalog),
         Command::ScheduleCatalog(after) => repo.schedule_catalog(after).map(Reply::ScheduleCatalog),
         Command::BackupNew(path) => repo
             .backup_new(&path, &request.canceled)
@@ -2228,6 +2274,78 @@ mod tests {
         let last = repo.catalog(Some(first[127].0.id)).unwrap();
         assert_eq!(last, expected[128..]);
         assert!(repo.catalog(Some(last[0].0.id)).unwrap().is_empty());
+    }
+    #[test]
+    fn library_lists_every_song_by_title_or_by_last_save() {
+        let (_d, _p, mut repo) = fixture();
+        let mut saved = Vec::new();
+        for i in 0..300 {
+            let mut song = song();
+            song.title = format!("Song {:03}", (i * 7) % 300);
+            saved.push((repo.save_song(None, song.clone()).unwrap(), song));
+        }
+        fn title(repo: &Repository, order: SongOrder) -> Vec<String> {
+            repo.library(order)
+                .unwrap()
+                .into_iter()
+                .map(|(_, t)| t)
+                .collect()
+        }
+        let ascending = title(&repo, SongOrder::default());
+        assert_eq!(ascending.len(), 300, "not limited to one catalog page");
+        assert!(ascending.windows(2).all(|p| p[0] <= p[1]));
+        let mut descending = ascending.clone();
+        descending.reverse();
+        assert_eq!(
+            title(
+                &repo,
+                SongOrder {
+                    sort: SongSort::Title,
+                    descending: true
+                }
+            ),
+            descending
+        );
+
+        // Case-insensitive, with the exact title breaking ties.
+        let mut mixed = song();
+        mixed.title = "song 000b".into();
+        repo.save_song(None, mixed).unwrap();
+        let ascending = title(&repo, SongOrder::default());
+        let at = |t: &str| ascending.iter().position(|x| x == t).unwrap();
+        assert!(at("Song 000") < at("song 000b") && at("song 000b") < at("Song 001"));
+
+        // Modified: creation order at first, a save moves a song to the end,
+        // a deleted song is gone.
+        let (first, first_song) = saved[0].clone();
+        let modified = SongOrder {
+            sort: SongSort::Modified,
+            descending: false,
+        };
+        let listed = repo.library(modified).unwrap();
+        assert_eq!(listed[0].0, first);
+        assert_eq!(listed.last().unwrap().1, "song 000b");
+        let mut edited = first_song;
+        edited.title = "Edited".into();
+        let first = repo.save_song(Some(first), edited).unwrap();
+        let listed = repo.library(modified).unwrap();
+        assert_eq!(listed.last().unwrap(), &(first, "Edited".to_string()));
+        assert_ne!(listed[0].0.id, first.id);
+        let newest = repo
+            .library(SongOrder {
+                sort: SongSort::Modified,
+                descending: true,
+            })
+            .unwrap();
+        assert_eq!(newest[0].0, first);
+        repo.delete_song(first).unwrap();
+        assert!(
+            repo.library(modified)
+                .unwrap()
+                .iter()
+                .all(|(v, _)| v.id != first.id)
+        );
+        assert_eq!(repo.library(modified).unwrap().len(), 300);
     }
     #[test]
     fn schedule_catalog_lists_current_titles() {

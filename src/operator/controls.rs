@@ -254,7 +254,7 @@ impl Operator {
                 self.drag = None;
                 if self.collapsed
                     && (self.controls.resources_focused(window)
-                        || self.song_rows.iter().any(|f| f.is_focused(window))
+                        || self.song_rows.values().any(|f| f.is_focused(window))
                         || self.image_rows.iter().any(|f| f.is_focused(window)))
                 {
                     self.controls[Control::CollapseResources].focus(window, cx);
@@ -306,13 +306,19 @@ impl Operator {
             Control::OpenSchedule => self.open_schedule(window, cx),
             Control::SaveSchedule => self.save_schedule(cx),
             Control::AddToSchedule if !self.collapsed && self.tab == 0 => {
-                match self
-                    .selected_song
-                    .filter(|_| self.selected_entry.is_none())
-                    .and_then(|v| self.catalog.iter().find(|(c, _)| *c == v).cloned())
-                {
-                    Some((version, title)) => self.add_entry(usize::MAX, version, title),
-                    None => self.schedule_message = Some(t!(Msg::SelectSongFirst).into()),
+                let mut songs = self.selected_songs();
+                if songs.is_empty() {
+                    songs.extend(
+                        self.selected_song
+                            .filter(|_| self.selected_entry.is_none())
+                            .and_then(|v| self.catalog.iter().find(|(c, _)| *c == v).cloned()),
+                    );
+                }
+                if songs.is_empty() {
+                    self.schedule_message = Some(t!(Msg::SelectSongFirst).into());
+                }
+                for (version, title) in songs {
+                    self.add_entry(usize::MAX, version, title);
                 }
             }
             Control::MoveUp | Control::MoveDown => {

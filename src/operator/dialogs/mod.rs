@@ -1,5 +1,11 @@
 use super::*;
 
+actions!(operator, [DismissDialog]);
+
+/// Upper bound on tab-stop hops while wrapping focus inside a dialog; far
+/// above the number of tab stops the operator renders at once.
+const TRAP_HOPS: usize = 4096;
+
 /// What follows once unsaved schedule changes are discarded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Then {
@@ -61,6 +67,71 @@ impl Operator {
         }
     }
 
+    /// Tab/Shift+Tab inside a modal dialog: the next tab stop, skipping every
+    /// stop outside the dialog so focus wraps within it.
+    pub(crate) fn trap_focus(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for _ in 0..TRAP_HOPS {
+            if forward {
+                window.focus_next(cx);
+            } else {
+                window.focus_prev(cx);
+            }
+            if self.dialog_scope.contains_focused(window, cx) {
+                return;
+            }
+        }
+        self.controls[Control::DialogCancel].focus(window, cx);
+    }
+
+    /// Esc closes a dialog as its Cancel button (EW8-OBS-065 saw Esc ignored
+    /// on the Delete confirmation; Sela treats it as No).
+    pub(crate) fn dismiss_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog.is_some() {
+            self.activate(Control::DialogCancel, window, cx);
+        }
+    }
+
+    /// A full-window backdrop that keeps the pointer from the window behind
+    /// and centres `dialog` over it. Keyboard focus stays inside through
+    /// `trap_focus`, and Esc cancels.
+    pub(crate) fn modal(
+        &self,
+        id: &'static str,
+        dialog: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        div()
+            .debug_selector(move || id.into())
+            .occlude()
+            .absolute()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .track_focus(&self.dialog_scope)
+            .key_context("SelaDialog")
+            .on_action(cx.listener(|this, _: &DismissDialog, window, cx| {
+                this.dismiss_dialog(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
+                this.trap_focus(true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusPrevious, window, cx| {
+                this.trap_focus(false, window, cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _, window, _| window.prevent_default()),
+            )
+            .child(dialog)
+            .into_any_element()
+    }
+
     /// Runs `then` now, or asks first when the schedule has unsaved changes.
     pub(crate) fn guard(&mut self, then: Then, window: &mut Window, cx: &mut Context<Self>) {
         if self.schedule.is_dirty() {
@@ -108,7 +179,7 @@ impl Operator {
         let confirm = match dialog {
             Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDontSave)),
             Dialog::Remove(_) => Some(t!(Msg::ConfirmRemove)),
-            Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmDelete)),
+            Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmYes)),
             Dialog::Options | Dialog::Preflight | Dialog::FileError => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
             Dialog::UpdateItems => Some(t!(Msg::UpdateItemsConfirm)),
@@ -138,73 +209,71 @@ impl Operator {
             ),
             _ => None,
         };
-        Some(
-            div()
-                .debug_selector(|| "schedule-dialog".into())
-                .occlude()
-                .absolute()
-                .top(px(MENU_BAR_H + 44.))
-                .left(px(8.))
-                .w(px(
-                    if matches!(dialog, Dialog::Preflight | Dialog::UpdateItems) {
-                        PREFLIGHT_DIALOG_W
-                    } else {
-                        380.
-                    },
-                ))
-                .p(px(DIALOG_PAD))
-                .flex()
-                .flex_col()
-                .gap(px(DIALOG_GAP))
-                .rounded(px(6.))
-                .border_1()
-                .border_color(rgb(BORDER))
-                .bg(rgb(SURFACE))
-                .shadow_md()
-                .child(div().font_weight(FontWeight::MEDIUM).child(heading))
-                .children(body)
-                .children(self.dialog_message.clone().map(|message| {
-                    div()
-                        .text_size(px(TEXT_SMALL))
-                        .text_color(rgb(ERROR))
-                        .child(message)
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap_1()
-                        .when(matches!(dialog, Dialog::Unsaved(_)), |d| {
-                            d.child(
-                                self.button(
-                                    Control::DialogSave,
-                                    "dialog-save",
-                                    t!(Msg::ConfirmSave),
-                                    cx,
-                                )
-                                .text_color(rgb(TEXT)),
+        let panel = div()
+            .debug_selector(|| "schedule-dialog".into())
+            .max_w_full()
+            .w(px(
+                if matches!(dialog, Dialog::Preflight | Dialog::UpdateItems) {
+                    PREFLIGHT_DIALOG_W
+                } else {
+                    380.
+                },
+            ))
+            .p(px(DIALOG_PAD))
+            .flex()
+            .flex_col()
+            .gap(px(DIALOG_GAP))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(SURFACE))
+            .shadow_md()
+            .child(div().font_weight(FontWeight::MEDIUM).child(heading))
+            .children(body)
+            .children(self.dialog_message.clone().map(|message| {
+                div()
+                    .text_size(px(TEXT_SMALL))
+                    .text_color(rgb(ERROR))
+                    .child(message)
+            }))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_1()
+                    .when(matches!(dialog, Dialog::Unsaved(_)), |d| {
+                        d.child(
+                            self.button(
+                                Control::DialogSave,
+                                "dialog-save",
+                                t!(Msg::ConfirmSave),
+                                cx,
                             )
-                        })
-                        .children(confirm.map(|label| {
-                            self.button(Control::DialogConfirm, "dialog-confirm", label, cx)
-                                .text_color(rgb(TEXT))
-                        }))
-                        .child(self.button(
-                            Control::DialogCancel,
-                            "dialog-cancel",
-                            if matches!(dialog, Dialog::Remove(_) | Dialog::DeleteSong(_)) {
-                                t!(Msg::ButtonKeep)
-                            } else if dialog == Dialog::Preflight {
-                                t!(Msg::PreflightClose)
-                            } else if dialog == Dialog::FileError {
-                                t!(Msg::ButtonOk)
-                            } else {
-                                t!(Msg::ButtonCancel)
-                            },
-                            cx,
-                        )),
-                )
-                .into_any_element(),
-        )
+                            .text_color(rgb(TEXT)),
+                        )
+                    })
+                    .children(confirm.map(|label| {
+                        self.button(Control::DialogConfirm, "dialog-confirm", label, cx)
+                            .text_color(rgb(TEXT))
+                    }))
+                    .child(self.button(
+                        Control::DialogCancel,
+                        "dialog-cancel",
+                        if matches!(dialog, Dialog::DeleteSong(_)) {
+                            t!(Msg::ButtonNo)
+                        } else if matches!(dialog, Dialog::Remove(_)) {
+                            t!(Msg::ButtonKeep)
+                        } else if dialog == Dialog::Preflight {
+                            t!(Msg::PreflightClose)
+                        } else if dialog == Dialog::FileError {
+                            t!(Msg::ButtonOk)
+                        } else {
+                            t!(Msg::ButtonCancel)
+                        },
+                        cx,
+                    )),
+            )
+            .into_any_element();
+        Some(self.modal("dialog-backdrop", panel, cx))
     }
 }

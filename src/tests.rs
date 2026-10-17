@@ -19,6 +19,7 @@ use std::{
 };
 
 mod navigation;
+mod resource_browser;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,
@@ -2018,7 +2019,7 @@ fn song_menu_items_order_disabled_items_and_dismissal(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         let focused = window.focused(cx);
         operator.read_with(cx, |o, _| {
-            assert_eq!(focused.as_ref(), o.song_rows.get(row_index))
+            assert_eq!(focused.as_ref(), o.song_rows.get(&row_index))
         })
     });
 
@@ -2036,6 +2037,8 @@ fn song_menu_items_order_disabled_items_and_dismissal(cx: &mut TestAppContext) {
     assert_eq!(operator.read_with(&cx, highlight_of), Some(1));
     cx.simulate_keystrokes("down");
     assert_eq!(operator.read_with(&cx, highlight_of), Some(2));
+    cx.simulate_keystrokes("down");
+    assert_eq!(operator.read_with(&cx, highlight_of), Some(4));
     cx.simulate_keystrokes("down");
     assert_eq!(operator.read_with(&cx, highlight_of), Some(5));
     cx.simulate_keystrokes("down");
@@ -2256,7 +2259,11 @@ fn deleting_a_scheduled_live_song_keeps_snapshots_and_the_live_scene(cx: &mut Te
         // Preview keeps the slides it had prepared.
         let preview = o.preview.as_ref().unwrap();
         assert_eq!((preview.version, preview.slides.len()), (pinned, 3));
-        assert_eq!(o.selected_song, None);
+        assert_eq!(
+            o.selected_song.map(|v| v.id),
+            Some(o.catalog[0].0.id),
+            "selection moves to the neighbour row"
+        );
         assert_eq!(entry_titles(o), ["Signal Hymn"]);
     });
     let repository = Repository::open(&path).unwrap();

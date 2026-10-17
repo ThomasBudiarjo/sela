@@ -112,6 +112,15 @@ pub enum Msg {
     MenuUpdateSchedule,
     MenuSortBy,
     MenuRefresh,
+    MenuSortTitle,
+    MenuSortModified,
+    MenuSortAscending,
+    MenuSortDescending,
+    A11ySortMenu,
+    A11ySongScrollbar,
+    SongSearchMore,
+    ConfirmYes,
+    ButtonNo,
     // Main menu bar (EW8-OBS-010 order; items from EW8-OBS-053 and the
     // RUN-W07D Profiles/View/Help captures).
     BarAbout,
@@ -585,6 +594,15 @@ impl Msg {
         Msg::MenuUpdateSchedule,
         Msg::MenuSortBy,
         Msg::MenuRefresh,
+        Msg::MenuSortTitle,
+        Msg::MenuSortModified,
+        Msg::MenuSortAscending,
+        Msg::MenuSortDescending,
+        Msg::A11ySortMenu,
+        Msg::A11ySongScrollbar,
+        Msg::SongSearchMore,
+        Msg::ConfirmYes,
+        Msg::ButtonNo,
         Msg::BarAbout,
         Msg::BarBackgroundHelper,
         Msg::BarBlackOnLive,
@@ -1044,6 +1062,17 @@ impl Msg {
             Self::MenuUpdateSchedule => "Update items in Schedule",
             Self::MenuSortBy => "Sort by ▸",
             Self::MenuRefresh => "Refresh",
+            Self::MenuSortTitle => "Title",
+            Self::MenuSortModified => "Date modified",
+            Self::MenuSortAscending => "Ascending",
+            Self::MenuSortDescending => "Descending",
+            Self::A11ySortMenu => "Sort songs by",
+            Self::A11ySongScrollbar => "Songs scroll bar",
+            Self::SongSearchMore => {
+                "More songs match than are shown. Type more to narrow the search."
+            }
+            Self::ConfirmYes => "Yes",
+            Self::ButtonNo => "No",
             Self::BarAbout => "About Sela...",
             Self::BarBackgroundHelper => "Background Helper",
             Self::BarBlackOnLive => "Black on Live Output",
@@ -1219,8 +1248,8 @@ impl Msg {
             Self::ScheduleReadTitleLong => "“{name}” has a title longer than {max} bytes.",
             Self::DialogRemoveTitled => "Remove “{title}” from the schedule?",
             Self::DialogRemoveGeneric => "Remove this item from the schedule?",
-            Self::DialogDeleteTitled => "Delete “{title}” from the song library?",
-            Self::DialogDeleteGeneric => "Delete this song from the song library?",
+            Self::DialogDeleteTitled => "Are you sure you want to permanently delete “{title}”?",
+            Self::DialogDeleteGeneric => "Are you sure you want to permanently delete this song?",
             Self::DialogDeleteNote => {
                 "Schedules that use this song keep their copy. Live output does not change."
             }
@@ -1570,6 +1599,17 @@ impl Msg {
             Self::MenuUpdateSchedule => "Perbarui item di Jadwal",
             Self::MenuSortBy => "Urutkan ▸",
             Self::MenuRefresh => "Segarkan",
+            Self::MenuSortTitle => "Judul",
+            Self::MenuSortModified => "Tanggal diubah",
+            Self::MenuSortAscending => "Menaik",
+            Self::MenuSortDescending => "Menurun",
+            Self::A11ySortMenu => "Urutkan lagu menurut",
+            Self::A11ySongScrollbar => "Bilah gulir lagu",
+            Self::SongSearchMore => {
+                "Lebih banyak lagu cocok daripada yang ditampilkan. Ketik lebih banyak untuk mempersempit."
+            }
+            Self::ConfirmYes => "Ya",
+            Self::ButtonNo => "Tidak",
             Self::BarAbout => "Tentang Sela...",
             Self::BarBackgroundHelper => "Asisten Latar Belakang",
             Self::BarBlackOnLive => "Hitam di Output Langsung",
@@ -1751,8 +1791,8 @@ impl Msg {
             Self::ScheduleReadTitleLong => "“{name}” memiliki judul lebih panjang dari {max} byte.",
             Self::DialogRemoveTitled => "Hapus “{title}” dari jadwal?",
             Self::DialogRemoveGeneric => "Hapus item ini dari jadwal?",
-            Self::DialogDeleteTitled => "Hapus “{title}” dari pustaka lagu?",
-            Self::DialogDeleteGeneric => "Hapus lagu ini dari pustaka lagu?",
+            Self::DialogDeleteTitled => "Yakin ingin menghapus “{title}” secara permanen?",
+            Self::DialogDeleteGeneric => "Yakin ingin menghapus lagu ini secara permanen?",
             Self::DialogDeleteNote => {
                 "Jadwal yang memakai lagu ini menyimpan salinannya. Output langsung tidak berubah."
             }

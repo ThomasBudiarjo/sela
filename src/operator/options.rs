@@ -42,6 +42,7 @@ pub(crate) struct SettingsConfig {
 pub(crate) enum RecentChange {
     Remember(PathBuf),
     Forget(PathBuf),
+    SongOrder(SongOrder),
 }
 
 impl RecentChange {
@@ -49,6 +50,7 @@ impl RecentChange {
         match self {
             Self::Remember(path) => settings.remember_recent(path),
             Self::Forget(path) => settings.forget_recent(&path),
+            Self::SongOrder(order) => settings.song_order = order,
         }
     }
 }
@@ -226,6 +228,11 @@ impl Operator {
                             change.apply(&mut self.settings.current);
                         }
                         self.save_settings_now();
+                    }
+                    // The stored Songs order applies once, after the load.
+                    if self.settings.current.song_order != self.song_order {
+                        self.song_order = self.settings.current.song_order;
+                        self.catalog_stale = true;
                     }
                 }
                 settings::Reply::Saved(Ok(())) => {
@@ -585,177 +592,162 @@ impl Operator {
         });
         let loading = monitors.is_none();
         let settings_loaded = self.settings.loaded;
-        Some(
+        let dialog = {
             div()
-                .debug_selector(|| "options-backdrop".into())
-                .occlude()
-                .absolute()
-                .size_full()
+                .debug_selector(|| "options-dialog".into())
+                .w(px(720.))
+                .max_w_full()
+                .h(px(500.))
                 .flex()
-                .items_center()
-                .justify_center()
+                .flex_col()
+                .overflow_hidden()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(SURFACE))
+                .shadow_md()
+                .text_size(px(TEXT_BASE))
+                .text_color(rgb(TEXT))
                 .child(
                     div()
-                        .debug_selector(|| "options-dialog".into())
-                        .w(px(720.))
-                        .max_w_full()
-                        .h(px(500.))
+                        .h(px(PANE_HEADER_H))
+                        .flex_shrink_0()
+                        .px(px(PANE_PAD_X))
                         .flex()
-                        .flex_col()
-                        .overflow_hidden()
-                        .rounded(px(6.))
-                        .border_1()
+                        .items_center()
+                        .border_b_1()
                         .border_color(rgb(BORDER))
-                        .bg(rgb(SURFACE))
-                        .shadow_md()
-                        .text_size(px(TEXT_BASE))
-                        .text_color(rgb(TEXT))
+                        .bg(rgb(CHROME))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(t!(Msg::OptionsTitle)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
                         .child(
                             div()
-                                .h(px(PANE_HEADER_H))
+                                .w(px(224.))
                                 .flex_shrink_0()
-                                .px(px(PANE_PAD_X))
                                 .flex()
-                                .items_center()
-                                .border_b_1()
+                                .flex_col()
+                                .py_1()
+                                .border_r_1()
                                 .border_color(rgb(BORDER))
                                 .bg(rgb(CHROME))
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(t!(Msg::OptionsTitle)),
+                                .children(sections),
                         )
                         .child(
                             div()
                                 .flex_1()
-                                .min_h_0()
+                                .min_w_0()
                                 .flex()
+                                .flex_col()
                                 .child(
                                     div()
-                                        .w(px(224.))
+                                        .h(px(TAB_BAR_H))
                                         .flex_shrink_0()
                                         .flex()
-                                        .flex_col()
-                                        .py_1()
-                                        .border_r_1()
+                                        .px_2()
+                                        .border_b_1()
                                         .border_color(rgb(BORDER))
-                                        .bg(rgb(CHROME))
-                                        .children(sections),
+                                        .children(tabs),
                                 )
                                 .child(
                                     div()
                                         .flex_1()
-                                        .min_w_0()
+                                        .min_h_0()
+                                        .p(px(DIALOG_PAD))
                                         .flex()
                                         .flex_col()
+                                        .gap(px(DIALOG_GAP))
                                         .child(
                                             div()
-                                                .h(px(TAB_BAR_H))
-                                                .flex_shrink_0()
-                                                .flex()
-                                                .px_2()
-                                                .border_b_1()
-                                                .border_color(rgb(BORDER))
-                                                .children(tabs),
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(t!(Msg::LanguageHeading)),
                                         )
                                         .child(
                                             div()
-                                                .flex_1()
-                                                .min_h_0()
-                                                .p(px(DIALOG_PAD))
-                                                .flex()
-                                                .flex_col()
-                                                .gap(px(DIALOG_GAP))
-                                                .child(
-                                                    div()
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .child(t!(Msg::LanguageHeading)),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(TEXT_SMALL))
-                                                        .text_color(rgb(MUTED))
-                                                        .child(t!(Msg::LanguageHint)),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .flex_col()
-                                                        .gap_1()
-                                                        .children(language_rows),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .mt_2()
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .child(t!(Msg::MonitorHeading)),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(TEXT_SMALL))
-                                                        .text_color(rgb(MUTED))
-                                                        .child(t!(Msg::MonitorHint)),
-                                                )
-                                                .children((!settings_loaded).then(|| {
-                                                    div()
-                                                        .debug_selector(|| "options-loading".into())
-                                                        .text_size(px(TEXT_SMALL))
-                                                        .text_color(rgb(MUTED))
-                                                        .child(t!(Msg::LoadingSettings))
-                                                }))
-                                                .children(loading.then(|| {
-                                                    div()
-                                                        .text_size(px(TEXT_SMALL))
-                                                        .text_color(rgb(MUTED))
-                                                        .child(t!(Msg::DetectingMonitors))
-                                                }))
-                                                .child(
-                                                    div().flex().flex_col().gap_1().children(rows),
-                                                )
-                                                .children(draft_missing.then(|| {
-                                                    div()
-                                                        .debug_selector(|| "options-missing".into())
-                                                        .text_size(px(TEXT_SMALL))
-                                                        .text_color(rgb(SENDING))
-                                                        .child(t!(
-                                                            Msg::MonitorMissingDialog,
-                                                            name = draft
-                                                                .as_deref()
-                                                                .map(short)
-                                                                .unwrap_or_default()
-                                                        ))
-                                                })),
-                                        ),
+                                                .text_size(px(TEXT_SMALL))
+                                                .text_color(rgb(MUTED))
+                                                .child(t!(Msg::LanguageHint)),
+                                        )
+                                        .child(
+                                            div().flex().flex_col().gap_1().children(language_rows),
+                                        )
+                                        .child(
+                                            div()
+                                                .mt_2()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(t!(Msg::MonitorHeading)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(TEXT_SMALL))
+                                                .text_color(rgb(MUTED))
+                                                .child(t!(Msg::MonitorHint)),
+                                        )
+                                        .children((!settings_loaded).then(|| {
+                                            div()
+                                                .debug_selector(|| "options-loading".into())
+                                                .text_size(px(TEXT_SMALL))
+                                                .text_color(rgb(MUTED))
+                                                .child(t!(Msg::LoadingSettings))
+                                        }))
+                                        .children(loading.then(|| {
+                                            div()
+                                                .text_size(px(TEXT_SMALL))
+                                                .text_color(rgb(MUTED))
+                                                .child(t!(Msg::DetectingMonitors))
+                                        }))
+                                        .child(div().flex().flex_col().gap_1().children(rows))
+                                        .children(draft_missing.then(|| {
+                                            div()
+                                                .debug_selector(|| "options-missing".into())
+                                                .text_size(px(TEXT_SMALL))
+                                                .text_color(rgb(SENDING))
+                                                .child(t!(
+                                                    Msg::MonitorMissingDialog,
+                                                    name = draft
+                                                        .as_deref()
+                                                        .map(short)
+                                                        .unwrap_or_default()
+                                                ))
+                                        })),
                                 ),
-                        )
-                        .child(
-                            div()
-                                .h(px(PANE_HEADER_H + 8.))
-                                .flex_shrink_0()
-                                .px(px(PANE_PAD_X))
-                                .flex()
-                                .items_center()
-                                .justify_end()
-                                .gap_1()
-                                .border_t_1()
-                                .border_color(rgb(BORDER))
-                                .child(
-                                    self.button(
-                                        Control::DialogConfirm,
-                                        "dialog-confirm",
-                                        t!(Msg::ButtonOk),
-                                        cx,
-                                    )
-                                    .text_color(rgb(TEXT)),
-                                )
-                                .child(self.button(
-                                    Control::DialogCancel,
-                                    "dialog-cancel",
-                                    t!(Msg::ButtonCancel),
-                                    cx,
-                                )),
                         ),
                 )
-                .into_any_element(),
-        )
+                .child(
+                    div()
+                        .h(px(PANE_HEADER_H + 8.))
+                        .flex_shrink_0()
+                        .px(px(PANE_PAD_X))
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_1()
+                        .border_t_1()
+                        .border_color(rgb(BORDER))
+                        .child(
+                            self.button(
+                                Control::DialogConfirm,
+                                "dialog-confirm",
+                                t!(Msg::ButtonOk),
+                                cx,
+                            )
+                            .text_color(rgb(TEXT)),
+                        )
+                        .child(self.button(
+                            Control::DialogCancel,
+                            "dialog-cancel",
+                            t!(Msg::ButtonCancel),
+                            cx,
+                        )),
+                )
+                .into_any_element()
+        };
+        Some(self.modal("options-backdrop", dialog, cx))
     }
 }
 

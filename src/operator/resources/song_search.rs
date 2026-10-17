@@ -18,6 +18,8 @@ pub(crate) struct SongSearch {
     /// The newest query not yet handed to the worker. A newer one replaces it.
     wanted: Option<(String, u64)>,
     hits: Option<Vec<(Version, String)>>,
+    /// More songs matched than `MAX_HITS` returned.
+    truncated: bool,
     #[cfg(test)]
     submitted: u64,
 }
@@ -58,6 +60,7 @@ impl SongSearch {
         } else {
             self.wanted = None;
             self.hits = None;
+            self.truncated = false;
         }
     }
 
@@ -79,6 +82,7 @@ impl SongSearch {
         if !self.generations.is_current(results.generation) {
             return false;
         }
+        self.truncated = results.truncated;
         self.hits = Some(
             results
                 .hits
@@ -114,6 +118,11 @@ impl SongSearch {
     /// The filtered rows, or `None` while the list is unfiltered.
     pub(crate) fn hits(&self) -> Option<&[(Version, String)]> {
         self.hits.as_deref()
+    }
+
+    /// The shown hits are the first `MAX_HITS` of more matches.
+    pub(crate) fn truncated(&self) -> bool {
+        self.hits.is_some() && self.truncated
     }
 
     pub(crate) fn forget(&mut self, version: Version) {
@@ -219,6 +228,20 @@ mod tests {
         let second = generation(search.take_command());
         assert!(second > first);
         assert!(!search.accept(results(first, &[])));
+    }
+
+    #[test]
+    fn truncation_is_reported_only_for_the_current_filtered_results() {
+        let mut search = SongSearch::default();
+        assert!(!search.truncated());
+        search.set_text("gr");
+        let g = generation(search.take_command());
+        let mut capped = results(g, &["Grace"]);
+        capped.truncated = true;
+        assert!(search.accept(capped));
+        assert!(search.truncated());
+        search.set_text("g");
+        assert!(!search.truncated(), "the unfiltered list is never capped");
     }
 
     #[test]

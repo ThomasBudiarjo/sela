@@ -3,8 +3,8 @@ use crate::text_input::TextInput;
 use crate::ui::theme::*;
 use gpui::{
     CursorStyle, DragMoveEvent, Empty, Entity, Focusable, FontWeight, KeyDownEvent, MouseButton,
-    PathPromptOptions, Pixels, Point, Role, ScrollHandle, SharedString, Subscription, Task,
-    Toggled, anchored, deferred, point,
+    PathPromptOptions, Pixels, Point, Role, ScrollHandle, ScrollStrategy, SharedString,
+    Subscription, Task, Toggled, UniformListScrollHandle, anchored, deferred, point, uniform_list,
 };
 use sela::{
     arrangement::VariantId,
@@ -23,12 +23,14 @@ use sela::{
     schedule::{EntryId, Pin, Schedule},
     schedule_file,
     slides::{self, Sizing, Slide},
+    song_order::{SongOrder, SongSort},
     storage::{self, MAX_ITEMS, Reply, Version, Worker},
     t,
 };
 use std::{
     cell::RefCell,
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -55,6 +57,7 @@ use controls::{
     ControlSet, DIALOG_TAB_INDEX, IMAGE_TAB_INDEX, SCHEDULE_TAB_INDEX, SLIDE_TAB_INDEX,
     SONG_TAB_INDEX, mark_disabled,
 };
+use dialogs::DismissDialog;
 pub(super) use dialogs::{Dialog, Then};
 pub(crate) use menus::{BarMenu, TopMenu};
 use menus::{
@@ -62,11 +65,16 @@ use menus::{
     OpenFileMenu, OpenHelpMenu, OpenLiveMenu, OpenProfilesMenu, OpenSongMenu, OpenViewMenu,
     SongMenu,
 };
+use menus::{MenuCloseSub, MenuOpenSub};
 #[cfg(test)]
 pub(super) use menus::{SONG_MENU, SongItem, TOP_MENUS};
 pub(super) use options::{MonitorSlot, SettingsConfig};
 use options::{RecentChange, SettingsState};
-use resources::{ClearSongSearch, NextSongRow, PreviousSongRow, SongSearch, TAB_IDS, TABS};
+use resources::{
+    ClearSongSearch, DeleteSongRow, ExtendFirstSongRow, ExtendLastSongRow, ExtendNextSongRow,
+    ExtendPreviousSongRow, FirstSongRow, LastSongRow, NextSongRow, PageDownSongRow, PageUpSongRow,
+    PreviousSongRow, SelectAllSongRows, SongSearch, SongSelection, TAB_IDS, TABS,
+};
 
 const POLL: Duration = Duration::from_millis(16);
 const LABELS: usize = 8;
@@ -219,7 +227,19 @@ pub(super) struct Operator {
     pub(super) catalog: Vec<(Version, String)>,
     pub(super) search: SongSearch,
     pub(super) search_input: Entity<TextInput>,
-    pub(super) song_rows: Vec<FocusHandle>,
+    /// Focus handles by row index, created for rows as they first scroll
+    /// into view. Only the active visible row is a tab stop.
+    pub(super) song_rows: HashMap<usize, FocusHandle>,
+    pub(super) song_scroll: UniformListScrollHandle,
+    /// Rows built by the last layout of the virtualized Songs list.
+    pub(super) song_visible: Range<usize>,
+    pub(super) song_selection: SongSelection,
+    /// A keyboard move to this row waits for it to be built before focusing.
+    pub(super) song_focus_pending: Option<usize>,
+    /// Order of the loaded Songs list; a settings change reloads it.
+    pub(super) song_order: SongOrder,
+    /// Thumb drag of the Songs scrollbar is in progress.
+    pub(super) song_scrolling: bool,
     slide_rows: Vec<FocusHandle>,
     pub(super) selected_song: Option<Version>,
     pub(super) preview: Option<Item>,
@@ -298,6 +318,8 @@ pub(super) struct Operator {
     pub(crate) window_title: String,
     pub(super) dialog: Option<Dialog>,
     dialog_return: Option<FocusHandle>,
+    /// Ancestor of every modal dialog control; Tab wraps inside it.
+    pub(super) dialog_scope: FocusHandle,
     pub(super) dialog_message: Option<String>,
     item_menu: Option<(EntryId, Point<Pixels>)>,
     pub(super) song_menu: Option<SongMenu>,
@@ -312,9 +334,6 @@ pub(super) struct Operator {
     bar_opened_with_mouse: Option<(TopMenu, Instant)>,
     /// Menu-label bounds from the last prepaint; popups anchor below them.
     bar_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
-    /// Song row bounds from the last prepaint; a keyboard-opened menu is
-    /// placed under its row.
-    song_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
     /// Songs footer status: text and whether it reports a failure.
     pub(super) song_message: Option<(String, bool)>,
     /// A library double-click waiting for its song to load.
@@ -401,8 +420,24 @@ impl Operator {
             KeyBinding::new("menu", OpenSongMenu, Some("SelaSongRow")),
             KeyBinding::new("down", NextSongRow, Some("SelaSongRow")),
             KeyBinding::new("up", PreviousSongRow, Some("SelaSongRow")),
+            KeyBinding::new("shift-down", ExtendNextSongRow, Some("SelaSongRow")),
+            KeyBinding::new("shift-up", ExtendPreviousSongRow, Some("SelaSongRow")),
+            KeyBinding::new("home", FirstSongRow, Some("SelaSongRow")),
+            KeyBinding::new("ctrl-home", FirstSongRow, Some("SelaSongRow")),
+            KeyBinding::new("end", LastSongRow, Some("SelaSongRow")),
+            KeyBinding::new("ctrl-end", LastSongRow, Some("SelaSongRow")),
+            KeyBinding::new("shift-home", ExtendFirstSongRow, Some("SelaSongRow")),
+            KeyBinding::new("shift-end", ExtendLastSongRow, Some("SelaSongRow")),
+            // Deeper than the global PageDown (Go Live): in the list it pages.
+            KeyBinding::new("pagedown", PageDownSongRow, Some("SelaSongRow")),
+            KeyBinding::new("pageup", PageUpSongRow, Some("SelaSongRow")),
+            KeyBinding::new("ctrl-a", SelectAllSongRows, Some("SelaSongRow")),
+            KeyBinding::new("delete", DeleteSongRow, Some("SelaSongRow")),
             KeyBinding::new("down", MenuNext, Some("SelaSongMenu")),
             KeyBinding::new("up", MenuPrevious, Some("SelaSongMenu")),
+            KeyBinding::new("right", MenuOpenSub, Some("SelaSongMenu")),
+            KeyBinding::new("left", MenuCloseSub, Some("SelaSongMenu")),
+            KeyBinding::new("escape", DismissDialog, Some("SelaDialog")),
             KeyBinding::new("enter", MenuConfirm, Some("SelaSongMenu")),
             KeyBinding::new("space", MenuConfirm, Some("SelaSongMenu")),
             KeyBinding::new("escape", MenuDismiss, Some("SelaSongMenu")),
@@ -483,7 +518,13 @@ impl Operator {
             catalog: Vec::new(),
             search: SongSearch::default(),
             search_input,
-            song_rows: Vec::new(),
+            song_rows: HashMap::new(),
+            song_scroll: UniformListScrollHandle::new(),
+            song_visible: 0..0,
+            song_selection: SongSelection::default(),
+            song_focus_pending: None,
+            song_order: SongOrder::default(),
+            song_scrolling: false,
             slide_rows: Vec::new(),
             selected_song: None,
             preview: None,
@@ -534,6 +575,7 @@ impl Operator {
             window_title: String::new(),
             dialog: None,
             dialog_return: None,
+            dialog_scope: cx.focus_handle(),
             dialog_message: None,
             item_menu: None,
             song_menu: None,
@@ -543,7 +585,6 @@ impl Operator {
             bar_return: None,
             bar_opened_with_mouse: None,
             bar_bounds: Rc::default(),
-            song_bounds: Rc::default(),
             song_message: None,
             live_on_load: None,
             live_entry_on_load: None,

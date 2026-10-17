@@ -6,11 +6,17 @@ mod media;
 mod presentations;
 mod scriptures;
 mod song_search;
+mod song_select;
 mod songs;
 mod themes;
 
 pub(super) use song_search::SongSearch;
-pub(super) use songs::{ClearSongSearch, NextSongRow, PreviousSongRow, SEARCH_TAB_INDEX};
+pub(super) use song_select::{SONG_ROW_H, SongSelection};
+pub(super) use songs::{
+    ClearSongSearch, DeleteSongRow, ExtendFirstSongRow, ExtendLastSongRow, ExtendNextSongRow,
+    ExtendPreviousSongRow, FirstSongRow, LastSongRow, NextSongRow, PageDownSongRow, PageUpSongRow,
+    PreviousSongRow, SEARCH_TAB_INDEX, SelectAllSongRows,
+};
 
 /// Tab labels, translated at render time.
 pub(crate) const TABS: [Msg; 5] = [

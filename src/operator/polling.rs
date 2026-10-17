@@ -209,6 +209,7 @@ impl Operator {
         let mut to_open = None;
         let mut scanned = None;
         let mut rescan = false;
+        let mut deleted_at = None;
         if let Some(reply) = worker.poll() {
             changed = true;
             match (self.request.take(), reply) {
@@ -238,12 +239,20 @@ impl Operator {
                 }
                 (Some(Request::Search), Err(storage::Error::Canceled)) => {}
                 (Some(Request::DeleteSong(version, title)), Ok(Reply::Deleted)) => {
+                    let shown = self
+                        .search
+                        .hits()
+                        .unwrap_or(&self.catalog)
+                        .iter()
+                        .position(|(v, _)| *v == version);
+                    if self.selected_song == Some(version) && self.selected_entry.is_none() {
+                        // Preview keeps the slides it already prepared
+                        // (provisional); the selection moves to a neighbour.
+                        self.selected_song = None;
+                        deleted_at = shown;
+                    }
                     self.catalog.retain(|(v, _)| *v != version);
                     self.search.forget(version);
-                    // Preview keeps the slides it already prepared (provisional).
-                    if self.selected_song == Some(version) && self.selected_entry.is_none() {
-                        self.selected_song = None;
-                    }
                     self.song_message =
                         Some((t!(Msg::DeletedSong, title = shown_title(&title)), false));
                     self.catalog_stale = true;
@@ -343,7 +352,7 @@ impl Operator {
             } else if self.catalog_stale {
                 self.catalog_stale = false;
                 self.search.refresh();
-                Some((storage::Command::Catalog(None), Request::Catalog))
+                Some((storage::Command::Library(self.song_order), Request::Catalog))
             } else {
                 None
             };
@@ -371,6 +380,14 @@ impl Operator {
                         changed = true;
                     }
                 }
+            }
+        }
+        if let Some(index) = deleted_at {
+            let remaining = self.songs().len();
+            if remaining > 0 {
+                self.select_song(index.min(remaining - 1), cx);
+            } else {
+                self.song_selection.clear();
             }
         }
         if let Some((pairs, versions, songs)) = scanned {

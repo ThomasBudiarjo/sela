@@ -122,7 +122,12 @@ impl Render for Operator {
             t!(Msg::LiveOff)
         };
         div()
-            .key_context("Sela SelaShow")
+            // Live shortcuts must not reach the main window behind a modal dialog.
+            .key_context(if self.dialog.is_some() {
+                "Sela"
+            } else {
+                "Sela SelaShow"
+            })
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 if this.may_close(window, cx) {
@@ -157,14 +162,6 @@ impl Render for Operator {
                 if event.keystroke.key == "escape" && this.cancel_entry_drag(window, cx) {
                     cx.stop_propagation();
                 }
-            }))
-            // Deeper than the SelaShow bindings: Up/Down with a Songs row
-            // focused move the song selection, never the schedule (M1-16).
-            .on_action(cx.listener(|this, _: &NextSongRow, _, cx| {
-                this.step_song(true, cx);
-            }))
-            .on_action(cx.listener(|this, _: &PreviousSongRow, _, cx| {
-                this.step_song(false, cx);
             }))
             .on_action(cx.listener(|this, _: &RemoveScheduleItem, _, cx| {
                 this.remove_selected();

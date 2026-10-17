@@ -15,7 +15,9 @@ actions!(
         OpenViewMenu,
         OpenHelpMenu,
         BarMenuLeft,
-        BarMenuRight
+        BarMenuRight,
+        MenuOpenSub,
+        MenuCloseSub
     ]
 );
 
@@ -62,13 +64,69 @@ impl SongItem {
         }
     }
 
-    /// Update items in Schedule needs a schedule with items (EW8-OBS-061);
-    /// the Sort by options belong to library sorting (not built).
+    /// Update items in Schedule needs a schedule with items (EW8-OBS-061).
     pub(crate) fn enabled(self, schedule_items: usize) -> bool {
         match self {
             Self::UpdateSchedule => schedule_items > 0,
-            Self::SortBy => false,
             _ => true,
+        }
+    }
+}
+
+/// One line of the open Songs menu. The Sort by choices follow their item
+/// in place, because a flyout cannot be positioned reliably at a window edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SongLine {
+    Item(SongItem),
+    Sort(SongSort),
+    Descending(bool),
+}
+
+pub(crate) fn song_menu_lines(sort_open: bool) -> Vec<SongLine> {
+    let mut lines = Vec::new();
+    for item in SONG_MENU {
+        lines.push(SongLine::Item(item));
+        if item == SongItem::SortBy && sort_open {
+            lines.extend(SongSort::ALL.map(SongLine::Sort));
+            lines.extend([SongLine::Descending(false), SongLine::Descending(true)]);
+        }
+    }
+    lines
+}
+
+impl SongLine {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Item(item) => item.label(),
+            Self::Sort(SongSort::Title) => t!(Msg::MenuSortTitle),
+            Self::Sort(SongSort::Modified) => t!(Msg::MenuSortModified),
+            Self::Descending(false) => t!(Msg::MenuSortAscending),
+            Self::Descending(true) => t!(Msg::MenuSortDescending),
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Item(item) => item.id(),
+            Self::Sort(SongSort::Title) => "song-sort-title",
+            Self::Sort(SongSort::Modified) => "song-sort-modified",
+            Self::Descending(false) => "song-sort-ascending",
+            Self::Descending(true) => "song-sort-descending",
+        }
+    }
+
+    fn enabled(self, schedule_items: usize) -> bool {
+        match self {
+            Self::Item(item) => item.enabled(schedule_items),
+            _ => true,
+        }
+    }
+
+    fn checked(self, order: SongOrder) -> bool {
+        match self {
+            Self::Item(_) => false,
+            Self::Sort(sort) => order.sort == sort,
+            Self::Descending(descending) => order.descending == descending,
         }
     }
 }
@@ -79,6 +137,8 @@ pub(crate) struct SongMenu {
     position: Point<Pixels>,
     /// Keyboard highlight; the pointer uses hover styling only.
     pub(crate) highlight: Option<usize>,
+    /// The Sort by choices are shown.
+    pub(crate) sort_open: bool,
 }
 
 impl Operator {
@@ -97,14 +157,20 @@ impl Operator {
         let Some((version, _)) = self.songs().get(index).cloned() else {
             return;
         };
-        self.select_song(index, cx);
+        // A right-click inside a multi-selection keeps it.
+        if !(position.is_some() && self.is_song_selected(version)) {
+            self.select_song(index, cx);
+        }
         let keyboard = position.is_none();
         let position = position.unwrap_or_else(|| {
-            self.song_bounds
-                .borrow()
-                .get(index)
-                .map(|row| row.bottom_left() + point(px(16.), px(0.)))
-                .unwrap_or_default()
+            let state = self.song_scroll.0.borrow();
+            let bounds = state.base_handle.bounds();
+            let top = bounds.origin.y + state.base_handle.offset().y;
+            let row_bottom = top + px((index + 1) as f32 * super::resources::SONG_ROW_H);
+            point(
+                bounds.origin.x + px(16.),
+                row_bottom.clamp(bounds.origin.y, bounds.bottom_left().y),
+            )
         });
         self.new_menu = false;
         self.item_menu = None;
@@ -115,6 +181,7 @@ impl Operator {
             version,
             position,
             highlight: keyboard.then_some(0),
+            sort_open: false,
         });
         self.song_menu_focus.focus(window, cx);
         cx.notify();
@@ -126,13 +193,12 @@ impl Operator {
             return;
         };
         if self.song_menu_focus.is_focused(window) {
-            match self
-                .songs()
-                .iter()
-                .position(|(v, _)| *v == menu.version)
-                .and_then(|index| self.song_rows.get(index))
-            {
-                Some(row) => row.focus(window, cx),
+            match self.song_index_of(menu.version) {
+                Some(index) => {
+                    self.song_scroll
+                        .scroll_to_item(index, ScrollStrategy::Nearest);
+                    self.focus_song_row(index, window, cx);
+                }
                 None => self.focus.focus(window, cx),
             }
         }
@@ -145,7 +211,8 @@ impl Operator {
         let Some(menu) = &mut self.song_menu else {
             return;
         };
-        let count = SONG_MENU.len();
+        let lines = song_menu_lines(menu.sort_open);
+        let count = lines.len();
         let mut next = menu.highlight;
         for _ in 0..count {
             let index = match next {
@@ -155,11 +222,27 @@ impl Operator {
                 Some(index) => (index + count - 1) % count,
             };
             next = Some(index);
-            if SONG_MENU[index].enabled(items) {
+            if lines[index].enabled(items) {
                 break;
             }
         }
         menu.highlight = next;
+        cx.notify();
+    }
+
+    /// Right opens the Sort by choices from their item; Left closes them.
+    pub(crate) fn set_song_sort_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        let Some(menu) = &mut self.song_menu else {
+            return;
+        };
+        let sort_at = SONG_MENU.iter().position(|i| *i == SongItem::SortBy);
+        if open && menu.highlight == sort_at {
+            menu.sort_open = true;
+            menu.highlight = sort_at.map(|i| i + 1);
+        } else if !open && menu.sort_open {
+            menu.sort_open = false;
+            menu.highlight = sort_at;
+        }
         cx.notify();
     }
 
@@ -169,12 +252,48 @@ impl Operator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(menu), Some(item)) = (self.song_menu, SONG_MENU.get(index).copied()) else {
+        let Some(menu) = self.song_menu else {
             return;
         };
-        if !item.enabled(self.schedule.entries().len()) {
+        let Some(line) = song_menu_lines(menu.sort_open).get(index).copied() else {
+            return;
+        };
+        if !line.enabled(self.schedule.entries().len()) {
             return;
         }
+        let item = match line {
+            SongLine::Item(SongItem::SortBy) => {
+                if let Some(menu) = &mut self.song_menu {
+                    menu.sort_open = !menu.sort_open;
+                    menu.highlight = Some(index);
+                }
+                cx.notify();
+                return;
+            }
+            SongLine::Item(item) => item,
+            SongLine::Sort(sort) => {
+                self.set_song_order(
+                    SongOrder {
+                        sort,
+                        ..self.song_order
+                    },
+                    window,
+                    cx,
+                );
+                return;
+            }
+            SongLine::Descending(descending) => {
+                self.set_song_order(
+                    SongOrder {
+                        descending,
+                        ..self.song_order
+                    },
+                    window,
+                    cx,
+                );
+                return;
+            }
+        };
         self.dismiss_song_menu(window, cx);
         match item {
             SongItem::NewSong => self.open_editor(None, cx),
@@ -187,6 +306,19 @@ impl Operator {
         cx.notify();
     }
 
+    /// Applies and remembers a new Songs order; the list reloads from the
+    /// storage worker.
+    fn set_song_order(&mut self, order: SongOrder, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_song_menu(window, cx);
+        if order != self.song_order {
+            self.song_order = order;
+            self.update_recent(RecentChange::SongOrder(order));
+            self.catalog_stale = true;
+            self.song_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        }
+        cx.notify();
+    }
+
     /// The Songs row context menu, drawn above the panes and kept inside the
     /// window (`deferred` + `anchored`, as in GPUI's popover example).
     pub(crate) fn song_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -194,11 +326,15 @@ impl Operator {
             .song_menu
             .filter(|_| self.tab == 0 && !self.collapsed)?;
         let schedule_items = self.schedule.entries().len();
-        let items = SONG_MENU
-            .iter()
+        let order = self.song_order;
+        let items = song_menu_lines(menu.sort_open)
+            .into_iter()
             .enumerate()
-            .map(|(index, &item)| {
+            .map(|(index, item)| {
                 let enabled = item.enabled(schedule_items);
+                let checked = item.checked(order);
+                let nested = !matches!(item, SongLine::Item(_));
+                let arrow = item == SongLine::Item(SongItem::SortBy);
                 div()
                     .id(item.id())
                     .debug_selector(move || item.id().into())
@@ -206,11 +342,20 @@ impl Operator {
                     .aria_label(item.label())
                     .accessibility_id(item.id())
                     .when(!enabled, mark_disabled)
+                    .when(nested, |d| {
+                        d.role(Role::MenuItemCheckBox).aria_toggled(if checked {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
+                    })
                     .h(px(CONTROL_H))
                     .mx(px(MENU_ITEM_MARGIN_X))
                     .px(px(MENU_ITEM_PAD_X))
+                    .when(nested, |d| d.pl(px(MENU_ITEM_PAD_X + 16.)))
                     .flex()
                     .items_center()
+                    .justify_between()
                     .rounded(px(RADIUS))
                     .text_color(rgb(if enabled { TEXT } else { DISABLED }))
                     .when(enabled, |d| {
@@ -224,6 +369,14 @@ impl Operator {
                         d.bg(rgb(FOCUS_BG)).text_color(rgb(FOCUS_TEXT))
                     })
                     .child(item.label())
+                    .when(checked, |d| d.child("\u{2713}"))
+                    .when(arrow, |d| {
+                        d.child(if menu.sort_open {
+                            "\u{25be}"
+                        } else {
+                            "\u{25b8}"
+                        })
+                    })
             })
             .collect::<Vec<_>>();
         Some(
@@ -266,6 +419,12 @@ impl Operator {
                             }))
                             .on_action(cx.listener(|this, _: &FocusPrevious, _, cx| {
                                 this.move_song_highlight(false, cx);
+                            }))
+                            .on_action(cx.listener(|this, _: &MenuOpenSub, _, cx| {
+                                this.set_song_sort_open(true, cx);
+                            }))
+                            .on_action(cx.listener(|this, _: &MenuCloseSub, _, cx| {
+                                this.set_song_sort_open(false, cx);
                             }))
                             .on_action(cx.listener(|this, _: &MenuConfirm, window, cx| {
                                 if let Some(index) = this.song_menu.and_then(|m| m.highlight) {

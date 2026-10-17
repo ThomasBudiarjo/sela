@@ -6,6 +6,7 @@
 //! (newer) version is treated as unreadable rather than guessed at.
 
 use crate::i18n::Language;
+use crate::song_order::{SongOrder, SongSort};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -34,6 +35,9 @@ pub struct Settings {
     /// (a key added within version 1: older builds ignore it, and a file
     /// without it loads with an empty list).
     pub recent_schedules: Vec<PathBuf>,
+    /// Songs list order (`song_sort`, `song_sort_descending`; keys added
+    /// within version 1, written only when not the default).
+    pub song_order: SongOrder,
 }
 
 impl Settings {
@@ -78,6 +82,10 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
         } else if key == "language" {
             // Unknown codes are ignored like unknown keys: English applies.
             settings.language = Language::from_code(value).unwrap_or_default();
+        } else if key == "song_sort" {
+            settings.song_order.sort = SongSort::from_code(value).unwrap_or_default();
+        } else if key == "song_sort_descending" {
+            settings.song_order.descending = value == "1";
         } else if key == "recent" && !value.is_empty() {
             // Lines are newest first; keep the first occurrence of a path.
             let path = PathBuf::from(value);
@@ -100,6 +108,12 @@ pub fn render(settings: &Settings) -> String {
     }
     if settings.language != Language::default() {
         text.push_str(&format!("language={}\n", settings.language.code()));
+    }
+    if settings.song_order.sort != SongSort::default() {
+        text.push_str(&format!("song_sort={}\n", settings.song_order.sort.code()));
+    }
+    if settings.song_order.descending {
+        text.push_str("song_sort_descending=1\n");
     }
     for path in settings.recent_schedules.iter().take(MAX_RECENT) {
         let path: String = path
@@ -374,6 +388,23 @@ mod tests {
         assert_eq!(parse(&text), Ok(settings));
         assert_eq!(
             parse("sela-settings 1\nlanguage=de\n"),
+            Ok(Settings::default())
+        );
+    }
+
+    #[test]
+    fn song_order_round_trips_and_the_default_is_not_written() {
+        let mut settings = Settings::default();
+        assert!(!render(&settings).contains("song_sort"));
+        settings.song_order = SongOrder {
+            sort: SongSort::Modified,
+            descending: true,
+        };
+        let text = render(&settings);
+        assert!(text.contains("song_sort=modified\n") && text.contains("song_sort_descending=1\n"));
+        assert_eq!(parse(&text), Ok(settings));
+        assert_eq!(
+            parse("sela-settings 1\nsong_sort=author\n"),
             Ok(Settings::default())
         );
     }
