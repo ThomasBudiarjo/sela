@@ -603,6 +603,72 @@ mod tests {
     }
 
     #[test]
+    fn copyright_strip_needs_copyright_text_and_is_two_lines() {
+        let mut s = song(&[("A", "one")]);
+        assert_eq!(copyright_strip(&s), None);
+        s.copyright = "  \n ".into();
+        assert_eq!(copyright_strip(&s), None);
+        s.copyright = "(c) 2020\nSome Owner".into();
+        assert_eq!(
+            copyright_strip(&s).as_deref(),
+            Some("Signal Hymn\n(c) 2020 Some Owner")
+        );
+        s.authors = "A. Writer".into();
+        assert_eq!(
+            copyright_strip(&s).as_deref(),
+            Some("Signal Hymn - A. Writer\n(c) 2020 Some Owner")
+        );
+    }
+
+    #[test]
+    fn cue_with_footer_carries_the_strip_and_reserves_room_for_it() {
+        let slide = Slide {
+            label: String::new(),
+            text: "one\ntwo\nthree\nfour\nfive\nsix".into(),
+            format: Default::default(),
+            background: None,
+        };
+        let resolved = Resolved::bundled(&slide.format);
+        let version = ContentVersion { id: 4, revision: 1 };
+        let strip = "Signal Hymn - A. Writer\n(c) 2020 Some Owner";
+        let plain = cue(version, &slide, &resolved, EXTENT, CAPS, None, black()).unwrap();
+        assert!(plain.footer().is_none());
+        let with = cue_with_footer(
+            version,
+            &slide,
+            Some(strip),
+            &resolved,
+            EXTENT,
+            CAPS,
+            None,
+            black(),
+        )
+        .unwrap();
+        let footer = with.footer().unwrap();
+        assert_eq!(footer.content(), strip);
+        assert_eq!(footer.style().valign, VAlign::Bottom);
+        assert!(footer.font_size() >= 8 && footer.font_size() < 60);
+        assert!(with.text().unwrap().font_size() < plain.text().unwrap().font_size());
+        // Too small an output draws no strip rather than failing the cue.
+        let tiny = Extent {
+            width: 320,
+            height: 180,
+        };
+        let small = cue_with_footer(
+            version,
+            &slide,
+            Some(strip),
+            &resolved,
+            tiny,
+            CAPS,
+            None,
+            black(),
+        )
+        .unwrap();
+        assert!(small.footer().is_none());
+    }
+
+    #[test]
     fn cue_carries_text_font_style_and_extent() {
         let slide = Slide {
             label: "Verse".into(),

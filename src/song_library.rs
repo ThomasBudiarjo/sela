@@ -24,13 +24,17 @@ use std::{
 
 mod format_pane;
 
-actions!(song_library, [Save, SplitSection, SelectAllSlides]);
+actions!(
+    song_library,
+    [Save, SplitSection, SelectAllSlides, CancelPrompt]
+);
 
 /// Call after `text_input::bind_keys`: at equal context depth the later
 /// binding wins, so Ctrl+A in a Words cell selects every slide
 /// (EW8-OBS-034) while other fields keep their own Select All.
 pub fn bind_keys(cx: &mut App) {
     format_pane::bind_keys(cx);
+    cx.bind_keys([KeyBinding::new("escape", CancelPrompt, Some("SongPrompt"))]);
     for modifier in ["ctrl", "cmd"] {
         let keys = format!("{modifier}-a");
         cx.bind_keys([
@@ -87,8 +91,8 @@ pub fn open_song(path: PathBuf, version: Option<Version>, cx: &mut App) -> Resul
                 library
             });
             let weak = view.downgrade();
-            window.on_window_should_close(cx, move |_, cx| {
-                weak.update(cx, |view, cx| view.may_close(cx))
+            window.on_window_should_close(cx, move |window, cx| {
+                weak.update(cx, |view, cx| view.may_close_in(window, cx))
                     .unwrap_or(true)
             });
             // EW8-OBS-023: a new song starts with the caret in slide 1's label.
@@ -140,6 +144,8 @@ fn blank() -> Song {
 
 const HISTORY_LIMIT: usize = 64;
 const HISTORY_BYTES: usize = 8 * 1024 * 1024;
+/// The close prompt's Yes button; it tabs before No (10) and Cancel (11).
+const YES: usize = 29;
 const LABEL: usize = 0;
 const LYRICS: usize = 1;
 /// Preview raster size. The audience fits text per extent, so this matches
@@ -176,6 +182,8 @@ impl Document {
             + self.song.authors.len()
             + self.song.copyright.len()
             + self.song.license.len()
+            + self.song.administrator.len()
+            + self.song.song_number.len()
             + self
                 .song
                 .variants
@@ -531,9 +539,9 @@ struct Preview {
 
 pub(crate) struct Library {
     focus: FocusHandle,
-    /// Title, authors, copyright, license.
-    fields: [Entity<TextInput>; 4],
-    field_edits: [u64; 4],
+    /// Title, authors, copyright, license, administrator, song number.
+    fields: [Entity<TextInput>; 6],
+    field_edits: [u64; 6],
     /// Label and lyrics cell per section; always parallel to `draft.sections`.
     cells: Vec<[Entity<TextInput>; 2]>,
     buttons: [FocusHandle; 32],
@@ -554,6 +562,9 @@ pub(crate) struct Library {
     /// (`clear_rejection`); survives translation because it is not a string.
     status_is_rejection: bool,
     confirm_close: bool,
+    /// Focus scope of the close prompt, and where focus returns on Cancel.
+    prompt_scope: FocusHandle,
+    prompt_return: Option<FocusHandle>,
     confirm_delete: bool,
     inspector: bool,
     show_catalog: bool,
@@ -608,9 +619,14 @@ impl Library {
         let fields = std::array::from_fn(|i| {
             let owner = cx.weak_entity();
             cx.new(|cx| {
-                let mut input =
-                    TextInput::new("", false, [1024, 4096, 4096, 4096][i], 20 + i as isize, cx)
-                        .expect("empty text is valid");
+                let mut input = TextInput::new(
+                    "",
+                    false,
+                    [1024, 4096, 4096, 4096, 1024, 64][i],
+                    20 + i as isize,
+                    cx,
+                )
+                .expect("empty text is valid");
                 if i == 0 {
                     input.set_placeholder(t!(Msg::TitlePlaceholder));
                 }
@@ -646,10 +662,14 @@ impl Library {
         let mut this = Self {
             focus: cx.focus_handle(),
             fields,
-            field_edits: [0; 4],
+            field_edits: [0; 6],
             cells: Vec::new(),
             buttons: std::array::from_fn(|i| {
-                cx.focus_handle().tab_stop(true).tab_index(i as isize + 1)
+                cx.focus_handle().tab_stop(true).tab_index(if i == YES {
+                    10
+                } else {
+                    i as isize + 1
+                })
             }),
             subscriptions: Vec::new(),
             task: None,
@@ -666,6 +686,8 @@ impl Library {
             status,
             status_is_rejection,
             confirm_close: false,
+            prompt_scope: cx.focus_handle(),
+            prompt_return: None,
             confirm_delete: false,
             inspector: false,
             show_catalog: false,
@@ -814,6 +836,8 @@ impl Library {
         song.authors = self.fields[1].read(cx).text().into();
         song.copyright = self.fields[2].read(cx).text().into();
         song.license = self.fields[3].read(cx).text().into();
+        song.administrator = self.fields[4].read(cx).text().into();
+        song.song_number = self.fields[5].read(cx).text().into();
         for (section, cell) in song.sections.iter_mut().zip(&self.cells) {
             section.label = cell[LABEL].read(cx).text().into();
             section.lyrics = cell[LYRICS].read(cx).text().into();
@@ -855,6 +879,8 @@ impl Library {
             &mut song.authors,
             &mut song.copyright,
             &mut song.license,
+            &mut song.administrator,
+            &mut song.song_number,
         ][index] = text.into();
         self.clear_rejection();
         self.record(song);
@@ -935,6 +961,51 @@ impl Library {
         }
         true
     }
+    /// may_close plus the prompt's focus: the non-destructive Cancel, so Enter
+    /// never discards by accident.
+    fn may_close_in(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let allowed = self.may_close(cx);
+        if !allowed && self.confirm_close {
+            if self.prompt_return.is_none() {
+                self.prompt_return = window.focused(cx);
+            }
+            self.buttons[11].focus(window, cx);
+        }
+        allowed
+    }
+    fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.may_close_in(window, cx) {
+            window.remove_window();
+        }
+    }
+    fn cancel_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.confirm_close {
+            return;
+        }
+        self.confirm_close = false;
+        self.confirm_delete = false;
+        self.set_status(t!(Msg::ContinueEditing));
+        match self.prompt_return.take() {
+            Some(handle) => handle.focus(window, cx),
+            None => self.focus.focus(window, cx),
+        }
+    }
+    /// Tab/Shift+Tab inside the close prompt wraps among its buttons.
+    fn trap_prompt_focus(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // The editor's own tab stops outnumber any hop budget, so step over
+        // the prompt's three buttons directly.
+        const ORDER: [usize; 3] = [YES, 10, 11];
+        let at = ORDER
+            .iter()
+            .position(|i| self.buttons[*i].is_focused(window));
+        let next = match (at, forward) {
+            (None, true) => 0,
+            (None, false) => ORDER.len() - 1,
+            (Some(i), true) => (i + 1) % ORDER.len(),
+            (Some(i), false) => (i + ORDER.len() - 1) % ORDER.len(),
+        };
+        self.buttons[ORDER[next]].focus(window, cx);
+    }
     fn may_replace(&mut self, cx: &mut Context<Self>) -> bool {
         if self.locked() {
             return false;
@@ -963,6 +1034,8 @@ impl Library {
             &self.draft.authors,
             &self.draft.copyright,
             &self.draft.license,
+            &self.draft.administrator,
+            &self.draft.song_number,
         ]) {
             load(field, value, cx);
         }
@@ -1140,11 +1213,7 @@ impl Library {
                 self.action(1, window, cx);
                 self.close_after_save = matches!(self.pending, Some(Pending::Save(_)));
             }
-            16 => {
-                if self.may_close(cx) {
-                    window.remove_window();
-                }
-            }
+            16 => self.request_close(window, cx),
             0 if self.may_replace(cx) => {
                 self.begin(blank(), None, cx);
                 self.set_status(t!(Msg::NewSongNotSaved));
@@ -1159,6 +1228,10 @@ impl Library {
                     .any(|field| field.read(cx).error().is_some())
                 {
                     self.reject_status(t!(Msg::InputRejected));
+                } else if !sela::storage::song_number_ok(&song.song_number) {
+                    self.reject_status(t!(Msg::SongNumberInvalid));
+                } else if song.administrator.len() > sela::storage::MAX_ADMINISTRATOR {
+                    self.reject_status(t!(Msg::AdministratorTooLong));
                 } else if song.validate().is_err() {
                     self.reject_status(t!(Msg::TitleRequired));
                 } else {
@@ -1197,11 +1270,12 @@ impl Library {
                 self.refresh(cx);
             }
             10 if self.confirm_close => window.remove_window(),
-            11 => {
+            YES if self.confirm_close => {
                 self.confirm_close = false;
-                self.confirm_delete = false;
-                self.set_status(t!(Msg::ContinueEditing));
+                self.action(15, window, cx);
+                self.prompt_return = None;
             }
+            11 => self.cancel_prompt(window, cx),
             _ => self.set_status(t!(Msg::SaveBeforeDelete)),
         }
         cx.notify();
@@ -2303,9 +2377,16 @@ fn valid_draft(song: &Song) -> bool {
 }
 
 fn editable(song: &Song) -> bool {
-    [&song.title, &song.authors, &song.copyright, &song.license]
-        .iter()
-        .all(|s| !s.contains(['\r', '\n']))
+    [
+        &song.title,
+        &song.authors,
+        &song.copyright,
+        &song.license,
+        &song.administrator,
+        &song.song_number,
+    ]
+    .iter()
+    .all(|s| !s.contains(['\r', '\n']))
         && song.sections.iter().all(|s| {
             !s.label.contains(['\r', '\n'])
                 && s.lyrics.bytes().filter(|b| *b == b'\n').count() < 4096
@@ -2388,11 +2469,7 @@ impl Render for Library {
         div()
             .key_context("Sela SongLibrary")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|s, _: &Quit, w, cx| {
-                if s.may_close(cx) {
-                    w.remove_window();
-                }
-            }))
+            .on_action(cx.listener(|s, _: &Quit, w, cx| s.request_close(w, cx)))
             .on_action(cx.listener(|_, _: &FocusNext, w, cx| w.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, w, cx| w.focus_prev(cx)))
             .on_action(cx.listener(|s, _: &Save, w, cx| s.action(1, w, cx)))
@@ -2412,6 +2489,7 @@ impl Render for Library {
             .on_mouse_up(MouseButton::Left, cx.listener(|s, _, _, cx| s.drag_end(cx)))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|s, _, _, cx| s.drag_end(cx)))
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(rgb(theme::CHROME))
@@ -2489,20 +2567,6 @@ impl Render for Library {
                         status = &self.status
                     )),
             )
-            .when(self.confirm_close && !busy, |d| {
-                d.child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .bg(rgb(0xfff1dc))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(t!(Msg::CloseWithoutSaving))
-                        .child(self.button(10, t!(Msg::DiscardAndClose), cx))
-                        .child(self.button(11, t!(Msg::KeepEditing), cx)),
-                )
-            })
             .child(
                 div()
                     .flex_1()
@@ -2855,6 +2919,8 @@ impl Render for Library {
                                                 t!(Msg::InspectorAuthors),
                                                 t!(Msg::InspectorCopyright),
                                                 t!(Msg::InspectorLicense),
+                                                t!(Msg::InspectorAdministrator),
+                                                t!(Msg::InspectorSongNumber),
                                             ]
                                             .iter()
                                             .enumerate()
@@ -2907,6 +2973,84 @@ impl Render for Library {
                         .child(self.framed(16, t!(Msg::EditorCancel), true, cx)),
                 )
             })
+            .when(self.confirm_close && !busy, |d| {
+                d.child(self.close_prompt(cx))
+            })
+    }
+}
+
+impl Library {
+    /// The Yes/No/Cancel close prompt (EW8-OBS-012): a full-window backdrop
+    /// that keeps the pointer from the editor behind it, with Tab wrapping
+    /// among its three buttons and Esc acting as Cancel.
+    fn close_prompt(&self, cx: &mut Context<Self>) -> AnyElement {
+        let button = |index: usize, id: &'static str, label: &str, cx: &mut Context<Self>| {
+            div()
+                .debug_selector(move || id.into())
+                .child(self.button(index, label, cx))
+        };
+        div()
+            .debug_selector(|| "close-prompt".into())
+            .occlude()
+            .absolute()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .track_focus(&self.prompt_scope)
+            .key_context("SongPrompt")
+            .on_action(cx.listener(|s, _: &CancelPrompt, w, cx| {
+                s.cancel_prompt(w, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|s, _: &FocusNext, w, cx| s.trap_prompt_focus(true, w, cx)))
+            .on_action(cx.listener(|s, _: &FocusPrevious, w, cx| s.trap_prompt_focus(false, w, cx)))
+            // Document commands bound on the editor root stop here.
+            .on_action(|_: &Undo, _, _| {})
+            .on_action(|_: &Redo, _, _| {})
+            .on_action(|_: &Save, _, _| {})
+            .on_action(|_: &SplitSection, _, _| {})
+            .on_action(|_: &SelectAllSlides, _, _| {})
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _, window, _| window.prevent_default()),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "close-prompt-panel".into())
+                    .w(px(380.))
+                    .max_w_full()
+                    .p(px(theme::DIALOG_PAD))
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme::DIALOG_GAP))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(rgb(theme::BORDER))
+                    .bg(rgb(theme::SURFACE))
+                    .shadow_md()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(t!(Msg::CloseWithoutSaving)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(theme::TEXT_SMALL))
+                            .text_color(rgb(theme::MUTED))
+                            .child(t!(Msg::UnsavedChanges)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_1()
+                            .child(button(YES, "close-prompt-yes", t!(Msg::ConfirmYes), cx))
+                            .child(button(10, "close-prompt-no", t!(Msg::ButtonNo), cx))
+                            .child(button(11, "close-prompt-cancel", t!(Msg::ButtonCancel), cx)),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -2951,7 +3095,7 @@ mod tests {
         view.read_with(cx, |v, _| v.cells[index][part].clone())
     }
     fn show_inspector(cx: &mut VisualTestContext, view: &Entity<Library>, index: usize) {
-        if (1..=3).contains(&index) {
+        if (1..=5).contains(&index) {
             cx.update(|_, cx| {
                 view.update(cx, |v, cx| {
                     v.inspector = true;
@@ -5009,5 +5153,140 @@ mod tests {
         type_cell(&mut cx, &view, 0, LYRICS, "Short");
         cx.run_until_parked();
         assert!(cx.debug_bounds("split-badge").is_none());
+    }
+
+    #[gpui::test]
+    fn administrator_and_song_number_save_reload_and_reject_invalid_values(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let (mut cx, view) = fixture(cx, path.clone());
+        cx.simulate_resize(size(px(1400.), px(900.)));
+        edit(&mut cx, &view, 0, "Meta song");
+        edit(&mut cx, &view, 1, "A. Writer");
+        edit(&mut cx, &view, 2, "(c) 2020 Owner");
+        edit(&mut cx, &view, 4, "Acme Music");
+        edit(&mut cx, &view, 5, "12x");
+        action(&mut cx, &view, 1);
+        assert_eq!(
+            view.read_with(&cx, |v, _| (v.version, v.status.clone())),
+            (None, t!(Msg::SongNumberInvalid).to_owned()),
+            "a non-numeric song number is refused with a message"
+        );
+        assert!(view.read_with(&cx, |v, _| v.status_is_rejection));
+        assert!(
+            Repository::open(&path)
+                .unwrap()
+                .catalog(None)
+                .unwrap()
+                .is_empty()
+        );
+        edit(&mut cx, &view, 5, "1234567890123");
+        action(&mut cx, &view, 1);
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.status.clone()),
+            t!(Msg::SongNumberInvalid)
+        );
+        edit(&mut cx, &view, 5, "7654321");
+        edit(&mut cx, &view, 4, &"a".repeat(300));
+        action(&mut cx, &view, 1);
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.status.clone()),
+            t!(Msg::AdministratorTooLong)
+        );
+        assert!(
+            Repository::open(&path)
+                .unwrap()
+                .catalog(None)
+                .unwrap()
+                .is_empty()
+        );
+        edit(&mut cx, &view, 4, "Acme Music");
+        action(&mut cx, &view, 1);
+        wait(&mut cx, &view);
+        let saved = view.read_with(&cx, |v, _| v.version.unwrap());
+        let song = Repository::open(&path).unwrap().song(saved).unwrap();
+        assert_eq!(song.administrator, "Acme Music");
+        assert_eq!(song.song_number, "7654321");
+        assert_eq!(song.copyright, "(c) 2020 Owner");
+        // Reload into a fresh draft: the inputs show the stored values.
+        action(&mut cx, &view, 0);
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx).song_number), "");
+        cx.update(|_, cx| view.update(cx, |v, cx| v.select(saved, cx)));
+        wait(&mut cx, &view);
+        assert_eq!(
+            input(&cx, &view, 4).read_with(&cx, |f, _| f.text().to_owned()),
+            "Acme Music"
+        );
+        assert_eq!(
+            input(&cx, &view, 5).read_with(&cx, |f, _| f.text().to_owned()),
+            "7654321"
+        );
+        assert!(!view.read_with(&cx, |v, cx| v.dirty(cx)));
+    }
+
+    #[gpui::test]
+    fn the_close_prompt_is_a_modal_that_traps_focus_and_blocks_the_editor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, view) = fixture(cx, dir.path().join("library.sqlite"));
+        cx.simulate_resize(size(px(1400.), px(900.)));
+        edit(&mut cx, &view, 0, "Draft title");
+        caret(&mut cx, &view, 0, LYRICS, 0);
+        cx.simulate_keystrokes("ctrl-q");
+        cx.run_until_parked();
+        assert!(view.read_with(&cx, |v, _| v.confirm_close));
+        assert!(cx.debug_bounds("close-prompt").is_some());
+        let in_prompt = |cx: &mut VisualTestContext| {
+            cx.update(|w, cx| view.read(cx).prompt_scope.contains_focused(w, cx))
+        };
+        let on = |cx: &mut VisualTestContext, index: usize| {
+            cx.update(|w, cx| view.read(cx).buttons[index].is_focused(w))
+        };
+        assert!(
+            on(&mut cx, 11),
+            "Cancel is the default so Enter never discards"
+        );
+        // Tab and Shift+Tab wrap among Yes, No and Cancel only.
+        let mut seen = Vec::new();
+        for _ in 0..7 {
+            cx.simulate_keystrokes("tab");
+            assert!(in_prompt(&mut cx), "Tab left the prompt");
+            seen.push([YES, 10, 11].map(|i| on(&mut cx, i)));
+        }
+        assert!(seen.iter().all(|s| s.iter().filter(|b| **b).count() == 1));
+        for index in [YES, 10, 11] {
+            assert!(
+                seen.iter()
+                    .any(|s| s[[YES, 10, 11].iter().position(|i| *i == index).unwrap()])
+            );
+        }
+        for _ in 0..4 {
+            cx.simulate_keystrokes("shift-tab");
+            assert!(in_prompt(&mut cx), "Shift+Tab left the prompt");
+        }
+        // Typing, show shortcuts and clicks on the editor behind do nothing.
+        let before = view.read_with(&cx, |v, cx| v.current(cx));
+        for keys in ["x", "ctrl-b", "pagedown", "ctrl-z", "ctrl-s"] {
+            cx.simulate_keystrokes(keys);
+        }
+        cx.simulate_click(point(px(60.), px(40.)), Default::default());
+        cx.simulate_click(point(px(700.), px(400.)), Default::default());
+        cx.run_until_parked();
+        assert!(in_prompt(&mut cx), "a click behind the prompt took focus");
+        assert!(view.read_with(&cx, |v, _| v.confirm_close && v.pending.is_none()));
+        assert_eq!(view.read_with(&cx, |v, cx| v.current(cx)), before);
+        // Esc is Cancel and focus returns to the lyrics cell it came from.
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!view.read_with(&cx, |v, _| v.confirm_close));
+        assert!(cx.debug_bounds("close-prompt").is_none());
+        assert_eq!(focused(&mut cx, &view), Some((0, LYRICS)));
+        // No discards and closes the window; Yes saves first.
+        cx.simulate_keystrokes("ctrl-q");
+        cx.run_until_parked();
+        action(&mut cx, &view, YES);
+        wait(&mut cx, &view);
+        assert!(view.read_with(&cx, |v, _| v.version.is_some() && !v.confirm_close));
     }
 }

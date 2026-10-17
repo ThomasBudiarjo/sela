@@ -409,11 +409,15 @@ pub enum Msg {
     EditorWords,
     EmptySlideHint,
     InputRejected,
+    AdministratorTooLong,
+    InspectorAdministrator,
     InspectorAuthors,
     InspectorCopyright,
     InspectorHeader,
     InspectorLicense,
+    InspectorSongNumber,
     JoinExceedsLimits,
+    SongNumberInvalid,
     KeepEditing,
     LabelPlaceholder,
     LayoutSample,
@@ -878,11 +882,15 @@ impl Msg {
         Msg::EditorWords,
         Msg::EmptySlideHint,
         Msg::InputRejected,
+        Msg::AdministratorTooLong,
+        Msg::InspectorAdministrator,
         Msg::InspectorAuthors,
         Msg::InspectorCopyright,
         Msg::InspectorHeader,
         Msg::InspectorLicense,
+        Msg::InspectorSongNumber,
         Msg::JoinExceedsLimits,
+        Msg::SongNumberInvalid,
         Msg::KeepEditing,
         Msg::LabelPlaceholder,
         Msg::LayoutSample,
@@ -1378,10 +1386,14 @@ impl Msg {
             Self::InputRejected => {
                 "An input was rejected. Correct the highlighted field before saving."
             }
+            Self::AdministratorTooLong => "Administrator is too long (256 characters at most).",
+            Self::InspectorAdministrator => "Administrator",
             Self::InspectorAuthors => "Authors",
             Self::InspectorCopyright => "Copyright",
             Self::InspectorHeader => "Inspector · song information",
             Self::InspectorLicense => "License identifier",
+            Self::InspectorSongNumber => "Song number (CCLI)",
+            Self::SongNumberInvalid => "Song number must be digits only (12 at most).",
             Self::JoinExceedsLimits => "Joining would exceed the slide limits. Original unchanged.",
             Self::KeepEditing => "Keep editing",
             Self::LabelPlaceholder => "label",
@@ -1927,10 +1939,14 @@ impl Msg {
             Self::InputRejected => {
                 "Sebuah masukan ditolak. Perbaiki kolom yang disorot sebelum menyimpan."
             }
+            Self::AdministratorTooLong => "Administrator terlalu panjang (maksimal 256 karakter).",
+            Self::InspectorAdministrator => "Administrator",
             Self::InspectorAuthors => "Penulis",
             Self::InspectorCopyright => "Hak Cipta",
             Self::InspectorHeader => "Inspektur · informasi lagu",
             Self::InspectorLicense => "Identifikasi lisensi",
+            Self::InspectorSongNumber => "Nomor lagu (CCLI)",
+            Self::SongNumberInvalid => "Nomor lagu harus berupa angka saja (maksimal 12).",
             Self::JoinExceedsLimits => {
                 "Penggabungan akan melebihi batas slide. Naskah asli tidak berubah."
             }

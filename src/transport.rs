@@ -1351,6 +1351,52 @@ mod tests {
         assert_eq!(decoded_text.face_index(), cue_text.face_index());
         assert_eq!(decoded_text.font_size(), cue_text.font_size());
         assert_eq!(decoded_text.style(), cue_text.style());
+        assert!(decoded.cue().unwrap().footer().is_none());
+        let strip = "Wire Title - Author\n(c) Owner";
+        let footed = Arc::new(
+            crate::slides::cue_with_footer(
+                version,
+                &slide,
+                Some(strip),
+                &resolved,
+                extent,
+                caps,
+                None,
+                crate::slides::color_background([0, 0, 0]),
+            )
+            .unwrap(),
+        );
+        let mut footed_wire = Vec::new();
+        Frame::command(
+            &Command::from_wire(
+                Stamp {
+                    epoch: Epoch(42),
+                    sequence: 2,
+                },
+                Lane::Cue,
+                Payload::Scene(footed.clone()),
+                now + Duration::from_secs(2),
+            ),
+            now,
+        )
+        .unwrap()
+        .write(&mut footed_wire)
+        .unwrap();
+        let back = Frame::read(footed_wire.as_slice())
+            .unwrap()
+            .into_command(now, caps)
+            .unwrap();
+        let (got, want) = (
+            back.cue().unwrap().footer().unwrap(),
+            footed.footer().unwrap(),
+        );
+        assert_eq!(got.content(), strip);
+        assert_eq!(got.font_size(), want.font_size());
+        assert_eq!(got.style(), want.style());
+        assert!(
+            Frame::read(&footed_wire[..footed_wire.len() - 1]).is_err(),
+            "a truncated strip is rejected"
+        );
         // Stream wire: 8-byte header, 4-byte resource length, the fixed
         // 61-byte body (stamp, lane, budget, version, extent), a color
         // background, then the text section: tag, version, face index, size,

@@ -77,19 +77,20 @@ pub fn layers(cue: &PreparedCue) -> Result<Layers, TextError> {
     let mut fill = empty();
     let mut outline = empty();
     let mut shadow = empty();
+    let (area_width, area_height) = (
+        extent
+            .width
+            .checked_sub(2 * INSET)
+            .ok_or(TextError::Bounds)?,
+        extent
+            .height
+            .checked_sub(2 * INSET)
+            .ok_or(TextError::Bounds)?,
+    );
+    let (rows, row) = (area_height as usize, area_width as usize);
     if let Some(text) = cue.text() {
         let style = text.style();
         let size = f32::from(text.font_size());
-        let (area_width, area_height) = (
-            extent
-                .width
-                .checked_sub(2 * INSET)
-                .ok_or(TextError::Bounds)?,
-            extent
-                .height
-                .checked_sub(2 * INSET)
-                .ok_or(TextError::Bounds)?,
-        );
         let mut area = glyph_coverage(
             text.font(),
             text.face_index(),
@@ -107,11 +108,32 @@ pub fn layers(cue: &PreparedCue) -> Result<Layers, TextError> {
                 size / 48.,
             );
         }
-        let (rows, row) = (area_height as usize, area_width as usize);
         for y in 0..rows {
             let start = (y + INSET as usize) * width + INSET as usize;
             fill[start..start + row].copy_from_slice(&area[y * row..(y + 1) * row]);
         }
+    }
+    if let Some(strip) = cue.footer() {
+        // The strip shares the lyrics' fill mask, so it takes their colour and
+        // effects; it is laid out in the same inset box, bottom aligned.
+        let area = glyph_coverage(
+            strip.font(),
+            strip.face_index(),
+            strip.content(),
+            area_width,
+            area_height,
+            f32::from(strip.font_size()),
+            &strip.style(),
+        )?;
+        for y in 0..rows {
+            let start = (y + INSET as usize) * width + INSET as usize;
+            for (dst, src) in fill[start..start + row].iter_mut().zip(&area[y * row..]) {
+                *dst = (*dst).max(*src);
+            }
+        }
+    }
+    if let Some(text) = cue.text() {
+        let style = text.style();
         if let Some(outline_style) = style.outline {
             let radius =
                 f32::from(outline_style.size) * extent.height as f32 / REFERENCE_HEIGHT as f32;
@@ -585,6 +607,43 @@ mod tests {
             }
         }
         (bounds.0 < bounds.2).then_some(bounds)
+    }
+
+    #[test]
+    fn the_footer_strip_is_drawn_centred_at_the_bottom_with_the_lyrics() {
+        let extent = Extent {
+            width: 640,
+            height: 360,
+        };
+        let top = TextStyle {
+            valign: VAlign::Top,
+            ..TextStyle::default()
+        };
+        let without = styled("Lyric", top, extent, 40);
+        let strip = OwnedText {
+            content: "Title - Author\nCopyright text".into(),
+            font_version: ContentVersion { id: 0, revision: 0 },
+            font: FONT.as_ref().into(),
+            face_index: 0,
+            font_size: 12,
+            style: TextStyle {
+                valign: VAlign::Bottom,
+                ..TextStyle::default()
+            },
+        };
+        let with = styled("Lyric", top, extent, 40).with_footer(strip).unwrap();
+        let (a, b) = (layers(&without).unwrap(), layers(&with).unwrap());
+        let width = extent.width as usize;
+        let (la, ta, ra, ba) = bbox(&b.fill, width).unwrap();
+        let plain = bbox(&a.fill, width).unwrap();
+        assert_eq!((la, ta), (plain.0, plain.1), "lyrics stay where they were");
+        assert!(ba > plain.3 + 100, "the strip sits far below the lyrics");
+        assert!(ba <= (extent.height - INSET) as usize, "inside the inset");
+        assert!(ra >= plain.2);
+        let rows = &b.fill[(ba - 20) * width..ba * width];
+        let strip_box = bbox(rows, width).unwrap();
+        let centre = (strip_box.0 + strip_box.2) / 2;
+        assert!(centre.abs_diff(width / 2) <= 2, "strip centre {centre}");
     }
 
     #[test]
