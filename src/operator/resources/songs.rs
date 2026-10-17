@@ -87,6 +87,8 @@ impl Operator {
     pub(crate) fn search_text_changed(&mut self, cx: &mut Context<Self>) {
         let text = self.search_input.read(cx).text().to_string();
         if self.search.set_text(&text) {
+            // A new result set starts at its first row.
+            self.song_scroll.scroll_to_item(0, ScrollStrategy::Top);
             self.poll(cx);
             self.watch_search(cx);
             cx.notify();
@@ -236,7 +238,10 @@ impl Operator {
             count,
             cx.processor(|this, range: Range<usize>, window, cx| {
                 this.song_visible = range.clone();
-                this.build_song_rows(range, window, cx)
+                let started = std::time::Instant::now();
+                let rows = this.build_song_rows(range, window, cx);
+                this.record_row_build(started.elapsed());
+                rows
             }),
         )
         .track_scroll(&self.song_scroll)
@@ -295,6 +300,13 @@ impl Operator {
             .child(list)
             .child(self.song_scrollbar(count, cx))
             .into_any_element()
+    }
+
+    /// Feeds the opt-in frame log (SELA_FRAME_LOG).
+    fn record_row_build(&mut self, spent: std::time::Duration) {
+        if let Some(log) = &mut self.frame_log {
+            log.add_rows(spent);
+        }
     }
 
     /// Builds the rows of the visible range only.

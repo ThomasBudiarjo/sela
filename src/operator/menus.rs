@@ -334,7 +334,6 @@ impl Operator {
                 let enabled = item.enabled(schedule_items);
                 let checked = item.checked(order);
                 let nested = !matches!(item, SongLine::Item(_));
-                let arrow = item == SongLine::Item(SongItem::SortBy);
                 div()
                     .id(item.id())
                     .debug_selector(move || item.id().into())
@@ -370,13 +369,6 @@ impl Operator {
                     })
                     .child(item.label())
                     .when(checked, |d| d.child("\u{2713}"))
-                    .when(arrow, |d| {
-                        d.child(if menu.sort_open {
-                            "\u{25be}"
-                        } else {
-                            "\u{25b8}"
-                        })
-                    })
             })
             .collect::<Vec<_>>();
         Some(

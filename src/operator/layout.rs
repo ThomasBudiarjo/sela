@@ -100,6 +100,9 @@ impl Operator {
 
 impl Render for Operator {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(log) = &mut self.frame_log {
+            log.tick();
+        }
         self.focus_pending_dialog(window, cx);
         self.resume_guarded(window, cx);
         self.sync_window_title(window);

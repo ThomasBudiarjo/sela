@@ -54,9 +54,15 @@ def keys(hwnd: int, *sequence: str) -> None:
 
 
 def song_ids(library: pathlib.Path) -> list[bytes]:
-    """Library rows in operator catalog order (stable song ID order)."""
+    """Library rows in operator catalog order (title, ignoring case)."""
     with sqlite3.connect(library.as_uri() + "?mode=ro", uri=True) as db:
-        return [row[0] for row in db.execute("SELECT id FROM songs ORDER BY id")]
+        return [
+            row[0]
+            for row in db.execute(
+                "SELECT m.song FROM search_rows m JOIN song_search f ON f.rowid=m.row "
+                "ORDER BY f.title COLLATE NOCASE"
+            )
+        ]
 
 
 def saved_file(path: pathlib.Path) -> tuple[str, list[bytes]] | None:
@@ -125,8 +131,9 @@ def main() -> int:
         # Song 0 -> Add (twice: a duplicate) -> song 1 -> Add.
         keys(operator, *["tab"] * lo.TABS_TO_FIRST_SONG, "enter")
         keys(operator, *["shift+tab"] * 4, "enter", "enter")
-        keys(operator, *["tab"] * 5, "enter")
-        keys(operator, *["shift+tab"] * 5, "enter")
+        # Only the selected song row is a tab stop: Down moves to song 1.
+        keys(operator, *["tab"] * 4, "down")
+        keys(operator, *["shift+tab"] * 4, "enter")
         time.sleep(0.3)
         save(operator, "operator-three-items")
 

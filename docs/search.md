@@ -198,9 +198,12 @@ Differences from EasyWorship 8.0.49 (RUN-W07A):
 | EW | Sela | Why |
 | --- | --- | --- |
 | Filters from one character | Filters from two; one character shows the full list and issues no query | owner decision (bounds the one-letter p95 of 109 ms measured in M1-07a) |
-| Word-prefix over title, slide labels, lyric words | FTS over title, lyrics (section labels are not indexed) and metadata, last term a prefix | slide-label search is not indexed; recorded gap |
+| Word-prefix over title, slide labels (section text labels), lyric words (EW8-OBS-045) | FTS over title, lyrics and metadata, last term a prefix; **section labels are not indexed** | documented deviation: indexing labels needs a schema bump or a label column in the FTS table, tracked in [backlog](backlog.md#m1-07-search-label-matching); a label-only query ("Chorus") finds nothing in Sela |
+| All matches | At most 200 results; when the cap is hit a "More songs match than are shown. Type more to narrow the search." row sits under the list (`song-search-more`) | bounds the list and the query; EW shows no hint (not observed) |
 | Empty list for no results | Empty list with a "No songs found" line | clearer for the operator |
 | Title echoed in the box when the pane first opens | Plain empty field | EW8-OBS-044 best guess |
+
+The two-character minimum is an owner-approved deviation from EW8-OBS-045 (EW filters from one character); it is recorded in [reference-observations](reference-observations.md).
 
 Not observed in EW and set by best guess (EW8-OBS-047): Ctrl+B/L/C and
 plain B/C/L typed in the box never toggle masks. Clearing the box with Ctrl+A
@@ -244,17 +247,33 @@ Database-only re-run after the query change (`cargo run --locked --release
 
 Limits: one machine, one corpus, synthetic text; the harness samples the
 screen so a frame the compositor delays shows as latency; not measured on the
-older integrated-GPU laptop or with Live output driving the GPU. The unfiltered
-20,000-row list is still built in full on every frame (existing behavior), so
-clearing the box on a very large library is slow; not part of the two-character
-latency but a known cost.
+older integrated-GPU laptop or with Live output driving the GPU. The Songs list is now virtualized
+(see below), so clearing the box no longer rebuilds 20,000 rows.
+
+## Songs list virtualization and scrolling (focus-scopes-resource-browser)
+
+The Songs list is a GPUI `uniform_list` (fixed 28 px rows) over the whole
+library (`Command::Library`, no payload decode) or the search hits, so only the
+visible rows plus overdraw are built, for the unfiltered list and for results
+alike. GPUI paints no scrollbar, so `songs.rs` draws a thumb and track
+(drag or click maps the pointer to a scroll position). Ctrl+End/Home,
+Page Up/Down and Shift variants move the selection and scroll the row into
+view; the row is focused once built. Sort by Title or Date modified is
+persisted in `settings.txt`; Date modified is the order of the last save
+(`search_rows.row`, moved to the end on every save). A rebuilt index restarts
+in id order, so a rebuild loses dates (no schema change was made).
+
+Frame measurement (release build, 20,000-song `search_bench --keep` corpus,
+`scripts/resource-browser-windows.py --binary target\release\sela.exe
+--library PATH`, operator frame log `SELA_FRAME_LOG`): numbers are in the work
+log. The log holds render-to-render intervals while input is continuous and
+the time spent building rows, so it bounds frame pacing but is not a GPU
+present timestamp.
 
 ## Open
 
-- Searching slide labels (EW matches them) and the field choice, if EW
+- Searching slide labels (EW matches them; documented deviation above) and the field choice, if EW
   exposes one.
 - Loading and error states of the box beyond the existing library error line.
-- Truncation hint when more than 200 songs match.
-- Virtualizing the unfiltered list for very large libraries.
 - Linux and macOS runs, and a run on an older integrated-GPU laptop for the
   M1-15 rehearsal machine.

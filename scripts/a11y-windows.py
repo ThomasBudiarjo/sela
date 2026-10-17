@@ -416,10 +416,17 @@ def main() -> int:
         found = nodes_by_id(doc)
 
         # Seed the schedule: select each song row, click Add to Schedule.
-        click_node(hwnd, found["song-0"])
-        click_node(hwnd, found["add-to-schedule"])
-        click_node(hwnd, found["song-1"])
-        click_node(hwnd, found["add-to-schedule"])
+        for row in ("song-0", "song-1"):
+            # A click right after the File menu closes can be dropped; confirm
+            # the row is selected (UIA) before adding it.
+            for attempt in range(5):
+                click_node(hwnd, found[row])
+                if nodes_by_id(uia(hwnd))[row].get("selected") is True:
+                    break
+                summary["seed_click_retries"] = summary.get("seed_click_retries", 0) + 1
+            else:
+                raise nw.Failure(f"clicking {row} never selected it")
+            click_node(hwnd, found["add-to-schedule"])
         # Select the three-slide song so Live previous/next have somewhere to go.
         hymn_aid = next(
             (
@@ -541,20 +548,26 @@ def main() -> int:
         click_node(hwnd, found[hymn_aid])
         time.sleep(1.0)
         park_cursor(hwnd)  # clear hover off the clicked row before probing
-        # A mouse-seeded start can leave UIA focus on the root window; Tab
-        # until a real control (non-empty AutomationId) holds it instead of
-        # assuming the click focused one.
-        for _ in range(4):
+        # Seed focus on a known non-list control. A click on a row can leave
+        # UIA focus on the window root (roughly one run in two), so click the
+        # Songs tab and confirm UIA reports it focused before the first Tab.
+        seed_tab = nodes_by_id(uia(hwnd))["Songs"]
+        for attempt in range(5):
+            click_node(hwnd, seed_tab)
+            park_cursor(hwnd)
             seeded = uia(hwnd, focused=True)["nodes"]
-            if seeded and seeded[0]["automationId"] and seeded[0]["controlType"] != "Window":
+            if seeded and seeded[0]["automationId"] == "Songs":
                 break
-            press("tab")
-            time.sleep(0.4)
+            summary["focus_seed_retries"] = attempt + 1
+        else:
+            raise nw.Failure("could not seed keyboard focus on the Songs tab")
         sequence: list[str] = []
         probed: set[str] = set()
         acted: set[str] = set()
         slide_digest: str | None = None
-        walk_limit = 3 * (len(REQUIRED_STOPS) + 30)
+        # Only the selected song row is a tab stop (the list is virtualized).
+        required = [hymn_aid if aid == "song-0" else aid for aid in REQUIRED_STOPS]
+        walk_limit = 3 * (len(required) + 30)
         for _ in range(walk_limit):
             focused = uia(hwnd, focused=True)
             if not focused["nodes"]:
@@ -562,7 +575,7 @@ def main() -> int:
             node = focused["nodes"][0]
             aid = node["automationId"]
             sequence.append(aid)
-            if aid in REQUIRED_STOPS and aid not in probed:
+            if aid in required and aid not in probed:
                 probed.add(aid)
                 save(f"walk-{aid}")
                 hits, total = focus_fill_hits(hwnd, node, FOCUS_BGR)
@@ -651,11 +664,11 @@ def main() -> int:
                     )
                 check.expect(restored, "Space on Logo again restores the slide")
 
-            if set(REQUIRED_STOPS) <= probed and len(acted) >= 6:
+            if set(required) <= probed and len(acted) >= 6:
                 break
             press("tab")
             time.sleep(0.35)
-        missing = [aid for aid in REQUIRED_STOPS if aid not in probed]
+        missing = [aid for aid in required if aid not in probed]
         check.expect(
             not missing, f"Tab reached every critical stop (missing: {missing})"
         )
@@ -675,6 +688,9 @@ def main() -> int:
 
         # --- VAL-A11Y-003: names follow the UI language ------------------
         rows = len(monitors(args.binary)) + 1
+        # The walk ends in the search box, a text field that keeps Alt+letter
+        # for itself; move focus to a button first so the menu mnemonic works.
+        click_node(hwnd, nodes_by_id(uia(hwnd))["Songs"])
         press("alt+e")
         time.sleep(0.3)
         press("enter")
@@ -700,6 +716,7 @@ def main() -> int:
             f"id: live output is {found['live-output']['name']!r}",
         )
         # And back to English without a restart.
+        click_node(hwnd, nodes_by_id(uia(hwnd))["Songs"])
         press("alt+e")
         time.sleep(0.3)
         press("enter")

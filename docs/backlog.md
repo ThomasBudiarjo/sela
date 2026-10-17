@@ -477,8 +477,9 @@ in the `Sela`/`SelaMenuBar` key contexts or calls the same Operator method as
 its toolbar/keyboard equivalent.
 
 - [x] Map observed commands to GPUI actions/key contexts, not global key matching.
-- [ ] Define focus traversal, text-input ownership, modal scope and selection
-  anchors for single, range and multi-selection where observed.
+- [x] Modal scope: every dialog (and Options) sits in one centred backdrop; Tab/Shift+Tab wrap inside, pointer and Live shortcuts do not reach the window behind, Esc cancels and returns focus (focus-scopes-resource-browser). The song editor's close prompt is still an inline banner, not a modal: a gap.
+- [ ] Define focus traversal, text-input ownership and selection
+  anchors for single, range and multi-selection where observed (Songs list done: Shift/Ctrl click, Shift+arrows/Home/End, Ctrl+A).
 - [ ] Implement next/previous, Go Live and safety bindings in the proper contexts.
 - [ ] Test typing in search/editor, open modal, unfocused panes, repeat keys and
   boundary slides so navigation cannot accidentally fire while entering text.
@@ -498,9 +499,11 @@ B/C/L-in-search best guess), 061, 064, 065 (context menu, sort, delete confirm).
 
 - [ ] Implement observed resource tabs, list/grid sizing, sorting, context actions,
   collections/folders and selection behavior; audit any missing browser controls.
+  (Songs: Sort by Title/Date modified with Ascending/Descending persisted, multi-select, Delete with Yes/No default No are done; Author, Copyright, Administrator and Song Number sort remain.)
 - [ ] Add asynchronous, cancellable search with result generations to reject
   stale queries; implement empty/loading/error states without list selection drift.
 - [ ] Virtualize large lists and bound thumbnail requests/cache ownership.
+  (Songs list virtualized and measured on 20k; Media and other lists and thumbnails remain.)
 - [ ] Test a slow earlier query completing after a newer one, deletion of selected
   resource, large libraries and keyboard navigation through virtualized rows.
 - [ ] Defer decoder-specific thumbnail production to M2-05, not browser behavior.
@@ -716,7 +719,9 @@ operator library search box. Searching starts at 2 characters (owner decision),
 typing never triggers live shortcuts, stale results are dropped by generation,
 and Esc/clear restore the full list. Measured on a 20k library: keystroke to
 painted list p95 81.5-83.8 ms (three runs of 30 two-letter queries, release).
-Open: slide-label search, truncation hint, Narrator and older-hardware runs.
+Truncation hint added in focus-scopes-resource-browser. Open: slide-label search (documented deviation from EW8-OBS-045, see below), Narrator and older-hardware runs.
+
+<a id="m1-07-search-label-matching"></a>Backlog (M1-07 search label matching): EW8-OBS-045 matches slide/section text labels; Sela indexes only title, lyrics and metadata. Index the labels (extra FTS column, schema bump, index rebuild) and add a native check that a label-only query finds the song. Not done because it changes the schema; the two-character minimum is a separate owner-approved deviation.
 
 - [x] Add indexed/FTS search for observed title/lyrics/metadata queries and filters.
   (Index in M1-07a, Songs search box in M1-07b; EW also matches slide labels,

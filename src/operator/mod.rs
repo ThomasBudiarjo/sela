@@ -40,6 +40,7 @@ use std::{
 mod assets;
 mod controls;
 mod dialogs;
+mod frame_log;
 mod layout;
 mod menus;
 mod navigation;
@@ -240,6 +241,7 @@ pub(super) struct Operator {
     pub(super) song_order: SongOrder,
     /// Thumb drag of the Songs scrollbar is in progress.
     pub(super) song_scrolling: bool,
+    pub(super) frame_log: Option<frame_log::FrameLog>,
     slide_rows: Vec<FocusHandle>,
     pub(super) selected_song: Option<Version>,
     pub(super) preview: Option<Item>,
@@ -525,6 +527,7 @@ impl Operator {
             song_focus_pending: None,
             song_order: SongOrder::default(),
             song_scrolling: false,
+            frame_log: frame_log::FrameLog::from_env(),
             slide_rows: Vec::new(),
             selected_song: None,
             preview: None,

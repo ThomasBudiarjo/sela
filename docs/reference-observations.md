@@ -682,3 +682,9 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 
 - Note (preview-live-navigation, 2026-10-15): EW8-OBS-052 label jump keys remain UNOBSERVED; Sela implements C/E/I/M/R/T/V + number + Enter on the Live pane as a best guess, with Bridge on Shift+B because bare B/period are Black for presenter remotes.
 
+## Owner-approved deviations from observations
+
+- **EW8-OBS-045, search minimum length:** EW filters from one character; Sela starts at two (owner decision, bounds the one-letter p95 of 109 ms measured in M1-07a). One character shows the full list and issues no query.
+- **EW8-OBS-045, label matching:** EW also matches slide/section text labels; Sela does not index them (recorded gap, docs/search.md and docs/backlog.md).
+- **EW8-OBS-064, Sort by:** Sela offers Title and Date modified with Ascending/Descending; Author, Copyright, Administrator and Song Number are backlog (docs/backlog.md M1-04). The checked direction in EW was unconfirmed, Sela defaults to Ascending. The choices open in place under Sort by instead of a flyout.
+- **EW8-OBS-065, Delete confirmation:** wording and Yes/No with default No follow EW; Esc closes the dialog as No in Sela (EW ignored Esc).
