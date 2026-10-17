@@ -666,8 +666,10 @@ Depends on: M1-05, M0-07. Tests: U, R, N.
 M1-06a/b [arrangement model and persistence](arrangement.md) are locally merged:
 immutable exact-revision data, backed-up legacy migration and stable section/
 variant/occurrence IDs. Editor save/load/duplicate/undo round trips preserve them;
-native replay independently verifies section IDs in SQLite. Arrangement editing
-controls, explicit reference repair, pagination and fitting remain open.
+native replay independently verifies section IDs in SQLite. M1-06d
+(**implemented-unqualified**, [arrangement](arrangement.md#m1-06d--arrangement-editing-pagination-and-per-item-arrangement)):
+editor Arrangement tab, per-schedule-item arrangement (`.selaschedule` v2),
+overflow pagination with feedback. Explicit reference repair remains open.
 M1-06c (**implemented-unqualified**, [arrangement](arrangement.md#m1-06c--better-slide-output)):
 output follows the first arrangement, text up to 288px with optional
 normalized size, and Ctrl+Enter section split with undo.
@@ -677,11 +679,13 @@ normalized size, and Ctrl+Enter section split with undo.
 - [ ] Implement reference-observed slide splitting, manual breaks, text fitting,
   section labels, slide ordering and overflow feedback.
   (Documented split, fit/normalize and arrangement order done in M1-06c;
-  8.0.49 observation, manual breaks and overflow pagination open.)
+  deterministic overflow pagination with feedback in M1-06d; 8.0.49
+  observation and manual breaks open.)
 - [ ] Keep layout deterministic for a declared font set, theme and output size.
-- [ ] Test asymmetric arrangement V1/C/V2/C/C, deleted sections, very long verse,
+- [ ] Test asymmetric arrangement V1/C/V2/C/C, deleted sections, very long verse (M1-06d adds long-verse and combining-mark pagination tests),
   font fallback, right-to-left/combining text and output aspect changes.
-- [ ] Verify editing/re-pagination while live cannot change acknowledged content.
+- [x] Verify editing/re-pagination while live cannot change acknowledged content
+  (M1-06d: Live keeps its own item copy; `tests::arrangements`).
 
 Acceptance: correct content and ordering, readable output and explicit overflow;
 do not silently truncate lyrics or hide missing sections.

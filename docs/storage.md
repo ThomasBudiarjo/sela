@@ -453,11 +453,15 @@ keeps song revisions only; the `schedules`/`items` tables and
 `Command::SaveSchedule/Schedule/ScheduleCatalog` remain for old data but the
 operator no longer writes them.
 
-- **Format v1**: UTF-8 JSON `{"format":"sela-schedule","version":1,"title":..,
-  "items":[{"kind":"song","song_id":hex,"revision":n,"song":{title,authors,
+- **Format v2** (v1 files still open; written since M1-06d): UTF-8 JSON
+  `{"format":"sela-schedule","version":2,"title":..,
+  "items":[{"kind":"song","song_id":hex,"revision":n,"arrangement":hex?,"song":{title,authors,
   copyright,license,master?,sections:[{id,label,lyrics,format?,background?}],
   variants:[..]}}]}`. Formats and backgrounds are hex of their library codecs.
-  Later item kinds, themes or asset snapshots bump `version`; a newer file is
+  `arrangement` is the item's own chosen variant ID and is written only when
+  set; a v2 reader drops an ID the embedded song does not contain (falls back
+  to the song's first arrangement), a v1 file has none and a non-string value
+  is corrupt. Later item kinds, themes or asset snapshots bump `version`; a newer file is
   rejected with its version number, version 0 and unknown kinds are corrupt.
 - **Limits**: 8 MiB file (checked from metadata, read capped at limit + 1), 32
   items, 1024-byte title, same as the old storage limits. Violations return

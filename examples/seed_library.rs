@@ -10,14 +10,14 @@
 //! the song master's color; --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
 use image::ImageEncoder;
 use sela::{
-    arrangement::SectionId,
+    arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId},
     background::{Aspect, Background, ImageRef},
     format::{Align, Outline, Shadow, Size, SlideFormat, VAlign},
     storage::{Repository, Section, Song},
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song]";
 
 /// `scripts/live-output-windows.py` samples these.
 const BANDS: [[u8; 3]; 3] = [[200, 40, 40], [40, 160, 60], [40, 60, 200]];
@@ -62,8 +62,8 @@ fn backdrop(path: &std::path::Path) -> Result<ImageRef, Box<dyn std::error::Erro
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let mut path = None;
-    let (mut second, mut formatted, mut background, mut heavy, mut vanished) =
-        (false, false, false, false, false);
+    let (mut second, mut formatted, mut background, mut heavy, mut vanished, mut arranged) =
+        (false, false, false, false, false, false);
     let mut extra = 0usize;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -79,6 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or(USAGE)?;
             }
             flag if flag == "--vanished-schedule" => vanished = true,
+            flag if flag == "--arranged-song" => arranged = true,
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -124,6 +125,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     copyright: String::new(),
                     license: String::new(),
                     variants: Vec::new(),
+                    sections,
+                    master: None,
+                },
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        return Ok(());
+    }
+    if arranged {
+        let sections = vec![
+            section("Verse 1", "Arranged verse line"),
+            section("Chorus", "Arranged chorus line"),
+            section("Bridge", "Arranged bridge line"),
+            section(
+                "Long Verse",
+                &(1..=40)
+                    .map(|n| format!("Overflowing line {n}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        ];
+        let variant = |name: &str, order: &[usize]| Variant {
+            id: VariantId(SectionId::allocate().0),
+            name: name.into(),
+            occurrences: order
+                .iter()
+                .map(|n| Occurrence {
+                    id: OccurrenceId(SectionId::allocate().0),
+                    section: sections[*n].id,
+                })
+                .collect(),
+        };
+        let variants = vec![
+            variant("Full", &[0, 1, 2]),
+            variant("Chorus Twice", &[1, 1]),
+            variant("Long", &[3]),
+        ];
+        repository
+            .save_song(
+                None,
+                Song {
+                    title: "Arranged Hymn".into(),
+                    authors: String::new(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    variants,
                     sections,
                     master: None,
                 },

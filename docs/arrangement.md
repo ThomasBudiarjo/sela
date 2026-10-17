@@ -184,3 +184,66 @@ driver is X11-only); GPUI tests cover them.
 Open: observe EasyWorship's auto-size default, normalize scope (item or
 service) and Ctrl+Enter behavior mid-line on 8.0.49; arrangement choice;
 pagination of overflowing sections; persisted text settings.
+
+## M1-06d — Arrangement editing, pagination and per-item arrangement
+
+Implemented-unqualified on local `main`. Nothing here is observed on
+EasyWorship 8.0.49; the editor layout and the Preview button are Sela's own.
+
+- **Editor.** The song editor's left pane has a third tab, Arrangement
+  (Words, Slides, Arrangement). It lists the active arrangement's references
+  in order (the stored slide order stands in while the song has none) and the
+  song's slides. Buttons: New (copies the current arrangement), Delete, Make
+  active, Next arrangement, Move up/down, Remove, Add slide (inserts the
+  selected slide after the selected reference, or at the end). The first
+  arrangement is the song's active one: new schedule items, Preview and Live
+  follow it, and Make active moves one to the front. Every change is applied
+  to a copy, refused with a status message when the copy would not validate
+  (`valid_draft`), and is one undo step; Save writes a new revision as usual.
+  The pure operations are `arrangement_edit.rs`; repeated sections get
+  distinct occurrence IDs and a moved reference keeps its ID.
+- **Pagination.** `slides::paginate` splits a section's text at line breaks
+  into balanced pages of at most 16 lines (48px minimum on the 1080 reference
+  canvas, the same everywhere so the editor and the audience agree) and at
+  most `PAGE_BYTES`; a single over-long line is cut only at grapheme-cluster
+  boundaries, so combining marks and ZWJ sequences never split. It is
+  deterministic and never drops text. `slides::project` returns the audience
+  slides plus each slide's page (`Page { number, of }`) for a chosen
+  arrangement; an unknown choice falls back to the first. Feedback: the
+  editor footer shows "Splits into N audience slides" (the editor preview
+  shows page 1), the Preview pane shows "Split slide N of M…" and tile
+  captions/UIA names read "2 · Long Verse (2/3)".
+- **Per-schedule-item arrangement.** An `Entry` carries its own
+  `arrangement: Option<VariantId>`, part of the schedule's saved state
+  (dirty, baseline `Pin`, Save/Open). The Preview pane shows an
+  "Arrangement: name (n of m)" button for a selected schedule item whose song
+  has several arrangements; each press picks the next one. Only that entry
+  changes, not the library song, other entries (so a duplicate can differ) or
+  Live. Library songs previewed from Songs use the first arrangement.
+  `.selaschedule` is format version 2 (see storage.md); v1 files still open.
+  Autosave/snapshots do not exist yet; when they land they must persist
+  `Pin`s (version + arrangement) the same way.
+- **Live stability.** Live holds its own copy of the sent item, so changing
+  the previewed arrangement or the paging of the edited song never changes
+  the audience; Go Live resends. Tests: `tests::arrangements::*`.
+
+Tests: `slides::tests` (balanced splits, determinism, combining marks/ZWJ,
+projection with page marks), `arrangement_edit::tests`,
+`schedule::tests::arrangement_belongs_to_the_entry_and_is_part_of_the_saved_state`,
+`schedule_file::tests::each_item_keeps_its_own_arrangement_and_version_1_still_opens`,
+`song_library::tests::{arrangement_tab_adds_removes_and_reorders_references_and_persists,
+arrangements_can_be_created_chosen_activated_and_deleted,
+long_text_shows_page_one_and_a_split_badge}`,
+`tests::arrangements::{each_schedule_item_keeps_its_own_arrangement_through_save_and_reopen,
+live_keeps_the_audience_slides_until_the_item_is_sent_again}`.
+
+Native: `python scripts/arrangement-windows.py` PASS (duplicate, change only
+the copy's arrangement, audience differs per item, Live stable while the
+preview changes, 40-line section pages into three slides on the audience,
+save as version 2, restart, Ctrl+O shows both items with their own slides and
+identical audience digests). The song-editor controls are not driven natively
+(that driver is X11-only); GPUI tests cover them.
+
+Open: EasyWorship's real splitting rule and keys (observation), manual
+breaks, tall-slide tile thumbnails clip long pages, explicit reference
+repair UI, autosave/snapshot persistence of per-item arrangements.
