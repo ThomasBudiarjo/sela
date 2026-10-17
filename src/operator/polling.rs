@@ -289,6 +289,7 @@ impl Operator {
                             .map(|v| (v.id, v.name.clone()))
                             .collect(),
                         chosen,
+                        copyright: slides::copyright_strip(&song).map(Into::into),
                         resolved: None,
                     });
                     self.preview_slide = 0;

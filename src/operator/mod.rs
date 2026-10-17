@@ -153,6 +153,9 @@ pub(super) struct Item {
     pub(super) arrangements: Arc<[(VariantId, String)]>,
     /// The entry's stored choice these slides were built for.
     pub(super) chosen: Option<VariantId>,
+    /// The song's copyright strip, drawn on every slide of the item
+    /// (EW8-OBS-063); `None` when the song has no copyright text.
+    pub(super) copyright: Option<Arc<str>>,
     /// Per-slide face resolution, `None` until the background resolver lands.
     /// Until then the current live scene stays and a deferred cue waits.
     pub(super) resolved: Option<Arc<[fonts::Resolved]>>,

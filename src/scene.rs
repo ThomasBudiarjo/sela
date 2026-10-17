@@ -191,7 +191,32 @@ pub struct PreparedCue {
     extent: Extent,
     background: PreparedBackground,
     text: Option<PreparedText>,
+    footer: Option<PreparedText>,
     bytes: usize,
+}
+
+fn prepare_text(text: OwnedText, bytes: &mut usize) -> Result<PreparedText, PrepareError> {
+    if text.content.is_empty()
+        || text.font_size == 0
+        || text.font_size > 512
+        || !text.style.is_valid()
+    {
+        return Err(PrepareError::InvalidScene);
+    }
+    if text.content.len() > MAX_TEXT_BYTES || text.font.len() > MAX_SOURCE_BYTES {
+        return Err(PrepareError::TooLarge);
+    }
+    // Also validates the face index against the collection.
+    ttf_parser::Face::parse(&text.font, text.face_index).map_err(|_| PrepareError::InvalidFont)?;
+    *bytes += text.content.len() + text.font.len();
+    Ok(PreparedText {
+        content: text.content,
+        font_version: text.font_version,
+        font: text.font,
+        face_index: text.face_index,
+        font_size: text.font_size,
+        style: text.style,
+    })
 }
 
 impl PreparedCue {
@@ -221,30 +246,7 @@ impl PreparedCue {
             PreparedBackground::Color(_) => {}
         }
         let text = text
-            .map(|text| {
-                if text.content.is_empty()
-                    || text.font_size == 0
-                    || text.font_size > 512
-                    || !text.style.is_valid()
-                {
-                    return Err(PrepareError::InvalidScene);
-                }
-                if text.content.len() > MAX_TEXT_BYTES || text.font.len() > MAX_SOURCE_BYTES {
-                    return Err(PrepareError::TooLarge);
-                }
-                // Also validates the face index against the collection.
-                ttf_parser::Face::parse(&text.font, text.face_index)
-                    .map_err(|_| PrepareError::InvalidFont)?;
-                bytes += text.content.len() + text.font.len();
-                Ok(PreparedText {
-                    content: text.content,
-                    font_version: text.font_version,
-                    font: text.font,
-                    face_index: text.face_index,
-                    font_size: text.font_size,
-                    style: text.style,
-                })
-            })
+            .map(|text| prepare_text(text, &mut bytes))
             .transpose()?;
         if bytes > MAX_SCENE_BYTES {
             return Err(PrepareError::TooLarge);
@@ -254,8 +256,21 @@ impl PreparedCue {
             extent,
             background,
             text,
+            footer: None,
             bytes,
         })
+    }
+
+    /// Adds the copyright strip: a second text drawn over the bottom of the
+    /// cue's text area (see `slides::cue`, which reserves its height).
+    pub fn with_footer(mut self, footer: OwnedText) -> Result<Self, PrepareError> {
+        let mut bytes = self.bytes;
+        self.footer = Some(prepare_text(footer, &mut bytes)?);
+        if bytes > MAX_SCENE_BYTES {
+            return Err(PrepareError::TooLarge);
+        }
+        self.bytes = bytes;
+        Ok(self)
     }
 
     /// Resource-free diagnostic snapshot. No file work or renderer readiness is
@@ -275,6 +290,7 @@ impl PreparedCue {
             extent,
             background: PreparedBackground::Color(color),
             text: None,
+            footer: None,
             bytes: 0,
         })
     }
@@ -290,6 +306,10 @@ impl PreparedCue {
     }
     pub fn text(&self) -> Option<&PreparedText> {
         self.text.as_ref()
+    }
+    /// The copyright strip, if the slide shows one.
+    pub fn footer(&self) -> Option<&PreparedText> {
+        self.footer.as_ref()
     }
     pub fn resource_bytes(&self) -> usize {
         self.bytes

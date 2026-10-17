@@ -1,11 +1,13 @@
 //! Schedule documents: `.selaschedule` files, like EasyWorship's `.ews`.
 //!
-//! The file is versioned UTF-8 JSON: `{"format":"sela-schedule","version":2,
+//! The file is versioned UTF-8 JSON: `{"format":"sela-schedule","version":3,
 //! "title":..,"items":[..]}`. Each item embeds the full pinned song revision
 //! (text, arrangement, formats, backgrounds, metadata) next to the source song
 //! id and revision, so a file opens against any library. Version 2 adds the
 //! item's chosen `arrangement` (a variant id of its embedded song); version 1
-//! files still open, with every item on the song's first arrangement. A later
+//! files still open, with every item on the song's first arrangement. Version 3
+//! adds the song's optional `administrator` and `song_number`; older files open
+//! with both empty. A later
 //! version adds item kinds, themes or asset snapshots; readers reject a version
 //! they do not know instead of guessing. Formats and backgrounds are embedded as hex of
 //! their own library codecs (`SlideFormat::encode`, `Background::encode`).
@@ -28,7 +30,7 @@ use std::{
 };
 
 pub const FORMAT: &str = "sela-schedule";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const EXTENSION: &str = "selaschedule";
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_TITLE_BYTES: usize = 1024;
@@ -158,6 +160,14 @@ pub fn song_json(song: &Song) -> Value {
     out.insert("authors".into(), song.authors.clone().into());
     out.insert("copyright".into(), song.copyright.clone().into());
     out.insert("license".into(), song.license.clone().into());
+    // Written only when set, so a song without them keeps its content hash
+    // (`import_hidden`) and its encoding from before version 3.
+    if !song.administrator.is_empty() {
+        out.insert("administrator".into(), song.administrator.clone().into());
+    }
+    if !song.song_number.is_empty() {
+        out.insert("song_number".into(), song.song_number.clone().into());
+    }
     if let Some(master) = &song.master {
         out.insert("master".into(), hex(&master.encode()).into());
     }
@@ -168,6 +178,14 @@ pub fn song_json(song: &Song) -> Value {
 
 fn text(value: &Value, key: &str) -> Option<String> {
     Some(value.get(key)?.as_str()?.to_owned())
+}
+
+/// Absent is empty (files before version 3); present must be a string.
+fn optional_text(value: &Value, key: &str) -> Option<String> {
+    match value.get(key) {
+        None => Some(String::new()),
+        Some(v) => Some(v.as_str()?.to_owned()),
+    }
 }
 
 pub fn song_from_json(value: &Value) -> Option<Song> {
@@ -218,6 +236,8 @@ pub fn song_from_json(value: &Value) -> Option<Song> {
         authors: text(value, "authors")?,
         copyright: text(value, "copyright")?,
         license: text(value, "license")?,
+        administrator: optional_text(value, "administrator")?,
+        song_number: optional_text(value, "song_number")?,
         sections,
         variants,
         master: match value.get("master") {

@@ -38,6 +38,7 @@ fn job(tag: u64) -> CueJob {
         caps: CAPS,
         sizing: Sizing::PerSlide,
         background: slides::color_background([0, 0, 0]),
+        footer: None,
     }
 }
 

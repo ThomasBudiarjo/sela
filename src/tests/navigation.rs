@@ -220,6 +220,8 @@ fn library_with_twelve_slides(dir: &tempfile::TempDir) -> std::path::PathBuf {
                 authors: String::new(),
                 copyright: String::new(),
                 license: String::new(),
+                administrator: String::new(),
+                song_number: String::new(),
                 variants: Vec::new(),
                 sections,
                 master: None,

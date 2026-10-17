@@ -279,6 +279,8 @@ mod tests {
             authors: String::new(),
             copyright: String::new(),
             license: String::new(),
+            administrator: String::new(),
+            song_number: String::new(),
             sections: lyrics
                 .iter()
                 .map(|text| Section {

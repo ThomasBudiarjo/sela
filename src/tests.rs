@@ -523,6 +523,8 @@ fn library_with_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
                 authors: String::new(),
                 copyright: String::new(),
                 license: String::new(),
+                administrator: String::new(),
+                song_number: String::new(),
                 variants: Vec::new(),
                 sections: vec![
                     section("Verse 1", "First original line\nSecond original line"),
@@ -754,6 +756,8 @@ fn library_with_background_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
                 authors: String::new(),
                 copyright: String::new(),
                 license: String::new(),
+                administrator: String::new(),
+                song_number: String::new(),
                 variants: Vec::new(),
                 sections: vec![
                     section(
@@ -806,6 +810,8 @@ fn library_with_two_backgrounds(dir: &tempfile::TempDir) -> std::path::PathBuf {
                 authors: String::new(),
                 copyright: String::new(),
                 license: String::new(),
+                administrator: String::new(),
+                song_number: String::new(),
                 variants: Vec::new(),
                 sections: vec![
                     section("Verse 1", Some(one)),
@@ -1280,6 +1286,8 @@ fn library_with_formatted_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
                 authors: String::new(),
                 copyright: String::new(),
                 license: String::new(),
+                administrator: String::new(),
+                song_number: String::new(),
                 variants: Vec::new(),
                 sections: vec![
                     Section {
@@ -1318,6 +1326,8 @@ fn library_with_songs(dir: &tempfile::TempDir) -> std::path::PathBuf {
                 authors: String::new(),
                 copyright: String::new(),
                 license: String::new(),
+                administrator: String::new(),
+                song_number: String::new(),
                 variants: Vec::new(),
                 sections: vec![Section {
                     id: SectionId::allocate(),
@@ -2068,6 +2078,8 @@ fn song_menu_items_order_disabled_items_and_dismissal(cx: &mut TestAppContext) {
                 authors: String::new(),
                 copyright: String::new(),
                 license: String::new(),
+                administrator: String::new(),
+                song_number: String::new(),
                 variants: Vec::new(),
                 sections: vec![Section {
                     id: SectionId::allocate(),
@@ -4234,6 +4246,8 @@ fn library_with_heavy_song(dir: &tempfile::TempDir) -> std::path::PathBuf {
                 authors: String::new(),
                 copyright: String::new(),
                 license: String::new(),
+                administrator: String::new(),
+                song_number: String::new(),
                 variants: Vec::new(),
                 sections,
                 master: None,
@@ -4517,6 +4531,8 @@ mod preflight_ui {
                     authors: String::new(),
                     copyright: String::new(),
                     license: String::new(),
+                    administrator: String::new(),
+                    song_number: String::new(),
                     variants: Vec::new(),
                     sections: vec![Section {
                         id: SectionId::allocate(),
@@ -4859,7 +4875,7 @@ mod schedule_files_ui {
         save_new(&mut cx, &operator, good.clone());
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&good).unwrap()).unwrap();
-        value["version"] = 3.into();
+        value["version"] = 4.into();
         let cases = [
             ("garbage", b"not a schedule".to_vec()),
             ("truncated", std::fs::read(&good).unwrap()[..40].to_vec()),
@@ -4941,6 +4957,8 @@ mod schedule_files_ui {
                     authors: String::new(),
                     copyright: String::new(),
                     license: String::new(),
+                    administrator: String::new(),
+                    song_number: String::new(),
                     variants: Vec::new(),
                     sections: vec![Section {
                         id: SectionId::allocate(),
@@ -5451,6 +5469,8 @@ mod arrangements {
                     authors: String::new(),
                     copyright: String::new(),
                     license: String::new(),
+                    administrator: String::new(),
+                    song_number: String::new(),
                     variants,
                     sections,
                     master: None,

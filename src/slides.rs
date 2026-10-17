@@ -199,14 +199,95 @@ pub fn size_cap(
     extent: Extent,
     sizing: Sizing,
 ) -> Option<u16> {
+    size_cap_with_footer(slides, resolved, extent, sizing, None)
+}
+
+/// `size_cap` for slides that each carry the copyright strip `footer`, whose
+/// height the text area gives up (see `cue_with_footer`).
+pub fn size_cap_with_footer(
+    slides: &[Slide],
+    resolved: &[Resolved],
+    extent: Extent,
+    sizing: Sizing,
+    footer: Option<&str>,
+) -> Option<u16> {
     match sizing {
         Sizing::PerSlide => None,
         Sizing::Normalized => slides
             .iter()
             .zip(resolved)
             .filter(|(s, _)| !s.text.is_empty() && !matches!(s.format.size, Some(Size::Fixed(_))))
-            .filter_map(|(s, r)| fit_size(&s.text, r, extent))
+            .filter_map(|(s, r)| fit_size(&s.text, r, text_extent(footer, r, extent)))
             .min(),
+    }
+}
+
+/// The copyright strip's font size, as a share of the output height.
+const FOOTER_EM: f32 = 0.032;
+/// Below this output height the strip is not drawn: it would leave no room.
+const FOOTER_MIN_HEIGHT: u32 = 360;
+const FOOTER_LINES: usize = 2;
+/// Pixel height of `lines` lines of strip text at `size`; the audience raster
+/// and the cue reserve the same box.
+pub fn footer_height(lines: usize, size: u16) -> u32 {
+    (lines as f32 * f32::from(size) * LINE_HEIGHT).ceil() as u32 + 2
+}
+
+/// The strip text of a song, or `None` for a song without copyright text
+/// (EW8-OBS-063): "Title - Author" over the Copyright line. Administrator and
+/// Song Number are not drawn (unobserved). Line breaks inside a field become
+/// spaces so the strip is always two lines.
+pub fn copyright_strip(song: &Song) -> Option<String> {
+    let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let copyright = one_line(&song.copyright);
+    if copyright.is_empty() {
+        return None;
+    }
+    let (title, authors) = (one_line(&song.title), one_line(&song.authors));
+    let first = if authors.is_empty() {
+        title
+    } else {
+        format!("{title} - {authors}")
+    };
+    Some(format!("{first}\n{copyright}"))
+}
+
+/// Strip font size and box height that fit the width, or `None` when it
+/// cannot be drawn (small output, a glyph the face lacks, too much text).
+fn footer_plan(text: &str, resolved: &Resolved, extent: Extent) -> Option<(u16, u32)> {
+    if extent.height < FOOTER_MIN_HEIGHT
+        || text.len() > MAX_TEXT_BYTES
+        || text.lines().count() != FOOTER_LINES
+    {
+        return None;
+    }
+    let width = extent.width.checked_sub(2 * INSET).filter(|w| *w > 0)? as f32;
+    let face = ttf_parser::Face::parse(resolved.face().bytes(), resolved.face().index()).ok()?;
+    let em = f32::from(face.units_per_em());
+    let mut widest: f32 = 0.;
+    for line in text.lines() {
+        let mut advance = 0u32;
+        for c in line.chars() {
+            advance += u32::from(face.glyph_hor_advance(face.glyph_index(c)?).unwrap_or(0));
+        }
+        widest = widest.max(advance as f32 / em);
+    }
+    let target = (extent.height as f32 * FOOTER_EM).round().max(10.);
+    let size = (width / (widest * 1.05).max(f32::EPSILON))
+        .min(target)
+        .floor();
+    (size >= 8.).then(|| (size as u16, footer_height(FOOTER_LINES, size as u16)))
+}
+
+/// The extent the lyrics fit in: the text area is centred, so giving up the
+/// strip's height at both edges keeps the lyrics clear of the strip.
+fn text_extent(footer: Option<&str>, resolved: &Resolved, extent: Extent) -> Extent {
+    match footer.and_then(|f| footer_plan(f, resolved, extent)) {
+        Some((_, height)) => Extent {
+            height: extent.height.saturating_sub(2 * height),
+            ..extent
+        },
+        None => extent,
     }
 }
 
@@ -241,6 +322,26 @@ pub fn cue(
     cap: Option<u16>,
     background: PreparedBackground,
 ) -> Result<PreparedCue, PrepareError> {
+    cue_with_footer(
+        version, slide, None, resolved, extent, caps, cap, background,
+    )
+}
+
+/// `cue` plus the copyright strip `footer` (`copyright_strip`) drawn centred
+/// at the bottom of the text area. Auto-sized lyrics fit above it; a Fixed
+/// size keeps its size and may reach the strip. A strip that cannot be drawn
+/// (see `footer_plan`) is left out instead of failing the cue.
+#[allow(clippy::too_many_arguments)]
+pub fn cue_with_footer(
+    version: ContentVersion,
+    slide: &Slide,
+    footer: Option<&str>,
+    resolved: &Resolved,
+    extent: Extent,
+    caps: RendererCapabilities,
+    cap: Option<u16>,
+    background: PreparedBackground,
+) -> Result<PreparedCue, PrepareError> {
     if let PreparedBackground::Image { extent: image, .. } = &background
         && *image != extent
     {
@@ -263,8 +364,8 @@ pub fn cue(
                     .ok_or(PrepareError::InvalidScene)?
             }
             _ => {
-                let size =
-                    fit_size(&slide.text, resolved, extent).ok_or(PrepareError::InvalidScene)?;
+                let size = fit_size(&slide.text, resolved, text_extent(footer, resolved, extent))
+                    .ok_or(PrepareError::InvalidScene)?;
                 cap.map_or(size, |cap| size.min(cap.max(1)))
             }
         };
@@ -277,7 +378,21 @@ pub fn cue(
             style: style_of(&slide.format, resolved),
         })
     };
-    PreparedCue::from_owned(version, extent, background, text, caps)
+    let cue = PreparedCue::from_owned(version, extent, background, text, caps)?;
+    match footer.and_then(|f| footer_plan(f, resolved, extent).map(|(size, _)| (f, size))) {
+        Some((content, size)) => cue.with_footer(OwnedText {
+            content: content.to_owned(),
+            font_version: resolved.face().version(),
+            font: resolved.face().bytes_arc(),
+            face_index: resolved.face().index(),
+            font_size: size,
+            style: TextStyle {
+                valign: VAlign::Bottom,
+                ..TextStyle::default()
+            },
+        }),
+        None => Ok(cue),
+    }
 }
 
 /// A color plan's opaque cue background; image plans are prepared by the
@@ -383,6 +498,8 @@ mod tests {
             authors: String::new(),
             copyright: String::new(),
             license: String::new(),
+            administrator: String::new(),
+            song_number: String::new(),
             variants: Vec::new(),
             sections: sections
                 .iter()

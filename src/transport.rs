@@ -119,7 +119,10 @@ impl Frame {
             Payload::Logo(cue) => return Self::resource_command(command, cue, LOGO, now),
             Payload::Scene(cue) => cue,
         };
-        if cue.text().is_some() || matches!(cue.background(), PreparedBackground::Image { .. }) {
+        if cue.text().is_some()
+            || cue.footer().is_some()
+            || matches!(cue.background(), PreparedBackground::Image { .. })
+        {
             return Self::resource_command(command, cue, COMMAND, now);
         }
         let PreparedBackground::Color(color) = cue.background() else {
@@ -202,52 +205,10 @@ impl Frame {
                 put_blob(&mut f.bytes, rgba);
             }
         }
-        if let Some(text) = cue.text() {
-            let style = text.style();
-            f.bytes.push(2); // Styled owned text (tag 1 was removed in M1-05g2).
-            put_version(&mut f.bytes, text.font_version());
-            f.bytes.extend_from_slice(&text.face_index().to_le_bytes());
-            f.bytes.extend_from_slice(&text.font_size().to_le_bytes());
-            f.bytes.extend_from_slice(&style.color);
-            f.bytes.push(style.align as u8);
-            f.bytes.push(style.valign as u8);
-            let mut flags = 0u8;
-            if style.underline {
-                flags |= 1;
-            }
-            if style.italic {
-                flags |= 2;
-            }
-            if style.synth_bold {
-                flags |= 4;
-            }
-            if style.synth_italic {
-                flags |= 8;
-            }
-            f.bytes.push(flags);
-            match style.outline {
-                Some(outline) => {
-                    f.bytes.push(1);
-                    f.bytes.extend_from_slice(&outline.color);
-                    f.bytes.extend_from_slice(&[outline.size, outline.opacity]);
-                }
-                None => f.bytes.push(0),
-            }
-            match style.shadow {
-                Some(shadow) => {
-                    f.bytes.push(1);
-                    f.bytes.extend_from_slice(&shadow.color);
-                    f.bytes.extend_from_slice(&shadow.angle.to_le_bytes());
-                    f.bytes
-                        .extend_from_slice(&[shadow.offset, shadow.blur, shadow.opacity]);
-                }
-                None => f.bytes.push(0),
-            }
-            put_blob(&mut f.bytes, text.content().as_bytes());
-            put_blob(&mut f.bytes, text.font());
-        } else {
-            f.bytes.push(0);
-        }
+        // The lyrics text, then the copyright strip, each tag 0 (absent) or 2
+        // (styled owned text; tag 1 was removed in M1-05g2).
+        put_text(&mut f.bytes, cue.text());
+        put_text(&mut f.bytes, cue.footer());
         f.len = f.bytes.len();
         if f.len - HEADER > MAX_RESOURCE_BODY {
             return Err(invalid());
@@ -340,81 +301,16 @@ impl Frame {
                 },
                 _ => return Err(invalid()),
             };
-            let text = match payload.byte()? {
-                0 => None,
-                // Tag 1 (unstyled text) was removed with M1-05g2; both ends of
-                // the pipe build from the same revision, so reject it outright.
-                1 => return Err(invalid()),
-                2 => {
-                    let version = payload.version()?;
-                    let face_index = payload.u32()?;
-                    let size = u16::from_le_bytes(payload.take(2)?.try_into().unwrap());
-                    let color: [u8; 3] = payload.take(3)?.try_into().unwrap();
-                    let align = match payload.byte()? {
-                        0 => crate::format::Align::Left,
-                        1 => crate::format::Align::Center,
-                        2 => crate::format::Align::Right,
-                        _ => return Err(invalid()),
-                    };
-                    let valign = match payload.byte()? {
-                        0 => crate::format::VAlign::Top,
-                        1 => crate::format::VAlign::Middle,
-                        2 => crate::format::VAlign::Bottom,
-                        _ => return Err(invalid()),
-                    };
-                    let flags = payload.byte()?;
-                    if flags > 0b1111 {
-                        return Err(invalid());
-                    }
-                    let outline = match payload.byte()? {
-                        0 => None,
-                        1 => Some(crate::scene::OutlineStyle {
-                            color: payload.take(3)?.try_into().unwrap(),
-                            size: payload.byte()?,
-                            opacity: payload.byte()?,
-                        }),
-                        _ => return Err(invalid()),
-                    };
-                    let shadow = match payload.byte()? {
-                        0 => None,
-                        1 => Some(crate::scene::ShadowStyle {
-                            color: payload.take(3)?.try_into().unwrap(),
-                            angle: u16::from_le_bytes(payload.take(2)?.try_into().unwrap()),
-                            offset: payload.byte()?,
-                            blur: payload.byte()?,
-                            opacity: payload.byte()?,
-                        }),
-                        _ => return Err(invalid()),
-                    };
-                    let content = std::str::from_utf8(payload.blob(crate::scene::MAX_TEXT_BYTES)?)
-                        .map_err(|_| invalid())?
-                        .to_owned();
-                    let font = payload.blob(crate::scene::MAX_SOURCE_BYTES)?.into();
-                    Some(crate::scene::OwnedText {
-                        content,
-                        font_version: version,
-                        font,
-                        face_index,
-                        font_size: size,
-                        style: crate::scene::TextStyle {
-                            color,
-                            align,
-                            valign,
-                            underline: flags & 1 != 0,
-                            italic: flags & 2 != 0,
-                            synth_bold: flags & 4 != 0,
-                            synth_italic: flags & 8 != 0,
-                            outline,
-                            shadow,
-                        },
-                    })
-                }
-                _ => return Err(invalid()),
-            };
+            let text = payload.text()?;
+            let footer = payload.text()?;
             if !payload.0.is_empty() {
                 return Err(invalid());
             }
-            PreparedCue::from_owned(version, extent, background, text, caps)
+            let cue = PreparedCue::from_owned(version, extent, background, text, caps);
+            match footer {
+                Some(footer) => cue.and_then(|cue| cue.with_footer(footer)),
+                None => cue,
+            }
         } else {
             PreparedCue::diagnostic_color(version, extent, b[61..65].try_into().unwrap(), caps)
         }
@@ -572,6 +468,127 @@ impl<'a> Reader<'a> {
         }
         self.take(size)
     }
+    /// One optional styled text; see `put_text`.
+    fn text(&mut self) -> io::Result<Option<crate::scene::OwnedText>> {
+        match self.byte()? {
+            0 => Ok(None),
+            // Tag 1 (unstyled text) was removed with M1-05g2; both ends of
+            // the pipe build from the same revision, so reject it outright.
+            2 => {
+                let version = self.version()?;
+                let face_index = self.u32()?;
+                let size = u16::from_le_bytes(self.take(2)?.try_into().unwrap());
+                let color: [u8; 3] = self.take(3)?.try_into().unwrap();
+                let align = match self.byte()? {
+                    0 => crate::format::Align::Left,
+                    1 => crate::format::Align::Center,
+                    2 => crate::format::Align::Right,
+                    _ => return Err(invalid()),
+                };
+                let valign = match self.byte()? {
+                    0 => crate::format::VAlign::Top,
+                    1 => crate::format::VAlign::Middle,
+                    2 => crate::format::VAlign::Bottom,
+                    _ => return Err(invalid()),
+                };
+                let flags = self.byte()?;
+                if flags > 0b1111 {
+                    return Err(invalid());
+                }
+                let outline = match self.byte()? {
+                    0 => None,
+                    1 => Some(crate::scene::OutlineStyle {
+                        color: self.take(3)?.try_into().unwrap(),
+                        size: self.byte()?,
+                        opacity: self.byte()?,
+                    }),
+                    _ => return Err(invalid()),
+                };
+                let shadow = match self.byte()? {
+                    0 => None,
+                    1 => Some(crate::scene::ShadowStyle {
+                        color: self.take(3)?.try_into().unwrap(),
+                        angle: u16::from_le_bytes(self.take(2)?.try_into().unwrap()),
+                        offset: self.byte()?,
+                        blur: self.byte()?,
+                        opacity: self.byte()?,
+                    }),
+                    _ => return Err(invalid()),
+                };
+                let content = std::str::from_utf8(self.blob(crate::scene::MAX_TEXT_BYTES)?)
+                    .map_err(|_| invalid())?
+                    .to_owned();
+                let font = self.blob(crate::scene::MAX_SOURCE_BYTES)?.into();
+                Ok(Some(crate::scene::OwnedText {
+                    content,
+                    font_version: version,
+                    font,
+                    face_index,
+                    font_size: size,
+                    style: crate::scene::TextStyle {
+                        color,
+                        align,
+                        valign,
+                        underline: flags & 1 != 0,
+                        italic: flags & 2 != 0,
+                        synth_bold: flags & 4 != 0,
+                        synth_italic: flags & 8 != 0,
+                        outline,
+                        shadow,
+                    },
+                }))
+            }
+            _ => Err(invalid()),
+        }
+    }
+}
+/// Tag 0 for no text, else tag 2 and the styled text.
+fn put_text(bytes: &mut Vec<u8>, text: Option<&crate::scene::PreparedText>) {
+    let Some(text) = text else {
+        bytes.push(0);
+        return;
+    };
+    let style = text.style();
+    bytes.push(2);
+    put_version(bytes, text.font_version());
+    bytes.extend_from_slice(&text.face_index().to_le_bytes());
+    bytes.extend_from_slice(&text.font_size().to_le_bytes());
+    bytes.extend_from_slice(&style.color);
+    bytes.push(style.align as u8);
+    bytes.push(style.valign as u8);
+    let mut flags = 0u8;
+    if style.underline {
+        flags |= 1;
+    }
+    if style.italic {
+        flags |= 2;
+    }
+    if style.synth_bold {
+        flags |= 4;
+    }
+    if style.synth_italic {
+        flags |= 8;
+    }
+    bytes.push(flags);
+    match style.outline {
+        Some(outline) => {
+            bytes.push(1);
+            bytes.extend_from_slice(&outline.color);
+            bytes.extend_from_slice(&[outline.size, outline.opacity]);
+        }
+        None => bytes.push(0),
+    }
+    match style.shadow {
+        Some(shadow) => {
+            bytes.push(1);
+            bytes.extend_from_slice(&shadow.color);
+            bytes.extend_from_slice(&shadow.angle.to_le_bytes());
+            bytes.extend_from_slice(&[shadow.offset, shadow.blur, shadow.opacity]);
+        }
+        None => bytes.push(0),
+    }
+    put_blob(bytes, text.content().as_bytes());
+    put_blob(bytes, text.font());
 }
 fn put_stamp(b: &mut [u8], stamp: Stamp) {
     b[..16].copy_from_slice(&stamp.epoch.0.to_le_bytes());

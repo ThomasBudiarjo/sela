@@ -748,6 +748,7 @@ impl Operator {
             caps,
             sizing: self.sizing,
             background,
+            footer: item.copyright.clone(),
         };
         let sizing = job.sizing;
         if self.cue_preparer.is_none() {

@@ -62,6 +62,9 @@ pub struct CueJob {
     pub sizing: Sizing,
     /// Already fitted to `extent` by the image worker, or a plain color.
     pub background: PreparedBackground,
+    /// The song's copyright strip (`slides::copyright_strip`), drawn on every
+    /// slide of the item; `None` for a song without copyright text.
+    pub footer: Option<Arc<str>>,
 }
 
 pub struct Built {
@@ -318,7 +321,13 @@ impl CapCache {
         {
             return *cap;
         }
-        let cap = slides::size_cap(&job.slides, &job.resolved, job.extent, job.sizing);
+        let cap = slides::size_cap_with_footer(
+            &job.slides,
+            &job.resolved,
+            job.extent,
+            job.sizing,
+            job.footer.as_deref(),
+        );
         self.0 = Some((job.item, job.extent, job.sizing, job.resolved.clone(), cap));
         cap
     }
@@ -335,9 +344,10 @@ impl CueJob {
         else {
             return Err(PrepareError::InvalidScene);
         };
-        let cue = slides::cue(
+        let cue = slides::cue_with_footer(
             self.version,
             slide,
+            self.footer.as_deref(),
             face,
             self.extent,
             self.caps,

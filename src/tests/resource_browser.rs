@@ -16,6 +16,8 @@ fn library_of(dir: &tempfile::TempDir, titles: &[String]) -> std::path::PathBuf 
                     authors: String::new(),
                     copyright: String::new(),
                     license: String::new(),
+                    administrator: String::new(),
+                    song_number: String::new(),
                     variants: Vec::new(),
                     sections: vec![Section {
                         id: SectionId::allocate(),

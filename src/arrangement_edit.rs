@@ -139,6 +139,8 @@ mod tests {
             authors: String::new(),
             copyright: String::new(),
             license: String::new(),
+            administrator: String::new(),
+            song_number: String::new(),
             sections: vec![
                 section("Verse 1", "v1", 1),
                 section("Verse 2", "v2", 2),

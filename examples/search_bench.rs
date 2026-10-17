@@ -117,6 +117,8 @@ fn song(rng: &mut Rng, words: &[String]) -> Song {
             capitalized(word(rng, words))
         ),
         license: String::new(),
+        administrator: String::new(),
+        song_number: String::new(),
         sections,
         variants: Vec::new(),
         master: None,

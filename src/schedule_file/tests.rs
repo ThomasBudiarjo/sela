@@ -9,6 +9,8 @@ fn song(title: &str) -> Song {
         authors: "Original 作者".into(),
         copyright: "© test".into(),
         license: "test-only".into(),
+        administrator: String::new(),
+        song_number: String::new(),
         variants: vec![Variant {
             id: VariantId(Id([9; 16])),
             name: "Short".into(),
@@ -67,6 +69,28 @@ fn round_trips_order_titles_and_content() {
 }
 
 #[test]
+fn song_properties_round_trip_and_older_files_open_without_them() {
+    let mut with = item(1, "Props");
+    with.song.administrator = "Acme Music".into();
+    with.song.song_number = "7654321".into();
+    let original = file(vec![with, item(2, "Plain")]);
+    let v = value(&original);
+    assert_eq!(v["items"][0]["song"]["administrator"], "Acme Music");
+    assert!(v["items"][1]["song"].get("administrator").is_none());
+    assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
+
+    let mut old = value(&file(vec![item(2, "Plain")]));
+    old["version"] = 2.into();
+    let opened = decode(old.to_string().as_bytes()).unwrap();
+    assert_eq!(opened.items[0].song.song_number, "");
+    old["items"][0]["song"]["song_number"] = "12x".into();
+    assert!(
+        decode(old.to_string().as_bytes()).is_err(),
+        "invalid number"
+    );
+}
+
+#[test]
 fn round_trips_empty_schedule() {
     let original = file(Vec::new());
     assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
@@ -76,7 +100,7 @@ fn round_trips_empty_schedule() {
 fn document_declares_format_and_version() {
     let v = value(&file(vec![item(1, "A")]));
     assert_eq!(v["format"], "sela-schedule");
-    assert_eq!(v["version"], 2);
+    assert_eq!(v["version"], 3);
     assert_eq!(v["items"][0]["kind"], "song");
     assert_eq!(v["items"][0]["song"]["title"], "A");
 }
@@ -148,8 +172,8 @@ fn extension_is_added_once() {
 #[test]
 fn newer_version_is_rejected_with_its_number() {
     let mut v = value(&file(Vec::new()));
-    v["version"] = 3.into();
-    assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Newer(3)));
+    v["version"] = 4.into();
+    assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Newer(4)));
     v["version"] = 0.into();
     assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Corrupt));
 }
