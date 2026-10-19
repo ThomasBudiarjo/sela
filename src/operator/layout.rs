@@ -104,6 +104,7 @@ impl Render for Operator {
             log.tick();
         }
         self.focus_pending_dialog(window, cx);
+        self.focus_live_if_pending(window, cx);
         self.resume_guarded(window, cx);
         self.sync_window_title(window);
         if self.activation.is_none() {
@@ -182,13 +183,10 @@ impl Render for Operator {
                 this.toggle_mask(Mask::Clear);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &GoLive, window, cx| {
-                this.go_live();
+            .on_action(cx.listener(|this, _: &GoLive, _, cx| {
                 // Later PageDown/PageUp, arrows and label keys then drive
                 // Live, which is how a presenter remote advances.
-                if this.live.is_some() {
-                    this.live_focus.focus(window, cx);
-                }
+                this.go_live_requested();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &LiveNextSlide, _, cx| {

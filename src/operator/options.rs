@@ -168,6 +168,20 @@ impl SettingsState {
         ));
     }
 
+    /// Size of the monitor the audience opens on, resolved like
+    /// `monitor_arg`: the saved name, else the first non-primary monitor.
+    pub(crate) fn audience_extent(&self) -> Option<Extent> {
+        let list = self.monitors.as_deref()?;
+        let saved = self.current.output_monitor.as_deref();
+        let monitor = saved
+            .and_then(|name| list.iter().find(|m| m.name == name))
+            .or_else(|| list.iter().find(|m| !m.primary))?;
+        Some(Extent {
+            width: monitor.width,
+            height: monitor.height,
+        })
+    }
+
     fn monitor_missing(&self) -> bool {
         settings::monitor_missing(
             self.current.output_monitor.as_deref(),

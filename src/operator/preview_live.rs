@@ -256,6 +256,14 @@ impl Operator {
         self.output_extent.unwrap_or(NOMINAL_EXTENT)
     }
 
+    /// What an import fits to: the connected output, else the configured
+    /// audience monitor, else the nominal size.
+    pub(crate) fn import_extent(&self) -> Extent {
+        self.output_extent
+            .or_else(|| self.settings.audience_extent())
+            .unwrap_or(NOMINAL_EXTENT)
+    }
+
     /// Backgrounds wanted soon, most urgent first: a deferred cue, the live
     /// slide, the previewed slide, then both neighbours of each. Capped at
     /// what the cache holds for this extent, so prefetching never evicts its
@@ -614,6 +622,7 @@ impl Operator {
 
     pub(crate) fn toggle_output(&mut self) {
         self.cancel_cues();
+        self.assets.drop_held();
         self.output_session += 1;
         if self.output.take().is_some() {
             self.live_message = Some(t!(Msg::LiveOutputOff).into());
@@ -639,6 +648,7 @@ impl Operator {
     pub(crate) fn go_live(&mut self) {
         // Refused or not, this is the newest explicit request.
         self.unmask.cancel();
+        self.assets.drop_held();
         let Some(item) = self.preview.clone() else {
             self.live_message = Some(t!(Msg::LiveSelectSongFirst).into());
             return;
@@ -892,6 +902,7 @@ impl Operator {
     pub(crate) fn cancel_cues(&mut self) {
         self.pending_cues.clear();
         self.deferred_send = None;
+        self.assets.drop_held();
         if let Some(preparer) = &self.cue_preparer {
             preparer.cancel(Lane::Live);
         }

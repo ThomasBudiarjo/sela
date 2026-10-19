@@ -109,6 +109,23 @@ fn page_keys_in_live_move_between_schedule_items_and_stop(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn the_go_live_button_hands_the_page_keys_to_live(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = live_hymn(cx, &dir);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "hymn verse", |o| {
+        on_screen(o, "Signal Hymn · Verse 1")
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("pagedown");
+    settle(&mut cx, &operator, "canticle", |o| on_screen(o, QUIET));
+    cx.simulate_keystrokes("pageup");
+    settle(&mut cx, &operator, "back to the hymn", |o| {
+        on_screen(o, "Signal Hymn · Verse 1")
+    });
+}
+
+#[gpui::test]
 fn label_keys_jump_live_and_ignore_unknown_labels_and_text_fields(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (mut cx, operator) = live_hymn(cx, &dir);

@@ -51,7 +51,7 @@ impl Operator {
             self.media_message = Some(t!(Msg::NoProfileImages).into());
             return;
         };
-        match worker.submit(images::Job::Import(path, self.background_extent())) {
+        match worker.submit(images::Job::Import(path, self.import_extent())) {
             Ok(()) => {
                 self.media_message = Some(t!(Msg::ImportingName, name = name));
                 self.assets.importing = Some(name);

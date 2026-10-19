@@ -4756,6 +4756,242 @@ mod preflight_ui {
         });
     }
 
+    /// The saved schedule opened, its report dismissed, output connected and
+    /// the only item previewed.
+    fn previewed_with_output(
+        cx: &mut TestAppContext,
+        dir: &tempfile::TempDir,
+    ) -> (VisualTestContext, Entity<Operator>, Fixture) {
+        let fixture = vanished_image(dir);
+        let (mut cx, operator, _) = with_library(cx, Some(fixture.library.clone()), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        open_saved(&mut cx, &operator, &fixture.schedule);
+        settle(&mut cx, &operator, "report", report_shown);
+        click(&mut cx, "dialog-cancel");
+        click(&mut cx, "live-output");
+        settle(&mut cx, &operator, "output connection", connected);
+        cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+        cx.simulate_keystrokes("down");
+        settle(&mut cx, &operator, "preview", |o| {
+            o.preview.as_ref().is_some_and(|p| p.resolved.is_some())
+        });
+        (cx, operator, fixture)
+    }
+
+    /// Replaces the check worker with one that stays stuck until the
+    /// returned gate is cleared, and fills its queue.
+    fn stalled_worker(
+        cx: &mut VisualTestContext,
+        operator: &Entity<Operator>,
+        dir: &tempfile::TempDir,
+    ) -> Arc<std::sync::atomic::AtomicBool> {
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut worker = sela::preflight::Worker::start_gated(
+            dir.path().to_path_buf(),
+            sela::fonts::shared(),
+            Some(gate.clone()),
+        )
+        .unwrap();
+        // The thread takes one request before it stalls, so a first Busy may
+        // be followed by room; two refusals around a pause mean it is full.
+        let mut refused = 0;
+        for _ in 0..50 {
+            if matches!(
+                worker.check_images(Vec::new()),
+                Err(sela::images::Error::Busy)
+            ) {
+                refused += 1;
+                if refused == 2 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(30));
+            } else {
+                refused = 0;
+            }
+        }
+        assert_eq!(refused, 2, "the queue filled up");
+        operator.update(cx, |o, _| o.assets.worker = Some(worker));
+        gate
+    }
+
+    fn live_focused(cx: &mut VisualTestContext, operator: &Entity<Operator>) -> bool {
+        cx.update(|window, cx| operator.read(cx).live_focus.is_focused(window))
+    }
+
+    #[gpui::test]
+    fn locate_shows_the_thumbnail_without_reselecting(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = vanished_image(&dir);
+        let (mut cx, operator, _) = with_library(cx, Some(fixture.library.clone()), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        open_saved(&mut cx, &operator, &fixture.schedule);
+        settle(&mut cx, &operator, "report", report_shown);
+        click(&mut cx, "dialog-cancel");
+        cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+        cx.simulate_keystrokes("down");
+        settle(&mut cx, &operator, "thumbnail failed while missing", |o| {
+            o.tile_images.iter().any(|(_, shown)| shown.is_none())
+        });
+
+        let thumbnail = |o: &Operator| {
+            o.preview
+                .as_ref()
+                .and_then(|p| p.slides.first())
+                .and_then(|slide| o.thumbnail(slide))
+        };
+        assert!(operator.read_with(&cx, |o, _| thumbnail(o).is_none()));
+        let reopened = report_shown;
+        cx.update(|window, cx| operator.update(cx, |o, cx| o.review_files(window, cx)));
+        settle(&mut cx, &operator, "report", reopened);
+        click(&mut cx, "locate-0");
+        let original = fixture.original.clone();
+        cx.simulate_path_prompt_response(|_| Some(vec![original.clone()]));
+        settle(&mut cx, &operator, "relinked", |o| {
+            o.assets.note.as_ref().is_some_and(|(_, failed)| !*failed)
+        });
+        settle(&mut cx, &operator, "thumbnail landed", |o| {
+            thumbnail(o).is_some()
+        });
+    }
+
+    #[gpui::test]
+    fn go_live_with_a_full_check_queue_still_asks(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, _) = previewed_with_output(cx, &dir);
+        let gate = stalled_worker(&mut cx, &operator, &dir);
+        let sent = operator.read_with(&cx, |o, _| submitted(o));
+
+        click(&mut cx, "go-live");
+        cx.run_until_parked();
+        operator.read_with(&cx, |o, _| {
+            assert!(o.assets.is_held(), "held, not sent black");
+            assert_eq!(o.dialog, None);
+            assert_eq!(submitted(o), sent, "nothing reached the audience");
+        });
+
+        gate.store(false, std::sync::atomic::Ordering::Release);
+        settle(&mut cx, &operator, "warning", |o| {
+            o.dialog == Some(Dialog::GoLiveMissing)
+        });
+        assert_eq!(operator.read_with(&cx, |o, _| submitted(o)), sent);
+    }
+
+    #[gpui::test]
+    fn a_held_check_never_overrides_a_newer_command(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, _) = previewed_with_output(cx, &dir);
+        let gate = stalled_worker(&mut cx, &operator, &dir);
+        click(&mut cx, "go-live");
+        cx.run_until_parked();
+        assert!(operator.read_with(&cx, |o, _| o.assets.is_held()));
+
+        // A newer Go Live on an item without an image goes out at once.
+        operator.update(&mut cx, |o, _| {
+            let mut plain = o.preview.clone().unwrap();
+            plain.slides = plain
+                .slides
+                .iter()
+                .cloned()
+                .map(|mut slide| {
+                    slide.background = None;
+                    slide
+                })
+                .collect();
+            o.preview = Some(plain);
+            o.go_live();
+            assert!(!o.assets.is_held(), "the newer Go Live replaced the hold");
+        });
+        gate.store(false, std::sync::atomic::Ordering::Release);
+        for _ in 0..20 {
+            operator.update(&mut cx, |o, cx| o.poll(cx));
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        operator.read_with(&cx, |o, _| assert_eq!(o.dialog, None, "no stale warning"));
+    }
+
+    #[gpui::test]
+    fn output_toggle_and_cue_cancel_drop_a_held_go_live(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, _) = previewed_with_output(cx, &dir);
+        let _gate = stalled_worker(&mut cx, &operator, &dir);
+        click(&mut cx, "go-live");
+        cx.run_until_parked();
+        assert!(operator.read_with(&cx, |o, _| o.assets.is_held()));
+        operator.update(&mut cx, |o, _| o.cancel_cues());
+        assert!(!operator.read_with(&cx, |o, _| o.assets.is_held()));
+
+        click(&mut cx, "go-live");
+        cx.run_until_parked();
+        assert!(operator.read_with(&cx, |o, _| o.assets.is_held()));
+        operator.update(&mut cx, |o, _| o.toggle_output());
+        assert!(!operator.read_with(&cx, |o, _| o.assets.is_held()));
+    }
+
+    #[gpui::test]
+    fn go_live_anyway_hands_focus_to_live(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, _) = previewed_with_output(cx, &dir);
+        click(&mut cx, "go-live");
+        settle(&mut cx, &operator, "warning", |o| {
+            o.dialog == Some(Dialog::GoLiveMissing)
+        });
+        click(&mut cx, "dialog-confirm");
+        settle(&mut cx, &operator, "live anyway", |o| {
+            o.on_screen() == Some("Pinned Hymn · Verse 1")
+        });
+        cx.run_until_parked();
+        assert!(live_focused(&mut cx, &operator));
+    }
+
+    #[gpui::test]
+    fn a_clean_delayed_check_hands_focus_to_live(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, fixture) = previewed_with_output(cx, &dir);
+        cx.update(|window, cx| operator.update(cx, |o, cx| o.review_files(window, cx)));
+        click(&mut cx, "locate-0");
+        let original = fixture.original.clone();
+        cx.simulate_path_prompt_response(|_| Some(vec![original.clone()]));
+        settle(&mut cx, &operator, "relinked", |o| {
+            o.assets.note.as_ref().is_some_and(|(_, failed)| !*failed)
+        });
+        click(&mut cx, "dialog-cancel");
+        cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+        click(&mut cx, "go-live");
+        settle(&mut cx, &operator, "live after the check", |o| {
+            o.on_screen() == Some("Pinned Hymn · Verse 1")
+        });
+        cx.run_until_parked();
+        assert!(live_focused(&mut cx, &operator));
+    }
+
+    #[gpui::test]
+    fn import_with_output_off_fits_the_configured_monitor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let library = library_with_song(&dir);
+        let (mut cx, operator, _) = with_library(cx, Some(library), "apply");
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        operator.update(&mut cx, |o, _| {
+            let monitor = |name: &str, primary| sela::settings::MonitorInfo {
+                name: name.into(),
+                width: if primary { 2560 } else { 1280 },
+                height: if primary { 1440 } else { 720 },
+                x: 0,
+                y: 0,
+                primary,
+            };
+            o.settings.monitors = Some(vec![monitor("A", true), monitor("B", false)]);
+            assert!(o.output.is_none());
+            assert_eq!(
+                o.import_extent(),
+                sela::scene::Extent {
+                    width: 1280,
+                    height: 720
+                }
+            );
+        });
+    }
+
     fn big_jpeg(path: &std::path::Path) {
         image::RgbImage::from_pixel(6000, 4000, image::Rgb([40, 90, 160]))
             .save(path)

@@ -311,6 +311,17 @@ impl Worker {
 
     /// `start` with an explicit font store (tests, other catalogs).
     pub fn start_with(profile: PathBuf, fonts: &'static Fonts) -> io::Result<Self> {
+        Self::start_gated(profile, fonts, None)
+    }
+
+    /// `start_with` whose thread waits while `hold` is true before each
+    /// request: lets tests keep the queue full without sleeping.
+    #[doc(hidden)]
+    pub fn start_gated(
+        profile: PathBuf,
+        fonts: &'static Fonts,
+        hold: Option<Arc<AtomicBool>>,
+    ) -> io::Result<Self> {
         let (requests, incoming) = mpsc::sync_channel::<(u64, Request)>(2);
         let (outgoing, replies) = mpsc::sync_channel(2);
         let latest = Arc::new(AtomicU64::new(0));
@@ -319,6 +330,9 @@ impl Worker {
             .name("sela-preflight".into())
             .spawn(move || {
                 while let Ok((generation, request)) = incoming.recv() {
+                    while hold.as_ref().is_some_and(|h| h.load(Ordering::Acquire)) {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
                     let reply = match request {
                         Request::Check(songs) => {
                             // Greater, not unequal: the caller publishes a

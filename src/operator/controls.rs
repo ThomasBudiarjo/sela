@@ -271,7 +271,7 @@ impl Operator {
                 self.open_editor(None, cx);
             }
             Control::LiveOutput => self.toggle_output(),
-            Control::GoLive => self.go_live(),
+            Control::GoLive => self.go_live_requested(),
             Control::Previous => self.step_live(false),
             Control::Next => self.step_live(true),
             Control::Logo => self.toggle_mask(Mask::Logo),

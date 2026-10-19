@@ -15,7 +15,9 @@ const LOCATE_TAB_INDEX: isize = DIALOG_TAB_INDEX + 10;
 
 /// A Go Live waiting for its item's images to be checked.
 struct HeldGoLive {
-    generation: u64,
+    /// `None` while the check is not yet queued (the queue was full).
+    generation: Option<u64>,
+    refs: Vec<ImageRef>,
     item: Item,
     index: usize,
 }
@@ -36,6 +38,9 @@ pub(crate) struct Assets {
     pub(crate) note: Option<(String, bool)>,
     /// A dialog opened from `poll` takes focus on the next render.
     focus_dialog: bool,
+    /// A Go Live was sent or is waiting on its check; the next render hands
+    /// focus to the Live pane once something is live.
+    focus_live_pending: bool,
     /// File name of the import in flight.
     pub(crate) importing: Option<String>,
     /// What Sela did to the last imported file, one sentence each.
@@ -92,6 +97,17 @@ impl Assets {
     pub(crate) fn needs_review(&self) -> bool {
         self.report.as_ref().is_some_and(attention)
     }
+
+    /// A newer explicit Live command supersedes a Go Live waiting on its check.
+    pub(crate) fn drop_held(&mut self) {
+        self.held = None;
+        self.held_problems.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_held(&self) -> bool {
+        self.held.is_some()
+    }
 }
 
 impl Operator {
@@ -138,6 +154,35 @@ impl Operator {
         }
     }
 
+    /// Both Go Live paths (key and button) end here, so a presenter remote's
+    /// PageDown/PageUp drive Live afterwards.
+    pub(crate) fn go_live_requested(&mut self) {
+        self.go_live();
+        if self.live.is_some() || self.assets.held.is_some() {
+            self.assets.focus_live_pending = true;
+        }
+    }
+
+    /// Called from `render`: waits while a Go Live is still being checked or
+    /// a dialog is open, and never takes focus from a text field.
+    pub(crate) fn focus_live_if_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.assets.focus_live_pending || self.dialog.is_some() {
+            return;
+        }
+        if self.live.is_none() {
+            self.assets.focus_live_pending = self.assets.held.is_some();
+            return;
+        }
+        self.assets.focus_live_pending = false;
+        let typing = window
+            .context_stack()
+            .iter()
+            .any(|context| context.contains("SelaTextInput"));
+        if !typing {
+            self.live_focus.focus(window, cx);
+        }
+    }
+
     pub(crate) fn review_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.assets.report.is_some() {
             self.open_dialog(Dialog::Preflight, window, cx);
@@ -145,7 +190,7 @@ impl Operator {
     }
 
     pub(crate) fn poll_preflight(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self.retry_held_check();
         // Two replies are buffered at most; bound the loop anyway.
         for _ in 0..4 {
             let Some(reply) = self
@@ -164,6 +209,7 @@ impl Operator {
                     self.assets.checking = false;
                     if let Some(held) = self.assets.held.take() {
                         self.go_live_item(held.item, held.index);
+                        self.assets.focus_live_pending = true;
                     }
                     break;
                 }
@@ -199,6 +245,10 @@ impl Operator {
                         // The file is back: shown backgrounds and the list
                         // must be rebuilt, and the report refreshed.
                         self.backgrounds.forget_substitutes();
+                        // A thumbnail that failed while the file was gone
+                        // is never requested again unless it is dropped.
+                        self.tile_images.retain(|(_, found)| found.is_some());
+                        self.prefetch_backgrounds();
                         if let Some(worker) = &self.image_worker {
                             let _ = worker.submit(images::Job::Scan);
                         }
@@ -206,12 +256,13 @@ impl Operator {
                     }
                 }
                 Ok(preflight::Reply::ImagesChecked(generation, problems)) => {
-                    if self.assets.held.as_ref().map(|h| h.generation) != Some(generation) {
+                    if self.assets.held.as_ref().and_then(|h| h.generation) != Some(generation) {
                         continue;
                     }
                     if problems.is_empty() {
                         if let Some(held) = self.assets.held.take() {
                             self.go_live_item(held.item, held.index);
+                            self.assets.focus_live_pending = true;
                         }
                     } else {
                         self.assets.held_problems = problems;
@@ -241,13 +292,16 @@ impl Operator {
         if refs.is_empty() {
             return false;
         }
-        // A full queue is not a reason to refuse Go Live: a missing image
-        // already shows black with its warning.
-        let Ok(generation) = worker.check_images(refs) else {
-            return false;
+        // A full queue holds the request unsubmitted; `poll_preflight`
+        // retries, so a missing image is never sent black without the prompt.
+        let generation = match worker.check_images(refs.clone()) {
+            Ok(generation) => Some(generation),
+            Err(images::Error::Busy) => None,
+            Err(_) => return false,
         };
         self.assets.held = Some(HeldGoLive {
             generation,
+            refs,
             item: item.clone(),
             index,
         });
@@ -256,12 +310,31 @@ impl Operator {
         true
     }
 
+    /// Submits a held check that found the queue full. True when it queued.
+    fn retry_held_check(&mut self) -> bool {
+        let assets = &mut self.assets;
+        let (Some(held), Some(worker)) = (&mut assets.held, &mut assets.worker) else {
+            return false;
+        };
+        if held.generation.is_some() {
+            return false;
+        }
+        match worker.check_images(held.refs.clone()) {
+            Ok(generation) => {
+                held.generation = Some(generation);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// The operator chose Go Live anyway: the usual cue, with its black
     /// substitute and warning.
     pub(crate) fn go_live_anyway(&mut self) {
         self.assets.held_problems.clear();
         if let Some(held) = self.assets.held.take() {
             self.go_live_item(held.item, held.index);
+            self.assets.focus_live_pending = true;
         }
     }
 
@@ -269,6 +342,7 @@ impl Operator {
     /// the current scene.
     pub(crate) fn hold_go_live_back(&mut self) {
         self.assets.held = None;
+        self.assets.focus_live_pending = false;
         self.assets.held_problems.clear();
         self.live_message = Some(t!(Msg::GoLiveHeld).into());
     }
