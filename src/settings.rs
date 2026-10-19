@@ -6,6 +6,7 @@
 //! (newer) version is treated as unreadable rather than guessed at.
 
 use crate::i18n::Language;
+use crate::pane_layout::{self, Layout};
 use crate::song_order::{SongOrder, SongSort};
 use std::{
     io::Write,
@@ -38,6 +39,16 @@ pub struct Settings {
     /// Songs list order (`song_sort`, `song_sort_descending`; keys added
     /// within version 1, written only when not the default).
     pub song_order: SongOrder,
+    /// Splitters, Resources collapsed state and window placement saved at the
+    /// last normal close; `None` means the default layout.
+    pub layout: Option<Layout>,
+}
+
+/// The saved layout of `path`, read without side effects. Unreadable or
+/// corrupt files give `None` here; `load` handles the backup and note.
+pub fn peek_layout(path: &Path) -> Option<Layout> {
+    let text = String::from_utf8(std::fs::read(path).ok()?).ok()?;
+    parse(&text).ok()?.layout
 }
 
 impl Settings {
@@ -72,11 +83,15 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
         return Err(ParseError::Version(version));
     }
     let mut settings = Settings::default();
+    let mut layout = pane_layout::Parts::default();
     for (index, line) in lines.enumerate() {
         if line.trim().is_empty() {
             continue;
         }
         let (key, value) = line.split_once('=').ok_or(ParseError::Line(index + 2))?;
+        if layout.accept(key, value) {
+            continue;
+        }
         if key == "output_monitor" && !value.is_empty() {
             settings.output_monitor = Some(value.to_owned());
         } else if key == "language" {
@@ -96,6 +111,7 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
             }
         }
     }
+    settings.layout = layout.finish();
     Ok(settings)
 }
 
@@ -122,6 +138,9 @@ pub fn render(settings: &Settings) -> String {
             .filter(|c| !c.is_control())
             .collect();
         text.push_str(&format!("recent={path}\n"));
+    }
+    if let Some(layout) = &settings.layout {
+        text.push_str(&layout.render());
     }
     text
 }
@@ -376,6 +395,48 @@ mod tests {
             output_monitor: Some(name.into()),
             ..Settings::default()
         }
+    }
+
+    #[test]
+    fn layout_round_trips_and_default_layout_is_not_written() {
+        assert!(!render(&Settings::default()).contains("pane_ratios"));
+        let settings = Settings {
+            layout: Some(Layout {
+                ratios: [2000, 5000, 7000],
+                collapsed: true,
+                window: Some(pane_layout::Placement {
+                    x: 10,
+                    y: 20,
+                    width: 1300,
+                    height: 810,
+                    maximized: false,
+                }),
+            }),
+            ..chosen(r"\\.\DISPLAY6")
+        };
+        assert_eq!(parse(&render(&settings)), Ok(settings));
+    }
+
+    #[test]
+    fn corrupt_layout_keeps_other_settings_and_is_overwritten_by_the_next_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_in(dir.path());
+        std::fs::write(
+            &path,
+            "sela-settings 1\nlanguage=id\npane_ratios=[1,2\nwindow=a,b,c,d\n",
+        )
+        .unwrap();
+        let loaded = load(&path);
+        assert_eq!(loaded.note, None, "no crash, no unreadable-file backup");
+        assert_eq!(loaded.settings.layout, None);
+        assert_eq!(loaded.settings.language, Language::Indonesian);
+        assert_eq!(peek_layout(&path), None);
+        let mut settings = loaded.settings;
+        settings.layout = Some(Layout::default());
+        save(&path, &settings).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("pane_ratios=2400,6200,6200") && !text.contains("[1,2"));
+        assert_eq!(peek_layout(&path), Some(Layout::default()));
     }
 
     #[test]

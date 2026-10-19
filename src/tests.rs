@@ -1804,6 +1804,12 @@ fn quit_and_new_schedule_are_guarded(cx: &mut TestAppContext) {
     let may_close = |cx: &mut VisualTestContext| {
         cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)))
     };
+    // Closing writes the layout first; store it so only the schedule guard is under test.
+    settle(&mut cx, &operator, "settings loaded", |o| {
+        o.settings.loaded_for_test()
+    });
+    cx.update(|window, cx| operator.update(cx, |o, _| o.save_layout(window)));
+    settle(&mut cx, &operator, "layout stored", |o| o.settings_idle());
     assert!(may_close(&mut cx), "a clean schedule closes");
     add_song(&mut cx, &operator, "Signal Hymn");
     assert!(!may_close(&mut cx));
@@ -2395,6 +2401,7 @@ mod settings_ui {
             writer,
             loader: settings::default_loader(),
             schedule_writer: sela::schedule_file::default_writer(),
+            initial_layout: None,
         };
         (config, slot)
     }
@@ -2474,6 +2481,76 @@ mod settings_ui {
             operator.read_with(&vcx, |o, _| o.settings.draft.clone()),
             Some(Some(r"\\.\DISPLAY6".to_string()))
         );
+    }
+
+    #[gpui::test]
+    fn layout_is_saved_on_close_and_restored_on_restart(cx: &mut TestAppContext) {
+        use gpui::{MouseButton, point};
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vcx, operator, _) = start(cx, &dir, settings::default_writer());
+        settle(&mut vcx, &operator, "loaded", |o| {
+            o.settings.loaded_for_test()
+        });
+        let from = vcx.debug_bounds("split-live").unwrap().center();
+        vcx.simulate_mouse_down(from, MouseButton::Left, Default::default());
+        vcx.simulate_mouse_move(
+            from + point(px(-15.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        vcx.simulate_mouse_move(
+            from + point(px(-120.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        vcx.simulate_mouse_up(
+            from + point(px(-120.), px(0.)),
+            MouseButton::Left,
+            Default::default(),
+        );
+        click(&mut vcx, "collapse-resources");
+        let ratios = operator.read_with(&vcx, |o, _| o.ratios);
+        assert_ne!(ratios, [0.24, 0.62, 0.62]);
+        let closed = vcx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+        assert!(!closed, "close waits for the layout write");
+        settle(&mut vcx, &operator, "layout written", |_| {
+            file(&dir).is_some_and(|text| text.contains("pane_ratios="))
+        });
+        let text = file(&dir).unwrap();
+        assert!(text.contains("resources_collapsed=1\n") && text.contains("window="));
+        drop(vcx);
+
+        let saved = settings::peek_layout(&settings::path_in(dir.path()));
+        let (mut config, _) = config(settings::default_writer());
+        config.initial_layout = saved;
+        let (vcx, operator, _) = with_settings(cx, Some(library_with_song(&dir)), "apply", config);
+        let restored = operator.read_with(&vcx, |o, _| (o.ratios, o.collapsed));
+        assert!(restored.1);
+        for (a, b) in restored.0.iter().zip(ratios) {
+            assert!((a - b).abs() < 1e-3, "{a} vs {b}");
+        }
+    }
+
+    #[gpui::test]
+    fn corrupt_layout_starts_with_the_default_layout_and_is_overwritten(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings::path_in(dir.path());
+        std::fs::write(&path, "sela-settings 1\npane_ratios=[oops\nwindow=1,2\n").unwrap();
+        assert_eq!(settings::peek_layout(&path), None);
+        let (mut vcx, operator, _) = start(cx, &dir, settings::default_writer());
+        settle(&mut vcx, &operator, "loaded", |o| {
+            o.settings.loaded_for_test()
+        });
+        assert_eq!(
+            operator.read_with(&vcx, |o, _| (o.ratios, o.collapsed)),
+            ([0.24, 0.62, 0.62], false)
+        );
+        let closed = vcx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+        assert!(!closed);
+        settle(&mut vcx, &operator, "layout rewritten", |_| {
+            file(&dir).is_some_and(|text| text.contains("pane_ratios=2400,6200,6200"))
+        });
+        assert!(!file(&dir).unwrap().contains("oops"));
     }
 
     #[gpui::test]
@@ -2647,8 +2724,13 @@ mod settings_ui {
             assert!(Instant::now() < end, "bounded wait for the write");
             std::thread::sleep(Duration::from_millis(5));
         }
-        vcx.executor().advance_clock(Duration::from_millis(200));
-        vcx.run_until_parked();
+        // The close also writes the layout, a second 2 s write.
+        while windows(&mut vcx) > 0 {
+            assert!(Instant::now() < end, "bounded wait for the layout write");
+            vcx.executor().advance_clock(Duration::from_millis(200));
+            vcx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert_eq!(windows(&mut vcx), 0, "closed once the write landed");
         let text = file(&dir).unwrap();
         assert!(text.contains("DISPLAY6") && text.contains("language=id"));

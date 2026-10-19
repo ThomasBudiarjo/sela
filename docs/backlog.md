@@ -449,15 +449,21 @@ and native-tested. M1-02b/c add contemporary chrome and official-image-directed
 toolbar placement (D-UI-01), including New Song entry. M1-02d adds the observed
 main menu bar (EW8-OBS-010/053: File, Edit, Live, Profiles, View, Help) with
 Alt+mnemonic and mouse access, action-parity dispatch and disabled unbuilt items;
-see the M1-02d section of operator-shell.md. Persisted layout,
-other modes and installed-reference behavior remain parent follow-through.
+see the M1-02d section of operator-shell.md. Persisted layout
+(splitters, Resources collapsed, window placement; `src/pane_layout.rs`) landed
+as `layout-persistence`; other modes and installed-reference behavior remain
+parent follow-through.
 
 - [x] Inspect relevant current GPUI split-pane/list/focus code and record references.
 - [ ] Implement Schedule/Preview/Live/Resources positions and observed pane sizing,
   minimum sizes, splitters and persisted geometry with original light-mode assets.
 - [ ] Implement observed separate/combined/contiguous modes; add child tickets if
   any mode needs a materially different data model, without dropping that mode.
-- [ ] Handle resize, small laptop viewport, mixed DPI and restored/offscreen windows.
+- [x] Persist splitter geometry, Resources collapsed state and window placement
+  in `settings.txt`; offscreen/missing-monitor placement moves to the primary
+  monitor; corrupt layout falls back to defaults (VAL-SHELL-008..010).
+- [ ] Handle resize, small laptop viewport, mixed DPI and restored/offscreen windows
+  (offscreen restore done; mixed-DPI placement and small laptop viewport open).
 - [ ] Inspect screenshots of each layout, collapsed/minimum states and empty/error
   states; compare interaction sequences with the reference.
 

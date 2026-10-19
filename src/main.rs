@@ -1,6 +1,6 @@
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, KeyBinding, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
+    WindowBounds, WindowOptions, actions, div, point, prelude::*, px, rgb, size,
 };
 
 actions!(
@@ -303,10 +303,47 @@ fn main() {
             }
             Mode::Operator(library) => library,
         };
-        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+        let layout = library
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .and_then(|profile| sela::settings::peek_layout(&sela::settings::path_in(profile)));
+        let default_bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+        let window_bounds = match layout.and_then(|l| l.window) {
+            Some(saved) => {
+                let primary = cx.primary_display().map(|d| d.id());
+                let displays = cx.displays();
+                let areas: Vec<_> = displays
+                    .iter()
+                    .map(|d| {
+                        let b = d.visible_bounds();
+                        sela::pane_layout::Area {
+                            x: f32::from(b.origin.x).round() as i32,
+                            y: f32::from(b.origin.y).round() as i32,
+                            width: f32::from(b.size.width).round().max(1.) as u32,
+                            height: f32::from(b.size.height).round().max(1.) as u32,
+                        }
+                    })
+                    .collect();
+                let primary = displays
+                    .iter()
+                    .position(|d| Some(d.id()) == primary)
+                    .unwrap_or(0);
+                let fit = sela::pane_layout::fit_placement(saved, &areas, primary);
+                let bounds = Bounds::new(
+                    point(px(fit.x as f32), px(fit.y as f32)),
+                    size(px(fit.width as f32), px(fit.height as f32)),
+                );
+                if fit.maximized {
+                    WindowBounds::Maximized(bounds)
+                } else {
+                    WindowBounds::Windowed(bounds)
+                }
+            }
+            None => WindowBounds::Windowed(default_bounds),
+        };
         if let Err(error) = cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(window_bounds),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Sela — Technical preview".into()),
                     ..Default::default()
@@ -322,6 +359,7 @@ fn main() {
                     writer: sela::settings::default_writer(),
                     loader: sela::settings::default_loader(),
                     schedule_writer: sela::schedule_file::default_writer(),
+                    initial_layout: layout,
                 };
                 let operator = cx.new(|cx| {
                     Operator::with_settings(library, audience_launcher(slot), config, cx)

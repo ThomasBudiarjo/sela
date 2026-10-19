@@ -505,12 +505,13 @@ impl Operator {
             }
         });
         let schedule_writer = config.schedule_writer.clone();
+        let layout = config.initial_layout.unwrap_or_default();
         let settings = SettingsState::start(profile.as_deref(), config, cx);
         Self {
             focus: cx.focus_handle(),
             controls: ControlSet::new(cx),
-            ratios: [0.24, 0.62, 0.62],
-            collapsed: false,
+            ratios: layout.fractions(),
+            collapsed: layout.collapsed,
             tab: 0,
             drag: None,
             activation: None,

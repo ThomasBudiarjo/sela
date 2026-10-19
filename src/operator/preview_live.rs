@@ -17,6 +17,33 @@ fn render_image(rgba: &[u8], extent: Extent) -> Option<Arc<gpui::RenderImage>> {
     )])))
 }
 
+const TILE_BOX_H: f32 = 94.;
+const TILE_BOX_W: f32 = 168. - 8.;
+/// Room left for text inside the tile's border and padding.
+const TILE_TEXT_H: f32 = TILE_BOX_H - 8.;
+const TILE_TEXT_W: f32 = TILE_BOX_W - 12.;
+const TILE_LINE_HEIGHT: f32 = 1.3;
+/// Average glyph advance in em, for the width fit of unshaped tile text.
+const TILE_GLYPH_EM: f32 = 0.6;
+const TILE_MIN_TEXT: f32 = 2.;
+
+/// Text size that fits every line of `text` inside the tile, the same
+/// whole-page rule the audience applies (height by line count, width by the
+/// longest line), never above the regular tile size.
+fn tile_text_size(text: &str) -> f32 {
+    let lines = text.lines().count().max(1) as f32;
+    let widest = text
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(1)
+        .max(1) as f32;
+    TEXT_TILE
+        .min(TILE_TEXT_H / (lines * TILE_LINE_HEIGHT))
+        .min(TILE_TEXT_W / (widest * TILE_GLYPH_EM))
+        .max(TILE_MIN_TEXT)
+}
+
 /// Slide thumbnail: the image background when `thumb` has landed, else the
 /// slide's fill color (black while an image is still loading), under the
 /// slide text; not a rendered audience frame.
@@ -53,7 +80,9 @@ pub(crate) fn tile(
                 .overflow_hidden()
                 .relative()
                 .px_1()
-                .text_size(px(TEXT_TILE))
+                .debug_selector(move || format!("tile-box-{index}"))
+                .text_size(px(tile_text_size(&slide.text)))
+                .line_height(gpui::relative(TILE_LINE_HEIGHT))
                 .text_color(rgb(DARK_TEXT))
                 .children(thumb.map(|image| {
                     gpui::img(image)
@@ -63,12 +92,21 @@ pub(crate) fn tile(
                         .size_full()
                         .object_fit(gpui::ObjectFit::Cover)
                 }))
-                .children(
-                    slide
-                        .text
-                        .lines()
-                        .take(6)
-                        .map(|line| div().text_center().child(line.to_owned())),
+                .child(
+                    div()
+                        .debug_selector(move || format!("tile-text-{index}"))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .whitespace_nowrap()
+                        .children(slide.text.lines().map(|line| {
+                            // An empty line keeps its height in the stack.
+                            div().text_center().child(if line.is_empty() {
+                                " ".to_owned()
+                            } else {
+                                line.to_owned()
+                            })
+                        })),
                 ),
         )
         .child(
@@ -1168,5 +1206,72 @@ impl Operator {
             tiles,
             Some(self.live_focus.clone()),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+
+    struct Host(String);
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let slide = Slide {
+                label: "Verse".into(),
+                text: self.0.clone(),
+                format: Default::default(),
+                background: None,
+            };
+            div().p_4().child(tile(&slide, 0, None, CANVAS, None))
+        }
+    }
+
+    fn lines(count: usize) -> String {
+        (1..=count)
+            .map(|n| format!("Line {n} of the page"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn render_tile(
+        cx: &mut TestAppContext,
+        text: String,
+    ) -> (gpui::Bounds<Pixels>, gpui::Bounds<Pixels>) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Host(text)))
+                .unwrap()
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        (
+            visual.debug_bounds("tile-box-0").expect("box"),
+            visual.debug_bounds("tile-text-0").expect("text"),
+        )
+    }
+
+    #[test]
+    fn tile_text_size_shrinks_with_lines_and_width() {
+        assert_eq!(tile_text_size("one"), TEXT_TILE);
+        assert!(tile_text_size(&lines(14)) < tile_text_size(&lines(4)));
+        assert!(tile_text_size(&"w".repeat(80)) < TEXT_TILE);
+        assert!(tile_text_size(&lines(14)) * TILE_LINE_HEIGHT * 14. <= TILE_TEXT_H + 0.01);
+    }
+
+    #[gpui::test]
+    fn tall_paginated_page_fits_the_whole_tile(cx: &mut TestAppContext) {
+        let (frame, text) = render_tile(cx, lines(14));
+        assert!(
+            text.top() >= frame.top() && text.bottom() <= frame.bottom(),
+            "all 14 lines inside the tile: text {text:?} box {frame:?}"
+        );
+        assert!(text.left() >= frame.left() && text.right() <= frame.right());
+    }
+
+    #[gpui::test]
+    fn short_text_keeps_the_regular_size(cx: &mut TestAppContext) {
+        let (frame, text) = render_tile(cx, "Glory\nto the King".into());
+        assert!(text.bottom() <= frame.bottom() && text.size.height < frame.size.height / 2.);
     }
 }

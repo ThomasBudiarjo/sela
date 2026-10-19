@@ -10,6 +10,7 @@ pub mod images;
 pub mod labels;
 pub mod masks;
 pub mod output;
+pub mod pane_layout;
 pub mod preflight;
 pub mod preparation;
 pub mod scene;

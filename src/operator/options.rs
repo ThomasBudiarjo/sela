@@ -37,6 +37,8 @@ pub(crate) struct SettingsConfig {
     pub(crate) loader: settings::Loader,
     /// Writes `.selaschedule` files on the schedule file worker.
     pub(crate) schedule_writer: sela::schedule_file::Writer,
+    /// Layout read before the window opened, so the first frame already uses it.
+    pub(crate) initial_layout: Option<sela::pane_layout::Layout>,
 }
 
 pub(crate) enum RecentChange {
@@ -63,6 +65,7 @@ impl Default for SettingsConfig {
             writer: settings::default_writer(),
             loader: settings::default_loader(),
             schedule_writer: sela::schedule_file::default_writer(),
+            initial_layout: None,
         }
     }
 }
@@ -146,6 +149,11 @@ impl SettingsState {
         };
         state.sync_slot();
         state
+    }
+
+    #[cfg(test)]
+    pub(crate) fn loaded_for_test(&self) -> bool {
+        self.loaded
     }
 
     #[cfg(test)]
@@ -260,6 +268,38 @@ impl Operator {
         self.save_settings_now();
     }
 
+    /// Writes the current splitters, collapsed state and window placement when
+    /// they differ from the stored layout. Skipped until the initial load
+    /// replied so defaults never overwrite the stored file.
+    pub(crate) fn save_layout(&mut self, window: &Window) {
+        if !self.settings.loaded {
+            return;
+        }
+        let (bounds, maximized) = match window.window_bounds() {
+            WindowBounds::Windowed(bounds) => (Some(bounds), false),
+            WindowBounds::Maximized(bounds) => (Some(bounds), true),
+            WindowBounds::Fullscreen(_) => (None, false),
+        };
+        let stored = self.settings.current.layout;
+        let layout = sela::pane_layout::Layout {
+            ratios: sela::pane_layout::Layout::from_fractions(self.ratios),
+            collapsed: self.collapsed,
+            window: bounds
+                .map(|b| sela::pane_layout::Placement {
+                    x: f32::from(b.origin.x).round() as i32,
+                    y: f32::from(b.origin.y).round() as i32,
+                    width: f32::from(b.size.width).round().max(1.) as u32,
+                    height: f32::from(b.size.height).round().max(1.) as u32,
+                    maximized,
+                })
+                .or(stored.and_then(|l| l.window)),
+        };
+        if stored != Some(layout) {
+            self.settings.current.layout = Some(layout);
+            self.save_settings_now();
+        }
+    }
+
     fn save_settings_now(&mut self) {
         let Some(worker) = &self.settings.worker else {
             return;
@@ -362,6 +402,7 @@ impl Operator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.save_layout(window);
         if self.settings.pending_saves == 0 || self.settings.close_forced {
             return true;
         }
