@@ -46,7 +46,7 @@ neither paths nor SQLite messages nor lyric payloads; don't log Commands/Replies
 
 ## Schema and durable meaning
 
-Current schema 5 uses `application_id=0x53454c41`, `user_version=5`, foreign keys on,
+Current schema 6 uses `application_id=0x53454c41`, `user_version=6`, foreign keys on,
 default rollback journal and synchronous FULL. `songs` tracks head/tombstone;
 `song_revisions` stores immutable original UTF-8 payloads. Encoding is repeated
 little-endian u32 byte-length + UTF-8: title, authors, copyright, license, then
@@ -67,7 +67,7 @@ No automatic garbage collection, library-refresh or cascade deletion exists.
 Snapshot occurrence identity currently is `(schedule ID, revision, position)`;
 stable cross-edit/live selection identity belongs to M1-09, not this storage slice.
 
-Fresh schema 0 initializes schema 5. Existing schema 1, 2, 3 or 4 upgrades only after
+Fresh schema 0 initializes schema 6. Existing schema 1, 2, 3 or 4 upgrades only after
 the verified backup gate documented below, straight to schema 5 behind exactly
 one `<profile>.schema{N}-backup` (`schema1-backup` to `schema4-backup`, N = the
 version found on open). A schema-0 database
@@ -420,7 +420,7 @@ write's immediate transaction (`delete_song` now opens one).
 
 Opening schema 4 publishes the verified `<profile>.schema4-backup` before the
 DDL, then creates the tables, fills them from the head revisions and sets
-`user_version=5` in one transaction. Schemas 1–3 reach 5 in one transaction
+`user_version=6` in one transaction. Schemas 1–3 reach 5 in one transaction
 behind their single backup, and a fresh profile is created at 5. Backup
 conflict, writer lock, DDL conflict (a pre-existing `search_rows`) and
 process abort after the DDL (`SELA_ABORT_MIGRATION_SCHEMA5` test hook) leave
@@ -486,3 +486,7 @@ operator no longer writes them.
   first, deduplicated). The settings format version stays 1: the key is
   additive, older builds ignore it, and a v1 file without the key loads empty
   (covered by a settings test).
+
+## M1-05 residual — schema 6 (song metadata, modified stamp)
+
+Schema 6 (backup schema5-backup, abort hook SELA_ABORT_MIGRATION_SCHEMA6) adds songs.modified INTEGER NOT NULL DEFAULT 0 with index songs_modified, filled from the search_rows.row order so existing libraries keep their Date modified order, and a song_metadata side table (administrator, song number) keyed by song revision. Saves stamp MAX(now_ms, MAX(modified)+1). Sort by Date modified uses the column and survives an FTS rebuild. Limits: administrator 256 chars, song number digits only, up to 12. Schedule files are v3 and carry the copyright footer on prepared cues.

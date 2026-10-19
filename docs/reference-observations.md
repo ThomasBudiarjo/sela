@@ -688,3 +688,11 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 - **EW8-OBS-045, label matching:** EW also matches slide/section text labels; Sela does not index them (recorded gap, docs/search.md and docs/backlog.md).
 - **EW8-OBS-064, Sort by:** Sela offers Title and Date modified with Ascending/Descending; Author, Copyright, Administrator and Song Number are backlog (docs/backlog.md M1-04). The checked direction in EW was unconfirmed, Sela defaults to Ascending. The choices open in place under Sort by instead of a flyout.
 - **EW8-OBS-065, Delete confirmation:** wording and Yes/No with default No follow EW; Esc closes the dialog as No in Sela (EW ignored Esc).
+
+## Song metadata best guesses (song-metadata-fields)
+
+- Copyright footer is drawn on every slide (EW8-OBS-063, first-slide-only option unchecked).
+- Administrator is stored and shown in the Inspector but not drawn in the footer (unobserved).
+- CCLI maps to the Song Number field.
+- Metadata search covers authors, copyright, license, administrator and song number.
+- Close prompt: Yes saves and closes, No discards, Cancel or Esc keeps editing; it is modal.

@@ -114,6 +114,7 @@ fn window_title(title: &str) -> String {
     t!(Msg::EditorWindowTitle, title = title)
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Pending {
     Open,
     Catalog,

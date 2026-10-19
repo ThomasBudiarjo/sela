@@ -19,7 +19,7 @@ Schema 5 adds two tables (see [storage](storage.md#m1-07a--search-index--backed-
 - `song_search`, an FTS5 table with columns `title`, `lyrics` and `metadata`.
   - `lyrics` is every section's lyrics joined by newlines; section labels are
     not indexed.
-  - `metadata` is authors, copyright and license.
+  - `metadata` is authors, copyright, license, administrator and song number (best guess, unobserved scope).
 
 The index holds exactly the nondeleted songs at their head revision. It is
 derived data: it can always be rebuilt from `song_revisions` payloads, and a

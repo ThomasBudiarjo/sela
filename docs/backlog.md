@@ -596,6 +596,7 @@ Follow-ups:
     are selected (Sela keeps the Text pane).
   - Open for the whole ticket: Linux/macOS native checks, IME and screen
     reader qualification, mixed-value display (unobserved).
+- [x] M1-05 residual: song metadata fields (administrator, song number), schema 6 modified stamp, modal editor close prompt (implemented-unqualified).
 - M1-05j Text › Style superscript/subscript and indent (EW8-OBS-028), and
   bullets (EW8-OBS-029). Planned.
 - M1-05k Text › Layout: margins, auto sizing with normalize, word wrap,

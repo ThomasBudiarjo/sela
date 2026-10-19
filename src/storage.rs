@@ -1307,6 +1307,7 @@ fn advance(
     }
 }
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     SaveSong(Option<Version>, Song),
     SaveSchedule(Option<Version>, Schedule),
