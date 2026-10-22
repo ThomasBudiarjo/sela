@@ -1,6 +1,7 @@
 //! Framework-independent preparation and presentation contracts.
 pub mod arrangement;
 pub mod arrangement_edit;
+pub mod autosave;
 pub mod background;
 pub mod delivery;
 pub mod fonts;
@@ -15,6 +16,7 @@ pub mod output;
 pub mod pane_layout;
 pub mod preflight;
 pub mod preparation;
+pub mod profile;
 pub mod scene;
 pub mod schedule;
 pub mod schedule_file;
