@@ -483,7 +483,7 @@ in the `Sela`/`SelaMenuBar` key contexts or calls the same Operator method as
 its toolbar/keyboard equivalent.
 
 - [x] Map observed commands to GPUI actions/key contexts, not global key matching.
-- [x] Modal scope: every dialog (and Options) sits in one centred backdrop; Tab/Shift+Tab wrap inside, pointer and Live shortcuts do not reach the window behind, Esc cancels and returns focus (focus-scopes-resource-browser). The song editor's close prompt is still an inline banner, not a modal: a gap.
+- [x] Modal scope: every dialog (and Options) sits in one centred backdrop; Tab/Shift+Tab wrap inside, pointer and Live shortcuts do not reach the window behind, Esc cancels and returns focus (focus-scopes-resource-browser). The song editor's close prompt is a modal in its window (song-metadata-fields) and blocks all operator pointer and key input while open (fix-sunday-focus-modality); native check open.
 - [ ] Define focus traversal, text-input ownership and selection
   anchors for single, range and multi-selection where observed (Songs list done: Shift/Ctrl click, Shift+arrows/Home/End, Ctrl+A).
 - [ ] Implement next/previous, Go Live and safety bindings in the proper contexts.

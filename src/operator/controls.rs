@@ -46,6 +46,10 @@ pub(crate) enum Control {
     ReviewFiles,
     ItemMenuDuplicate,
     Arrangement,
+    /// The Songs list itself. Its rows are the tab stops; the list holds
+    /// focus after a click below the rows or once the focused row is no
+    /// longer rendered.
+    SongList,
 }
 
 /// First tab index of each focus band. Rows are placed by band so lists of
@@ -57,7 +61,7 @@ pub(crate) const SLIDE_TAB_INDEX: isize = 1000;
 pub(crate) const IMAGE_TAB_INDEX: isize = 2000;
 
 impl Control {
-    pub(crate) const ALL: [Control; 37] = [
+    pub(crate) const ALL: [Control; 38] = [
         Self::ResetLayout,
         Self::Quit,
         Self::CollapseResources,
@@ -95,6 +99,7 @@ impl Control {
         Self::ReviewFiles,
         Self::ItemMenuDuplicate,
         Self::Arrangement,
+        Self::SongList,
     ];
 
     pub(crate) const COUNT: usize = Self::ALL.len();
@@ -135,6 +140,7 @@ impl Control {
                 | Self::ImageMenuLogo
                 | Self::Normalize
                 | Self::AddToSchedule
+                | Self::SongList
         )
     }
 
@@ -146,6 +152,7 @@ impl Control {
             Self::DialogSave => DIALOG_TAB_INDEX + 1,
             Self::DialogConfirm => DIALOG_TAB_INDEX + 2,
             Self::DialogCancel => DIALOG_TAB_INDEX + 3,
+            Self::SongList => SONG_TAB_INDEX,
             _ => 2 * (self.index() as isize + 1),
         }
     }
@@ -162,6 +169,7 @@ impl Control {
             | Self::ItemMenuRemove
             | Self::ItemMenuDuplicate
             | Self::ImageMenuLogo => Role::MenuItem,
+            Self::SongList => Role::List,
             _ => Role::Button,
         }
     }
@@ -190,9 +198,10 @@ pub(crate) struct ControlSet([FocusHandle; Control::COUNT]);
 impl ControlSet {
     pub(crate) fn new(cx: &mut App) -> Self {
         Self(std::array::from_fn(|index| {
+            let control = Control::ALL[index];
             cx.focus_handle()
-                .tab_index(Control::ALL[index].tab_position())
-                .tab_stop(true)
+                .tab_index(control.tab_position())
+                .tab_stop(control != Control::SongList)
         }))
     }
 
@@ -471,7 +480,10 @@ mod tests {
     fn every_control_has_an_exposed_role() {
         for control in Control::ALL {
             assert!(
-                matches!(control.role(), Role::Button | Role::Tab | Role::MenuItem),
+                matches!(
+                    control.role(),
+                    Role::Button | Role::Tab | Role::MenuItem | Role::List
+                ),
                 "{control:?} has no accessibility role"
             );
         }

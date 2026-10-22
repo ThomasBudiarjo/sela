@@ -225,37 +225,31 @@ impl Operator {
             .size_full()
             .flex()
             .flex_col()
-            .child(div().flex_1().min_h_0().child(body))
+            .child(self.song_list_scope(body, cx))
             .children(more)
             .child(search)
             .into_any_element()
     }
 
-    fn song_rows_list(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let count = self.songs().len();
-        let list = uniform_list(
-            "song-rows",
-            count,
-            cx.processor(|this, range: Range<usize>, window, cx| {
-                this.song_visible = range.clone();
-                let started = std::time::Instant::now();
-                let rows = this.build_song_rows(range, window, cx);
-                this.record_row_build(started.elapsed());
-                rows
-            }),
-        )
-        .track_scroll(&self.song_scroll)
-        .flex_1()
-        .min_w_0()
-        .h_full();
+    /// The list element, rendered whenever a library is open, rows or not,
+    /// so it can take focus from a row that scrolled out or was deleted
+    /// (`watch_window`). Its `SelaSongRow` context keeps Page Down paging the
+    /// list; without it Page Down from the list resolves to Go Live.
+    fn song_list_scope(
+        &mut self,
+        body: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         div()
             .id("song-list")
             .role(Role::List)
             .aria_label(t!(Msg::TabSongs))
             .accessibility_id("song-list")
             .debug_selector(|| "song-list".into())
-            .size_full()
-            .flex()
+            .track_focus(&self.controls[Control::SongList])
+            .key_context("SelaControl SelaSongRow")
+            .flex_1()
+            .min_h_0()
             .on_action(cx.listener(|this, _: &NextSongRow, _, cx| {
                 this.move_song(SongStep::Next, false, cx);
             }))
@@ -297,6 +291,30 @@ impl Operator {
                     this.open_dialog(Dialog::DeleteSong(version), window, cx);
                 }
             }))
+            .child(body)
+            .into_any_element()
+    }
+
+    fn song_rows_list(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let count = self.songs().len();
+        let list = uniform_list(
+            "song-rows",
+            count,
+            cx.processor(|this, range: Range<usize>, window, cx| {
+                this.song_visible = range.clone();
+                let started = std::time::Instant::now();
+                let rows = this.build_song_rows(range, window, cx);
+                this.record_row_build(started.elapsed());
+                rows
+            }),
+        )
+        .track_scroll(&self.song_scroll)
+        .flex_1()
+        .min_w_0()
+        .h_full();
+        div()
+            .size_full()
+            .flex()
             .child(list)
             .child(self.song_scrollbar(count, cx))
             .into_any_element()

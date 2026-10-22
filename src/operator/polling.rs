@@ -386,7 +386,12 @@ impl Operator {
         if let Some(index) = deleted_at {
             let remaining = self.songs().len();
             if remaining > 0 {
-                self.select_song(index.min(remaining - 1), cx);
+                let neighbour = index.min(remaining - 1);
+                self.select_song(neighbour, cx);
+                // The confirmation returned focus to the deleted row; the
+                // neighbour takes it over, which also covers a deleted last
+                // row that is no longer rendered.
+                self.reveal_song(neighbour);
             } else {
                 self.song_selection.clear();
             }
