@@ -67,16 +67,45 @@ fn library_changed(cx: &mut App) {
 }
 
 /// Song editor windows whose close prompt is open. The prompt is modal for
-/// the whole app (VAL-FOCUS-001): while this is nonzero the operator window
+/// the whole app (VAL-FOCUS-001): while any is listed the operator window
 /// takes no pointer or key input, so the audience cannot change behind it.
+/// A closed window leaves the list however it closed, so a lost editor can
+/// never keep the operator (and Black) blocked.
 #[derive(Default)]
-pub struct EditorPromptOpen(usize);
+pub struct EditorPromptOpen {
+    windows: Vec<WindowId>,
+    watching: bool,
+}
 
 impl Global for EditorPromptOpen {}
 
 pub fn editor_prompt_open(cx: &App) -> bool {
     cx.try_global::<EditorPromptOpen>()
-        .is_some_and(|open| open.0 > 0)
+        .is_some_and(|open| !open.windows.is_empty())
+}
+
+fn set_editor_prompt(window: WindowId, open: bool, cx: &mut App) {
+    let watch = {
+        let prompts = cx.default_global::<EditorPromptOpen>();
+        prompts.windows.retain(|w| *w != window);
+        if open {
+            prompts.windows.push(window);
+        }
+        !std::mem::replace(&mut prompts.watching, true)
+    };
+    if watch {
+        cx.on_window_closed(|cx, closed| {
+            if editor_prompt_was_open(closed, cx) {
+                set_editor_prompt(closed, false, cx);
+            }
+        })
+        .detach();
+    }
+}
+
+fn editor_prompt_was_open(window: WindowId, cx: &App) -> bool {
+    cx.try_global::<EditorPromptOpen>()
+        .is_some_and(|open| open.windows.contains(&window))
 }
 
 pub fn open(path: PathBuf, cx: &mut App) -> Result<(), String> {
@@ -98,8 +127,10 @@ pub fn open_song(path: PathBuf, version: Option<Version>, cx: &mut App) -> Resul
             ..Default::default()
         },
         |window, cx| {
+            let window_id = window.window_handle().window_id();
             let view = cx.new(|cx| {
                 let mut library = Library::new(path, cx);
+                library.window = Some(window_id);
                 library.open_version = version;
                 library
             });
@@ -577,6 +608,9 @@ pub(crate) struct Library {
     status_is_rejection: bool,
     /// Written only by `set_confirm_close`, which keeps `EditorPromptOpen`.
     confirm_close: bool,
+    /// The editor's own window, set by `open_song`; `None` in tests that
+    /// build a `Library` without one.
+    window: Option<WindowId>,
     /// Focus scope of the close prompt, and where focus returns on Cancel.
     prompt_scope: FocusHandle,
     prompt_return: Option<FocusHandle>,
@@ -701,6 +735,7 @@ impl Library {
             status,
             status_is_rejection,
             confirm_close: false,
+            window: None,
             prompt_scope: cx.focus_handle(),
             prompt_return: None,
             confirm_delete: false,
@@ -965,11 +1000,8 @@ impl Library {
     fn set_confirm_close(&mut self, open: bool, cx: &mut App) {
         if self.confirm_close != open {
             self.confirm_close = open;
-            let count = &mut cx.default_global::<EditorPromptOpen>().0;
-            if open {
-                *count += 1;
-            } else {
-                *count -= 1;
+            if let Some(window) = self.window {
+                set_editor_prompt(window, open, cx);
             }
         }
     }

@@ -113,8 +113,9 @@ limit is dropped with one `LimitReached`.
 
 ### Storage mapping
 
-`to_song` makes one `storage::Section` per slide, carrying its section's
-label, with IDs from `SectionId::allocate`. A non-empty order becomes the
+`to_song` makes one `storage::Section` per slide, with IDs from
+`SectionId::allocate`. The first slide of a section carries its label and the
+others have an empty label (see the shared rules). A non-empty order becomes the
 song's only arrangement, "Arrangement 1". Each order entry expands into all
 slides of its section. License and backgrounds stay empty. The result passes
 `Song::validate`, or `to_song` returns `Error::Invalid`. The caller must

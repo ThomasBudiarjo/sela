@@ -268,3 +268,24 @@ fn dont_save_in_the_editor_close_prompt_unblocks_the_operator(cx: &mut TestAppCo
     click(&mut cx, "mask-black");
     assert!(operator.read_with(&cx, |o, _| o.masks.is_on(Mask::Black)));
 }
+
+#[gpui::test]
+fn an_editor_removed_with_its_prompt_open_unblocks_the_operator(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, mut editor_cx) = live_hymn_beside_a_dirty_editor(cx, &dir);
+    assert!(!editor_cx.simulate_close());
+    assert!(editor_cx.debug_bounds("close-prompt").is_some());
+
+    editor_cx.update(|window, _| window.remove_window());
+    drop(editor_cx);
+    cx.run_until_parked();
+    assert!(editor_windows(&cx).is_empty(), "the editor window is gone");
+    assert!(
+        !cx.update(|_, cx| crate::song_library::editor_prompt_open(cx)),
+        "a closed editor no longer holds the prompt"
+    );
+    click(&mut cx, "mask-black");
+    settle(&mut cx, &operator, "Black after the editor is gone", |o| {
+        o.masks.is_on(Mask::Black)
+    });
+}
