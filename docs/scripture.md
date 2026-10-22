@@ -25,8 +25,12 @@ against the loaded translation.
 
 ## Syntax
 
-A reference is a book name followed by a locator. Case and whitespace never
-matter.
+A reference is a book name followed by a locator. Case does not matter.
+Whitespace may be added or left out anywhere except inside a number
+(`john3:16`, `John 3 : 16 - 4 : 2`). A space never joins numbers, so
+`John 1 2` and `Ps 11 9` are malformed rather than John 12 or Psalm 119. A
+space is not a chapter and verse separator either, because EasyWorship's
+handling of `John 3 16` is unobserved.
 
 | Form | Example | Result |
 | --- | --- | --- |
@@ -47,8 +51,10 @@ matter.
 - A numbered book may be written with or without a space (`1Cor`, `1 Cor`,
   `1 Kor`, `1Kor 13:4`, `1Cor13:4`).
 - A book name may contain spaces, dots, hyphens and apostrophes
-  (`Kisah Para Rasul`, `Hakim-hakim`, `1 Raja-raja`). A hyphen right before
-  the chapter is not part of the name, so `John -3` is malformed.
+  (`Kisah Para Rasul`, `Hakim-hakim`, `1 Raja-raja`). That punctuation is
+  ignored wherever it appears when the name is matched, so `Jo-hn 3` is
+  John 3. A hyphen right before the chapter is not part of the name, so
+  `John -3` is malformed.
 
 Not supported, and reported as an error rather than guessed:
 

@@ -182,8 +182,13 @@ pub fn parse(input: &str) -> Result<Reference, ParseError> {
 
 fn tokens(locator: &str) -> Result<Vec<Token>, ParseError> {
     let mut tokens = Vec::new();
-    let mut chars = locator.chars().filter(|c| !c.is_whitespace()).peekable();
+    // Whitespace separates tokens but is not one, so it ends a number: `John
+    // 1 2` is two numbers (malformed), never chapter 12.
+    let mut chars = locator.chars().peekable();
     while let Some(c) = chars.next() {
+        if c.is_whitespace() {
+            continue;
+        }
         tokens.push(match c {
             ':' | '.' => Token::Separator,
             '-' | '\u{2013}' | '\u{2014}' => Token::Dash,
@@ -477,6 +482,12 @@ mod tests {
             "John 3:0-4",
             ":John 3:16",
             "Jo#hn 3:16",
+            "John 1 2",
+            "Ps 11 9",
+            "Mzm 2 3",
+            "John 3 16-18",
+            "John 3:1 6",
+            "John 3:16-4 2",
         ] {
             assert_eq!(parse(input), Err(ParseError::Malformed), "{input}");
         }
