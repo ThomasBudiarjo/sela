@@ -741,9 +741,13 @@ Truncation hint added in focus-scopes-resource-browser. Open: slide-label search
   which Sela does not index yet, and no filter UI exists in EW 8.0.49.)
 - [x] Define normalization, escaping, ranking and deterministic tie handling;
   keep display text unchanged.
-- [ ] Maintain indexes transactionally on edits/deletes/imports and support rebuild.
+- [x] Maintain indexes transactionally on edits/deletes/imports and support rebuild.
   (Edits, deletes and rebuild done in M1-07a; no importer exists yet, so
-  import maintenance is unproven until M1-14 saves through `save_song`.)
+  import maintenance is unproven until M1-14 saves through `save_song`.
+  import-framework 2026-10-22: `Repository::commit_import` writes every
+  imported song through `write_song`, the `save_song` path, in one transaction;
+  `storage::tests::an_import_commits_every_song_in_one_transaction_and_indexes_it`
+  and the GPUI accented search after import prove it.)
 - [x] Test punctuation, diacritics, Indonesian text, duplicate titles, empty queries,
   corrupt index recovery and canceled requests.
 - [x] Benchmark a synthetic 20k-song corpus, separating database query latency
@@ -927,18 +931,27 @@ Depends on: M1-05, M1-06. Tests: U, I, N, L.
 
 - [x] Pin supported OpenLyrics versions/fields and consult authoritative format docs.
   (0.8/0.9 parser core, `src/import/openlyrics.rs`; docs/import.md "OpenLyrics".)
-- [ ] Map sections, metadata, line breaks and arrangements with loss diagnostics.
+- [x] Map sections, metadata, line breaks and arrangements with loss diagnostics.
   (Parser part done: `ParsedSong` and `import::song::to_song` onto `storage::Song`,
-  with elements and repeated properties reported. Open: dropped attributes such as
-  `lines/@repeat` and `verse/@lang` are not reported yet, see docs/import.md; saving
-  through `save_song` stays with the framework.)
+  with elements and repeated properties reported. import-framework 2026-10-22:
+  dropped attributes (`lines/@repeat`, `verse/@lang`, ...) are reported as
+  `Warning::IgnoredAttribute`, and songs are saved through the `save_song` path
+  (`storage::write_song`); docs/import.md "Import framework".)
 - [x] Disable external entity/network resolution; bound input size and nesting.
-- [ ] Stage import with preview, duplicates policy and transaction/cancel behavior.
-- [ ] Test malformed XML, unknown fields, repeated labels, Unicode and partial batch
+- [x] Stage import with preview, duplicates policy and transaction/cancel behavior.
+  (import-framework 2026-10-22, implemented-unqualified: File › Import ▸ Songs… /
+  Song Folder… (UNOBSERVED placement), bounded `sela-import` worker, staged
+  preview with warnings and per-file errors, duplicate policy Skip / Import as
+  copy / Replace (UNOBSERVED best guess), one-transaction commit, cancel in every
+  phase. GPUI tests and `song-import-x11.py` PASS; Windows script not run, EW
+  behavior unobserved: parity-pending PP-IMPF-01..09.)
+- [x] Test malformed XML, unknown fields, repeated labels, Unicode and partial batch
   failure using redistributable fixtures; keep originals untouched.
   (Parser part done: malformed/hostile XML, unknown fields, repeated labels, Unicode
-  and a bounded property test. Partial batch failure and untouched originals need the
-  framework.)
+  and a bounded property test. import-framework 2026-10-22: partial batch with bad
+  files, cancel mid-import, duplicate choices, rollback on an injected failing save,
+  accented search after import and untouched source files (bytes and mtime) in
+  `src/tests/song_import.rs`; fixtures `tests/fixtures/import/batch/`.)
 
 Acceptance: supported data imports correctly and unsupported content is reported,
 not silently discarded or guessed.
@@ -1387,9 +1400,18 @@ Depends on: M1-13, M1-14, M4-06. Tests: U, I, N, L.
   - [ ] OpenSong song files: parser core `import::opensong` is
     implemented-unqualified (field mapping and line rules in docs/import.md);
     framework hookup, staged preview and native VAL-IMPORT-005 remain.
+    import-framework 2026-10-22: hooked into the M1-14 framework (`.xml`
+    without an OpenLyrics root, or no extension with XML content), staged
+    preview and commit done; Linux native run `song-import-x11.py` PASS
+    (extensionless OpenSong file with a repeated `[C]` tag). Open: Windows
+    `song-import-windows.py`, EW comparison PP-IMPF-02.
   - [ ] ChordPro files: parser core `import::chordpro` is
     implemented-unqualified (directive table in docs/import.md); framework
     hookup, staged preview and native VAL-IMPORT-006 remain.
+    import-framework 2026-10-22: hooked in by extension (`.cho`, `.chopro`,
+    `.chordpro`, `.crd`, `.pro`), staged preview and commit done; Linux
+    native run `song-import-x11.py` PASS. Open: Windows
+    `song-import-windows.py`, EW comparison PP-IMPF-02.
 - [ ] Implement read-only source access, staged preview and transactional import;
   do not bypass encryption/DRM or mutate the original installation's database.
 - [ ] Test cross-version, malformed, partially missing assets and duplicate IDs;

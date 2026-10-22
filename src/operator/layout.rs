@@ -107,6 +107,7 @@ impl Render for Operator {
         self.focus_pending_dialog(window, cx);
         self.focus_live_if_pending(window, cx);
         self.resume_guarded(window, cx);
+        self.song_import_render(window, cx);
         self.sync_window_title(window);
         if self.activation.is_none() {
             self.activation = Some(cx.observe_window_activation(window, |this, window, _| {
@@ -741,6 +742,7 @@ impl Render for Operator {
             .children(self.bar_menu_overlay(cx))
             .children(self.dialog_overlay(cx))
             .children(self.options_overlay(cx))
+            .children(self.import_overlay(window, cx))
             .when(editor_prompt_open(cx), |d| {
                 d.child(div().occlude().absolute().size_full())
             })

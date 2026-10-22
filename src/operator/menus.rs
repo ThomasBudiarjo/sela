@@ -545,6 +545,10 @@ pub(crate) enum BarItem {
     SaveScheduleAs,
     ExportStandalone,
     CloseSchedule,
+    /// File › Import ▸, flattened like New ▸ (UNOBSERVED placement).
+    ImportHeader,
+    ImportSongs,
+    ImportFolder,
     ReportsPrinting,
     Exit,
     Cut,
@@ -587,6 +591,9 @@ impl BarItem {
             BarItem::SaveScheduleAs => Msg::BarSaveScheduleAs,
             BarItem::ExportStandalone => Msg::BarExportStandalone,
             BarItem::CloseSchedule => Msg::BarCloseSchedule,
+            BarItem::ImportHeader => Msg::BarImport,
+            BarItem::ImportSongs => Msg::BarImportSongs,
+            BarItem::ImportFolder => Msg::BarImportFolder,
             BarItem::ReportsPrinting => Msg::BarReportsPrinting,
             BarItem::Exit => Msg::BarExit,
             BarItem::Cut => Msg::BarCut,
@@ -644,6 +651,9 @@ impl BarItem {
             BarItem::SaveScheduleAs => "bar-file-save-as",
             BarItem::ExportStandalone => "bar-file-export",
             BarItem::CloseSchedule => "bar-file-close",
+            BarItem::ImportHeader => "bar-file-import",
+            BarItem::ImportSongs => "bar-file-import-songs",
+            BarItem::ImportFolder => "bar-file-import-folder",
             BarItem::ReportsPrinting => "bar-file-reports",
             BarItem::Exit => "bar-file-exit",
             BarItem::Cut => "bar-edit-cut",
@@ -694,6 +704,7 @@ impl BarItem {
             // Mirrors the toolbar Logo button: usable only when a logo is
             // chosen or already showing.
             BarItem::LogoOnLive => !(operator.logo.is_none() && !operator.masks.is_on(Mask::Logo)),
+            BarItem::ImportSongs | BarItem::ImportFolder => !operator.song_import.active(),
             BarItem::OpenRecent => !operator.recent_schedules().is_empty(),
             BarItem::Recent(index) => (index as usize) < operator.recent_schedules().len(),
             _ => false,
@@ -723,7 +734,10 @@ impl BarItem {
 
     /// Group rows that only head the flattened rows below them.
     fn is_header(self) -> bool {
-        matches!(self, BarItem::NewHeader | BarItem::OpenRecent)
+        matches!(
+            self,
+            BarItem::NewHeader | BarItem::OpenRecent | BarItem::ImportHeader
+        )
     }
 
     /// Rows the keyboard highlight can land on and Enter can run.
@@ -745,6 +759,10 @@ const FILE_MENU: &[BarEntry] = &[
     BarEntry::Item(BarItem::SaveScheduleAs),
     BarEntry::Item(BarItem::ExportStandalone),
     BarEntry::Item(BarItem::CloseSchedule),
+    BarEntry::Separator,
+    BarEntry::Item(BarItem::ImportHeader),
+    BarEntry::Item(BarItem::ImportSongs),
+    BarEntry::Item(BarItem::ImportFolder),
     BarEntry::Separator,
     BarEntry::Item(BarItem::ReportsPrinting),
     BarEntry::Separator,
@@ -976,6 +994,8 @@ impl Operator {
             BarItem::BlackOnLive => self.toggle_mask(Mask::Black),
             BarItem::ClearOnLive => self.toggle_mask(Mask::Clear),
             BarItem::ShowLiveOutput => self.toggle_output(),
+            BarItem::ImportSongs => self.begin_song_import(false, cx),
+            BarItem::ImportFolder => self.begin_song_import(true, cx),
             _ => unreachable!("enabled() gates unbuilt items"),
         }
         cx.notify();

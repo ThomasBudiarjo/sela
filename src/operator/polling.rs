@@ -6,7 +6,8 @@ impl Operator {
             | self.poll_images()
             | self.poll_preflight()
             | self.poll_settings()
-            | self.poll_schedule_files();
+            | self.poll_schedule_files()
+            | self.poll_song_import();
         changed |= self.poll_cues();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());
@@ -210,6 +211,7 @@ impl Operator {
         let mut scanned = None;
         let mut rescan = false;
         let mut deleted_at = None;
+        let mut import_reply = None;
         if let Some(reply) = worker.poll() {
             changed = true;
             match (self.request.take(), reply) {
@@ -327,6 +329,7 @@ impl Operator {
                     self.schedule_message =
                         Some(t!(Msg::ScheduleStorageFailed, error = format!("{error:?}")));
                 }
+                (Some(Request::SongImport(job)), reply) => import_reply = Some((job, reply)),
                 (_, Err(error)) => self.library_error = Some(storage_message(error)),
                 _ => {}
             }
@@ -346,6 +349,8 @@ impl Operator {
                 Some(job)
             } else if let Some(job) = self.queued.take() {
                 Some(job)
+            } else if let Some((command, job)) = self.song_import.take_storage() {
+                Some((command, Request::SongImport(job)))
             } else if let Some(version) = wanted {
                 Some((storage::Command::Song(version), Request::Song(version)))
             } else if let Some(command) = self.search.take_command() {
@@ -365,7 +370,18 @@ impl Operator {
                         | Request::UpdateScan { .. }
                 );
                 match worker.submit(command) {
-                    Ok(_) => self.request = Some(request),
+                    Ok(cancel) => {
+                        if matches!(request, Request::SongImport(_)) {
+                            self.song_import.hold_cancel(cancel);
+                        }
+                        self.request = Some(request);
+                    }
+                    Err(error) if matches!(request, Request::SongImport(_)) => {
+                        if let Request::SongImport(job) = request {
+                            import_reply = Some((job, Err(error)));
+                        }
+                        changed = true;
+                    }
                     Err(error) if matches!(request, Request::DeleteSong(..)) => {
                         self.song_message =
                             Some((t!(Msg::DeleteQueueFull, error = format!("{error:?}")), true));
@@ -382,6 +398,9 @@ impl Operator {
                     }
                 }
             }
+        }
+        if let Some((job, reply)) = import_reply {
+            self.song_import_reply(job, reply);
         }
         if let Some(index) = deleted_at {
             let remaining = self.songs().len();

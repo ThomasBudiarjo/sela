@@ -3,9 +3,10 @@
 Parsers for untrusted song files live in `src/import/`. Each one turns a
 single file's bytes into a `ParsedSong` (sections of slides, a presentation
 order, metadata and warnings) or a `Rejected` reason. They never touch the
-library, the UI thread or the network. The import framework (M1-14) owns
-staging, the staged preview, duplicate policy and the commit transaction, and
-maps a `ParsedSong` onto `storage::Song`.
+library, the UI thread or the network. The import framework (M1-14, see
+[Import framework](#import-framework-m1-14) below) owns staging, the staged
+preview, duplicate policy and the commit transaction, and maps a
+`ParsedSong` onto `storage::Song`.
 
 Shared rules (`src/import/mod.rs`):
 
@@ -99,12 +100,15 @@ Not imported, reported once each as `UnknownElement(name)`: `<format>`,
 `<instrument>`, and every property not listed above, such as `keywords`,
 `themes`, `songbooks`, `releaseDate`, `tempo`, `key` and `comments`.
 
-Not imported and not reported: the attributes `author/@type`,
-`author/@lang`, `title/@lang`, `title/@original`, `verse/@lang`,
-`verse/@translit`, `lines/@part`, `lines/@break` and `lines/@repeat`.
-This is an open loss: `Warning` has no attribute variant yet, and adding one
-is a framework decision (M1-14), because the staged preview names every
-warning kind.
+Not imported, reported once each as `IgnoredAttribute("element/@name")`
+(added by the import framework, 2026-10-22): every attribute of `<title>`,
+`<author>` and `<lines>`, and every attribute of `<verse>` except `name`,
+such as `author/@type`, `author/@lang`, `title/@lang`, `title/@original`,
+`verse/@lang`, `verse/@translit`, `lines/@part`, `lines/@break` and
+`lines/@repeat`. A repeated chorus (`lines/@repeat`) therefore plays once
+unless the `verseOrder` repeats it. Attributes of `<song>` itself (version,
+creating application, dates) describe the file, not the song, and are not
+reported.
 
 Limits: 128 sections, 128 slides, and an order of at most 512 slides after
 expansion. Slide text and labels share a budget of 240 KiB, priced like the
@@ -391,3 +395,172 @@ Still unobserved in EW 8.0.49:
 - Whether EW8 shows a legacy block's "Verse 1" first line as a label. Sela's
   "Verse N" numbering of unlabelled legacy blocks is Sela's own choice.
 - Whether a label paragraph ever follows lyrics without a marker.
+
+## Import framework (M1-14)
+
+Status: **implemented-unqualified** (import-framework stream, 2026-10-22).
+Linux evidence only: GPUI tests and `scripts/song-import-x11.py`. Windows
+(`scripts/song-import-windows.py`) and every EasyWorship comparison are open
+(docs/parity-pending.md, "Stream: import-framework").
+
+### Entry point and chooser
+
+File › Import ▸ Songs… (files, several at once) and Song Folder… (one or
+more folders) in the operator menu bar. The Import ▸ group is flattened into
+the File popup like New ▸, after Close Schedule. Where EasyWorship 8.0.49
+offers library import is **UNOBSERVED**: its observed File menu
+(EW8-OBS-053) has no Import row and its Songs context menu (EW8-OBS-061)
+none either; the Song Editor's Import ▾ (EW8-OBS-021) imports into one open
+song. See docs/reference-observations.md, "Song import — UNOBSERVED best
+guesses". The native chooser is GPUI's `prompt_for_paths` (asynchronous; the
+UI never waits on it). Both items are disabled while an import runs.
+
+### Which files, which parser (`import::batch`)
+
+- `.cho`, `.chopro`, `.chordpro`, `.crd`, `.pro`: ChordPro.
+- `.xml`, or no extension with content that starts with `<`: OpenLyrics when
+  the root is `<song>` in the OpenLyrics namespace, otherwise OpenSong. A
+  well-formed file with another root is "not a song file".
+- A chosen file of any other type is listed as unsupported. Inside a chosen
+  folder, other files are only counted ("Not song files, skipped: N"),
+  because song folders hold pictures and notes too. Folders are walked three
+  levels deep without following symbolic links; hidden entries are skipped;
+  only regular files are candidates (a named pipe, socket or device is
+  counted as not a song file, and a chosen one is refused from its metadata
+  before it is opened; on Unix the open itself does not wait
+  (`O_NONBLOCK`) and the opened file's type is checked again, so a pipe
+  swapped in after the first check cannot block the worker either); at most 20,000
+  directory entries are looked at per chosen folder, and a folder cut there
+  is named in the preview ("Folder has more than 20000 entries; files after
+  that were not looked at: …"). Which entries fall past the budget depends
+  on the file system's listing order.
+- Limits: 500 files per import (the rest are counted as not read), 1 MiB
+  per file (checked from the file size before reading, and again while
+  reading), 32 MiB of staged song text (later files get "Not read: one
+  import holds at most 32 MiB of song text", distinct from the 500-file
+  message), and the library's own song limits
+  (`Song::validate`, `storage::MAX_SONG_BYTES`), which give "larger than the
+  library allows".
+- A missing title becomes the file name (without extension); the
+  `MissingTitle` warning stays and the preview says so.
+
+### The `sela-import` worker (`import::worker`)
+
+One long-lived thread, started on first use. Its job channel holds one job
+and its event channel `EVENT_DEPTH` (16) results; when the UI does not read,
+the worker blocks instead of queueing more (tested). Events carry the job
+number, so results of a cancelled job are dropped. Cancel is checked before
+every file; `Done { canceled }` always ends a job. The UI handles at most 64
+events per 16 ms poll. Nothing in the worker touches the library.
+
+### Staged preview
+
+A modal dialog (`Dialog::ImportSongs`, `src/operator/song_import.rs`) that
+opens while files are read and lists every file in order: the song title, a
+format chip, the file name and slide count, every warning as text, and for
+a failed file its error in red. A summary line counts ready songs, files
+that cannot be imported and duplicates. Nothing is saved while the dialog is
+open. Keyboard: focus starts on Cancel; Tab cycles the per-row choice groups,
+Import and Cancel inside the dialog; Left/Right (or Up/Down) change the
+focused group's choice; a row focused from the keyboard scrolls into view;
+Esc is Cancel. Accessibility: the dialog is a Dialog named "Import Songs",
+the list a List, each row a ListItem named by the song title (or the file
+name) with the path as its description, each choice group a RadioGroup
+("What to do with <title>") of RadioButtons with their toggle state, the
+summary and progress lines Status nodes.
+
+### Duplicates (UNOBSERVED best guess)
+
+After reading, the operator asks the storage worker (`find_duplicates`) for
+library songs with the same title, compared case-insensitively with
+punctuation and spacing ignored (`batch::title_key`; accents count). A
+match with the same words (`batch::lyrics_key`, a SHA-256 of the
+normalized lyrics in slide order, labels and metadata ignored) wins over a
+title-only match. Inside one import, a later file with the same title and
+words points at the first one.
+
+| Kind | Default | Choices |
+| --- | --- | --- |
+| Not a duplicate | Import | Import, Skip |
+| Same title and words as a library song | Skip | Skip, Import as copy, Replace |
+| Same title, other words | Import as copy | Skip, Import as copy, Replace |
+| Same song earlier in this import | Skip | Skip, Import as copy |
+
+"All duplicates" sets one choice on every row that offers it. Import as
+copy adds a new song with the same title. Replace saves the file's song as
+a new revision of the library song (same song id): schedules keep the
+revision they pinned until Update items in Schedule, and the old revision
+stays in history. Replace overwrites words, labels and metadata, drops
+that song's backgrounds, master background and per-slide formatting
+(the file has none), and replaces its arrangement variants with the file's
+order (none when the file has no order). The dialog's Replace note says
+so in EN and ID.
+Two rows replacing the same song are refused before anything is saved.
+
+### Commit and cancel
+
+Import (n) sends every accepted song to the storage worker as one
+`Command::CommitImport`. `Repository::commit_import` validates all songs,
+then writes them in ONE immediate transaction through `write_song`, the
+same path as `save_song` (revision, section ids, formats, metadata, search
+index row, Date modified). Any failure rolls the whole batch back and the
+preview stays open with "Nothing was imported: …" for a retry. A replaced
+song that changed since the check fails with `Conflict` (also a full
+rollback). This closes M1-07's import index maintenance: imported words are
+searchable at once, accent-folded (`unicode61 remove_diacritics 2`).
+
+Cancel works in every phase: while reading, the worker stops before its next
+file and its late results are dropped; while checking or reviewing, the
+staged songs are discarded; while committing, a commit that has not reached
+the storage worker is dropped, and one that has is cancelled through its
+`storage::Cancel` flag, which `commit_import` checks before every song and
+before the commit, so it rolls back. If the commit had already finished,
+the footer says so ("finished before it could be cancelled"). Source files
+are only read, never written (tested by content and modification time).
+
+While the preview is reading, checking, in review or committing, Quit
+(Ctrl+Q, which still reaches the main window behind a dialog) and the
+window's close request are refused with "Finish or cancel the import before
+quitting." in the dialog (on its own line, so an import error such as a
+failed duplicate check stays visible), so an Unsaved prompt can never
+replace the preview and strand the import (UNOBSERVED, EW8-OBS-IMP-7). This
+also holds for a quit that resumes later, after Don't Save while a settings
+write was pending or after a Save, when the preview was opened in the
+meantime: the quit is dropped and the operator quits again once the import
+is finished or cancelled. Any other
+dialog that replaces the preview cancels the import first. A chooser that
+returns while another dialog is open drops its choice with "Close the open
+dialog, then import again."
+
+After a commit the dialog closes, the Songs footer reports
+"Imported: n · Skipped: n · Not importable: n", the Songs list reloads, the
+imported songs become the Songs selection, Preview loads the first one and
+keyboard focus moves to its row. Live is never touched.
+
+### Tests
+
+- `import::batch` (format choice, unsupported and hostile files, library
+  limit, title from the file name, duplicate keys, bounded folder walk, file
+  limit), `import::worker` (ordered results with partial failure, cancel
+  before the next file, back-pressure), `storage` (one transaction with the
+  index and Replace, failure injection by trigger, Conflict, cancel, invalid
+  batch, duplicate lookup through the worker),
+  `operator::song_import::tests` (batch duplicates, choices, every warning
+  and error has text), `import::openlyrics` (attributes reported).
+- GPUI (`src/tests/song_import.rs`): folder import with preview, commit,
+  selection, focus, accented search, a repeated OpenSong label, preview and
+  an acknowledged Live slide; keyboard File menu and choice groups with an
+  unsupported file and Esc; cancel while reading (worker held by the test
+  pace hook); cancel before the commit reaches storage; a failing save
+  (SQLite trigger) rolling back the batch, then a retry; duplicate choices
+  (bulk, Replace, copy, double Replace refused).
+- Native: `scripts/song-import-x11.py` (PASS on Linux/Xvfb) and
+  `scripts/song-import-windows.py` (NOT RUN: no Windows host).
+- Fixtures: `tests/fixtures/import/batch/` (original synthetic text).
+
+Open: the EasyWorship observations listed in parity-pending; Windows run;
+cancel during a long commit is covered by the storage flag test and the
+queued-commit GPUI test, not by a native run; per-file read timeouts (a hung
+network share would hold the worker, never the UI); `.txt`/EasyWorship
+lyrics files and SongSelect formats are not imported; several songs in one
+ChordPro file still merge (see ChordPro above).

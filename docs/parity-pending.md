@@ -314,6 +314,80 @@ Common Windows prerequisites are listed once in
 
 ## Stream: import-framework
 
+Added 2026-10-22 (M1-14, M4-07 OpenSong/ChordPro; docs/import.md "Import
+framework", reference-observations "Song import — UNOBSERVED best guesses").
+
+- [ ] **PP-IMPF-01 Where EW8 imports songs into the library**
+  (EW8-OBS-IMP-1). Steps: in a disposable profile, open every top menu at a
+  size where nothing is cut off (File, Edit, Live, Profiles, View, Help,
+  including File › New ▸ and Profiles › Utilities ▸), the Songs library
+  context menu, the Songs footer and the Song Editor's Import ▾; record each
+  import entry, its submenu and dialog title. Sela now: File › Import ▸
+  Songs… / Song Folder… after Close Schedule (best guess; EW8-OBS-053 shows
+  no Import row). Re-run: `song-import-windows.py`, `menu-bar-windows.py`;
+  GPUI `menu_contents_match_the_captures_plus_tracked_deviations`, whose
+  DEVIATIONS table must lose the Import rows (or this item close) once EW
+  is observed.
+- [ ] **PP-IMPF-02 Formats and the chooser** (EW8-OBS-IMP-2). Steps: open the
+  import dialog found in PP-IMPF-01; record its file-type filter list,
+  whether several files or a folder can be chosen, and import one original
+  OpenLyrics, OpenSong and ChordPro file each (fixtures from
+  `tests/fixtures/import/batch/`). Record what EW keeps and drops (labels,
+  order, chords, authors, CCLI). Sela now: those three formats, several
+  files or folders, chords removed with a warning. Re-run:
+  `song-import-windows.py`.
+- [ ] **PP-IMPF-03 Preview or report before saving** (EW8-OBS-IMP-3). Steps:
+  import the batch folder (including `broken.xml` and `empty.cho`); record
+  whether EW shows a list, warnings or errors before or after saving, and
+  what happens to the bad files. Sela now: staged preview with every file,
+  its warnings and errors; nothing saved before Import. Re-run:
+  `song-import-windows.py`.
+- [ ] **PP-IMPF-04 Duplicates** (EW8-OBS-IMP-4). Steps: import the same
+  folder twice, then a file with an existing title but other words; record
+  EW's prompt wording, choices and default, and what the library holds
+  afterwards (two songs, replaced, skipped). Sela now: same words → Skip,
+  same title → Import as copy, Replace = new revision, bulk choice. Re-run:
+  `song-import-windows.py`; GPUI `duplicate_choices_skip_copy_and_replace`.
+- [ ] **PP-IMPF-05 After the import** (EW8-OBS-IMP-5). Steps: record which
+  song is selected or previewed, where focus lands, whether the Songs list
+  scrolls to the new songs and whether any message shows. Sela now: imported
+  songs selected, first previewed and focused, counts in the Songs footer.
+  Re-run: `song-import-windows.py`.
+- [ ] **PP-IMPF-06 Cancel and partial failure** (EW8-OBS-IMP-6). Steps: start
+  a large import (copy the batch folder 50 times) and cancel midway; record
+  whether part of it was saved. Sela now: one transaction, nothing saved on
+  cancel or failure. Re-run: `song-import-windows.py`; GPUI
+  `cancel_while_files_are_read_commits_nothing`.
+- [ ] **PP-IMPF-07 Windows run of `song-import-windows.py`** (NOT RUN: no
+  Windows host on 2026-10-22). Steps: run it (see the run order table) and
+  inspect `01-import-preview.png` and `05-audience-imported-slide.png`;
+  check the common folder dialog accepts the typed path (the script presses
+  Enter until it closes). Sela now: the Linux counterpart
+  `song-import-x11.py` passes. Re-run: the script itself.
+- [ ] **PP-IMPF-08 Indonesian and Narrator pass of the import dialog.**
+  Steps: switch to Bahasa Indonesia, open the preview with duplicates and
+  failures, check for clipping; with Narrator, Tab through the choice groups
+  and confirm each is announced as a radio group with its title and the
+  selected choice. Sela now: EN/ID strings and AccessKit roles exist, not
+  heard with a screen reader. Re-run: `i18n-windows.py`, `a11y-windows.py`.
+- [ ] **PP-IMPF-09 Quit while an import is open** (EW8-OBS-IMP-7). Steps:
+  make an unsaved schedule change, open EW's import dialog found in
+  PP-IMPF-01 and, with its list or progress showing, press Ctrl+Q, then try
+  the window's close button; record whether EW closes, prompts about the
+  schedule, or refuses, and whether the import survives. Sela now: the
+  close is refused with "Finish or cancel the import before quitting." in
+  the import dialog (its own line under any import error, which stays);
+  after Cancel the usual Save / Don't Save / Cancel prompt appears. The same
+  refusal holds when the preview was opened while an earlier quit waited
+  for a settings write after Don't Save, or for a Save before quitting.
+  Also observe in EW: if a quit is pending (prompt answered, still saving)
+  can the import dialog be opened at all. Re-run: GPUI
+  `quit_waits_for_an_open_import_and_a_replaced_preview_cancels_it`,
+  `an_import_opened_during_the_settings_wait_after_dont_save_keeps_the_window`,
+  `an_import_opened_during_a_save_then_quit_keeps_the_window`; native
+  `python3 scripts/song-import-x11.py` (Ctrl+Q and Alt+F4 on the duplicate
+  preview) and `scripts/song-import-windows.py` (Ctrl+Q and WM_CLOSE).
+
 ## Stream: ew-library-import
 
 ## Stream: autosave-recovery
@@ -372,6 +446,7 @@ timing):
 | 20 | `resource-browser-windows.py` | seed (`--second-song`, `--extra-songs`); release binary and a 20k library for the scrolling timings |
 | 21 | `prep-windows.py` | release binary (`--binary target\release\sela.exe`); seed (`--heavy-song`); audience on the laptop panel (`--monitor name:\\.\DISPLAY1`, the default) |
 | 22 | `reference-w03-windows.py` | not a Sela check: EasyWorship 8.0.49 open and maximized with one song previewed from the Songs tab; observation only |
+| 23 | `song-import-windows.py` | seed; secondary monitor; native folder dialog; the batch fixtures in `tests\fixtures\import\batch` |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

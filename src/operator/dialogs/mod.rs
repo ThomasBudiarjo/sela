@@ -35,6 +35,8 @@ pub(crate) enum Dialog {
     GoLiveMissing,
     /// Songs menu → Update items in Schedule: the reviewable diff.
     UpdateItems,
+    /// File › Import › Songs: the staged preview; drawn by `import_overlay`.
+    ImportSongs,
 }
 
 impl Operator {
@@ -46,6 +48,11 @@ impl Operator {
     ) {
         if self.dialog.is_none() {
             self.dialog_return = window.focused(cx);
+        }
+        // Replacing the import preview cancels the import as its Cancel
+        // button does, so `song_import` never outlives its dialog.
+        if self.dialog == Some(Dialog::ImportSongs) && dialog != Dialog::ImportSongs {
+            self.cancel_song_import();
         }
         self.dialog = Some(dialog);
         self.dialog_message = None;
@@ -155,6 +162,11 @@ impl Operator {
                 self.clear_entry_selection();
                 self.schedule_message = None;
             }
+            // A Save-then-Quit resumes after the write; an import preview
+            // opened meanwhile still holds the close back (PP-IMPF-09).
+            Then::Quit if self.song_import.holds_dialog() => {
+                self.may_close(window, cx);
+            }
             Then::Quit => {
                 if self.settings_allow_close(window, cx) {
                     window.remove_window();
@@ -172,7 +184,7 @@ impl Operator {
                 Some(entry) => t!(Msg::DialogRemoveTitled, title = entry.title),
                 None => t!(Msg::DialogRemoveGeneric).into(),
             },
-            Dialog::Options => return None,
+            Dialog::Options | Dialog::ImportSongs => return None,
             Dialog::Preflight => t!(Msg::PreflightHeading).into(),
             Dialog::GoLiveMissing => t!(Msg::GoLiveMissingHeading).into(),
             Dialog::UpdateItems => t!(Msg::MenuUpdateSchedule).into(),
@@ -185,7 +197,7 @@ impl Operator {
             Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDontSave)),
             Dialog::Remove(_) => Some(t!(Msg::ConfirmRemove)),
             Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmYes)),
-            Dialog::Options | Dialog::Preflight | Dialog::FileError => None,
+            Dialog::Options | Dialog::Preflight | Dialog::FileError | Dialog::ImportSongs => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
             Dialog::UpdateItems => Some(t!(Msg::UpdateItemsConfirm)),
         };

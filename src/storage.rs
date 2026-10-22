@@ -4,11 +4,13 @@ use crate::arrangement::{
 };
 use crate::background::Background;
 use crate::format::SlideFormat;
+use crate::import::batch::{self, DuplicateKey};
 use crate::search;
 use crate::song_order::{SongOrder, SongSort};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         Arc,
@@ -20,6 +22,24 @@ use std::{
 
 const APP: i64 = 0x53454c41;
 pub const MAX_SONG_BYTES: usize = 256 * 1024;
+/// Most songs one import commit or duplicate check carries.
+pub const MAX_IMPORT_SONGS: usize = batch::MAX_FILES;
+/// One song of an import commit: a new song, or a new revision of `replace`
+/// (the operator chose Replace for a library duplicate).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportWrite {
+    pub replace: Option<Version>,
+    /// Shared with the staged preview, so a retry after a failure needs no copy.
+    pub song: Arc<Song>,
+}
+/// A current library song an imported song duplicates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryMatch {
+    pub version: Version,
+    pub title: String,
+    /// The words match too, not only the title.
+    pub same_lyrics: bool,
+}
 pub const MAX_ITEMS: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Id(pub [u8; 16]);
@@ -858,15 +878,100 @@ impl Repository {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let v = advance(&tx, "songs", previous)?;
-        insert_revision(&tx, v, &song)?;
-        index_song(&tx, v.id, &song)?;
-        tx.execute(
-            "UPDATE songs SET modified=MAX(?1,(SELECT COALESCE(MAX(modified),0)+1 FROM songs)) WHERE id=?2",
-            params![now_millis(), &v.id.0[..]],
-        )?;
+        let v = write_song(&tx, previous, &song)?;
         tx.commit()?;
         Ok(v)
+    }
+    /// Saves every write of an import batch in ONE transaction through the
+    /// same path as `save_song`, so the search index follows (M1-07, M1-14).
+    /// Any failure, or `canceled` seen between songs or before the commit,
+    /// rolls the whole batch back: nothing of it is saved. A `replace`
+    /// whose song moved on since it was matched fails with `Conflict`.
+    pub fn commit_import(
+        &mut self,
+        writes: Vec<ImportWrite>,
+        canceled: &AtomicBool,
+    ) -> Result<Vec<Version>> {
+        self.commit_import_until(writes, &|| canceled.load(Ordering::Acquire))
+    }
+    /// `commit_import` with the cancel check as a function, so a test can
+    /// cancel between two songs or right before COMMIT.
+    fn commit_import_until(
+        &mut self,
+        writes: Vec<ImportWrite>,
+        canceled: &dyn Fn() -> bool,
+    ) -> Result<Vec<Version>> {
+        if writes.len() > MAX_IMPORT_SONGS {
+            return Err(Error::Invalid);
+        }
+        for write in &writes {
+            write.song.validate()?;
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut saved = Vec::with_capacity(writes.len());
+        for write in &writes {
+            if canceled() {
+                return Err(Error::Canceled);
+            }
+            saved.push(write_song(&tx, write.replace, &write.song)?);
+        }
+        if canceled() {
+            return Err(Error::Canceled);
+        }
+        tx.commit()?;
+        Ok(saved)
+    }
+    /// For each key, the current library song it duplicates: one with the
+    /// same title and words if any (`same_lyrics`), else the first with the
+    /// same title. Titles and words come from the search index, so only the
+    /// words of songs whose title matches are read. Ties go to the lowest id.
+    pub fn find_duplicates(&self, keys: &[DuplicateKey]) -> Result<Vec<Option<LibraryMatch>>> {
+        if keys.len() > MAX_IMPORT_SONGS {
+            return Err(Error::Invalid);
+        }
+        let mut by_title: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (index, key) in keys.iter().enumerate() {
+            by_title.entry(key.title.as_str()).or_default().push(index);
+        }
+        let mut found: Vec<Option<LibraryMatch>> = vec![None; keys.len()];
+        if by_title.is_empty() {
+            return Ok(found);
+        }
+        let mut statement = self.db.prepare_cached("SELECT s.id,s.head,f.title,m.row FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY s.id")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let title: String = row.get(2)?;
+            let Some(indices) = by_title.get(batch::title_key(&title).as_str()) else {
+                continue;
+            };
+            let version = Version {
+                id: read_id(row.get(0)?)?,
+                revision: row.get(1)?,
+            };
+            let lyrics: String = self.db.query_row(
+                "SELECT lyrics FROM song_search WHERE rowid=?",
+                params![row.get::<_, i64>(3)?],
+                |r| r.get(0),
+            )?;
+            let digest = batch::lyrics_key(&lyrics);
+            for &index in indices {
+                let same_lyrics = keys[index].lyrics == digest;
+                let better = match &found[index] {
+                    None => true,
+                    Some(current) => same_lyrics && !current.same_lyrics,
+                };
+                if better {
+                    found[index] = Some(LibraryMatch {
+                        version,
+                        title: title.clone(),
+                        same_lyrics,
+                    });
+                }
+            }
+        }
+        Ok(found)
     }
     /// The song at each version, in order, for a schedule file to embed.
     pub fn songs(&self, versions: &[Version]) -> Result<Vec<Song>> {
@@ -1269,6 +1374,23 @@ fn search_consistent(db: &Connection) -> Result<bool> {
     }
     Ok(!db.prepare("SELECT 1 FROM songs s WHERE s.deleted=0 AND NOT EXISTS(SELECT 1 FROM search_rows m WHERE m.song=s.id) UNION ALL SELECT 1 FROM search_rows m LEFT JOIN songs s ON s.id=m.song WHERE s.id IS NULL OR s.deleted!=0 UNION ALL SELECT 1 FROM search_rows m WHERE NOT EXISTS(SELECT 1 FROM song_search f WHERE f.rowid=m.row) UNION ALL SELECT 1 FROM song_search f WHERE NOT EXISTS(SELECT 1 FROM search_rows m WHERE m.row=f.rowid) LIMIT 1")?.exists([])?)
 }
+/// The one song save path inside the caller's transaction: the next
+/// revision (or a new song), its payload and tables, its search index entry
+/// and the Date modified stamp. `song` is already validated.
+fn write_song(
+    tx: &rusqlite::Transaction<'_>,
+    previous: Option<Version>,
+    song: &Song,
+) -> Result<Version> {
+    let v = advance(tx, "songs", previous)?;
+    insert_revision(tx, v, song)?;
+    index_song(tx, v.id, song)?;
+    tx.execute(
+        "UPDATE songs SET modified=MAX(?1,(SELECT COALESCE(MAX(modified),0)+1 FROM songs)) WHERE id=?2",
+        params![now_millis(), &v.id.0[..]],
+    )?;
+    Ok(v)
+}
 fn advance(
     tx: &rusqlite::Transaction<'_>,
     table: &str,
@@ -1342,6 +1464,11 @@ pub enum Command {
     RepairSearch,
     /// Rebuilds the search index unconditionally.
     RebuildSearch,
+    /// Library duplicates of staged import songs (`Repository::find_duplicates`).
+    FindDuplicates(Vec<DuplicateKey>),
+    /// Saves an import batch in one transaction (`Repository::commit_import`);
+    /// cancelling the command rolls back whatever it has not committed.
+    CommitImport(Vec<ImportWrite>),
 }
 #[derive(Debug)]
 pub enum Reply {
@@ -1359,6 +1486,9 @@ pub enum Reply {
     Copied,
     Search(search::Results),
     SearchIndex(search::IndexState),
+    Duplicates(Vec<Option<LibraryMatch>>),
+    /// The saved version of each import write, in order.
+    Committed(Vec<Version>),
 }
 struct Request {
     command: Command,
@@ -1396,6 +1526,10 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::Search { query, generation } => repo.search(&query, generation).map(Reply::Search),
         Command::RepairSearch => repo.repair_search().map(Reply::SearchIndex),
         Command::RebuildSearch => repo.rebuild_search().map(Reply::SearchIndex),
+        Command::FindDuplicates(keys) => repo.find_duplicates(&keys).map(Reply::Duplicates),
+        Command::CommitImport(writes) => repo
+            .commit_import(writes, &request.canceled)
+            .map(Reply::Committed),
     }
 }
 /// Cancellation only wins before the worker starts a command. Always poll its result.
@@ -1472,6 +1606,13 @@ impl Worker {
             }
             Command::Songs(v) if v.len() > 2 * MAX_ITEMS => return Err(Error::Invalid),
             Command::ImportSongs(items) if items.len() > MAX_ITEMS => return Err(Error::Invalid),
+            // Songs are validated on the storage thread, not here on the UI's.
+            Command::CommitImport(writes) if writes.len() > MAX_IMPORT_SONGS => {
+                return Err(Error::Invalid);
+            }
+            Command::FindDuplicates(keys) if keys.len() > MAX_IMPORT_SONGS => {
+                return Err(Error::Invalid);
+            }
             Command::BackupNew(p) if p.as_os_str().len() > 4096 => return Err(Error::Invalid),
             Command::RestoreNew {
                 source,
@@ -3855,5 +3996,199 @@ mod tests {
             .unwrap()
             .verify_history(&AtomicBool::new(false), std::time::Instant::now())
             .unwrap();
+    }
+
+    fn import_write(title: &str, lyrics: &str) -> ImportWrite {
+        ImportWrite {
+            replace: None,
+            song: Arc::new(lyric_song(title, lyrics)),
+        }
+    }
+
+    #[test]
+    fn an_import_commits_every_song_in_one_transaction_and_indexes_it() {
+        let (_d, _path, mut repo) = fixture();
+        let existing = repo
+            .save_song(None, lyric_song("Kasih Setia", "old words"))
+            .unwrap();
+        let mut replacement = import_write("Kasih Setia", "kasih-Mu sétia selamanya");
+        replacement.replace = Some(existing);
+        let saved = repo
+            .commit_import(
+                vec![
+                    import_write("Bapa yang Kekal", "Engkau sungguh ajaib"),
+                    replacement,
+                    import_write("Harbor Light", "the lamp is lit"),
+                ],
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert_eq!(saved.len(), 3);
+        assert_eq!(saved[1].id, existing.id, "Replace keeps the song");
+        assert_eq!(saved[1].revision, existing.revision + 1);
+        // The same index as an editor save: accented words, prefix search.
+        assert_eq!(titles(&repo, "sétia"), ["Kasih Setia"]);
+        assert_eq!(titles(&repo, "ajai"), ["Bapa yang Kekal"]);
+        assert!(titles(&repo, "old").is_empty());
+        assert!(repo.check_search().unwrap());
+        assert_eq!(repo.heads(false, None).unwrap().len(), 3);
+        // History of the replaced song stays readable.
+        assert_eq!(repo.song(existing).unwrap().sections[0].lyrics, "old words");
+    }
+
+    #[test]
+    fn a_failing_save_rolls_the_whole_import_back() {
+        let (_d, _path, mut repo) = fixture();
+        let kept = repo
+            .save_song(None, lyric_song("Kept", "kept words"))
+            .unwrap();
+        // The third song's index insert fails (failure injection).
+        repo.db
+            .execute_batch(
+                "CREATE TRIGGER fail_third BEFORE INSERT ON search_rows WHEN (SELECT count(*) FROM search_rows) >= 3 BEGIN SELECT RAISE(ABORT,'injected'); END;",
+            )
+            .unwrap();
+        let writes = vec![
+            import_write("One", "first"),
+            import_write("Two", "second"),
+            import_write("Three", "third"),
+        ];
+        assert_eq!(
+            repo.commit_import(writes.clone(), &AtomicBool::new(false)),
+            Err(Error::Io)
+        );
+        assert_eq!(repo.heads(false, None).unwrap(), [kept]);
+        assert!(titles(&repo, "first").is_empty());
+        assert!(repo.check_search().unwrap());
+        // A replace of a song that moved on conflicts, and also rolls back.
+        repo.db.execute_batch("DROP TRIGGER fail_third").unwrap();
+        let newer = repo
+            .save_song(Some(kept), lyric_song("Kept", "newer"))
+            .unwrap();
+        let mut stale = import_write("Kept", "stale replace");
+        stale.replace = Some(kept);
+        assert_eq!(
+            repo.commit_import(
+                vec![import_write("One", "first"), stale],
+                &AtomicBool::new(false)
+            ),
+            Err(Error::Conflict)
+        );
+        assert_eq!(repo.heads(false, None).unwrap(), [newer]);
+        // A cancelled commit saves nothing.
+        assert_eq!(
+            repo.commit_import(writes.clone(), &AtomicBool::new(true)),
+            Err(Error::Canceled)
+        );
+        assert_eq!(repo.heads(false, None).unwrap(), [newer]);
+        // An invalid song refuses the whole batch before any write.
+        let mut invalid = writes;
+        Arc::make_mut(&mut invalid[1].song).title = " ".into();
+        assert_eq!(
+            repo.commit_import(invalid, &AtomicBool::new(false)),
+            Err(Error::Invalid)
+        );
+        assert_eq!(repo.heads(false, None).unwrap(), [newer]);
+        let too_many = vec![import_write("X", "x"); MAX_IMPORT_SONGS + 1];
+        assert_eq!(
+            repo.commit_import(too_many, &AtomicBool::new(false)),
+            Err(Error::Invalid)
+        );
+    }
+
+    #[test]
+    fn a_cancel_between_songs_or_before_commit_rolls_back() {
+        let (_d, _path, mut repo) = fixture();
+        let kept = repo
+            .save_song(None, lyric_song("Kept", "kept words"))
+            .unwrap();
+        let writes = vec![
+            import_write("One", "first"),
+            import_write("Two", "second"),
+            import_write("Three", "third"),
+        ];
+        // Check 1 is before song 1, 2 and 3 between songs, 4 before COMMIT.
+        for cancel_at in 2..=4 {
+            let calls = std::cell::Cell::new(0);
+            let canceled = || {
+                calls.set(calls.get() + 1);
+                calls.get() >= cancel_at
+            };
+            assert_eq!(
+                repo.commit_import_until(writes.clone(), &canceled),
+                Err(Error::Canceled),
+                "cancel at check {cancel_at}"
+            );
+            assert_eq!(calls.get(), cancel_at, "stopped at check {cancel_at}");
+            assert_eq!(repo.heads(false, None).unwrap(), [kept]);
+            assert!(titles(&repo, "first").is_empty());
+            assert!(repo.check_search().unwrap());
+        }
+        // Never cancelled: four checks, then the batch lands.
+        let calls = std::cell::Cell::new(0);
+        let saved = repo
+            .commit_import_until(writes, &|| {
+                calls.set(calls.get() + 1);
+                false
+            })
+            .unwrap();
+        assert_eq!((saved.len(), calls.get()), (3, 4));
+    }
+
+    #[test]
+    fn duplicates_prefer_same_words_then_same_title() {
+        let (_d, path, mut repo) = fixture();
+        let other = repo
+            .save_song(None, lyric_song("Amazing  Grace", "different words"))
+            .unwrap();
+        let same = repo
+            .save_song(None, lyric_song("amazing grace!", "How sweet the sound"))
+            .unwrap();
+        let deleted = repo
+            .save_song(None, lyric_song("Gone Song", "gone"))
+            .unwrap();
+        repo.delete_song(deleted).unwrap();
+        let key = |title: &str, lyrics: &str| batch::duplicate_key(&lyric_song(title, lyrics));
+        let found = repo
+            .find_duplicates(&[
+                key("Amazing Grace", "how sweet, the SOUND"),
+                key("Amazing Grace", "new words"),
+                key("Gone Song", "gone"),
+                key("Brand New", "x"),
+            ])
+            .unwrap();
+        assert_eq!(
+            found[0],
+            Some(LibraryMatch {
+                version: same,
+                title: "amazing grace!".into(),
+                same_lyrics: true
+            })
+        );
+        let title_only = found[1].clone().unwrap();
+        assert!(!title_only.same_lyrics);
+        assert!([other, same].contains(&title_only.version));
+        assert_eq!(found[2], None, "deleted songs are not duplicates");
+        assert_eq!(found[3], None);
+        assert_eq!(repo.find_duplicates(&[]).unwrap(), []);
+        // Through the worker, with the commit after it.
+        drop(repo);
+        let mut worker = Worker::open(path).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        worker
+            .submit(Command::FindDuplicates(vec![key("Brand New", "x")]))
+            .unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Duplicates(d)) if d == [None]));
+        worker
+            .submit(Command::CommitImport(vec![import_write("Brand New", "x")]))
+            .unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Committed(v)) if v.len() == 1));
+        assert!(matches!(
+            worker.submit(Command::CommitImport(vec![
+                import_write("X", "x");
+                MAX_IMPORT_SONGS + 1
+            ])),
+            Err(Error::Invalid)
+        ));
     }
 }

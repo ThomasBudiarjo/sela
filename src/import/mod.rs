@@ -2,11 +2,13 @@
 //! a `ParsedSong` or a `Rejected` reason; none touches storage, the UI thread
 //! or the network. The import framework (M1-14) maps a `ParsedSong` onto
 //! `storage::Song` and owns staging, duplicates and the commit transaction.
+pub mod batch;
 pub mod chordpro;
 pub mod ew_rtf;
 pub mod openlyrics;
 pub mod opensong;
 pub mod song;
+pub mod worker;
 
 /// Largest song file any parser accepts, checked before parsing.
 pub const MAX_FILE_BYTES: usize = 1024 * 1024;
@@ -64,6 +66,9 @@ pub enum Warning {
     InvalidField(String),
     /// The section, slide or order limit was reached and the rest was dropped.
     LimitReached,
+    /// An attribute the song model has no place for, as `element/@name`
+    /// (OpenLyrics `lines/@repeat`, `verse/@lang`); reported once per file.
+    IgnoredAttribute(String),
 }
 
 /// Why a file produced no song. Other files in the same batch still import.

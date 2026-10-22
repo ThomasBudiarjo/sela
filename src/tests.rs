@@ -23,6 +23,7 @@ mod focus_modality;
 mod layout_startup;
 mod navigation;
 mod resource_browser;
+mod song_import;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,
@@ -2858,6 +2859,40 @@ mod settings_ui {
         }
     }
 
+    /// Don't Save covers the schedule, not an import preview opened while
+    /// the settings write was still pending (PP-IMPF-09).
+    #[gpui::test]
+    fn an_import_opened_during_the_settings_wait_after_dont_save_keeps_the_window(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::operator::Dialog;
+        use crate::operator::song_import::Phase;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = super::song_import::batch_dir(&dir);
+        let (writer, release) = gated_writer();
+        let (mut vcx, operator, _slot) = start(cx, &dir, writer);
+        settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == 1);
+        add_song(&mut vcx, &operator, "Signal Hymn");
+        open_options(&mut vcx);
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        assert!(!quit(&mut vcx, &operator));
+        click(&mut vcx, "dialog-confirm");
+        assert_eq!(windows(&mut vcx), 1, "still waiting for the write");
+        super::song_import::import_folder(&mut vcx, &operator, folder);
+        super::song_import::settle_review(&mut vcx, &operator);
+        drain_writer(&mut vcx, &operator, &dir, &release);
+        assert_eq!(windows(&mut vcx), 1, "the open import is not lost");
+        operator.read_with(&vcx, |o, _| {
+            assert_eq!(o.dialog, Some(Dialog::ImportSongs));
+            assert_eq!(o.song_import.phase, Phase::Review);
+            assert_eq!(
+                o.song_import.quit_note.as_deref(),
+                Some("Finish or cancel the import before quitting.")
+            );
+        });
+    }
+
     #[gpui::test]
     fn an_edit_after_dont_save_during_the_settings_wait_prompts_again(cx: &mut TestAppContext) {
         use crate::operator::{Dialog, Then};
@@ -3032,28 +3067,49 @@ mod menu_bar {
     }
 
     #[gpui::test]
-    fn menu_contents_match_the_captures(cx: &mut TestAppContext) {
+    fn menu_contents_match_the_captures_plus_tracked_deviations(cx: &mut TestAppContext) {
         let (mut cx, _operator, _) = fixture(cx);
         cx.simulate_resize(size(px(1280.), px(800.)));
         // EW8-OBS-053 plus the menu-p/v/h.png captures; the New ▸ submenu is
         // flattened into a header row followed by Song.../Schedule.
+        const EW_FILE: [&str; 11] = [
+            "bar-file-new",
+            "bar-file-new-song",
+            "bar-file-new-schedule",
+            "bar-file-open",
+            "bar-file-open-recent",
+            "bar-file-save",
+            "bar-file-save-as",
+            "bar-file-export",
+            "bar-file-close",
+            "bar-file-reports",
+            "bar-file-exit",
+        ];
+        // Rows Sela adds that the captures do NOT show: a known deviation,
+        // not parity. Each names its docs/parity-pending.md check; it goes
+        // once EasyWorship's import entry point is observed.
+        // (after row, added rows, tracking id)
+        const DEVIATIONS: [(&str, &[&str], &str); 1] = [(
+            "bar-file-close",
+            &[
+                "bar-file-import",
+                "bar-file-import-songs",
+                "bar-file-import-folder",
+            ],
+            "PP-IMPF-01 (UNOBSERVED, M1-14)",
+        )];
+        let mut file: Vec<&str> = Vec::new();
+        for row in EW_FILE {
+            file.push(row);
+            for (after, added, tracking) in DEVIATIONS {
+                if after == row {
+                    assert!(!tracking.is_empty());
+                    file.extend_from_slice(added);
+                }
+            }
+        }
         let menus: [(&str, &[&str]); 6] = [
-            (
-                "alt-f",
-                &[
-                    "bar-file-new",
-                    "bar-file-new-song",
-                    "bar-file-new-schedule",
-                    "bar-file-open",
-                    "bar-file-open-recent",
-                    "bar-file-save",
-                    "bar-file-save-as",
-                    "bar-file-export",
-                    "bar-file-close",
-                    "bar-file-reports",
-                    "bar-file-exit",
-                ],
-            ),
+            ("alt-f", &file),
             (
                 "alt-e",
                 &[
@@ -5474,6 +5530,45 @@ mod schedule_files_ui {
         operator.read_with(&cx, |o, _| {
             assert_eq!(entry_titles(o), ["Signal Hymn", SECOND_SONG]);
             assert!(o.schedule.is_dirty());
+        });
+    }
+
+    /// Save, then Quit: an import preview opened while the write ran still
+    /// holds the close back once the Save lands (PP-IMPF-09).
+    #[gpui::test]
+    fn an_import_opened_during_a_save_then_quit_keeps_the_window(cx: &mut TestAppContext) {
+        use crate::operator::Then;
+        use crate::operator::song_import::Phase;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = super::song_import::batch_dir(&dir);
+        let (mut cx, operator, release) = gated_loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        assert!(!cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx))));
+        cx.run_until_parked();
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.dialog.clone()),
+            Some(Dialog::Unsaved(Then::Quit))
+        );
+        click(&mut cx, "dialog-save");
+        assert!(cx.did_prompt_for_new_path());
+        let file = dir.path().join("Quit.selaschedule");
+        cx.simulate_new_path_selection(move |_| Some(file));
+        settle(&mut cx, &operator, "save in flight", |o| o.saving_file());
+        super::song_import::import_folder(&mut cx, &operator, folder);
+        super::song_import::settle_review(&mut cx, &operator);
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut cx, &operator, "saved and quit refused", |o| {
+            !o.saving_file() && o.song_import.quit_note.is_some()
+        });
+        assert_eq!(
+            cx.read(|cx| cx.windows().len()),
+            1,
+            "the import is not lost"
+        );
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.dialog, Some(Dialog::ImportSongs));
+            assert_eq!(o.song_import.phase, Phase::Review);
+            assert!(!o.schedule.is_dirty());
         });
     }
 

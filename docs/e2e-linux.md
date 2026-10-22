@@ -15,7 +15,8 @@ Files:
   external tools; no pip packages).
 - `scripts/<feature>-x11.py`: one script per feature. Ported so far:
   `live-output-x11.py`, `schedule-x11.py`, `song-editor-x11.py` (from the
-  `*-windows.py` scripts of the same name).
+  `*-windows.py` scripts of the same name). New with a Windows counterpart:
+  `song-import-x11.py` (import-framework; `song-import-windows.py`).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -243,6 +244,15 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `live-output-x11.py --kind dual --tolerate-audience-focus` | private dual, audience `secondary` 1920x1080 | PASS, four tolerated focus thefts |
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
+| `song-import-x11.py --display :112` (import-framework, 2026-10-22) | xvfb, audience `window` | PASS (27 s) |
+
+GTK portal folder chooser notes (song-import-x11.py): it opens on Recent,
+where Enter in the location entry does nothing, so the script first clicks
+the sidebar's Home row; a GTK tooltip under a resting pointer is a visible
+portal window that `App.file_dialog()` may return, so the pointer is parked
+away before the chooser opens; GPUI reads the X keymap at start and ignores
+xdotool's on-the-fly mapping for characters outside the US layout, so "ñ" is
+mapped to a spare keycode with `xmodmap` before the operator starts.
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live

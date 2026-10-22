@@ -194,7 +194,10 @@ impl Reader {
                 Some("titles") => {
                     for title in elements(child) {
                         match name(title) {
-                            Some("title") => self.titles.push(text_of(title)),
+                            Some("title") => {
+                                self.ignored_attributes(title, "title", &[]);
+                                self.titles.push(text_of(title));
+                            }
                             _ => self.not_imported(title),
                         }
                     }
@@ -202,7 +205,10 @@ impl Reader {
                 Some("authors") => {
                     for author in elements(child) {
                         match name(author) {
-                            Some("author") => self.authors.push(text_of(author)),
+                            Some("author") => {
+                                self.ignored_attributes(author, "author", &[]);
+                                self.authors.push(text_of(author));
+                            }
                             _ => self.not_imported(author),
                         }
                     }
@@ -212,6 +218,20 @@ impl Reader {
                 Some("publisher") => self.once(child, |r| &mut r.publisher),
                 Some("verseOrder") => self.once(child, |r| &mut r.verse_order),
                 _ => self.not_imported(child),
+            }
+        }
+    }
+
+    /// Reports each attribute of `node` outside `mapped` once per file as
+    /// `IgnoredAttribute("element/@name")`, such as `lines/@repeat` or
+    /// `verse/@lang`: the song model has no place for them.
+    fn ignored_attributes(&mut self, node: Node, element: &str, mapped: &[&str]) {
+        for attribute in node.attributes() {
+            if !mapped.contains(&attribute.name()) {
+                self.warn(Warning::IgnoredAttribute(format!(
+                    "{element}/@{}",
+                    attribute.name()
+                )));
             }
         }
     }
@@ -236,6 +256,7 @@ impl Reader {
     }
 
     fn verse(&mut self, node: Node) {
+        self.ignored_attributes(node, "verse", &["name"]);
         let source = collapse(node.attribute("name").unwrap_or_default());
         if source.is_empty() {
             self.warn(Warning::InvalidField("verse name".into()));
@@ -249,6 +270,7 @@ impl Reader {
         for child in elements(node) {
             match name(child) {
                 Some("lines") => {
+                    self.ignored_attributes(child, "lines", &[]);
                     let text = self.lines(child);
                     if !text.is_empty() {
                         slides.push(text);
@@ -495,7 +517,8 @@ mod tests {
                     ),
                 ],
                 order: vec![0, 2, 1, 2, 3, 2],
-                warnings: vec![],
+                // "words"/"music" has no place in the one-line Authors field.
+                warnings: vec![Warning::IgnoredAttribute("author/@type".into())],
             }
         );
     }
@@ -526,6 +549,7 @@ mod tests {
         );
         assert_eq!(song.order, [0, 1, 2, 0, 1, 3]);
         let unknown = |name: &str| Warning::UnknownElement(name.into());
+        let attribute = |name: &str| Warning::IgnoredAttribute(name.into());
         assert_eq!(
             sorted(song.warnings),
             sorted(vec![
@@ -539,6 +563,15 @@ mod tests {
                 Warning::ChordsRemoved,
                 Warning::EmptySection("Verse 2".into()),
                 Warning::MissingOrderReference("v3".into()),
+                // Dropped attributes, once each (docs/import.md).
+                attribute("title/@lang"),
+                attribute("author/@type"),
+                attribute("author/@lang"),
+                attribute("lines/@part"),
+                attribute("lines/@break"),
+                attribute("verse/@lang"),
+                attribute("verse/@translit"),
+                attribute("lines/@repeat"),
             ])
         );
     }
