@@ -91,7 +91,7 @@ def drive_folder_dialog(app: nx.App, folder: Path, owner: int) -> None:
     time.sleep(0.6)
     nx.press(dialog, "enter")
     nx.wait_until(
-        lambda: not nx.window_exists(dialog) or not nx.geometry(dialog).viewable,
+        lambda: not nx.viewable(dialog),
         12,
         "the portal folder chooser to close",
     )
