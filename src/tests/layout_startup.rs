@@ -25,7 +25,9 @@ fn opened(
         Some(primary().0),
         area(640., 300., 1280., 800.),
     );
-    (options.window_bounds, options.display_id)
+    // GPUI opens on the primary monitor when no display is given.
+    let display = options.display_id.or(Some(primary().0));
+    (options.window_bounds, display)
 }
 
 #[test]

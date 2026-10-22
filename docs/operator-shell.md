@@ -19,9 +19,16 @@ Drags do not focus another control. Geometry is recalculated from viewport bound
 on render; resizing retains proportions, with 150px upper pane minima and 140px
 upper/resources area minima. Subminimum viewports use nonnegative equal-share
 fallback minima. Resources collapse/restore and Reset layout support click and keyboard;
-reset restores provisional ratios and expands Resources. Layout persistence,
-alternative layout modes, installed-reference focus/traversal and mixed-DPI
-qualification remain parent M1-02 acceptance, not silently dropped functionality.
+reset restores provisional ratios and expands Resources. Layout persistence landed
+later (`layout-persistence`, `src/pane_layout.rs`): splitters, Resources collapsed
+and the window placement live in `settings.txt`. A saved window reopens on the
+monitor whose work area holds most of it, passed to GPUI as `display_id`, because
+without it GPUI opens on the primary monitor and replaces bounds that are not on
+it. A window on no connected monitor is centred on the primary. Any malformed or
+out-of-range layout value, including an `i32::MIN`/`i32::MAX` origin, drops the
+whole layout to the default. Alternative layout modes, installed-reference
+focus/traversal and mixed-DPI qualification remain parent M1-02 acceptance, not
+silently dropped functionality.
 
 ## Provenance and unknowns
 
