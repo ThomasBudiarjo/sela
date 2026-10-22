@@ -500,6 +500,9 @@ its toolbar/keyboard equivalent.
   did the same for the Schedule item, image and New ▾ menus, which now take
   the focus (right-click menus) and close with Esc (SC2-FOCUS-02, GPUI tests
   and `scenario-s02-x11.py` step 2b). EW behavior unobserved (PP-SC2-01).
+  Review round 2: a press on New ▾ that closed its menu without completing a
+  click no longer swallows the next Enter, and a right press no longer arms
+  the swallow (SC2-FOCUS-03, GPUI test and `scenario-s02-x11.py` step 2c).
 - [ ] Verify keyboard-only access, visible focus and disabled/unavailable actions.
 
 Acceptance: focus and selection match observed workflows, with no typing-triggered
@@ -845,7 +848,10 @@ Images and picture logo) are **implemented-unqualified**; see
   (SC2-LIVE-03); masked Go Live and Page Up under Black checked natively by
   `scenario-s02-x11.py`. Review round 1: Normalize text size re-sends the
   newest requested slide, so a Go Live still in preparation lands normalized
-  (SC2-LIVE-04, GPUI test). Windows and physical display runs open.
+  (SC2-LIVE-04, GPUI test). Review round 2: it rebuilds that request in
+  place, so the old-sizing cue never reaches the audience and a pending
+  double-click unmask survives (SC2-LIVE-05, GPUI tests). Windows and
+  physical display runs open.
 - [ ] Linux/X11: keep the operator's input focus when the audience window maps.
   winit 0.30's X11 backend ignores `with_active(false)`, so Openbox focuses the
   monitor-covering audience (found by `scripts/live-output-x11.py --kind dual`,

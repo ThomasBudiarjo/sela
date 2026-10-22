@@ -301,14 +301,15 @@ impl Operator {
                 // only on the next navigation. The newest request, not only
                 // the acknowledged slide: a cue still in preparation (a new
                 // item's Go Live, a step) was built with the old sizing
-                // (SC2-LIVE-04).
-                if let Some(index) = self.requested_slide()
-                    && matches!(
-                        self.output.as_ref().map(Supervisor::status),
-                        Some(Status::Connected { .. })
-                    )
-                {
-                    self.send(index);
+                // (SC2-LIVE-04). It is rebuilt in place under its own
+                // generation, so the stale-sized cue never reaches the
+                // audience and a double-click unmask intent stays with it
+                // (SC2-LIVE-05).
+                if matches!(
+                    self.output.as_ref().map(Supervisor::status),
+                    Some(Status::Connected { .. })
+                ) {
+                    self.refresh_live_request();
                 }
             }
             Control::Arrangement => self.cycle_arrangement(),
@@ -444,6 +445,10 @@ impl Operator {
                     return;
                 }
                 this.controls[control].focus(window, cx);
+                if control == Control::NewMenu && this.swallow_new_menu_click() {
+                    cx.notify();
+                    return;
+                }
                 this.activate(control, window, cx);
             }))
     }

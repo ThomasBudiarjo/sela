@@ -323,8 +323,12 @@ Common Windows prerequisites are listed once in
   them or New ▾ is open every show shortcut (B, period, Ctrl+B/C/L, Page
   Down, arrows, Home/End, Ctrl+Delete) is inert; Esc closes the menu and
   returns the focus to the row or button that opened it (SC2-FOCUS-01, -02;
-  UNOBSERVED best guess). Re-run: `scenario-s02-windows.py` (Songs and
-  Schedule item menus).
+  UNOBSERVED best guess). Also on New ▾: with its menu open, press the left
+  button on New ▾, drag away and release, then press Enter (and separately
+  right-press New ▾, then left-click it); record whether the menu opens.
+  Sela now: the press closes it, and the next Enter or left click opens it
+  (SC2-FOCUS-03). Re-run: `scenario-s02-windows.py` (Songs, Schedule item and
+  New ▾ menus).
 - [ ] **PP-SC2-02 Next/Previous after a Go Live that did not show**
   (SC2-LIVE-01; EW8-OBS-014, -050). Steps: hard to force in EW; the nearest
   case is Go Live on an item whose background media is missing. Record
@@ -366,9 +370,13 @@ Common Windows prerequisites are listed once in
   (SC2-LIVE-04; EW8-OBS-014). Steps: with item A live, select item B, press
   Go Live and immediately click "Normalize text size across slides"; record
   the size B's first slide lands with and whether it changes on the next
-  slide. Sela now: the toggle re-sends the newest requested slide (B's
-  Verse 1 here), so B lands with the new sizing (UNOBSERVED best guess; the
-  timing window is short on fast hardware). Re-run: `live-output-windows.py`.
+  slide; also under Black double-click a Live slide and click Normalize at
+  once, and record whether the mask lifts. Sela now: the toggle rebuilds the
+  newest requested slide (B's Verse 1 here) in place, so B lands once, with
+  the new sizing and no intermediate old-sizing frame, and a double-click
+  unmask still lifts the mask over that slide (SC2-LIVE-04, -05; UNOBSERVED
+  best guess; the timing window is short on fast hardware). Re-run:
+  `live-output-windows.py`.
 - [ ] **PP-SC2-09 Song Editor close prompt wording** (SC2-I18N-02;
   EW8-OBS-012). Steps: edit a song, press Cancel (and close the editor
   window), read the prompt and press each of Yes, No and Cancel in turn on a

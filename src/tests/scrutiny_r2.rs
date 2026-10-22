@@ -464,18 +464,29 @@ fn normalize_applies_to_a_go_live_still_in_preparation(cx: &mut TestAppContext) 
     operator.update(&mut cx, |o, _| o.cue_preparer = Some(preparer));
     click(&mut cx, "go-live");
     assert_eq!(operator.read_with(&cx, |o, _| o.pending_cues.len()), 1);
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
     click(&mut cx, "normalize-text");
-    assert_eq!(
-        operator.read_with(&cx, |o, _| (o.sizing, o.pending_cues.len())),
-        (Sizing::Normalized, 2),
-        "the canticle's cue is prepared again with the new sizing"
-    );
+    // SC2-LIVE-05: the cue in preparation is rebuilt in place, not followed
+    // by a second one, so its per-slide sizing never reaches the audience.
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.sizing, Sizing::Normalized);
+        assert_eq!(o.pending_cues.len(), 1, "the old-sizing cue is cancelled");
+        assert_eq!(o.pending_cues[0].sizing, Sizing::Normalized);
+    });
+    // One gate for the cancelled build still blocking the worker, one for
+    // the rebuilt cue.
     open.send(()).unwrap();
     open.send(()).unwrap();
     settle(&mut cx, &operator, "canticle on screen", |o| {
         o.pending_cues.is_empty() && o.on_screen() == Some("Quiet Canticle · Verse 1")
     });
+    idle(&mut cx, &operator);
     operator.read_with(&cx, |o, _| {
+        assert_eq!(
+            submitted(o),
+            sent + 1,
+            "only the normalized cue reached the audience"
+        );
         let (item, _, sizing, _) = o.size_cap.unwrap();
         assert_eq!(item, o.live.as_ref().unwrap().version);
         assert_eq!(
@@ -485,4 +496,108 @@ fn normalize_applies_to_a_go_live_still_in_preparation(cx: &mut TestAppContext) 
         );
         assert_eq!(o.live_slide, Some(0));
     });
+}
+
+/// SC2-LIVE-05: Normalize re-sent the newest request through `send`, which
+/// starts a new request and cancels the double-click unmask intent. A slide
+/// double-clicked under Black and still in preparation then landed with
+/// Black kept on. The toggle now rebuilds that same request.
+#[gpui::test]
+fn normalize_keeps_a_pending_double_click_unmask(cx: &mut TestAppContext) {
+    use sela::slides::Sizing;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = show_verse_then_black(cx, &dir);
+    let (open, preparer) = gated_preparer(Default::default());
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(preparer));
+
+    operator.update(&mut cx, |o, _| o.click_live(1, false));
+    operator.update(&mut cx, |o, _| o.click_live(1, true));
+    let armed = operator.read_with(&cx, |o, _| o.unmask.armed());
+    assert!(armed.is_some());
+    click(&mut cx, "normalize-text");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.sizing, Sizing::Normalized);
+        assert_eq!(o.pending_cues.len(), 1);
+        assert_eq!(o.pending_cues[0].index, 1);
+        assert_eq!(o.unmask.armed(), armed, "the intent stays with the request");
+        assert_eq!(confirmed_mask(o), Some(Layer::Black));
+    });
+
+    open.send(()).unwrap();
+    open.send(()).unwrap();
+    let mut revealed_with = None;
+    for _ in 0..400 {
+        poll_for(&mut cx, &operator, 1);
+        operator.read_with(&cx, |o, _| {
+            if confirmed_mask(o) == Some(Layer::None) {
+                revealed_with = Some(o.on_screen().map(str::to_owned));
+            }
+        });
+        if revealed_with.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        revealed_with,
+        Some(Some("Signal Hymn · Chorus".to_owned())),
+        "the mask lifts over the double-clicked slide"
+    );
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.masks.layer(), Layer::None);
+        assert_eq!(
+            o.size_cap.map(|(_, _, sizing, _)| sizing),
+            Some(Sizing::Normalized)
+        );
+    });
+}
+
+/// SC2-FOCUS-03: the New ▾ swallow-click flag outlived its press. A press on
+/// New ▾ that closed the menu but released elsewhere (no click) left it set,
+/// so the next keyboard activation was swallowed; a right press that closed
+/// the menu armed it for a later left click at the same pixel.
+#[gpui::test]
+fn new_menu_swallow_never_outlives_its_click(cx: &mut TestAppContext) {
+    use gpui::{MouseButton, point};
+    let (mut cx, operator, _) = fixture(cx);
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    let start = cx.debug_bounds("new-menu").unwrap().center();
+
+    // Press on New ▾ with the menu open, drag away, release: closed.
+    click(&mut cx, "new-menu");
+    assert!(operator.read_with(&cx, |o, _| o.new_menu));
+    let away = start + point(px(0.), px(300.));
+    cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(away, MouseButton::Left, Default::default());
+    cx.simulate_mouse_up(away, MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    assert!(operator.read_with(&cx, |o, _| !o.new_menu));
+    assert_control(&mut cx, &operator, Control::NewMenu);
+    // The first Enter opens it.
+    cx.simulate_keystrokes("enter");
+    assert!(
+        operator.read_with(&cx, |o, _| o.new_menu),
+        "Enter on New ▾ opens the menu"
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(operator.read_with(&cx, |o, _| !o.new_menu));
+
+    // A right press closes it; a left click at the same pixel reopens it.
+    click(&mut cx, "new-menu");
+    assert!(operator.read_with(&cx, |o, _| o.new_menu));
+    cx.simulate_mouse_down(start, MouseButton::Right, Default::default());
+    cx.simulate_mouse_up(start, MouseButton::Right, Default::default());
+    cx.run_until_parked();
+    assert!(operator.read_with(&cx, |o, _| !o.new_menu));
+    click(&mut cx, "new-menu");
+    assert!(
+        operator.read_with(&cx, |o, _| o.new_menu),
+        "a left click after a right press opens the menu"
+    );
+
+    // The completed left click on New ▾ with the menu open still closes it
+    // without reopening (SC2-FOCUS-02).
+    click(&mut cx, "new-menu");
+    assert!(operator.read_with(&cx, |o, _| !o.new_menu));
+    click(&mut cx, "new-menu");
+    assert!(operator.read_with(&cx, |o, _| o.new_menu));
 }

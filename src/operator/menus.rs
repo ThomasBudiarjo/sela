@@ -505,14 +505,13 @@ impl Operator {
     }
 
     /// Toolbar New ▾: opens or closes the New menu; focus stays on the
-    /// button, Tab reaches the items.
+    /// button, Tab reaches the items. Keyboard activation always toggles: a
+    /// swallow left by a press that never completed a click is dropped here
+    /// (SC2-FOCUS-03).
     pub(crate) fn toggle_new_menu(&mut self) {
         self.bar_menu = None;
-        if std::mem::take(&mut self.new_menu_swallow_click) {
-            // This press already closed the menu (mouse down outside it).
-            self.new_menu = false;
-            return;
-        }
+        self.new_menu_swallow_click = false;
+        self.new_menu_closed_at = None;
         self.new_menu = !self.new_menu;
         if self.new_menu {
             self.item_menu = None;
@@ -521,10 +520,29 @@ impl Operator {
         }
     }
 
-    /// A press on the New button: when the same press just closed the menu
-    /// from outside, the click that follows must not reopen it.
+    /// A left press on the New button: when the same press just closed the
+    /// menu from outside, the click that follows must not reopen it. Every
+    /// press replaces the previous verdict, so it never outlives its click.
     pub(crate) fn new_button_pressed(&mut self, position: Point<Pixels>) {
         self.new_menu_swallow_click = self.new_menu_closed_at.take() == Some(position);
+    }
+
+    /// A press outside the open New menu closed it. Only a left press can be
+    /// the start of a click on New ▾, so only its position is kept.
+    pub(crate) fn new_menu_pressed_outside(&mut self, event: &gpui::MouseDownEvent) {
+        self.new_menu_closed_at =
+            (event.button == gpui::MouseButton::Left).then_some(event.position);
+    }
+
+    /// A mouse click on New ▾ whose press already closed the menu: consumed
+    /// without reopening it. Only the mouse click path asks.
+    pub(crate) fn swallow_new_menu_click(&mut self) -> bool {
+        if !std::mem::take(&mut self.new_menu_swallow_click) {
+            return false;
+        }
+        self.bar_menu = None;
+        self.new_menu = false;
+        true
     }
 
     /// A popup item (rendered or just closed) holds the keyboard focus.

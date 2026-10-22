@@ -10,7 +10,9 @@ order (see that docstring): seeded "Signal Hymn" (A) and "Quiet Canticle"
 (B) scheduled as A, B with Live output on (SELA_AUDIENCE_MONITOR=secondary);
 A goes live by Page Down; with the Songs row menu open B and Page Down change
 nothing (SC2-FOCUS-01), and with the Schedule item menu open B, Page Down and
-Ctrl+Delete change nothing and Esc closes it (SC2-FOCUS-02); Songs menu › Edit Song… on B adds a line and Ctrl+S
+Ctrl+Delete change nothing and Esc closes it (SC2-FOCUS-02); with New ▾ open
+B and Page Down change nothing, a press on New ▾ released 300 px away closes
+it and the next Enter opens it again (SC2-FOCUS-03); Songs menu › Edit Song… on B adds a line and Ctrl+S
 stores B's revision 2 while A keeps revision 1 and the audience frame and the
 Live status (UIA `Live-status`) stay on A's Verse 1; selecting B is Preview
 only; Next/Previous act on A; Ctrl+B / Ctrl+C toggle and restore the exact
@@ -181,6 +183,27 @@ def main() -> int:
             raise nw.Failure("a key under the Schedule item menu removed or closed it")
         nw.press(operator, "escape")
         wait_for(5, "Esc to close the item menu", lambda: "item-menu-popup" not in nodes())
+
+        # 2c. New ▾ modality and a press released elsewhere (SC2-FOCUS-03).
+        press_control("new-menu")
+        wait_for(5, "the New menu", lambda: "new-menu-popup" in nodes())
+        nw.press(operator, "b")
+        nw.press(operator, "pagedown")
+        unchanged("B and Page Down under the New menu")
+        new = nodes()["new-menu"]
+        new_x = new["x"] + new["width"] // 2 - origin_x
+        new_y = new["y"] + new["height"] // 2 - origin_y
+        nw.mouse_down(operator, new_x, new_y)
+        try:
+            nw.drag_to(operator, new_x, new_y + 300)
+        finally:
+            nw.mouse_up()
+        wait_for(5, "the press to close New ▾", lambda: "new-menu-popup" not in nodes())
+        nw.press(operator, "enter")
+        wait_for(5, "the first Enter to open New ▾", lambda: "new-menu-popup" in nodes())
+        nw.press(operator, "escape")
+        wait_for(5, "Esc to close New ▾", lambda: "new-menu-popup" not in nodes())
+        unchanged("the New menu steps")
 
         # 3. Edit B while A is live.
         before = revisions(library)

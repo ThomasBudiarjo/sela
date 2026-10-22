@@ -718,7 +718,7 @@ impl Render for Operator {
                         // itself closes it without reopening.
                         .on_mouse_down_out(cx.listener(
                             |this, event: &gpui::MouseDownEvent, window, cx| {
-                                this.new_menu_closed_at = Some(event.position);
+                                this.new_menu_pressed_outside(event);
                                 this.dismiss_popup_menus(false, window, cx);
                             },
                         ))

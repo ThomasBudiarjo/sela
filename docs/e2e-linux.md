@@ -261,6 +261,9 @@ commands and timings in the work-log record "scrutiny-r2"). Review round 1:
 query (a window vanishing between two queries counts as gone), used by
 `App.wait_exit`, the file dialog close wait and the scenario scripts; S01 now
 also checks Options and the editor close prompt, S02 the Schedule item menu.
+Review round 2: S02 step 2c drives New ▾ (show keys inert while open; a
+press released 300 px away closes it and the first Enter reopens it) with
+`nx.drag`; it FAILS on the binary without the SC2-FOCUS-03 fix.
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live

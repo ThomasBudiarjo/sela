@@ -17,7 +17,9 @@ output on. Checks, in order:
    Page Down change neither the audience nor the mask; Esc closes the menu.
    The Schedule item menu (right-click on item 2) is modal the same way
    (SC2-FOCUS-02): B, Page Down and Ctrl+Delete change nothing and the entry
-   stays; Esc closes it.
+   stays; Esc closes it. With the toolbar New ▾ menu open B and Page Down
+   change nothing; a press on New ▾ released 300 px away closes the menu and
+   the next Enter on New ▾ opens it again (SC2-FOCUS-03); Esc closes it.
 3. Edit B while A is live: Songs menu › Edit Song… opens "Song Editor - Quiet
    Canticle"; a line is added to its verse and Ctrl+S stores revision 2 of B
    (SQLite) while A keeps revision 1. The audience frame and the Live status
@@ -186,6 +188,30 @@ def body(session: nx.Session) -> str:
     time.sleep(0.4)
     if "item-menu-popup" in app.controls(operator):
         raise nx.Failure("Esc did not close the Schedule item menu")
+
+    # 2c. New ▾ (SC2-FOCUS-02/-03): show keys are inert while it is open; a
+    # press on New ▾ that closes it but is released elsewhere (no click)
+    # leaves nothing behind, so the first Enter on New ▾ opens it again.
+    press_control("new-menu")
+    control("new-menu-popup")
+    nx.press(operator, "b", "pagedown")
+    unchanged("B and Page Down under the New menu")
+    new = control("new-menu").center
+    nx.drag(operator, new, (new[0], new[1] + 300))
+    time.sleep(0.4)
+    if "new-menu-popup" in app.controls(operator):
+        raise nx.Failure("a press on New ▾ did not close its menu")
+    nx.press(operator, "enter")
+    try:
+        control("new-menu-popup")
+    except nx.Failure:
+        raise nx.Failure("the first Enter on New ▾ after a press-and-drag was swallowed")
+    session.save(operator, "02c-new-menu-enter")
+    nx.press(operator, "escape")
+    time.sleep(0.4)
+    if "new-menu-popup" in app.controls(operator):
+        raise nx.Failure("Esc did not close the New menu")
+    unchanged("the New menu steps")
 
     # 3. Edit B while A is live.
     before = revisions(library)
