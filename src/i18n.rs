@@ -548,6 +548,11 @@ pub enum Msg {
     StyleTab,
     SwatchesTab,
     ValuesTab,
+    // Media backend (M2-01).
+    MediaUnavailableMissing,
+    MediaUnavailableGpl,
+    MediaUnavailableNonfree,
+    MediaUnavailableBroken,
 }
 
 impl Msg {
@@ -1020,6 +1025,10 @@ impl Msg {
         Msg::StyleTab,
         Msg::SwatchesTab,
         Msg::ValuesTab,
+        Msg::MediaUnavailableMissing,
+        Msg::MediaUnavailableGpl,
+        Msg::MediaUnavailableNonfree,
+        Msg::MediaUnavailableBroken,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1560,6 +1569,15 @@ impl Msg {
             Self::StyleTab => "Style",
             Self::SwatchesTab => "Swatches",
             Self::ValuesTab => "Values",
+            // Media backend (M2-01).
+            Self::MediaUnavailableMissing => "Video and audio unavailable: FFmpeg was not found",
+            Self::MediaUnavailableGpl => {
+                "Video and audio unavailable: the FFmpeg found is a GPL build"
+            }
+            Self::MediaUnavailableNonfree => {
+                "Video and audio unavailable: the FFmpeg found is a nonfree build"
+            }
+            Self::MediaUnavailableBroken => "Video and audio unavailable: FFmpeg did not start",
         }
     }
 
@@ -2121,6 +2139,19 @@ impl Msg {
             Self::StyleTab => "Gaya",
             Self::SwatchesTab => "Palet Warna",
             Self::ValuesTab => "Nilai",
+            // Media backend (M2-01).
+            Self::MediaUnavailableMissing => {
+                "Video dan audio tidak tersedia: FFmpeg tidak ditemukan"
+            }
+            Self::MediaUnavailableGpl => {
+                "Video dan audio tidak tersedia: FFmpeg yang ditemukan berlisensi GPL"
+            }
+            Self::MediaUnavailableNonfree => {
+                "Video dan audio tidak tersedia: FFmpeg yang ditemukan bukan perangkat lunak bebas"
+            }
+            Self::MediaUnavailableBroken => {
+                "Video dan audio tidak tersedia: FFmpeg gagal dijalankan"
+            }
         }
     }
 }

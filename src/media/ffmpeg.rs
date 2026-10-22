@@ -18,6 +18,10 @@ use std::time::{Duration, Instant};
 
 /// Environment variable naming a directory that holds `ffmpeg` and `ffprobe`.
 pub const ENV_DIR: &str = "SELA_FFMPEG_DIR";
+/// Set to `1` to leave the development copy out of the lookup, so a debug
+/// build can exercise the missing or refused FFmpeg paths (native checks).
+/// Release builds have no development copy to leave out.
+pub const ENV_NO_DEV_COPY: &str = "SELA_FFMPEG_NO_DEV_COPY";
 /// Folder name of the pinned LGPL build under `.amp/in/ffmpeg/` in a
 /// development checkout.
 pub const PINNED_ID: &str = "n8.1.3-lgpl";
@@ -226,7 +230,8 @@ pub fn locate() -> Result<Located, NotFound> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
-    let dev_dir = dev_dir();
+    let dev_dir =
+        dev_dir().filter(|_| std::env::var_os(ENV_NO_DEV_COPY).is_none_or(|value| value != "1"));
     locate_with(
         candidates(env_dir.as_deref(), exe_dir.as_deref(), dev_dir.as_deref()),
         probe_build,
@@ -973,6 +978,35 @@ libavformat    62. 12.103 / 62. 12.103
                 dir.display()
             );
         }
+    }
+
+    #[test]
+    fn locate_leaves_out_the_dev_copy_on_request() {
+        let root = tempfile::tempdir().unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(child_args("child_locates_without_dev_copy"))
+            .env(ENV_DIR, root.path())
+            .env(ENV_NO_DEV_COPY, "1")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "child process for locate_leaves_out_the_dev_copy_on_request"]
+    fn child_locates_without_dev_copy() {
+        if !in_child() {
+            return;
+        }
+        let not_found = locate().expect_err("only the empty env dir and install dir remain");
+        let sources: Vec<Source> = not_found.tried.iter().map(|t| t.candidate.source).collect();
+        assert_eq!(sources, [Source::Env, Source::Install]);
     }
 
     fn tried_entry(source: Source, dir: &Path) -> Tried {

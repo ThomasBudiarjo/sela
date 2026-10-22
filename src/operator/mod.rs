@@ -42,6 +42,7 @@ mod controls;
 mod dialogs;
 mod frame_log;
 mod layout;
+mod media_backend;
 mod menus;
 mod navigation;
 mod options;
@@ -60,6 +61,7 @@ use controls::{
 };
 use dialogs::DismissDialog;
 pub(super) use dialogs::{Dialog, Then};
+pub(crate) use media_backend::MediaLocator;
 pub(crate) use menus::{BarMenu, TopMenu};
 use menus::{
     BarMenuLeft, BarMenuRight, MenuConfirm, MenuDismiss, MenuNext, MenuPrevious, OpenEditMenu,
@@ -289,6 +291,8 @@ pub(super) struct Operator {
     pub(super) selected_image: Option<String>,
     image_menu: Option<Point<Pixels>>,
     pub(super) media_message: Option<String>,
+    /// FFmpeg availability, located once off the UI thread (M2-01).
+    pub(super) media_backend: media_backend::MediaBackend,
     /// Not persisted yet.
     pub(super) sizing: Sizing,
     pub(super) size_cap: Option<(Version, Extent, Sizing, Option<u16>)>,
@@ -506,6 +510,7 @@ impl Operator {
         });
         let schedule_writer = config.schedule_writer.clone();
         let layout = config.initial_layout.unwrap_or_default();
+        let media_backend = media_backend::MediaBackend::start(config.media_locator.clone());
         let settings = SettingsState::start(profile.as_deref(), config, cx);
         Self {
             focus: cx.focus_handle(),
@@ -563,6 +568,7 @@ impl Operator {
             selected_image: None,
             image_menu: None,
             media_message,
+            media_backend,
             sizing: Sizing::default(),
             size_cap: None,
             cue_preparer: None,

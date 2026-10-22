@@ -6,7 +6,8 @@ impl Operator {
             | self.poll_images()
             | self.poll_preflight()
             | self.poll_settings()
-            | self.poll_schedule_files();
+            | self.poll_schedule_files()
+            | self.poll_media_backend();
         changed |= self.poll_cues();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());

@@ -153,6 +153,16 @@ fn process_exists(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(windows)]
+fn process_exists(pid: u32) -> bool {
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("tasklist");
+    String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+}
+
 #[test]
 fn a_generated_clip_decodes_every_frame_in_order_with_timestamps() {
     let Some(tools) = tools("a_generated_clip_decodes_every_frame_in_order_with_timestamps") else {
@@ -555,7 +565,7 @@ fn backpressure_holds_the_decoder_without_a_stall_or_lost_frames() {
         std::thread::sleep(Duration::from_millis(5));
     }
     std::thread::sleep(Duration::from_millis(1200));
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     assert!(
         process_exists(decoder.pid().unwrap()),
         "ffmpeg is held back by the full queue, not finished"
@@ -599,7 +609,7 @@ fn try_next_never_blocks_while_the_decoder_works() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn dropping_the_decoder_kills_ffmpeg() {
     let Some(tools) = tools("dropping_the_decoder_kills_ffmpeg") else {
@@ -638,7 +648,7 @@ fn dropping_the_decoder_kills_ffmpeg() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn a_decoder_killed_from_outside_reports_a_crash() {
     let Some(tools) = tools("a_decoder_killed_from_outside_reports_a_crash") else {
@@ -662,11 +672,23 @@ fn a_decoder_killed_from_outside_reports_a_crash() {
         }
     }
     let pid = decoder.pid().unwrap().to_string();
-    let status = Command::new("kill").args(["-KILL", &pid]).status().unwrap();
+    #[cfg(unix)]
+    let (status, killed) = (
+        Command::new("kill").args(["-KILL", &pid]).status().unwrap(),
+        "signal",
+    );
+    #[cfg(windows)]
+    let (status, killed) = (
+        Command::new("taskkill")
+            .args(["/PID", &pid, "/F"])
+            .status()
+            .unwrap(),
+        "exit code",
+    );
     assert!(status.success());
     let rest = run_after(&decoder, true);
     match rest.failed {
-        Some(MediaError::Crashed(detail)) => assert!(detail.contains("signal"), "{detail}"),
+        Some(MediaError::Crashed(detail)) => assert!(detail.contains(killed), "{detail}"),
         other => panic!(
             "expected a crash, got {other:?} after {} frames",
             rest.frames.len()

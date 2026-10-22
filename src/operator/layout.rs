@@ -420,6 +420,7 @@ impl Render for Operator {
                             .text_color(rgb(MUTED))
                             .child(self.output_line()),
                     )
+                    .children(self.media_warning())
                     .children(self.settings_note().map(|note| {
                         div()
                             .debug_selector(|| "settings-note".into())
