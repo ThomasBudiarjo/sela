@@ -2284,6 +2284,10 @@ impl Library {
         }
         div()
             .id(("library-button", index))
+            // Stable automation id and name (M1-08 theme editor scripts).
+            .role(Role::Button)
+            .aria_label(label.to_owned())
+            .accessibility_id(format!("editor-button-{index}"))
             .track_focus(&self.buttons[index])
             .key_context("SelaControl")
             .flex_shrink_0()

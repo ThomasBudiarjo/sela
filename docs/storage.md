@@ -490,3 +490,14 @@ operator no longer writes them.
 ## M1-05 residual — schema 6 (song metadata, modified stamp)
 
 Schema 6 (backup schema5-backup, abort hook SELA_ABORT_MIGRATION_SCHEMA6) adds songs.modified INTEGER NOT NULL DEFAULT 0 with index songs_modified, filled from the search_rows.row order so existing libraries keep their Date modified order, and a song_metadata side table (administrator, song number) keyed by song revision. Saves stamp MAX(now_ms, MAX(modified)+1). Sort by Date modified uses the column and survives an FTS rebuild. Limits: administrator 256 chars, song number digits only, up to 12. Schedule files are v3 and carry the copyright footer on prepared cues.
+
+## M1-08 — schema 7 (themes)
+
+Schema 7 (backup `.schema6-backup`, abort hook `SELA_ABORT_MIGRATION_SCHEMA7`)
+adds three tables and changes no existing row: `themes` (id, save revision,
+`Theme::encode` payload of at most 1024 bytes), `song_themes` (a song's theme
+by song id, so applying a theme creates no song revision) and `theme_default`
+(one row: the default song theme). At most 256 themes; deleting the default
+returns to the built-in theme; a song naming a deleted theme falls back to the
+default with a visible note. Schedule files are version 4: each item carries
+its theme snapshot. Design and inheritance rules: [themes](themes.md).

@@ -1316,6 +1316,85 @@ mod tests {
     }
 
     #[test]
+    fn margin_insets_round_trip_and_bad_insets_are_rejected() {
+        let now = Instant::now();
+        let caps = RendererCapabilities {
+            max_texture_dimension: 8192,
+        };
+        let extent = Extent {
+            width: 640,
+            height: 360,
+        };
+        let format = crate::format::SlideFormat {
+            margins: Some(crate::format::Margins {
+                left: 300,
+                right: 60,
+                top: 90,
+                bottom: 30,
+            }),
+            ..Default::default()
+        };
+        let slide = crate::slides::Slide {
+            label: String::new(),
+            text: "Margin wire refrain".into(),
+            format: format.clone(),
+            background: None,
+        };
+        let cue = Arc::new(
+            crate::slides::cue(
+                ContentVersion { id: 5, revision: 6 },
+                &slide,
+                &crate::fonts::Resolved::bundled(&format),
+                extent,
+                caps,
+                None,
+                crate::slides::color_background([0, 0, 0]),
+            )
+            .unwrap(),
+        );
+        let insets = cue.insets().unwrap();
+        assert_eq!(insets.left, 100, "300 points at 360 lines");
+        let command = Command::from_wire(
+            Stamp {
+                epoch: Epoch(7),
+                sequence: 1,
+            },
+            Lane::Cue,
+            Payload::Scene(cue.clone()),
+            now + Duration::from_secs(2),
+        );
+        let mut wire = Vec::new();
+        Frame::command(&command, now)
+            .unwrap()
+            .write(&mut wire)
+            .unwrap();
+        let back = Frame::read(wire.as_slice())
+            .unwrap()
+            .into_command(now, caps)
+            .unwrap();
+        assert_eq!(back.cue().unwrap().insets(), Some(insets));
+        // The block trails the strip: a bad tag or a box wider than the
+        // canvas is refused, never drawn somewhere else.
+        let tag = wire.len() - 17;
+        let mut bad = wire.clone();
+        bad[tag] = 2;
+        assert!(
+            Frame::read(bad.as_slice())
+                .unwrap()
+                .into_command(now, caps)
+                .is_err()
+        );
+        let mut wide = wire.clone();
+        wide[tag + 1..tag + 5].copy_from_slice(&700u32.to_le_bytes());
+        assert!(
+            Frame::read(wide.as_slice())
+                .unwrap()
+                .into_command(now, caps)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn styled_text_round_trips_and_rejects_bad_wire_values() {
         let now = Instant::now();
         let caps = RendererCapabilities {

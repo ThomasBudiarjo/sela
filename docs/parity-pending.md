@@ -330,6 +330,57 @@ Common Windows prerequisites are listed once in
 
 ## Stream: themes
 
+Sela behavior and every best guess: [themes](themes.md); best-guess IDs are in
+reference-observations.md, "Themes — UNOBSERVED best guesses".
+
+- [ ] **PP-TH-01 Themes tab layout and commands** (EW8-OBS-010 lists the tab;
+  content unobserved; TH-BG-01). Steps: open Resources › Themes in 8.0.49 with
+  the default profile; capture the tab (list or grid, thumbnails, columns,
+  footer + / gear, right-click menu entries); right-click a theme and record
+  every entry (Edit, Duplicate, Delete, "Set As Default Song Theme"…); note
+  which theme carries a default marker. Sela now: list with 160x90 thumbnails
+  and a footer New Theme / Edit… / Duplicate / Delete / Set as Default /
+  Apply to Song / Apply to Item / Item: Song Theme. Re-run:
+  `themes-windows.py`.
+- [ ] **PP-TH-02 Applying a theme to a song and a schedule item** (TH-BG-02,
+  TH-BG-03). Steps: with song A in the schedule and A live, change A's theme
+  from the Songs list (or by dragging a theme onto it) and separately from
+  the schedule item; record whether Preview/Live change before a new Go Live,
+  whether the library song and the schedule item change together, and
+  whether a saved .ews keeps the item's look. Sela now: library songs follow
+  their library theme; schedule items keep a snapshot (captured when first
+  shown or saved, explicit when applied); Live changes only on Go Live.
+  Re-run: `themes-windows.py`, `schedule-windows.py`.
+- [ ] **PP-TH-03 Editing a theme while it is live** (TH-BG-04; EW8-OBS-057).
+  Steps: with a themed song live, edit the theme's background and font and
+  save; record whether the audience changes immediately, on Next, or only on
+  a new Go Live; whether other songs on the theme change. Sela now: nothing
+  reaches the audience until a re-cue; library songs show the edit on their
+  next Preview; schedule items keep their snapshot. Re-run:
+  `themes-windows.py`.
+- [ ] **PP-TH-04 Theme editor controls** (EW8-OBS-030, -032, -043;
+  TH-BG-05). Steps: open a theme's editor (Edit Theme or the Layouts tab
+  theme selector), record its window title, whether margins (Text › Layout)
+  and Theme Elements show there, how Reset works, and the Save/Cancel
+  wording. Sela now: the Song Editor in theme mode, title "Theme Editor -
+  name", margins under Text, Copyright under Slide › Theme Elements, Reset
+  Look button, OK/Apply/Cancel. Re-run: `themes-windows.py`.
+- [ ] **PP-TH-05 Default song theme and a deleted theme** (EW8-OBS-019;
+  TH-BG-06). Steps: Set As Default Song Theme on a theme and check songs
+  without their own theme; delete a theme a song uses and record what the
+  song shows and any message. Sela now: the default applies to songs without
+  a theme; a deleted theme falls back to the default with a Preview note.
+  Re-run: `themes-windows.py`.
+- [ ] **PP-TH-06 Contrast/aspect/missing-font warnings** (TH-BG-07). Steps:
+  look for any EW warning when a theme uses an uninstalled font, a 4:3 image
+  on a 16:9 output, or white text on a near-white background. Sela now: row
+  and editor warnings (font, image, WCAG contrast < 3:1, aspect mismatch >
+  2%); EW is believed to show none. Re-run: `themes-windows.py`.
+- [ ] **PP-TH-07 Windows run of `themes-windows.py`** (NOT RUN: no Windows
+  host). Prerequisites as in the run order below; seed `--themes`; secondary
+  monitor for the audience. Also re-run `song-editor-windows.py` (editor
+  buttons now carry AccessKit ids `editor-button-N`).
+
 ## Stream: stage-display
 
 ## Stream: fuzz-audit
@@ -372,6 +423,7 @@ timing):
 | 20 | `resource-browser-windows.py` | seed (`--second-song`, `--extra-songs`); release binary and a 20k library for the scrolling timings |
 | 21 | `prep-windows.py` | release binary (`--binary target\release\sela.exe`); seed (`--heavy-song`); audience on the laptop panel (`--monitor name:\\.\DISPLAY1`, the default) |
 | 22 | `reference-w03-windows.py` | not a Sela check: EasyWorship 8.0.49 open and maximized with one song previewed from the Songs tab; observation only |
+| 23 | `themes-windows.py` | seed (`--themes`); secondary monitor; native Save dialog (themes stream, PP-TH-07) |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

@@ -758,13 +758,28 @@ provisional 30 ms target/100 ms p95 ceiling, not an unqualified speed claim.
 
 Depends on: M1-06, M1-01. Tests: U, R, N.
 
-- [ ] Implement font, size, color, alignment, margins, shadow/outline, background
+Progress (stream "themes", 2026-10-22, **implemented-unqualified**; see
+[themes](themes.md)): `sela::theme` model with field-by-field inheritance
+(slide → song master → theme → built-in), schema 7 behind a verified backup,
+`.selaschedule` v4 item snapshots, margins carried to the audience as cue
+insets, the operator Themes tab (thumbnails, warnings, default, apply to song
+and to schedule items) and the Song Editor theme mode. GPUI tests and
+`scripts/themes-x11.py` pass on Linux; `scripts/themes-windows.py`, the EW
+Themes tab observation and screen-reader checks are open
+([parity pending](parity-pending.md#stream-themes)).
+
+- [x] Implement font, size, color, alignment, margins, shadow/outline, background
   color/image and copyright position where confirmed by the reference.
-- [ ] Specify default/theme/item overrides and snapshot inheritance explicitly.
-- [ ] Preview changes without applying them live; implement reset/cancel/undo.
-- [ ] Validate missing fonts/assets, unsuitable aspect ratios and text contrast;
+  (Copyright: shown/hidden at the bottom, the observed position; free
+  placement is unobserved and not built. Margins live under the Text tab, EW's
+  Text › Layout is M1-05k.)
+- [x] Specify default/theme/item overrides and snapshot inheritance explicitly.
+- [x] Preview changes without applying them live; implement reset/cancel/undo.
+- [x] Validate missing fonts/assets, unsuitable aspect ratios and text contrast;
   make substitutions visible rather than claiming identical output.
-- [ ] Render long/short text, landscape variants and override combinations.
+- [x] Render long/short text, landscape variants and override combinations.
+  (Raster/fit unit tests on five landscape sizes and GPUI checks; no golden
+  image or physical display run.)
 
 Acceptance: theme edits are predictable, serializable and isolated from live;
 advanced shape/layer tooling remains tracked in M4-01.

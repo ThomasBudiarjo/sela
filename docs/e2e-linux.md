@@ -16,6 +16,11 @@ Files:
 - `scripts/<feature>-x11.py`: one script per feature. Ported so far:
   `live-output-x11.py`, `schedule-x11.py`, `song-editor-x11.py` (from the
   `*-windows.py` scripts of the same name).
+  New feature scripts: `themes-x11.py` (M1-08; Windows counterpart
+  `themes-windows.py`). Finding while writing it: after an editor window of
+  the operator process closes, or once the operator's X title names the
+  schedule, AT-SPI lookups of the operator frame by title time out, so the
+  script locates operator controls once and reuses their centers.
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -243,6 +248,7 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `live-output-x11.py --kind dual --tolerate-audience-focus` | private dual, audience `secondary` 1920x1080 | PASS, four tolerated focus thefts |
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
+| `themes-x11.py --display :117` (themes stream, 2026-10-22, binary sha256 `f37bf47ba9dd1ca2…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (40 s) |
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live

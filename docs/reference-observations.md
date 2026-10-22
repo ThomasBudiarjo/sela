@@ -696,3 +696,24 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 - CCLI maps to the Song Number field.
 - Metadata search covers authors, copyright, license, administrator and song number.
 - Close prompt: Yes saves and closes, No discards, Cancel or Esc keeps editing; it is modal.
+
+## Themes — UNOBSERVED best guesses (themes, 2026-10-22)
+
+EasyWorship 8.0.49 was not run for M1-08. Observed inputs: the Themes tab
+exists (EW8-OBS-010); the Master is a layout of the song's theme
+(EW8-OBS-037, -043); Theme Elements song/scripture/copyright (EW8-OBS-032);
+Copy to Theme and "Set As Default Song Theme" re-render the song preview
+(EW8-OBS-019); format and margin controls (EW8-OBS-028..030); copyright strip
+(EW8-OBS-063). Everything below is a reversible Sela choice to check
+(docs/parity-pending.md, PP-TH-01..07; design in docs/themes.md).
+
+| ID | State | Record |
+|---|---|---|
+| TH-BG-01 | UNOBSERVED | Themes tab content: Sela lists the built-in theme then library themes by name, each with a 160x90 rendered thumbnail, Default/In Preview badges and warnings, and a one-line footer of commands. |
+| TH-BG-02 | UNOBSERVED | Applying a theme to a library song changes that song for every later Preview (by song id, no new song revision); Live changes only on a new Go Live. |
+| TH-BG-03 | UNOBSERVED | Schedule items keep a theme snapshot: captured from the song's library theme when first shown or saved, explicit after Apply to Item; library edits never reach it; `.selaschedule` v4 stores it. |
+| TH-BG-04 | UNOBSERVED | Editing a theme while a song using it is live never changes the audience until a re-cue (consistent with EW8-OBS-057's song-local rule being unverified). |
+| TH-BG-05 | UNOBSERVED | Theme editor = Song Editor in theme mode over a one-slide sample (EW8-OBS-043 shows sample lyrics); margins under the Text tab (EW: Text › Layout); Copyright under Slide › Theme Elements; Reset Look returns to the built-in look as one undo step. |
+| TH-BG-06 | UNOBSERVED | Default song theme applies to songs without their own; deleting it returns to the built-in theme; a song naming a deleted theme shows the default with a Preview note. |
+| TH-BG-07 | UNOBSERVED (Sela addition) | Warnings for an uninstalled font, a missing/changed image, WCAG contrast below 3:1 (no separating outline) and an image aspect off the output by more than 2%; EW is not known to warn. |
+| TH-BG-08 | UNOBSERVED | Copyright position: only the bottom strip (shown/hidden) is built; EW's free element placement is unobserved. |

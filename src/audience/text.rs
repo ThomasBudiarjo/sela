@@ -616,6 +616,42 @@ mod tests {
     }
 
     #[test]
+    fn theme_margins_keep_the_lyrics_inside_their_box() {
+        let extent = Extent {
+            width: 640,
+            height: 360,
+        };
+        let top_left = TextStyle {
+            align: HAlign::Left,
+            valign: VAlign::Top,
+            ..TextStyle::default()
+        };
+        let plain = layers(&styled("Margin", top_left, extent, 40)).unwrap();
+        let (left, top, _, _) = bbox(&plain.fill, 640).unwrap();
+        assert!(
+            (32..40).contains(&left) && (32..48).contains(&top),
+            "fixed inset"
+        );
+        let insets = sela::scene::Insets {
+            left: 200,
+            right: 20,
+            top: 120,
+            bottom: 20,
+        };
+        let boxed = styled("Margin", top_left, extent, 40)
+            .with_insets(insets)
+            .unwrap();
+        let (left, top, right, bottom) = bbox(&layers(&boxed).unwrap().fill, 640).unwrap();
+        assert!((200..208).contains(&left), "{left}");
+        assert!((120..136).contains(&top), "{top}");
+        assert!(right <= 640 - 20 && bottom <= 360 - 20);
+        // The slide fit and the raster agree on the box.
+        let room = slides::lyrics_box(extent, Some(insets), 0).unwrap();
+        assert_eq!((room.x, room.y), (200, 120));
+        assert_eq!((room.width, room.height), (420, 220));
+    }
+
+    #[test]
     fn the_footer_strip_is_drawn_centred_at_the_bottom_with_the_lyrics() {
         let extent = Extent {
             width: 640,
