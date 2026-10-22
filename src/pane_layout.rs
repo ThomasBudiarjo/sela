@@ -140,8 +140,8 @@ fn parse_window(value: &str) -> Option<Placement> {
         Some(_) => return None,
     };
     if parts.next().is_some()
-        || x.abs() > MAX_ORIGIN
-        || y.abs() > MAX_ORIGIN
+        || !(-MAX_ORIGIN..=MAX_ORIGIN).contains(&x)
+        || !(-MAX_ORIGIN..=MAX_ORIGIN).contains(&y)
         || !(1..=MAX_EXTENT).contains(&width)
         || !(1..=MAX_EXTENT).contains(&height)
     {
@@ -176,24 +176,33 @@ impl Area {
 /// Returns a placement that is fully usable: at least the minimum size, no
 /// larger than its monitor, and reachable on a connected monitor. A saved
 /// rectangle that is missing or offscreen is centred on the primary area.
-pub fn fit_placement(saved: Placement, areas: &[Area], primary: usize) -> Placement {
-    let Some(&fallback) = areas.get(primary).or_else(|| areas.first()) else {
-        return saved;
-    };
+/// Also returns the index of the area it belongs to, so the window opens on
+/// that monitor; `None` only when no monitor is known.
+pub fn fit_placement(
+    saved: Placement,
+    areas: &[Area],
+    primary: usize,
+) -> (Placement, Option<usize>) {
+    if areas.is_empty() {
+        return (saved, None);
+    }
+    let fallback = if primary < areas.len() { primary } else { 0 };
     let reachable = areas
         .iter()
-        .filter(|a| {
+        .enumerate()
+        .filter(|(_, a)| {
             let (w, h) = a.overlap(&saved);
             w >= REACH.0.min(saved.width as i32)
                 && h >= REACH.1.min(saved.height as i32)
                 && saved.y >= a.y
         })
-        .max_by_key(|a| {
+        .max_by_key(|(_, a)| {
             let (w, h) = a.overlap(&saved);
             i64::from(w) * i64::from(h)
         })
-        .copied();
-    let home = reachable.unwrap_or(fallback);
+        .map(|(index, _)| index);
+    let index = reachable.unwrap_or(fallback);
+    let home = areas[index];
     let width = saved
         .width
         .max(MIN_WINDOW.0)
@@ -210,13 +219,14 @@ pub fn fit_placement(saved: Placement, areas: &[Area], primary: usize) -> Placem
             home.y + (home.height as i32 - height as i32) / 2,
         )
     };
-    Placement {
+    let fitted = Placement {
         x,
         y,
         width,
         height,
         maximized: saved.maximized,
-    }
+    };
+    (fitted, Some(index))
 }
 
 #[cfg(test)]
@@ -304,6 +314,23 @@ mod tests {
     }
 
     #[test]
+    fn extreme_window_values_drop_the_layout_without_panicking() {
+        for value in [
+            "-2147483648,0,1280,800",
+            "0,-2147483648,1280,800",
+            "2147483647,0,1280,800",
+            "0,2147483647,1280,800",
+            "-100001,0,1280,800",
+            "0,0,4294967295,800",
+            "0,0,1280,4294967296",
+        ] {
+            assert_eq!(parts(&[("window", value)]), None, "window={value}");
+        }
+        let edge = parts(&[("window", "-100000,100000,1280,800")]).unwrap();
+        assert_eq!(edge.window, Some(at(-100_000, 100_000, 1280, 800)));
+    }
+
+    #[test]
     fn missing_keys_keep_defaults() {
         let layout = parts(&[("resources_collapsed", "1")]).unwrap();
         assert_eq!(layout.ratios, DEFAULT_RATIOS);
@@ -325,9 +352,20 @@ mod tests {
     #[test]
     fn visible_placement_is_kept() {
         let saved = at(100, 80, 1280, 800);
-        assert_eq!(fit_placement(saved, &[PRIMARY, SPARE], 0), saved);
+        assert_eq!(fit_placement(saved, &[PRIMARY, SPARE], 0), (saved, Some(0)));
+    }
+
+    #[test]
+    fn a_placement_wholly_on_the_spare_monitor_belongs_to_that_monitor() {
         let on_spare = at(2700, 50, 1000, 700);
-        assert_eq!(fit_placement(on_spare, &[PRIMARY, SPARE], 0), on_spare);
+        assert_eq!(
+            fit_placement(on_spare, &[PRIMARY, SPARE], 0),
+            (on_spare, Some(1))
+        );
+        assert_eq!(
+            fit_placement(on_spare, &[SPARE, PRIMARY], 1),
+            (on_spare, Some(0))
+        );
     }
 
     #[test]
@@ -342,7 +380,8 @@ mod tests {
             } else {
                 vec![PRIMARY, SPARE]
             };
-            let fitted = fit_placement(saved, &areas, 0);
+            let (fitted, area) = fit_placement(saved, &areas, 0);
+            assert_eq!(area, Some(0), "{saved:?}");
             assert!(fitted.x >= 0 && fitted.y >= 0, "{fitted:?}");
             assert!(fitted.x + fitted.width as i32 <= 2560, "{fitted:?}");
             assert!(fitted.y + fitted.height as i32 <= 1400, "{fitted:?}");
@@ -352,21 +391,21 @@ mod tests {
 
     #[test]
     fn size_is_clamped_to_the_minimum_and_the_monitor() {
-        let tiny = fit_placement(at(100, 100, 50, 40), &[PRIMARY], 0);
+        let (tiny, _) = fit_placement(at(100, 100, 50, 40), &[PRIMARY], 0);
         assert_eq!((tiny.width, tiny.height), MIN_WINDOW);
-        let huge = fit_placement(at(100, 100, 9000, 9000), &[PRIMARY], 0);
+        let (huge, _) = fit_placement(at(100, 100, 9000, 9000), &[PRIMARY], 0);
         assert_eq!((huge.width, huge.height), (2560, 1400));
     }
 
     #[test]
     fn title_bar_above_every_monitor_is_not_reachable() {
-        let fitted = fit_placement(at(100, -400, 1280, 800), &[PRIMARY], 0);
+        let (fitted, _) = fit_placement(at(100, -400, 1280, 800), &[PRIMARY], 0);
         assert!(fitted.y >= 0);
     }
 
     #[test]
     fn no_known_monitors_keeps_the_saved_placement() {
         let saved = at(5, 5, 900, 600);
-        assert_eq!(fit_placement(saved, &[], 0), saved);
+        assert_eq!(fit_placement(saved, &[], 0), (saved, None));
     }
 }
