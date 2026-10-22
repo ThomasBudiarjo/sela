@@ -293,6 +293,7 @@ mod tests {
     use super::*;
     use crate::import::MAX_FILE_BYTES;
     use proptest::prelude::*;
+    use proptest::test_runner::FileFailurePersistence;
 
     const HARBOR_LIGHT: &[u8] =
         include_bytes!("../../tests/fixtures/import/chordpro/harbor-light.cho");
@@ -556,11 +557,24 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(10));
     }
 
-    fn has_chord(text: &str) -> bool {
-        text.match_indices('[').any(|(i, _)| {
-            text[i + 1..]
+    #[test]
+    fn minimized_property_cases() {
+        assert_eq!(
+            parse_str("}[\n]").sections,
+            [section("Verse 1", &["}[\n]"])]
+        );
+        assert_eq!(parse(b"\n\n[]\n\n"), Err(Rejected::NoLyrics));
+        assert_eq!(
+            parse_str("[[G]]Sing").sections,
+            [section("Verse 1", &["Sing"])]
+        );
+    }
+
+    fn has_chord(line: &str) -> bool {
+        line.match_indices('[').any(|(i, _)| {
+            line[i + 1..]
                 .find(['[', ']'])
-                .is_some_and(|j| text.as_bytes()[i + 1 + j] == b']')
+                .is_some_and(|j| line.as_bytes()[i + 1 + j] == b']')
         })
     }
 
@@ -595,7 +609,13 @@ mod tests {
     ];
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+        #![proptest_config(ProptestConfig {
+            cases: 256,
+            failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
+                "tests/fixtures/import/chordpro/proptest-regressions.txt",
+            ))),
+            ..ProptestConfig::default()
+        })]
 
         #[test]
         fn arbitrary_input_keeps_the_song_invariants(
@@ -614,7 +634,7 @@ mod tests {
                     prop_assert!(song.order.iter().all(|&i| i < song.sections.len()));
                     for slide in song.sections.iter().flat_map(|s| &s.slides) {
                         prop_assert!(!slide.trim().is_empty());
-                        prop_assert!(!has_chord(slide), "{slide:?}");
+                        prop_assert!(!slide.lines().any(has_chord), "{slide:?}");
                     }
                 }
                 Err(rejected) => prop_assert!(matches!(

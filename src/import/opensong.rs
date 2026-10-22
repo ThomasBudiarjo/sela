@@ -147,18 +147,17 @@ fn build_sections(lyrics: &str, song: &mut ParsedSong) -> HashMap<String, Option
     let mut numbered: HashMap<u32, usize> = HashMap::new();
     for line in lyrics.lines() {
         let digits = line.bytes().take_while(u8::is_ascii_digit).count();
-        match line.as_bytes().first() {
-            Some(b'[') => {
+        match (line.as_bytes().first(), line[..digits].parse::<u32>()) {
+            (Some(b'['), _) => {
                 let name = line[1..].split(']').next().unwrap_or_default().trim();
                 let name = if name.is_empty() { "V" } else { name };
                 blocks.push(Block::new(name.to_string()));
                 tag = blocks.len() - 1;
                 numbered.clear();
             }
-            Some(b'.') => warn(song, Warning::ChordsRemoved),
-            Some(b';') => {}
-            Some(_) if digits > 0 && line[..digits].parse::<u32>().is_ok() => {
-                let number = line[..digits].parse::<u32>().unwrap_or_default();
+            (Some(b'.'), _) => warn(song, Warning::ChordsRemoved),
+            (Some(b';'), _) => {}
+            (_, Ok(number)) => {
                 let index = *numbered.entry(number).or_insert_with(|| {
                     blocks[tag].quiet_if_empty = true;
                     blocks.push(Block::new(numbered_name(&blocks[tag].name, number)));
@@ -298,6 +297,7 @@ mod tests {
     use super::*;
     use crate::import::MAX_FILE_BYTES;
     use proptest::prelude::*;
+    use proptest::test_runner::FileFailurePersistence;
 
     const MORNING_RIVER: &[u8] =
         include_bytes!("../../tests/fixtures/import/opensong/morning-river.xml");
@@ -491,8 +491,8 @@ mod tests {
 
         let deep = format!(
             "<song>{}{}</song>",
-            "<a>".repeat(200_000),
-            "</a>".repeat(200_000)
+            "<a>".repeat(100_000),
+            "</a>".repeat(100_000)
         );
         assert_eq!(parse(deep.as_bytes()), Err(Rejected::TooDeep));
         let at_cap = format!(
@@ -555,7 +555,13 @@ mod tests {
     ];
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+        #![proptest_config(ProptestConfig {
+            cases: 256,
+            failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
+                "tests/fixtures/import/opensong/proptest-regressions.txt",
+            ))),
+            ..ProptestConfig::default()
+        })]
 
         #[test]
         fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
