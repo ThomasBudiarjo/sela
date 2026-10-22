@@ -1,8 +1,8 @@
 //! OpenLyrics 0.8/0.9 XML song parser (M1-14). See docs/import.md for the
 //! field mapping and what is reported instead of imported.
 use super::{
-    MAX_ORDER, MAX_SECTIONS, MAX_SLIDES, MAX_WARNINGS, Parsed, ParsedSection, ParsedSong, Rejected, Warning,
-    decode, label_for_code, song::AUTHOR_SEPARATOR,
+    MAX_ORDER, MAX_SECTIONS, MAX_SLIDES, MAX_WARNINGS, Parsed, ParsedSection, ParsedSong, Rejected,
+    Warning, decode, label_for_code, song::AUTHOR_SEPARATOR,
 };
 use crate::storage::{MAX_ADMINISTRATOR, song_number_ok};
 use roxmltree::Node;
@@ -823,7 +823,8 @@ mod tests {
             <ccliNo>111</ccliNo><ccliNo>222</ccliNo>\
             <publisher>First admin</publisher><publisher>Second admin</publisher>\
             <verseOrder>v1</verseOrder><verseOrder>v2 v1</verseOrder>";
-        let lyrics = r#"<verse name="v1"><lines>a</lines></verse><verse name="v2"><lines>b</lines></verse>"#;
+        let lyrics =
+            r#"<verse name="v1"><lines>a</lines></verse><verse name="v2"><lines>b</lines></verse>"#;
         let song = parse(song_with(properties, lyrics).as_bytes()).unwrap();
         assert_eq!(song.copyright, "First holder");
         assert_eq!(song.song_number, "111");
