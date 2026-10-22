@@ -151,9 +151,15 @@ impl SongImport {
             .count()
     }
 
-    /// The storage command for the next free storage slot.
-    pub(crate) fn take_storage(&mut self) -> Option<storage::Command> {
-        self.storage.take()
+    /// The storage command for the next free storage slot, with its job.
+    pub(crate) fn take_storage(&mut self) -> Option<(storage::Command, u64)> {
+        self.storage.take().map(|command| (command, self.job))
+    }
+
+    /// Number of the current import job.
+    #[cfg(test)]
+    pub(crate) fn job(&self) -> u64 {
+        self.job
     }
 
     /// The `sela-import` thread still has a job that has not reported Done.
@@ -425,8 +431,12 @@ impl Operator {
         self.song_import.phase = Phase::Checking;
     }
 
-    /// A storage reply for the import (`Request::SongImport`).
-    pub(crate) fn song_import_reply(&mut self, reply: Result<Reply, storage::Error>) {
+    /// A storage reply for the import (`Request::SongImport`). A reply for
+    /// an earlier job (cancelled while its duplicate check ran) is dropped.
+    pub(crate) fn song_import_reply(&mut self, job: u64, reply: Result<Reply, storage::Error>) {
+        if job != self.song_import.job {
+            return;
+        }
         self.song_import.storage_cancel = None;
         match (self.song_import.phase, reply) {
             (Phase::Checking, Ok(Reply::Duplicates(found))) => {
@@ -1201,7 +1211,7 @@ mod tests {
             format: Format::ChordPro,
             key: batch::duplicate_key(&song),
             bytes: batch::song_bytes(&song),
-            song,
+            song: Arc::new(song),
             warnings: Vec::new(),
         }))
     }

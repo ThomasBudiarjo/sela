@@ -696,3 +696,20 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 - CCLI maps to the Song Number field.
 - Metadata search covers authors, copyright, license, administrator and song number.
 - Close prompt: Yes saves and closes, No discards, Cancel or Esc keeps editing; it is modal.
+
+## Song import — UNOBSERVED best guesses (2026-10-22, import-framework)
+
+EasyWorship 8.0.49 was not run for the import framework (M1-14, M4-07
+OpenSong/ChordPro). Nothing below is an observation; each row is a
+reversible best guess to check in the next EW session (observe only; never
+import into the reference profile unless it is a disposable one). IDs use an
+`IMP` suffix so parallel streams cannot collide on numbers.
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-IMP-1 | UNOBSERVED | Where library import lives. EW8-OBS-053 lists the File menu without an Import row and EW8-OBS-061 the Songs context menu without one; the Song Editor has an Import ▾ (EW8-OBS-021) for one open song. Sela adds File › Import ▸ Songs… / Song Folder… after Close Schedule. |
+| EW8-OBS-IMP-2 | UNOBSERVED | Which song formats EW8 imports and from which dialog (OpenLyrics, OpenSong, ChordPro, plain text, SongSelect, older EasyWorship). Sela imports OpenLyrics 0.8/0.9, OpenSong and ChordPro files; folders are walked three levels deep. |
+| EW8-OBS-IMP-3 | UNOBSERVED | Whether EW shows a preview or report before saving imported songs. Sela stages every file in a preview dialog with its warnings and errors and saves nothing until Import is pressed. |
+| EW8-OBS-IMP-4 | UNOBSERVED | Duplicate handling. Sela: same title (case, spacing and punctuation ignored) and same words → Skip by default; same title only → Import as copy; Replace saves a new revision of the library song; a bulk "All duplicates" choice. |
+| EW8-OBS-IMP-5 | UNOBSERVED | What follows an import: Sela selects the imported songs in the Songs list, previews the first, moves focus to its row and reports counts in the Songs footer; Live is untouched. |
+| EW8-OBS-IMP-6 | UNOBSERVED | Cancel during an import and partial failures. Sela commits all accepted songs in one transaction; cancel or any failure saves none of them. |

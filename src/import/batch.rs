@@ -16,7 +16,10 @@ use sha2::{Digest, Sha256};
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// Most files one batch stages; the rest are reported as `BatchFull`.
@@ -70,7 +73,8 @@ pub struct DuplicateKey {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Staged {
     pub format: Format,
-    pub song: Song,
+    /// Shared with the commit, so accepting a song never copies its text.
+    pub song: Arc<Song>,
     /// Everything the parser dropped or guessed, in the parser's order.
     pub warnings: Vec<Warning>,
     pub key: DuplicateKey,
@@ -284,7 +288,7 @@ pub fn stage(path: &Path, bytes: &[u8]) -> Result<Staged, FileError> {
     let bytes = song_bytes(&song);
     Ok(Staged {
         format,
-        song,
+        song: Arc::new(song),
         warnings: parsed.warnings,
         key,
         bytes,

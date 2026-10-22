@@ -329,7 +329,7 @@ impl Operator {
                     self.schedule_message =
                         Some(t!(Msg::ScheduleStorageFailed, error = format!("{error:?}")));
                 }
-                (Some(Request::SongImport), reply) => import_reply = Some(reply),
+                (Some(Request::SongImport(job)), reply) => import_reply = Some((job, reply)),
                 (_, Err(error)) => self.library_error = Some(storage_message(error)),
                 _ => {}
             }
@@ -349,8 +349,8 @@ impl Operator {
                 Some(job)
             } else if let Some(job) = self.queued.take() {
                 Some(job)
-            } else if let Some(command) = self.song_import.take_storage() {
-                Some((command, Request::SongImport))
+            } else if let Some((command, job)) = self.song_import.take_storage() {
+                Some((command, Request::SongImport(job)))
             } else if let Some(version) = wanted {
                 Some((storage::Command::Song(version), Request::Song(version)))
             } else if let Some(command) = self.search.take_command() {
@@ -371,13 +371,15 @@ impl Operator {
                 );
                 match worker.submit(command) {
                     Ok(cancel) => {
-                        if matches!(request, Request::SongImport) {
+                        if matches!(request, Request::SongImport(_)) {
                             self.song_import.hold_cancel(cancel);
                         }
                         self.request = Some(request);
                     }
-                    Err(error) if matches!(request, Request::SongImport) => {
-                        import_reply = Some(Err(error));
+                    Err(error) if matches!(request, Request::SongImport(_)) => {
+                        if let Request::SongImport(job) = request {
+                            import_reply = Some((job, Err(error)));
+                        }
                         changed = true;
                     }
                     Err(error) if matches!(request, Request::DeleteSong(..)) => {
@@ -397,8 +399,8 @@ impl Operator {
                 }
             }
         }
-        if let Some(reply) = import_reply {
-            self.song_import_reply(reply);
+        if let Some((job, reply)) = import_reply {
+            self.song_import_reply(job, reply);
         }
         if let Some(index) = deleted_at {
             let remaining = self.songs().len();

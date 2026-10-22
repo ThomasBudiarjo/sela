@@ -125,6 +125,20 @@ fn click_in_list(cx: &mut VisualTestContext, target: &'static str) {
     panic!("{target} never scrolled into the import list");
 }
 
+/// Every file of `folder` with its bytes and modification time.
+fn snapshot(folder: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
+    let mut files: Vec<_> = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+            (path.clone(), std::fs::read(&path).unwrap(), modified)
+        })
+        .collect();
+    files.sort();
+    files
+}
+
 fn titles(o: &Operator) -> Vec<String> {
     let mut titles: Vec<String> = o.catalog.iter().map(|(_, t)| t.clone()).collect();
     titles.sort();
@@ -152,8 +166,9 @@ fn hits(o: &Operator) -> Option<Vec<String>> {
 fn folder_import_previews_commits_and_finds_accented_words(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let folder = batch_dir(&dir);
+    let originals = snapshot(&folder);
     let (mut cx, operator) = open(cx, library_with_songs(&dir), 2);
-    import_folder(&mut cx, &operator, folder);
+    import_folder(&mut cx, &operator, folder.clone());
     settle_review(&mut cx, &operator);
 
     // Every file is listed: three songs with their warnings, two failures.
@@ -268,6 +283,11 @@ fn folder_import_previews_commits_and_finds_accented_words(cx: &mut TestAppConte
             "keyboard focus moves to the first imported song"
         );
     });
+    assert_eq!(
+        snapshot(&folder),
+        originals,
+        "source files are never modified"
+    );
 
     // The commit went through the search index: accented and folded words.
     type_search(&mut cx, &operator, "mañana");
@@ -611,5 +631,43 @@ fn duplicate_choices_skip_copy_and_replace(cx: &mut TestAppContext) {
     type_search(&mut cx, &operator, "antiguas");
     settle(&mut cx, &operator, "old words gone", |o| {
         hits(o).is_some_and(|h| h.is_empty())
+    });
+}
+
+#[gpui::test]
+fn a_duplicate_reply_for_an_older_import_is_ignored(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = batch_dir(&dir);
+    let (mut cx, operator) = open(cx, library_with_songs(&dir), 2);
+    import_folder(&mut cx, &operator, folder);
+    settle_review(&mut cx, &operator);
+    let stale = sela::storage::LibraryMatch {
+        version: operator.read_with(&cx, |o, _| o.catalog[0].0),
+        title: "Signal Hymn".into(),
+        same_lyrics: true,
+    };
+    operator.update(&mut cx, |o, _| {
+        // As if this import were still checking when an earlier, cancelled
+        // import's duplicate check answered.
+        o.song_import.phase = Phase::Checking;
+        let job = o.song_import.job();
+        o.song_import_reply(
+            job - 1,
+            Ok(sela::storage::Reply::Duplicates(vec![
+                Some(stale.clone());
+                3
+            ])),
+        );
+        assert_eq!(o.song_import.phase, Phase::Checking);
+        assert_eq!(o.song_import.duplicates(), 0, "stale reply dropped");
+        o.song_import_reply(
+            job,
+            Ok(sela::storage::Reply::Duplicates(vec![
+                Some(stale.clone());
+                3
+            ])),
+        );
+        assert_eq!(o.song_import.phase, Phase::Review);
+        assert_eq!(o.song_import.duplicates(), 3);
     });
 }

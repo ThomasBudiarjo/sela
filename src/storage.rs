@@ -29,7 +29,8 @@ pub const MAX_IMPORT_SONGS: usize = batch::MAX_FILES;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportWrite {
     pub replace: Option<Version>,
-    pub song: Song,
+    /// Shared with the staged preview, so a retry after a failure needs no copy.
+    pub song: Arc<Song>,
 }
 /// A current library song an imported song duplicates.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3991,7 +3992,7 @@ mod tests {
     fn import_write(title: &str, lyrics: &str) -> ImportWrite {
         ImportWrite {
             replace: None,
-            song: lyric_song(title, lyrics),
+            song: Arc::new(lyric_song(title, lyrics)),
         }
     }
 
@@ -4073,7 +4074,7 @@ mod tests {
         assert_eq!(repo.heads(false, None).unwrap(), [newer]);
         // An invalid song refuses the whole batch before any write.
         let mut invalid = writes;
-        invalid[1].song.title = " ".into();
+        Arc::make_mut(&mut invalid[1].song).title = " ".into();
         assert_eq!(
             repo.commit_import(invalid, &AtomicBool::new(false)),
             Err(Error::Invalid)

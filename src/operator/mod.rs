@@ -213,8 +213,9 @@ pub(crate) enum Request {
         pairs: Vec<(EntryId, Version, Version)>,
         versions: Vec<Version>,
     },
-    /// A song import's duplicate check or commit (`song_import`).
-    SongImport,
+    /// A song import's duplicate check or commit (`song_import`), for the
+    /// import job that asked; a reply for an older job is dropped.
+    SongImport(u64),
 }
 
 pub(super) struct Operator {
