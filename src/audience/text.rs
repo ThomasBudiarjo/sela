@@ -585,7 +585,7 @@ mod tests {
             Some(OwnedText {
                 content: text.into(),
                 font_version: ContentVersion { id: 0, revision: 0 },
-                font: FONT.as_ref().into(),
+                font: std::sync::Arc::<[u8]>::from(FONT),
                 face_index: 0,
                 font_size: size,
                 style,
@@ -626,7 +626,7 @@ mod tests {
         let strip = OwnedText {
             content: "Title - Author\nCopyright text".into(),
             font_version: ContentVersion { id: 0, revision: 0 },
-            font: FONT.as_ref().into(),
+            font: std::sync::Arc::<[u8]>::from(FONT),
             face_index: 0,
             font_size: 12,
             style: TextStyle {
