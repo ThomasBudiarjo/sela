@@ -30,6 +30,8 @@ pub enum Event {
         ignored: usize,
         over_limit: usize,
         unreadable: Vec<(PathBuf, String)>,
+        /// Chosen folders cut at `batch::MAX_FOLDER_ENTRIES`.
+        truncated: Vec<PathBuf>,
     },
     File {
         job: u64,
@@ -163,6 +165,7 @@ fn run(
         ignored: found.ignored,
         over_limit: found.over_limit,
         unreadable: found.unreadable,
+        truncated: found.truncated,
     })?;
     let mut held = 0usize;
     for (index, path) in found.files.into_iter().enumerate() {
@@ -175,19 +178,19 @@ fn run(
                 canceled: true,
             });
         }
-        let result = if index >= MAX_FILES || held >= MAX_STAGED_BYTES {
-            Err(FileError::BatchFull)
-        } else {
-            batch::read(&path)
+        let result = match over_budget(index, held, None) {
+            Some(error) => Err(error),
+            None => batch::read(&path)
                 .and_then(|bytes| batch::stage(&path, &bytes))
-                .and_then(|staged| {
-                    if held + staged.bytes > MAX_STAGED_BYTES {
-                        Err(FileError::BatchFull)
-                    } else {
-                        held += staged.bytes;
-                        Ok(Box::new(staged))
-                    }
-                })
+                .and_then(
+                    |staged| match over_budget(index, held, Some(staged.bytes)) {
+                        Some(error) => Err(error),
+                        None => {
+                            held += staged.bytes;
+                            Ok(Box::new(staged))
+                        }
+                    },
+                ),
         };
         send(Event::File {
             job: job.id,
@@ -200,6 +203,21 @@ fn run(
         job: job.id,
         canceled: canceled(),
     })
+}
+
+/// Which batch limit file `index` hits with `held` bytes already staged
+/// and, once read, `next` bytes of its own: the file count (`BatchFull`)
+/// or the staged text (`BatchTooLarge`), so the preview names the right one.
+fn over_budget(index: usize, held: usize, next: Option<usize>) -> Option<FileError> {
+    if index >= MAX_FILES {
+        Some(FileError::BatchFull)
+    } else if held.saturating_add(next.unwrap_or(0)) > MAX_STAGED_BYTES
+        || (next.is_none() && held >= MAX_STAGED_BYTES)
+    {
+        Some(FileError::BatchTooLarge)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -267,6 +285,21 @@ mod tests {
         // The thread takes the next job.
         importer.submit(8, vec![dir.path().join("a.cho")]).unwrap();
         assert_eq!(drain(&mut importer, 8).len(), 3);
+    }
+
+    #[test]
+    fn the_byte_limit_and_the_file_limit_are_told_apart() {
+        assert_eq!(over_budget(MAX_FILES, 0, None), Some(FileError::BatchFull));
+        assert_eq!(
+            over_budget(200, MAX_STAGED_BYTES, None),
+            Some(FileError::BatchTooLarge)
+        );
+        assert_eq!(
+            over_budget(200, MAX_STAGED_BYTES - 10, Some(11)),
+            Some(FileError::BatchTooLarge)
+        );
+        assert_eq!(over_budget(200, MAX_STAGED_BYTES - 10, Some(10)), None);
+        assert_eq!(over_budget(0, 0, None), None);
     }
 
     #[test]

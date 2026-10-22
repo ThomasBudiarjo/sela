@@ -106,6 +106,8 @@ pub(crate) struct SongImport {
     pub(crate) total: Option<usize>,
     pub(crate) ignored: usize,
     pub(crate) over_limit: usize,
+    /// Chosen folders the walk cut at `batch::MAX_FOLDER_ENTRIES`.
+    pub(crate) truncated: Vec<PathBuf>,
     /// Shown in the dialog (commit failure, replace conflict).
     pub(crate) error: Option<String>,
     /// A storage command waiting for the storage worker.
@@ -129,6 +131,16 @@ pub(crate) struct SongImport {
 impl SongImport {
     pub(crate) fn active(&self) -> bool {
         self.phase != Phase::Idle
+    }
+
+    /// The preview dialog owns this import's state: closing the window or
+    /// replacing the dialog must wait for Import or Cancel. The chooser
+    /// (`Choosing`) and a cancelled commit (`Cancelling`) have no dialog.
+    pub(crate) fn holds_dialog(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Reading | Phase::Checking | Phase::Review | Phase::Committing
+        )
     }
 
     pub(crate) fn staged(&self) -> usize {
@@ -184,6 +196,7 @@ impl SongImport {
         self.total = None;
         self.ignored = 0;
         self.over_limit = 0;
+        self.truncated.clear();
         self.error = None;
         self.storage = None;
         self.storage_cancel = None;
@@ -240,6 +253,12 @@ pub(crate) fn file_error_text(error: &FileError) -> String {
         FileError::Unreadable(error) => return t!(Msg::ImportErrUnreadable, error = error),
         FileError::TooLargeForLibrary => return t!(Msg::ImportErrLibraryLimit).into(),
         FileError::BatchFull => return t!(Msg::ImportErrBatchFull, max = batch::MAX_FILES),
+        FileError::BatchTooLarge => {
+            return t!(
+                Msg::ImportErrBatchBytes,
+                max = batch::MAX_STAGED_BYTES / (1024 * 1024)
+            );
+        }
         FileError::Rejected(_, reason) => reason,
     };
     match reason {
@@ -336,10 +355,12 @@ impl Operator {
             return;
         }
         if !self.show_dialog_later(Dialog::ImportSongs) {
+            // Another dialog opened while the chooser was up: say so, not
+            // "another import".
             if let Some(importer) = &self.song_import.importer {
                 importer.cancel();
             }
-            self.song_message = Some((t!(Msg::ImportBusy).into(), true));
+            self.song_message = Some((t!(Msg::ImportDialogBusy).into(), true));
             return;
         }
         self.song_import.phase = Phase::Reading;
@@ -363,7 +384,9 @@ impl Operator {
                     ignored,
                     over_limit,
                     unreadable,
+                    truncated,
                 } if job == current && reading => {
+                    self.song_import.truncated = truncated;
                     self.song_import.total = Some(total + unreadable.len());
                     self.song_import.ignored = ignored;
                     self.song_import.over_limit = over_limit;
@@ -1010,6 +1033,13 @@ impl Operator {
                 max = batch::MAX_FILES
             ));
         }
+        for folder in &import.truncated {
+            notes.push(t!(
+                Msg::ImportFolderTruncated,
+                max = batch::MAX_FOLDER_ENTRIES,
+                name = folder.display()
+            ));
+        }
         let library_duplicates = import
             .rows
             .iter()
@@ -1122,8 +1152,9 @@ impl Operator {
                     .text_color(rgb(MUTED))
                     .child(text)
             }))
-            .children(notes.into_iter().map(|note| {
+            .children(notes.into_iter().enumerate().map(|(index, note)| {
                 div()
+                    .debug_selector(move || format!("import-note-{index}"))
                     .text_size(px(TEXT_CAPTION))
                     .text_color(rgb(MUTED))
                     .child(note)
@@ -1288,6 +1319,7 @@ mod tests {
             FileError::Unreadable("denied".into()),
             FileError::TooLargeForLibrary,
             FileError::BatchFull,
+            FileError::BatchTooLarge,
             FileError::Rejected(None, Rejected::TooLarge),
             FileError::Rejected(None, Rejected::InvalidUtf8),
             FileError::Rejected(None, Rejected::Malformed("line 2".into())),
@@ -1299,5 +1331,20 @@ mod tests {
             let text = file_error_text(&error);
             assert!(!text.is_empty() && !text.contains('{'), "{error:?}: {text}");
         }
+        // Replace warns what the new revision loses (both languages).
+        for (note, formatting) in [
+            (Msg::ImportReplaceNote.english(), "formatting"),
+            (Msg::ImportReplaceNote.indonesian(), "format slide"),
+        ] {
+            assert!(
+                note.contains(formatting) && note.contains("master"),
+                "{note}"
+            );
+        }
+        // The byte limit names itself, not the file count.
+        let bytes = file_error_text(&FileError::BatchTooLarge);
+        assert_ne!(bytes, file_error_text(&FileError::BatchFull));
+        assert!(bytes.contains("32"), "{bytes}");
+        assert!(!bytes.contains(&batch::MAX_FILES.to_string()), "{bytes}");
     }
 }

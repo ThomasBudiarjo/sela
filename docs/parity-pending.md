@@ -324,7 +324,10 @@ framework", reference-observations "Song import — UNOBSERVED best guesses").
   context menu, the Songs footer and the Song Editor's Import ▾; record each
   import entry, its submenu and dialog title. Sela now: File › Import ▸
   Songs… / Song Folder… after Close Schedule (best guess; EW8-OBS-053 shows
-  no Import row). Re-run: `song-import-windows.py`, `menu-bar-windows.py`.
+  no Import row). Re-run: `song-import-windows.py`, `menu-bar-windows.py`;
+  GPUI `menu_contents_match_the_captures_plus_tracked_deviations`, whose
+  DEVIATIONS table must lose the Import rows (or this item close) once EW
+  is observed.
 - [ ] **PP-IMPF-02 Formats and the chooser** (EW8-OBS-IMP-2). Steps: open the
   import dialog found in PP-IMPF-01; record its file-type filter list,
   whether several files or a folder can be chosen, and import one original
@@ -367,6 +370,15 @@ framework", reference-observations "Song import — UNOBSERVED best guesses").
   and confirm each is announced as a radio group with its title and the
   selected choice. Sela now: EN/ID strings and AccessKit roles exist, not
   heard with a screen reader. Re-run: `i18n-windows.py`, `a11y-windows.py`.
+- [ ] **PP-IMPF-09 Quit while an import is open** (EW8-OBS-IMP-7). Steps:
+  make an unsaved schedule change, open EW's import dialog found in
+  PP-IMPF-01 and, with its list or progress showing, press Ctrl+Q, then try
+  the window's close button; record whether EW closes, prompts about the
+  schedule, or refuses, and whether the import survives. Sela now: the
+  close is refused with "Finish or cancel the import before quitting." in
+  the import dialog; after Cancel the usual Save / Don't Save / Cancel
+  prompt appears. Re-run: GPUI
+  `quit_waits_for_an_open_import_and_a_replaced_preview_cancels_it`.
 
 ## Stream: ew-library-import
 

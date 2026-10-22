@@ -602,6 +602,10 @@ pub enum Msg {
     ImportErrEntities,
     ImportErrTooDeep,
     ImportErrNoLyrics,
+    ImportFolderTruncated,
+    ImportDialogBusy,
+    ImportQuitBlocked,
+    ImportErrBatchBytes,
 }
 
 impl Msg {
@@ -1127,6 +1131,10 @@ impl Msg {
         Msg::ImportErrEntities,
         Msg::ImportErrTooDeep,
         Msg::ImportErrNoLyrics,
+        Msg::ImportFolderTruncated,
+        Msg::ImportDialogBusy,
+        Msg::ImportQuitBlocked,
+        Msg::ImportErrBatchBytes,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1685,7 +1693,7 @@ impl Msg {
             Self::ImportRowDetail => "{name} · Slides: {count}",
             Self::ImportBulkLabel => "All duplicates",
             Self::ImportReplaceNote => {
-                "Replace saves the file's words as a new revision of the library song; schedules keep their copy."
+                "Replace saves the file's words as a new revision of the library song. That revision drops the song's slide formatting, backgrounds and master background, and the file's order replaces its arrangements; schedules keep their copy."
             }
             Self::ImportChoiceImport => "Import",
             Self::ImportChoiceSkip => "Skip",
@@ -1730,6 +1738,14 @@ impl Msg {
             Self::ImportErrEntities => "Refused: the file declares a DOCTYPE or entities",
             Self::ImportErrTooDeep => "Refused: elements are nested too deeply",
             Self::ImportErrNoLyrics => "No lyrics found",
+            Self::ImportFolderTruncated => {
+                "Folder has more than {max} entries; files after that were not looked at: {name}"
+            }
+            Self::ImportDialogBusy => "Close the open dialog, then import again.",
+            Self::ImportQuitBlocked => "Finish or cancel the import before quitting.",
+            Self::ImportErrBatchBytes => {
+                "Not read: one import holds at most {max} MiB of song text"
+            }
         }
     }
 
@@ -2309,7 +2325,7 @@ impl Msg {
             Self::ImportRowDetail => "{name} · Slide: {count}",
             Self::ImportBulkLabel => "Semua duplikat",
             Self::ImportReplaceNote => {
-                "Ganti menyimpan kata-kata berkas sebagai revisi baru lagu di pustaka; jadwal tetap memakai salinannya."
+                "Ganti menyimpan kata-kata berkas sebagai revisi baru lagu di pustaka. Revisi itu tidak membawa format slide, latar, dan latar master lagu, dan urutan dari berkas menggantikan susunannya; jadwal tetap memakai salinannya."
             }
             Self::ImportChoiceImport => "Impor",
             Self::ImportChoiceSkip => "Lewati",
@@ -2358,6 +2374,14 @@ impl Msg {
             Self::ImportErrEntities => "Ditolak: berkas mendeklarasikan DOCTYPE atau entitas",
             Self::ImportErrTooDeep => "Ditolak: elemen bersarang terlalu dalam",
             Self::ImportErrNoLyrics => "Lirik tidak ditemukan",
+            Self::ImportFolderTruncated => {
+                "Folder berisi lebih dari {max} entri; berkas setelahnya tidak diperiksa: {name}"
+            }
+            Self::ImportDialogBusy => "Tutup dialog yang terbuka, lalu impor lagi.",
+            Self::ImportQuitBlocked => "Selesaikan atau batalkan impor sebelum keluar.",
+            Self::ImportErrBatchBytes => {
+                "Tidak dibaca: satu impor paling banyak {max} MiB teks lagu"
+            }
         }
     }
 }
@@ -2427,7 +2451,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 521);
+        assert_eq!(Msg::ALL.len(), 525);
     }
 
     #[test]

@@ -671,3 +671,200 @@ fn a_duplicate_reply_for_an_older_import_is_ignored(cx: &mut TestAppContext) {
         assert_eq!(o.song_import.duplicates(), 3);
     });
 }
+
+/// Stores the layout so a close request tests only the import and schedule
+/// guards (closing writes the layout first).
+fn settle_layout(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+    settle(cx, operator, "settings loaded", |o| {
+        o.settings.loaded_for_test()
+    });
+    cx.update(|window, cx| operator.update(cx, |o, _| o.save_layout(window)));
+    settle(cx, operator, "layout stored", |o| o.settings_idle());
+}
+
+#[gpui::test]
+fn quit_waits_for_an_open_import_and_a_replaced_preview_cancels_it(cx: &mut TestAppContext) {
+    use crate::operator::{Dialog, Then};
+    let dir = tempfile::tempdir().unwrap();
+    let folder = batch_dir(&dir);
+    let (mut cx, operator) = open(cx, library_with_songs(&dir), 2);
+    settle_layout(&mut cx, &operator);
+    let may_close = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)))
+    };
+    // An unsaved schedule, then the import preview.
+    add_song(&mut cx, &operator, "Signal Hymn");
+    import_folder(&mut cx, &operator, folder.clone());
+    settle_review(&mut cx, &operator);
+    // Ctrl+Q reaches the "Sela" context behind the dialog; it must neither
+    // replace the preview with the Unsaved prompt nor close the window.
+    cx.simulate_keystrokes("ctrl-q");
+    cx.run_until_parked();
+    assert!(!may_close(&mut cx), "the window close request waits too");
+    cx.run_until_parked();
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.dialog, Some(Dialog::ImportSongs));
+        assert_eq!(o.song_import.phase, Phase::Review);
+        assert_eq!(o.song_import.rows.len(), 5);
+        assert_eq!(
+            o.song_import.error.as_deref(),
+            Some("Finish or cancel the import before quitting.")
+        );
+    });
+    assert!(cx.debug_bounds("import-error").is_some());
+    // Any other dialog that replaces the preview cancels the import, so the
+    // menu entries come back instead of staying disabled.
+    cx.update(|window, cx| {
+        operator.update(cx, |o, cx| {
+            o.open_dialog(Dialog::Unsaved(Then::Quit), window, cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.dialog, Some(Dialog::Unsaved(Then::Quit)));
+        assert_eq!(o.song_import.phase, Phase::Idle);
+        assert!(o.song_import.rows.is_empty());
+        assert_eq!(
+            o.song_message.clone().unwrap().0,
+            "Import cancelled. Nothing was imported."
+        );
+    });
+    click(&mut cx, "dialog-cancel");
+    import_folder(&mut cx, &operator, folder);
+    settle_review(&mut cx, &operator);
+    // Cancelled, the import no longer holds the close back: the schedule
+    // guard asks as usual.
+    click(&mut cx, "import-cancel");
+    assert!(!may_close(&mut cx));
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.dialog.clone()),
+        Some(Dialog::Unsaved(Then::Quit))
+    );
+}
+
+#[gpui::test]
+fn a_chooser_answered_behind_another_dialog_says_so(cx: &mut TestAppContext) {
+    use crate::operator::Dialog;
+    let dir = tempfile::tempdir().unwrap();
+    let folder = batch_dir(&dir);
+    let (mut cx, operator) = open(cx, library_with_songs(&dir), 2);
+    click(&mut cx, "bar-file");
+    click(&mut cx, "bar-file-import-folder");
+    // A dialog opens in the main window while the native chooser is up.
+    cx.update(|window, cx| {
+        operator.update(cx, |o, cx| {
+            o.open_dialog(Dialog::Preflight, window, cx);
+            cx.notify();
+        })
+    });
+    cx.simulate_path_prompt_response(move |_| Some(vec![folder]));
+    cx.run_until_parked();
+    settle(&mut cx, &operator, "worker done", |o| {
+        !o.song_import.worker_busy()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.dialog, Some(Dialog::Preflight));
+        assert_eq!(o.song_import.phase, Phase::Idle);
+        assert_eq!(
+            o.song_message.clone().unwrap().0,
+            "Close the open dialog, then import again."
+        );
+    });
+}
+
+#[gpui::test]
+fn a_cancel_after_the_commit_reached_storage_rolls_back_or_reports_late(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = batch_dir(&dir);
+    let library = library_with_songs(&dir);
+    let (mut cx, operator) = open(cx, library.clone(), 2);
+    // Confirms and hands the commit over as the storage worker would take
+    // it, without running it, so Cancel finds it in flight.
+    let hand_over = |cx: &mut VisualTestContext| {
+        operator.update(cx, |o, cx| {
+            cx.notify();
+            o.confirm_song_import();
+            let (command, job) = o.song_import.take_storage().expect("commit queued");
+            let sela::storage::Command::CommitImport(writes) = command else {
+                panic!("not a commit");
+            };
+            (writes, job)
+        })
+    };
+    import_folder(&mut cx, &operator, folder.clone());
+    settle_review(&mut cx, &operator);
+    let (_, job) = hand_over(&mut cx);
+    click(&mut cx, "import-cancel");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.song_import.phase, Phase::Cancelling);
+        assert!(o.dialog.is_none(), "the dialog closes at once");
+    });
+    // Storage rolled back on the cancel flag.
+    operator.update(&mut cx, |o, _| {
+        o.song_import_reply(job, Err(sela::storage::Error::Canceled))
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.song_import.phase, Phase::Idle);
+        assert_eq!(
+            o.song_message.clone().unwrap().0,
+            "Import cancelled. Nothing was imported."
+        );
+        assert!(o.song_import.imported.is_empty());
+    });
+
+    // Again, but the transaction committed before the flag was seen.
+    import_folder(&mut cx, &operator, folder);
+    settle_review(&mut cx, &operator);
+    let (writes, job) = hand_over(&mut cx);
+    click(&mut cx, "import-cancel");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.song_import.phase),
+        Phase::Cancelling
+    );
+    let versions = Repository::open(&library)
+        .unwrap()
+        .commit_import(writes, &AtomicBool::new(false))
+        .unwrap();
+    operator.update(&mut cx, |o, _| {
+        o.song_import_reply(job, Ok(sela::storage::Reply::Committed(versions.clone())))
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.song_import.phase, Phase::Idle);
+        assert!(o.dialog.is_none());
+        assert_eq!(
+            o.song_message.clone().unwrap().0,
+            format!(
+                "The import finished before it could be cancelled. Imported: {}",
+                versions.len()
+            )
+        );
+        assert_eq!(o.song_import.imported, versions);
+        assert_eq!(o.selected_song, versions.first().copied());
+    });
+    settle(&mut cx, &operator, "catalog refreshed", |o| {
+        o.catalog.len() == 2 + versions.len() && !o.catalog_refresh_pending()
+    });
+}
+
+#[gpui::test]
+fn a_folder_cut_at_the_entry_budget_is_noted_in_the_preview(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = batch_dir(&dir);
+    let (mut cx, operator) = open(cx, library_with_songs(&dir), 2);
+    import_folder(&mut cx, &operator, folder.clone());
+    settle_review(&mut cx, &operator);
+    let notes = operator.read_with(&cx, |o, _| {
+        usize::from(o.song_import.ignored > 0) + usize::from(o.song_import.over_limit > 0)
+    });
+    let note = selector(format!("import-note-{notes}"));
+    assert!(cx.debug_bounds(note).is_none());
+    // As the worker reports a folder whose walk hit MAX_FOLDER_ENTRIES
+    // (the walk itself is tested in `import::batch`).
+    operator.update(&mut cx, |o, cx| {
+        o.song_import.truncated = vec![folder];
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(note).is_some());
+}

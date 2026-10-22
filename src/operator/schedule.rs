@@ -364,8 +364,19 @@ impl Operator {
 
     /// Quit and window-close guard: unsaved schedule changes are confirmed
     /// first, and a save in progress finishes before the window closes.
+    /// An open import preview (reading, checking, review or commit) is
+    /// finished or cancelled first: its state lives in that dialog, and an
+    /// Unsaved prompt must never replace it (UNOBSERVED best guess,
+    /// EW8-OBS-IMP-7, PP-IMPF-09).
     pub(crate) fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.saving_file() {
+        if self.song_import.holds_dialog() {
+            let message: String = t!(Msg::ImportQuitBlocked).into();
+            if self.dialog == Some(Dialog::ImportSongs) {
+                self.song_import.error = Some(message);
+            } else {
+                self.song_message = Some((message, true));
+            }
+        } else if self.saving_file() {
             self.schedule_message = Some(t!(Msg::SavingWaitDone).into());
         } else if self.schedule.is_dirty() {
             self.open_dialog(Dialog::Unsaved(Then::Quit), window, cx);

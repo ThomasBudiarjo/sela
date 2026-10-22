@@ -56,8 +56,10 @@ pub enum FileError {
     /// Parsed, but the song is over the library's limits
     /// (`storage::MAX_SONG_BYTES`, sections, arrangement size).
     TooLargeForLibrary,
-    /// The batch already holds `MAX_FILES` files or `MAX_STAGED_BYTES`.
+    /// The batch already holds `MAX_FILES` files.
     BatchFull,
+    /// The batch already holds `MAX_STAGED_BYTES` of song text.
+    BatchTooLarge,
 }
 
 /// Normalized identity of a song for duplicate detection: the title and a
@@ -94,6 +96,9 @@ pub struct Found {
     pub over_limit: usize,
     /// Folders that could not be listed.
     pub unreadable: Vec<(PathBuf, String)>,
+    /// Chosen folders whose walk stopped at `MAX_FOLDER_ENTRIES`: entries
+    /// after that point were not looked at, so the preview must say so.
+    pub truncated: Vec<PathBuf>,
 }
 
 fn extension(path: &Path) -> Option<String> {
@@ -118,8 +123,15 @@ pub fn is_candidate(path: &Path) -> bool {
 
 /// Expands chosen paths into the files to stage. Folders are walked up to
 /// `MAX_FOLDER_DEPTH` levels without following symbolic links; hidden
-/// entries are skipped. Stops early when `cancel` is set.
+/// entries are skipped, and only regular files are candidates (a named
+/// pipe or device would block the reader). A folder whose tree holds more
+/// than `MAX_FOLDER_ENTRIES` entries is listed in `Found::truncated`.
+/// Stops early when `cancel` is set.
 pub fn find(paths: &[PathBuf], cancel: &AtomicBool) -> Found {
+    find_bounded(paths, cancel, MAX_FOLDER_ENTRIES)
+}
+
+fn find_bounded(paths: &[PathBuf], cancel: &AtomicBool, entries: usize) -> Found {
     let mut found = Found::default();
     let push = |found: &mut Found, file: PathBuf| {
         if found.files.len() < MAX_FILES {
@@ -135,8 +147,19 @@ pub fn find(paths: &[PathBuf], cancel: &AtomicBool) -> Found {
         match std::fs::symlink_metadata(path) {
             Ok(meta) if meta.is_dir() => {
                 let mut files = Vec::new();
-                let mut budget = MAX_FOLDER_ENTRIES;
-                walk(path, 0, &mut files, &mut found, &mut budget, cancel);
+                let mut budget = entries;
+                let mut exhausted = false;
+                walk(
+                    path,
+                    0,
+                    &mut files,
+                    &mut found,
+                    (&mut budget, &mut exhausted),
+                    cancel,
+                );
+                if exhausted && !cancel.load(Ordering::Acquire) {
+                    found.truncated.push(path.clone());
+                }
                 files.sort();
                 for file in files {
                     push(&mut found, file);
@@ -155,7 +178,7 @@ fn walk(
     depth: usize,
     files: &mut Vec<PathBuf>,
     found: &mut Found,
-    budget: &mut usize,
+    (budget, exhausted): (&mut usize, &mut bool),
     cancel: &AtomicBool,
 ) {
     let entries = match std::fs::read_dir(dir) {
@@ -169,7 +192,12 @@ fn walk(
     };
     let mut folders = Vec::new();
     for entry in entries {
-        if *budget == 0 || cancel.load(Ordering::Acquire) {
+        if cancel.load(Ordering::Acquire) {
+            return;
+        }
+        if *budget == 0 {
+            // Another entry exists past the budget: report the folder.
+            *exhausted = true;
             return;
         }
         *budget -= 1;
@@ -185,25 +213,43 @@ fn walk(
             if depth < MAX_FOLDER_DEPTH {
                 folders.push(path);
             }
-        } else if is_candidate(&path) {
+        } else if kind.is_file() && is_candidate(&path) {
             files.push(path);
         } else {
+            // Not a song file: pictures, notes, and anything that is not a
+            // regular file (named pipe, socket, device).
             found.ignored += 1;
         }
     }
     folders.sort();
     for folder in folders {
-        walk(&folder, depth + 1, files, found, budget, cancel);
+        if *exhausted {
+            return;
+        }
+        walk(
+            &folder,
+            depth + 1,
+            files,
+            found,
+            (&mut *budget, &mut *exhausted),
+            cancel,
+        );
     }
 }
 
 /// Reads at most `MAX_FILE_BYTES` (plus one byte to tell a larger file).
+/// Only regular files (or links to one) are opened: opening a named pipe
+/// with no writer would block the `sela-import` thread for good.
 pub fn read(path: &Path) -> Result<Vec<u8>, FileError> {
+    let meta = std::fs::metadata(path).map_err(|e| FileError::Unreadable(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(FileError::Unsupported);
+    }
     let file = std::fs::File::open(path).map_err(|e| FileError::Unreadable(e.to_string()))?;
     let meta = file
         .metadata()
         .map_err(|e| FileError::Unreadable(e.to_string()))?;
-    if meta.is_dir() {
+    if !meta.is_file() {
         return Err(FileError::Unsupported);
     }
     if meta.len() > MAX_FILE_BYTES as u64 {
@@ -525,6 +571,52 @@ mod tests {
         assert_eq!(found.over_limit, 0);
         let canceled = find(&[root.to_path_buf()], &AtomicBool::new(true));
         assert!(canceled.files.is_empty());
+    }
+
+    #[test]
+    fn a_folder_over_the_entry_budget_is_reported_not_silently_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        for n in 0..6 {
+            std::fs::write(root.join(format!("{n}.cho")), "x").unwrap();
+        }
+        let cut = find_bounded(&[root.to_path_buf()], &AtomicBool::new(false), 4);
+        assert_eq!(cut.truncated, [root.to_path_buf()]);
+        assert!(cut.files.len() <= 4);
+        // Exactly the budget: nothing was left unseen.
+        let exact = find_bounded(&[root.to_path_buf()], &AtomicBool::new(false), 7);
+        assert!(exact.truncated.is_empty());
+        assert_eq!(exact.files.len(), 6);
+        let whole = find(&[root.to_path_buf()], &AtomicBool::new(false));
+        assert!(whole.truncated.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_is_never_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success());
+        std::fs::write(dir.path().join("song.cho"), "Line\n").unwrap();
+        let found = find(&[dir.path().to_path_buf()], &AtomicBool::new(false));
+        assert_eq!(found.files, [dir.path().join("song.cho")]);
+        assert_eq!(found.ignored, 1, "the pipe is counted, not staged");
+        // Chosen directly, it is refused without blocking: opening a FIFO
+        // with no writer would wait forever, so read on a thread with a
+        // bounded wait.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(read(&pipe));
+        });
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("read returns instead of blocking");
+        assert_eq!(result, Err(FileError::Unsupported));
     }
 
     #[test]

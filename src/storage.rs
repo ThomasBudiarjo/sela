@@ -892,6 +892,15 @@ impl Repository {
         writes: Vec<ImportWrite>,
         canceled: &AtomicBool,
     ) -> Result<Vec<Version>> {
+        self.commit_import_until(writes, &|| canceled.load(Ordering::Acquire))
+    }
+    /// `commit_import` with the cancel check as a function, so a test can
+    /// cancel between two songs or right before COMMIT.
+    fn commit_import_until(
+        &mut self,
+        writes: Vec<ImportWrite>,
+        canceled: &dyn Fn() -> bool,
+    ) -> Result<Vec<Version>> {
         if writes.len() > MAX_IMPORT_SONGS {
             return Err(Error::Invalid);
         }
@@ -903,12 +912,12 @@ impl Repository {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut saved = Vec::with_capacity(writes.len());
         for write in &writes {
-            if canceled.load(Ordering::Acquire) {
+            if canceled() {
                 return Err(Error::Canceled);
             }
             saved.push(write_song(&tx, write.replace, &write.song)?);
         }
-        if canceled.load(Ordering::Acquire) {
+        if canceled() {
             return Err(Error::Canceled);
         }
         tx.commit()?;
@@ -4085,6 +4094,45 @@ mod tests {
             repo.commit_import(too_many, &AtomicBool::new(false)),
             Err(Error::Invalid)
         );
+    }
+
+    #[test]
+    fn a_cancel_between_songs_or_before_commit_rolls_back() {
+        let (_d, _path, mut repo) = fixture();
+        let kept = repo
+            .save_song(None, lyric_song("Kept", "kept words"))
+            .unwrap();
+        let writes = vec![
+            import_write("One", "first"),
+            import_write("Two", "second"),
+            import_write("Three", "third"),
+        ];
+        // Check 1 is before song 1, 2 and 3 between songs, 4 before COMMIT.
+        for cancel_at in 2..=4 {
+            let calls = std::cell::Cell::new(0);
+            let canceled = || {
+                calls.set(calls.get() + 1);
+                calls.get() >= cancel_at
+            };
+            assert_eq!(
+                repo.commit_import_until(writes.clone(), &canceled),
+                Err(Error::Canceled),
+                "cancel at check {cancel_at}"
+            );
+            assert_eq!(calls.get(), cancel_at, "stopped at check {cancel_at}");
+            assert_eq!(repo.heads(false, None).unwrap(), [kept]);
+            assert!(titles(&repo, "first").is_empty());
+            assert!(repo.check_search().unwrap());
+        }
+        // Never cancelled: four checks, then the batch lands.
+        let calls = std::cell::Cell::new(0);
+        let saved = repo
+            .commit_import_until(writes, &|| {
+                calls.set(calls.get() + 1);
+                false
+            })
+            .unwrap();
+        assert_eq!((saved.len(), calls.get()), (3, 4));
     }
 
     #[test]

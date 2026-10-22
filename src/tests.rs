@@ -3033,32 +3033,49 @@ mod menu_bar {
     }
 
     #[gpui::test]
-    fn menu_contents_match_the_captures(cx: &mut TestAppContext) {
+    fn menu_contents_match_the_captures_plus_tracked_deviations(cx: &mut TestAppContext) {
         let (mut cx, _operator, _) = fixture(cx);
         cx.simulate_resize(size(px(1280.), px(800.)));
         // EW8-OBS-053 plus the menu-p/v/h.png captures; the New ▸ submenu is
-        // flattened into a header row followed by Song.../Schedule. Import ▸
-        // Songs… / Song Folder… is Sela's UNOBSERVED placement (M1-14).
+        // flattened into a header row followed by Song.../Schedule.
+        const EW_FILE: [&str; 11] = [
+            "bar-file-new",
+            "bar-file-new-song",
+            "bar-file-new-schedule",
+            "bar-file-open",
+            "bar-file-open-recent",
+            "bar-file-save",
+            "bar-file-save-as",
+            "bar-file-export",
+            "bar-file-close",
+            "bar-file-reports",
+            "bar-file-exit",
+        ];
+        // Rows Sela adds that the captures do NOT show: a known deviation,
+        // not parity. Each names its docs/parity-pending.md check; it goes
+        // once EasyWorship's import entry point is observed.
+        // (after row, added rows, tracking id)
+        const DEVIATIONS: [(&str, &[&str], &str); 1] = [(
+            "bar-file-close",
+            &[
+                "bar-file-import",
+                "bar-file-import-songs",
+                "bar-file-import-folder",
+            ],
+            "PP-IMPF-01 (UNOBSERVED, M1-14)",
+        )];
+        let mut file: Vec<&str> = Vec::new();
+        for row in EW_FILE {
+            file.push(row);
+            for (after, added, tracking) in DEVIATIONS {
+                if after == row {
+                    assert!(!tracking.is_empty());
+                    file.extend_from_slice(added);
+                }
+            }
+        }
         let menus: [(&str, &[&str]); 6] = [
-            (
-                "alt-f",
-                &[
-                    "bar-file-new",
-                    "bar-file-new-song",
-                    "bar-file-new-schedule",
-                    "bar-file-open",
-                    "bar-file-open-recent",
-                    "bar-file-save",
-                    "bar-file-save-as",
-                    "bar-file-export",
-                    "bar-file-close",
-                    "bar-file-import",
-                    "bar-file-import-songs",
-                    "bar-file-import-folder",
-                    "bar-file-reports",
-                    "bar-file-exit",
-                ],
-            ),
+            ("alt-f", &file),
             (
                 "alt-e",
                 &[

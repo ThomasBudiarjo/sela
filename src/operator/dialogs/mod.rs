@@ -49,6 +49,11 @@ impl Operator {
         if self.dialog.is_none() {
             self.dialog_return = window.focused(cx);
         }
+        // Replacing the import preview cancels the import as its Cancel
+        // button does, so `song_import` never outlives its dialog.
+        if self.dialog == Some(Dialog::ImportSongs) && dialog != Dialog::ImportSongs {
+            self.cancel_song_import();
+        }
         self.dialog = Some(dialog);
         self.dialog_message = None;
         self.item_menu = None;

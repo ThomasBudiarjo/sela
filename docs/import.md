@@ -425,11 +425,18 @@ UI never waits on it). Both items are disabled while an import runs.
   folder, other files are only counted ("Not song files, skipped: N"),
   because song folders hold pictures and notes too. Folders are walked three
   levels deep without following symbolic links; hidden entries are skipped;
-  at most 20,000 directory entries are looked at per folder.
+  only regular files are candidates (a named pipe, socket or device is
+  counted as not a song file, and a chosen one is refused from its metadata
+  before it is opened, so it can never block the worker); at most 20,000
+  directory entries are looked at per chosen folder, and a folder cut there
+  is named in the preview ("Folder has more than 20000 entries; files after
+  that were not looked at: …"). Which entries fall past the budget depends
+  on the file system's listing order.
 - Limits: 500 files per import (the rest are counted as not read), 1 MiB
   per file (checked from the file size before reading, and again while
-  reading), 32 MiB of staged song text (later files get "not read: one
-  import holds at most 500 files"), and the library's own song limits
+  reading), 32 MiB of staged song text (later files get "Not read: one
+  import holds at most 32 MiB of song text", distinct from the 500-file
+  message), and the library's own song limits
   (`Song::validate`, `storage::MAX_SONG_BYTES`), which give "larger than the
   library allows".
 - A missing title becomes the file name (without extension); the
@@ -481,8 +488,11 @@ words points at the first one.
 copy adds a new song with the same title. Replace saves the file's song as
 a new revision of the library song (same song id): schedules keep the
 revision they pinned until Update items in Schedule, and the old revision
-stays in history. Replace overwrites words, labels and metadata and drops
-that song's backgrounds and per-slide formatting, because the file has none.
+stays in history. Replace overwrites words, labels and metadata, drops
+that song's backgrounds, master background and per-slide formatting
+(the file has none), and replaces its arrangement variants with the file's
+order (none when the file has no order). The dialog's Replace note says
+so in EN and ID.
 Two rows replacing the same song are refused before anything is saved.
 
 ### Commit and cancel
@@ -505,6 +515,15 @@ the storage worker is dropped, and one that has is cancelled through its
 before the commit, so it rolls back. If the commit had already finished,
 the footer says so ("finished before it could be cancelled"). Source files
 are only read, never written (tested by content and modification time).
+
+While the preview is reading, checking, in review or committing, Quit
+(Ctrl+Q, which still reaches the main window behind a dialog) and the
+window's close request are refused with "Finish or cancel the import before
+quitting." in the dialog, so an Unsaved prompt can never replace the
+preview and strand the import (UNOBSERVED, EW8-OBS-IMP-7). Any other
+dialog that replaces the preview cancels the import first. A chooser that
+returns while another dialog is open drops its choice with "Close the open
+dialog, then import again."
 
 After a commit the dialog closes, the Songs footer reports
 "Imported: n · Skipped: n · Not importable: n", the Songs list reloads, the
