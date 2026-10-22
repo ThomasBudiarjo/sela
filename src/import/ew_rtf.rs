@@ -1,6 +1,8 @@
 //! EasyWorship 6-8 song words (`SongWords.db` `word.words`, an RTF string) to
 //! labelled sections of slides (M4-07). The observed format, both dialects
 //! and the decoding rules are in docs/import.md, "EasyWorship song words".
+use std::collections::BTreeMap;
+
 use super::{
     MAX_FILE_BYTES, MAX_SECTIONS, MAX_SLIDES, Parsed, ParsedSection, ParsedSong, Rejected, Warning,
 };
@@ -129,7 +131,7 @@ struct Reader<'a> {
     /// The `\fN` of the font table entry being read.
     font_entry: Option<i32>,
     /// Font table entries as (`\fN`, `\fcharsetM`).
-    fonts: Vec<(i32, i32)>,
+    fonts: BTreeMap<i32, i32>,
     /// `\uN` fallback characters still to skip.
     skip: u32,
     high_surrogate: Option<u16>,
@@ -148,7 +150,7 @@ impl<'a> Reader<'a> {
             code_page: Ok(CodePage::Cp1252),
             default_font: 0,
             font_entry: None,
-            fonts: Vec::new(),
+            fonts: BTreeMap::new(),
             skip: 0,
             high_surrogate: None,
             text: String::new(),
@@ -350,7 +352,7 @@ impl<'a> Reader<'a> {
             b"plain" => self.group().font = None,
             b"fcharset" if destination == Destination::FontTable => {
                 if let (Some(font), Some(charset)) = (self.font_entry, param) {
-                    self.fonts.push((font, charset));
+                    self.fonts.insert(font, charset);
                 }
             }
             w if destination == Destination::Text
@@ -369,8 +371,7 @@ impl<'a> Reader<'a> {
     /// the document's `\ansicpg` when the font declares none.
     fn decode(&mut self, byte: u8) -> char {
         let font = self.group().font.unwrap_or(self.default_font);
-        let charset = self.fonts.iter().find(|(f, _)| *f == font).map(|&(_, c)| c);
-        let code_page = match charset {
+        let code_page = match self.fonts.get(&font).copied() {
             None | Some(1) => self.code_page.clone(),
             Some(0) => Ok(CodePage::Cp1252),
             Some(204) => Ok(CodePage::Cp1251),
@@ -503,9 +504,13 @@ fn ew8_sections(paragraphs: &[Paragraph]) -> Vec<Draft> {
                 if label.is_empty() {
                     continue;
                 }
-                // A label is its slide's first line, so one after lyrics opens a slide.
+                // A label is its slide's first line, so one after lyrics opens
+                // a slide. Blank lines before it are dropped so that a run of
+                // labels does not rescan them.
                 if lines.iter().any(|line| !line.trim().is_empty()) {
                     close_slide(&mut drafts, &mut lines);
+                } else {
+                    lines.clear();
                 }
                 drafts.push(Draft::new(label.join(" ")));
             }
@@ -640,8 +645,8 @@ mod tests {
         song.sections
     }
 
-    /// One slide's text in EW8's paragraph shape, as observed in a local
-    /// EW 8.0.49 `SongWords.db` (docs/import.md).
+    /// One paragraph in the shape observed in a local EW 8.0.49
+    /// `SongWords.db` (docs/import.md).
     fn ew8_paragraph(flag: &str, text: &str) -> String {
         format!(
             "{{\\pard{flag}\\qc\\qdef\\sdewparatemplatestyle101\\plain\\sdewtemplatestyle101\\fs156{{\\*\\sdfsreal 77.76}}\\sdfsauto {text}\\par}}\r\n"
@@ -874,7 +879,7 @@ mod tests {
         );
         assert_eq!(
             sections(
-                "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Arial;}{\\f1\\fnil\\fcharset204 Arial Cyr;}}\\f1\\'cf {\\f0\\'cf} \\'cf\\plain\\'cf}"
+                "{\\rtf1\\ansi\\ansicpg1251\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Arial;}{\\f1\\fnil\\fcharset204 Arial Cyr;}}\\f1\\'cf {\\f0\\'cf} \\'cf\\plain\\'cf}"
             ),
             [section("Verse 1", &["\u{41f} \u{cf} \u{41f}\u{cf}"])]
         );
@@ -1029,6 +1034,46 @@ mod tests {
             format!("Verse {MAX_SECTIONS}")
         );
         assert_eq!(song.warnings, [Warning::LimitReached]);
+    }
+
+    fn assert_fast(started: std::time::Instant) {
+        let elapsed = started.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+    }
+
+    #[test]
+    fn largest_font_tables_decode_in_linear_time() {
+        let started = std::time::Instant::now();
+        let mut fonts = String::from("{\\rtf1{\\fonttbl");
+        let mut last = 0;
+        while fonts.len() < MAX_FILE_BYTES / 2 {
+            last += 1;
+            fonts += &format!("\\f{last}\\fcharset204 ");
+        }
+        fonts += &format!("}}\\f{last} ");
+        while fonts.len() < MAX_FILE_BYTES - 8 {
+            fonts += "\\'e9";
+        }
+        fonts += "}";
+        let song = parse(fonts.as_bytes()).unwrap();
+        assert!(song.sections[0].slides[0].starts_with("\u{439}\u{439}"));
+        assert_fast(started);
+    }
+
+    #[test]
+    fn largest_label_runs_parse_in_linear_time() {
+        let started = std::time::Instant::now();
+        let mut labels = String::from("{\\rtf1 ");
+        while labels.len() < MAX_FILE_BYTES / 2 {
+            labels += "\\par ";
+        }
+        while labels.len() < MAX_FILE_BYTES - 32 {
+            labels += "{\\sdparawysiwghidden x\\par}";
+        }
+        labels += "y}";
+        let song = parse(labels.as_bytes()).unwrap();
+        assert_eq!(song.sections, [section("x", &["y"])]);
+        assert_fast(started);
     }
 
     fn assert_bounded(input: &[u8], parsed: &Parsed) {

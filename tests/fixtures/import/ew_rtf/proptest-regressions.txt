@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 833cbd5f8d992e9dc7c153045069db30c7805613c0147884e8e035ca565ca9a9 # shrinks to song = [ParsedSection { label: "Verse 1", slides: ["A", "a"] }]
+cc 9e255bfe5ce82f3bb2029902994e729b501dbeb76f5383a295fbdd046d177359 # shrinks to song = [ParsedSection { label: "Verse 1", slides: ["light light", "light light"] }]
