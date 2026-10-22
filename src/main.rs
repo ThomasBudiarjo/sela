@@ -48,15 +48,15 @@ const LABEL_NUMBERS: u32 = 30;
 
 /// Show controls (EW8-OBS-018). `!SelaTextInput` is evaluated against the
 /// whole context stack, so a focused text field anywhere below keeps Ctrl+C
-/// and friends for editing; `!SelaMenuBar` keeps an open menu modal-ish, so
-/// show shortcuts stay inert until it closes.
-const SHOW: &str = "SelaShow && !SelaTextInput && !SelaMenuBar";
+/// and friends for editing; `!SelaMenuBar` and `!SelaSongMenu` keep an open
+/// menu modal-ish, so show shortcuts stay inert until it closes (SC2-FOCUS-01).
+const SHOW: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongMenu";
 /// Shift+Up/Down extend the Schedule selection, not a Songs row focus.
-const EXTEND: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongRow";
+const EXTEND: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongMenu && !SelaSongRow";
 /// Live navigation keys (EW8-OBS-014/050): Songs rows and Schedule rows keep
 /// Home/End and the arrows for their own selection (EW8-OBS-048).
-const NAVIGATE: &str =
-    "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongRow && !SelaScheduleRow";
+const NAVIGATE: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongMenu \
+     && !SelaSongRow && !SelaScheduleRow";
 
 /// Label shortcuts as GPUI multi-keystroke bindings ("v 1 enter"): a pending
 /// prefix times out by itself, an unknown sequence replays as ordinary keys
@@ -283,7 +283,7 @@ fn operator_window_options(
         window_bounds: Some(window_bounds),
         display_id,
         titlebar: Some(TitlebarOptions {
-            title: Some("Sela — Technical preview".into()),
+            title: Some(sela::t!(sela::i18n::Msg::WindowTitleIdle).into()),
             ..Default::default()
         }),
         window_min_size: Some(size(px(720.), px(440.))),

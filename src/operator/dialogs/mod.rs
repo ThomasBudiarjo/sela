@@ -214,8 +214,20 @@ impl Operator {
             ),
             _ => None,
         };
+        // Screen readers announce what is asked, not only the focused button
+        // (SC2-A11Y-01).
+        let description = match dialog {
+            Dialog::DeleteSong(_) => Some(t!(Msg::DialogDeleteNote).to_string()),
+            Dialog::FileError => self.file_error.clone(),
+            _ => None,
+        };
         let panel = div()
+            .id("schedule-dialog")
             .debug_selector(|| "schedule-dialog".into())
+            .role(Role::Dialog)
+            .aria_label(heading.clone())
+            .when_some(description, |d, text| d.aria_description(text))
+            .accessibility_id("schedule-dialog")
             .max_w_full()
             .w(px(
                 if matches!(dialog, Dialog::Preflight | Dialog::UpdateItems) {

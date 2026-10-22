@@ -23,6 +23,7 @@ mod focus_modality;
 mod layout_startup;
 mod navigation;
 mod resource_browser;
+mod scrutiny_r2;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,

@@ -678,7 +678,11 @@ impl Operator {
         let settings_loaded = self.settings.loaded;
         let dialog = {
             div()
+                .id("options-dialog")
                 .debug_selector(|| "options-dialog".into())
+                .role(Role::Dialog)
+                .aria_label(t!(Msg::OptionsTitle))
+                .accessibility_id("options-dialog")
                 .w(px(720.))
                 .max_w_full()
                 .h(px(500.))

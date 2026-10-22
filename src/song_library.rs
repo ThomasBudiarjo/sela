@@ -3076,7 +3076,13 @@ impl Library {
             )
             .child(
                 div()
+                    .id("close-prompt-panel")
                     .debug_selector(|| "close-prompt-panel".into())
+                    // Announced as a dialog with its question (SC2-A11Y-01).
+                    .role(Role::Dialog)
+                    .aria_label(t!(Msg::CloseWithoutSaving))
+                    .aria_description(t!(Msg::UnsavedChanges))
+                    .accessibility_id("close-prompt")
                     .w(px(380.))
                     .max_w_full()
                     .p(px(theme::DIALOG_PAD))

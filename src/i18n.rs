@@ -548,6 +548,9 @@ pub enum Msg {
     StyleTab,
     SwatchesTab,
     ValuesTab,
+    LiveItemNotShown,
+    WindowTitleIdle,
+    WindowTitleUntitledDirty,
 }
 
 impl Msg {
@@ -1020,6 +1023,9 @@ impl Msg {
         Msg::StyleTab,
         Msg::SwatchesTab,
         Msg::ValuesTab,
+        Msg::LiveItemNotShown,
+        Msg::WindowTitleIdle,
+        Msg::WindowTitleUntitledDirty,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1560,6 +1566,9 @@ impl Msg {
             Self::StyleTab => "Style",
             Self::SwatchesTab => "Swatches",
             Self::ValuesTab => "Values",
+            Self::LiveItemNotShown => "{title} is not on screen yet; use Go Live first",
+            Self::WindowTitleIdle => "Sela — Technical preview",
+            Self::WindowTitleUntitledDirty => "Untitled schedule* — Sela",
         }
     }
 
@@ -2121,6 +2130,9 @@ impl Msg {
             Self::StyleTab => "Gaya",
             Self::SwatchesTab => "Palet Warna",
             Self::ValuesTab => "Nilai",
+            Self::LiveItemNotShown => "{title} belum tampil; gunakan Tayangkan dulu",
+            Self::WindowTitleIdle => "Sela — Pratinjau teknis",
+            Self::WindowTitleUntitledDirty => "Jadwal tanpa judul* — Sela",
         }
     }
 }
@@ -2190,7 +2202,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 468);
+        assert_eq!(Msg::ALL.len(), 471);
     }
 
     #[test]

@@ -390,8 +390,9 @@ impl Operator {
         let title = match self.schedule.name() {
             Some(name) if self.schedule.is_dirty() => format!("{name}* — Sela"),
             Some(name) => format!("{name} — Sela"),
-            None if self.schedule.is_dirty() => "Untitled schedule* — Sela".to_owned(),
-            None => "Sela — Technical preview".to_owned(),
+            // Localized like every other operator string (SC2-I18N-01).
+            None if self.schedule.is_dirty() => t!(Msg::WindowTitleUntitledDirty).to_owned(),
+            None => t!(Msg::WindowTitleIdle).to_owned(),
         };
         if title != self.window_title {
             window.set_window_title(&title);
