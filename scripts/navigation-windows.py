@@ -138,7 +138,9 @@ def main() -> int:
     finally:
         if app is not None:
             app.close()
-        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+        summary_path.write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0 if summary["status"] == "PASS" else 1
 

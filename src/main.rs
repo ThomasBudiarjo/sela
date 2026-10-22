@@ -362,35 +362,50 @@ fn main() {
             .iter()
             .map(|d| (d.id(), d.visible_bounds()))
             .collect();
-        if let Err(error) = cx.open_window(
-            operator_window_options(
-                layout.and_then(|l| l.window),
-                &work_areas,
-                cx.primary_display().map(|d| d.id()),
-                Bounds::centered(None, size(px(1280.), px(800.)), cx),
-            ),
-            |window, cx| {
-                let slot = std::sync::Arc::new(operator::MonitorSlot::default());
-                let config = operator::SettingsConfig {
-                    slot: slot.clone(),
-                    list_monitors: std::sync::Arc::new(list_monitors),
-                    writer: sela::settings::default_writer(),
-                    loader: sela::settings::default_loader(),
-                    schedule_writer: sela::schedule_file::default_writer(),
-                    initial_layout: layout,
-                };
-                let operator = cx.new(|cx| {
-                    Operator::with_settings(library, audience_launcher(slot), config, cx)
-                });
-                let weak = operator.downgrade();
-                window.on_window_should_close(cx, move |window, cx| {
-                    weak.update(cx, |operator, cx| operator.may_close(window, cx))
-                        .unwrap_or(true)
-                });
-                operator.read(cx).focus.clone().focus(window, cx);
-                operator
-            },
-        ) {
+        let options = operator_window_options(
+            layout.and_then(|l| l.window),
+            &work_areas,
+            cx.primary_display().map(|d| d.id()),
+            Bounds::centered(None, size(px(1280.), px(800.)), cx),
+        );
+        let requested = match options.window_bounds {
+            Some(WindowBounds::Windowed(bounds)) => Some(bounds.size),
+            _ => None,
+        };
+        if let Err(error) = cx.open_window(options, move |window, cx| {
+            // GPUI (zed a846890, gpui_windows `retrieve_window_placement`)
+            // creates the window on the primary monitor and then places it
+            // on `display_id`; on a monitor with another scale the
+            // WM_DPICHANGED that follows rescales the size again, so a
+            // window saved on a 100% spare monitor next to a 125% primary
+            // reopened 20% smaller on every launch.
+            if let Some(requested) = requested {
+                let opened = window.bounds().size;
+                let off = (f32::from(opened.width) - f32::from(requested.width)).abs()
+                    + (f32::from(opened.height) - f32::from(requested.height)).abs();
+                if off > 2. {
+                    window.resize(requested);
+                }
+            }
+            let slot = std::sync::Arc::new(operator::MonitorSlot::default());
+            let config = operator::SettingsConfig {
+                slot: slot.clone(),
+                list_monitors: std::sync::Arc::new(list_monitors),
+                writer: sela::settings::default_writer(),
+                loader: sela::settings::default_loader(),
+                schedule_writer: sela::schedule_file::default_writer(),
+                initial_layout: layout,
+            };
+            let operator =
+                cx.new(|cx| Operator::with_settings(library, audience_launcher(slot), config, cx));
+            let weak = operator.downgrade();
+            window.on_window_should_close(cx, move |window, cx| {
+                weak.update(cx, |operator, cx| operator.may_close(window, cx))
+                    .unwrap_or(true)
+            });
+            operator.read(cx).focus.clone().focus(window, cx);
+            operator
+        }) {
             eprintln!("Cannot open the Sela operator window: {error:#}");
             cx.quit();
         }

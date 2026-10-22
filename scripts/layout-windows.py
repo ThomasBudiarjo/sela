@@ -10,8 +10,10 @@ rectangle match run 1 within 2 px (VAL-SHELL-008). Run 3 edits settings.txt so
 the saved window lies far outside every monitor: the window opens inside the
 primary monitor at least at the minimum size (VAL-SHELL-009). Run 4 stores a
 malformed layout: Sela starts with the default splitters and the next normal
-close rewrites valid values (VAL-SHELL-010, with cargo tests). Needs exclusive
-keyboard and mouse; never run with EasyWorship open.
+close rewrites valid values (VAL-SHELL-010, with cargo tests). Run 5 moves the
+window wholly onto the spare monitor and quits: the restart opens it on that
+monitor at the same rectangle (SC-LAYOUT-03). Needs exclusive keyboard and
+mouse; never run with EasyWorship open.
 """
 
 from __future__ import annotations
@@ -258,6 +260,29 @@ def main() -> int:
         summary["settings_after_corrupt_quit"] = rewritten["text"]
         if rewritten["ratios"] != [2400, 6200, 6200] or "bad json" in rewritten["text"]:
             raise nw.Failure("corrupt layout was not replaced by the default on close")
+
+        spare = nw.spare_monitor(screens)
+        summary["spare"] = spare
+        run = Session(args.binary, library, args.out)
+        sessions.append(run)
+        place(run, spare["x"] + 80, spare["y"] + 60, 1200, 760)
+        rect_before = window_rect(run.hwnd)
+        run.capture("07-on-spare")
+        run.quit()
+        summary["settings_after_spare_quit"] = read_layout(settings)["text"]
+        run = Session(args.binary, library, args.out)
+        sessions.append(run)
+        rect_after = window_rect(run.hwnd)
+        run.capture("08-spare-restarted")
+        summary["spare_window_before"] = rect_before
+        summary["spare_window_after"] = rect_after
+        if not inside(rect_before, spare):
+            raise nw.Failure(f"setup: window {rect_before} is not on {spare['name']}")
+        if not inside(rect_after, spare):
+            raise nw.Failure(f"window {rect_after} did not reopen on {spare['name']}")
+        if not close_enough(rect_before, rect_after):
+            raise nw.Failure(f"window on the spare monitor {rect_before} != {rect_after}")
+        run.quit()
         summary["status"] = "PASS"
     except nw.Failure as error:
         summary["error"] = str(error)

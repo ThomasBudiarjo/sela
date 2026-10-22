@@ -42,6 +42,9 @@ import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+# Four lines, so 14-update-diff.png shows whether Update items prints the
+# change on a late line (SC-SCHED-01).
+REVISED = "Revised audience line\nSecond study line\nThird study line\nFourth line changed"
 sys.path.insert(0, str(ROOT / "scripts"))
 import native_win as nw
 
@@ -423,7 +426,7 @@ def main() -> int:
         save_again()
         old_items = file_items(saved2)
         subprocess.run(
-            [str(args.edit), str(library), target_song, "Revised audience line"],
+            [str(args.edit), str(library), target_song, REVISED],
             check=True,
         )
         # Songs list > right-click > Refresh, then Update items in Schedule.
@@ -469,7 +472,7 @@ def main() -> int:
             changed = names[index] == target_song
             if changed:
                 expect(
-                    f"item_{index}_new_lyrics", after_item[2], "Revised audience line"
+                    f"item_{index}_new_lyrics", after_item[2], REVISED
                 )
                 if after_item[1] <= before_item[1]:
                     raise nw.Failure(
