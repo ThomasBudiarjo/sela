@@ -4,7 +4,8 @@
 //! The lookup order lives in [`candidates`] and the refusal rules in
 //! [`locate_with`] and [`check_buildconf`], which take everything they need as
 //! arguments. [`locate`] is the thin shell that reads the real environment and
-//! runs the real FFmpeg. Nothing calls it yet.
+//! runs the real FFmpeg; the operator calls it once on a worker thread at
+//! startup (`media::backend`).
 
 use std::env::consts::EXE_SUFFIX;
 use std::ffi::OsString;
@@ -219,7 +220,7 @@ fn version(output: &str) -> Option<String> {
 /// Finds FFmpeg from the real environment and probes each candidate with up
 /// to two child processes, each bounded by [`PROBE_TIMEOUT`]. It blocks for
 /// that long, so callers must run it on a worker thread, never on the UI
-/// thread or the live frame path. It is not wired into the app yet.
+/// thread or the live frame path.
 pub fn locate() -> Result<Located, NotFound> {
     let env_dir = std::env::var_os(ENV_DIR).map(PathBuf::from);
     let exe_dir = std::env::current_exe()
@@ -228,11 +229,12 @@ pub fn locate() -> Result<Located, NotFound> {
     let dev_dir = dev_dir();
     locate_with(
         candidates(env_dir.as_deref(), exe_dir.as_deref(), dev_dir.as_deref()),
-        probe,
+        probe_build,
     )
 }
 
-fn probe(ffmpeg: &Path) -> Result<ProbeOutput, ProbeError> {
+/// Runs `ffmpeg -hide_banner -buildconf` and `-version` with the probe bounds.
+pub fn probe_build(ffmpeg: &Path) -> Result<ProbeOutput, ProbeError> {
     Ok(ProbeOutput {
         buildconf: run(ffmpeg, &["-hide_banner", "-buildconf"], PROBE_TIMEOUT)?,
         version: run(ffmpeg, &["-hide_banner", "-version"], PROBE_TIMEOUT)?,
@@ -322,6 +324,29 @@ pub fn input_args(input: &Path) -> Result<Vec<OsString>, InputRefused> {
         "-hide_banner",
         "-protocol_whitelist",
         "file",
+        "-i",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    args.push(input.as_os_str().to_owned());
+    Ok(args)
+}
+
+/// The `ffprobe` arguments that print `input`'s format and streams as JSON
+/// on stdout, with the same local-only rules as [`input_args`].
+pub fn probe_args(input: &Path) -> Result<Vec<OsString>, InputRefused> {
+    check_input(input)?;
+    let mut args: Vec<OsString> = [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-protocol_whitelist",
+        "file",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
         "-i",
     ]
     .into_iter()
@@ -879,7 +904,7 @@ libavformat    62. 12.103 / 62. 12.103
 
     #[test]
     fn a_program_that_is_not_ffmpeg_fails_the_probe() {
-        let error = probe(&std::env::current_exe().unwrap()).unwrap_err();
+        let error = probe_build(&std::env::current_exe().unwrap()).unwrap_err();
         assert!(matches!(error, ProbeError::Failed(_)), "{error:?}");
     }
 
@@ -887,7 +912,7 @@ libavformat    62. 12.103 / 62. 12.103
     fn a_file_that_cannot_run_fails_the_probe() {
         let dir = tempfile::tempdir().unwrap();
         pair(dir.path());
-        let error = probe(&dir.path().join(Tool::Ffmpeg.file_name())).unwrap_err();
+        let error = probe_build(&dir.path().join(Tool::Ffmpeg.file_name())).unwrap_err();
         assert!(matches!(error, ProbeError::Failed(_)), "{error:?}");
     }
 
