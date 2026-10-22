@@ -4,6 +4,36 @@ use sela::preparation::cue::LIVE_DEPTH;
 /// Thumbnails kept for tiles at once.
 const MAX_THUMBNAILS: usize = 32;
 
+/// What an item's slides were projected from: the song revision and the
+/// stored arrangement choice. Items with the same key show the same slides,
+/// so only they can share a face resolution; Preview and Live may hold two
+/// arrangements of one revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Projected {
+    version: Version,
+    chosen: Option<VariantId>,
+}
+
+/// A revision's default projection: no stored choice, so the first
+/// arrangement.
+impl From<Version> for Projected {
+    fn from(version: Version) -> Self {
+        Self {
+            version,
+            chosen: None,
+        }
+    }
+}
+
+impl Item {
+    fn projected(&self) -> Projected {
+        Projected {
+            version: self.version,
+            chosen: self.chosen,
+        }
+    }
+}
+
 /// GPUI draws BGRA; the fitted background is RGBA.
 fn render_image(rgba: &[u8], extent: Extent) -> Option<Arc<gpui::RenderImage>> {
     let mut bgra = rgba.to_vec();
@@ -475,8 +505,8 @@ impl Operator {
 
     /// The next item wanting face resolution: the live item first, then the
     /// preview item. Items are resolved whole, one job at a time.
-    pub(crate) fn unresolved(&self) -> Option<Version> {
-        let wants = |item: &Item| item.resolved.is_none().then_some(item.version);
+    pub(crate) fn unresolved(&self) -> Option<Projected> {
+        let wants = |item: &Item| item.resolved.is_none().then(|| item.projected());
         self.live
             .as_ref()
             .and_then(wants)
@@ -486,7 +516,7 @@ impl Operator {
     /// Resolve the unresolved item's formats off the UI thread. The landing
     /// callback re-derives the next want, so a busy job is simply skipped.
     pub(crate) fn resolve_fonts(&mut self, cx: &mut Context<Self>) {
-        let Some(version) = self.unresolved() else {
+        let Some(projected) = self.unresolved() else {
             return;
         };
         if self.font_job.is_some() {
@@ -496,7 +526,7 @@ impl Operator {
             .preview
             .iter()
             .chain(self.live.iter())
-            .find(|item| item.version == version)
+            .find(|item| item.projected() == projected)
             .map(|item| {
                 item.slides
                     .iter()
@@ -507,7 +537,7 @@ impl Operator {
         if formats.is_empty() {
             return;
         }
-        self.font_job = Some(version);
+        self.font_job = Some(projected.version);
         let executor = cx.background_executor().clone();
         self.font_task = Some(cx.spawn(async move |this, cx| {
             let resolved = executor
@@ -520,26 +550,28 @@ impl Operator {
                 })
                 .await;
             let _ = this.update(cx, |operator, cx| {
-                operator.fonts_resolved(version, resolved, cx)
+                operator.fonts_resolved(projected, resolved, cx)
             });
         }));
     }
 
-    /// A background resolution landed: attach by version, retry the deferred
-    /// cue, then derive the next wanting item. `pub(super)` for the
-    /// late-landing transition test in `tests`.
+    /// A background resolution landed: attach it to the items it was made
+    /// for, retry the deferred cue, then derive the next wanting item.
+    /// `pub(super)` for the late-landing transition test in `tests`.
     pub(crate) fn fonts_resolved(
         &mut self,
-        version: Version,
+        projected: impl Into<Projected>,
         resolved: Vec<fonts::Resolved>,
         cx: &mut Context<Self>,
     ) {
+        let projected = projected.into();
         self.font_job = None;
         self.font_task = None;
         let resolved: Arc<[fonts::Resolved]> = resolved.into();
         let mut replaced = false;
         for item in [&mut self.live, &mut self.preview].into_iter().flatten() {
-            if item.version == version {
+            // Cues index the resolution by slide, so it must be parallel.
+            if item.projected() == projected && item.slides.len() == resolved.len() {
                 replaced = item.resolved.is_some();
                 item.resolved = Some(resolved.clone());
             }
@@ -551,7 +583,7 @@ impl Operator {
             if self
                 .live
                 .as_ref()
-                .is_some_and(|live| live.version == version)
+                .is_some_and(|live| live.projected() == projected)
             {
                 self.refresh_live_request();
             }
