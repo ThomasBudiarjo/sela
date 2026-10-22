@@ -10,7 +10,7 @@ last is one 40-line section that does not fit a slide).
 VAL-SCHED-002: Duplicate puts a copy after the original; the Preview toolbar's
 arrangement button changes only the copy's arrangement. The original keeps its
 three slides, the copy shows two, and the audience differs per item. Saving
-writes format version 2 with the copy's arrangement only; reopening the file
+writes format version 3 with the copy's arrangement only; reopening the file
 with Ctrl+O shows both items with their own slides and the same audience.
 VAL-ARR-003: choosing "Long" lists several Preview slides whose captions carry
 the page numbers ("(1/N)"), the original unaffected.
@@ -229,7 +229,7 @@ def main() -> int:
             time.sleep(0.05)
         time.sleep(0.6)
         version, stored = items(saved)
-        expect("file_version", version, 2)
+        expect("file_version", version, 3)
         expect("original_has_no_arrangement", "arrangement" in stored[0], False)
         expect(
             "copy_has_arrangement", isinstance(stored[1].get("arrangement"), str), True
@@ -278,7 +278,7 @@ def main() -> int:
 
         summary["status"] = "PASS"
         print(
-            "PASS: per-item arrangement survives duplicate, change, save (v2) and "
+            "PASS: per-item arrangement survives duplicate, change, save (v3) and "
             "reopen; overflow paginates with page numbers; Live stable"
         )
         return 0

@@ -12,6 +12,8 @@ pub(crate) struct SaveJob {
     pub(crate) pins: Vec<Pin>,
     /// Guarded command to continue with once the file is written.
     pub(crate) then: Option<Then>,
+    /// `Schedule::document` when the save began.
+    pub(crate) document: u64,
 }
 
 /// The one file operation on the schedule file worker.
@@ -54,7 +56,7 @@ impl Operator {
             || matches!(self.queued, Some((_, Request::SaveSchedule(_))))
     }
 
-    fn report_busy(&mut self) {
+    pub(crate) fn report_busy(&mut self) {
         self.schedule_message = Some(t!(Msg::WaitScheduleBusy).into());
     }
 
@@ -131,6 +133,7 @@ impl Operator {
             versions: versions.clone(),
             pins: self.schedule.pins().collect(),
             then,
+            document: self.schedule.document(),
         };
         if self.queue(
             storage::Command::Songs(versions),
@@ -172,11 +175,8 @@ impl Operator {
         }));
     }
 
-    pub(crate) fn open_recent(&mut self, index: usize) {
-        match self.recent_schedules().get(index).cloned() {
-            Some(path) => self.begin_read(path),
-            None => self.schedule_message = Some(t!(Msg::ScheduleEmpty).into()),
-        }
+    pub(crate) fn open_recent(&mut self, path: PathBuf) {
+        self.begin_read(path);
     }
 
     fn begin_read(&mut self, path: PathBuf) {
@@ -295,10 +295,14 @@ impl Operator {
         let name = schedule_file::display_name(&path);
         match result {
             Ok(()) => {
-                self.schedule.mark_saved(path.clone(), job.pins);
+                // The file is written either way, but a different document may
+                // be showing now; it must keep its own title and baseline.
+                if job.document == self.schedule.document() {
+                    self.schedule.mark_saved(path.clone(), job.pins);
+                    self.resume = job.then;
+                }
                 self.remember_recent(path);
                 self.schedule_message = Some(t!(Msg::SavedSchedule, title = name));
-                self.resume = job.then;
             }
             Err(error) => {
                 let reason = match error {
@@ -375,7 +379,7 @@ impl Operator {
     pub(crate) fn resume_guarded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(then) = self.resume.take() {
             cx.defer_in(window, move |this, window, cx| {
-                this.proceed(then, window, cx);
+                this.guard(then, window, cx);
                 cx.notify();
             });
         }

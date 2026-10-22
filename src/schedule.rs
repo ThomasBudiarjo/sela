@@ -43,9 +43,16 @@ pub struct Schedule {
     path: Option<PathBuf>,
     /// Revisions as last saved or opened; differs from `entries` when dirty.
     baseline: Vec<Pin>,
+    /// Bumped whenever the document is replaced (open, clear), so a save
+    /// that finishes late can tell it no longer describes the current one.
+    document: u64,
 }
 
 impl Schedule {
+    pub fn document(&self) -> u64 {
+        self.document
+    }
+
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
@@ -276,6 +283,7 @@ impl Schedule {
         if items.len() > MAX_ITEMS {
             return Err(Error::Invalid);
         }
+        self.document += 1;
         self.baseline = items.iter().map(|(pin, _)| *pin).collect();
         self.entries = items
             .into_iter()
@@ -292,6 +300,7 @@ impl Schedule {
 
     /// An empty, untitled schedule. Entry IDs keep counting.
     pub fn clear(&mut self) {
+        self.document += 1;
         self.entries.clear();
         self.path = None;
         self.baseline.clear();
@@ -505,6 +514,20 @@ mod tests {
         assert!(s.is_dirty());
         s.move_to(a, 0);
         assert!(!s.is_dirty(), "restored order is clean");
+    }
+
+    #[test]
+    fn the_document_generation_changes_on_open_and_clear_only() {
+        let mut s = Schedule::default();
+        let first = s.document();
+        s.push(v(1, 1), "A".into()).unwrap();
+        s.mark_saved("a".into(), s.pins().collect());
+        assert_eq!(s.document(), first);
+        s.open("b".into(), vec![(pin(2, 1), "B".into())]).unwrap();
+        let opened = s.document();
+        assert_ne!(opened, first);
+        s.clear();
+        assert_ne!(s.document(), opened);
     }
 
     #[test]

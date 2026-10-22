@@ -32,7 +32,12 @@ pub(crate) struct UpdateReview {
 }
 
 fn shown(slide: &Slide) -> String {
-    let text = slide.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = slide
+        .text
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect::<Vec<_>>()
+        .join("\n");
     match slide.label.trim() {
         "" => text,
         label => format!("{label} · {text}"),
@@ -229,7 +234,7 @@ impl Operator {
                                     div()
                                         .flex_1()
                                         .min_w_0()
-                                        .truncate()
+                                        .whitespace_normal()
                                         .text_color(rgb(MUTED))
                                         .child(change.old.clone().unwrap_or_else(none)),
                                 ),
@@ -250,7 +255,7 @@ impl Operator {
                                     div()
                                         .flex_1()
                                         .min_w_0()
-                                        .truncate()
+                                        .whitespace_normal()
                                         .child(change.new.clone().unwrap_or_else(none)),
                                 ),
                         ),
@@ -326,6 +331,17 @@ mod tests {
             ]
         );
         assert!(slide_changes(&old, &old).is_empty());
+    }
+
+    #[test]
+    fn a_change_on_a_late_line_shows_every_line_of_both_slides() {
+        let old = song(&["one  1\ntwo\nthree\nfour"]);
+        let mut new = old.clone();
+        new.sections[0].lyrics = "one 1\ntwo\nthree\nFOUR".into();
+        let changes = slide_changes(&old, &new);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].old.as_deref(), Some("one 1\ntwo\nthree\nfour"));
+        assert_eq!(changes[0].new.as_deref(), Some("one 1\ntwo\nthree\nFOUR"));
     }
 
     #[test]

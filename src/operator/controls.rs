@@ -350,13 +350,13 @@ impl Operator {
                 self.guard(Then::New, window, cx);
             }
             Control::DialogSave => {
-                let Some(Dialog::Unsaved(then)) = self.dialog else {
+                let Some(Dialog::Unsaved(then)) = self.dialog.clone() else {
                     return;
                 };
                 self.close_dialog(window, cx);
                 self.save_then(Some(then), cx);
             }
-            Control::DialogConfirm => match self.dialog {
+            Control::DialogConfirm => match self.dialog.clone() {
                 Some(Dialog::Remove(id)) => {
                     self.close_dialog(window, cx);
                     self.remove_entry(id);
@@ -367,6 +367,9 @@ impl Operator {
                 }
                 Some(Dialog::Unsaved(then)) => {
                     self.close_dialog(window, cx);
+                    if then == Then::Quit {
+                        self.discard_for_quit();
+                    }
                     self.proceed(then, window, cx);
                 }
                 Some(Dialog::Options) => {

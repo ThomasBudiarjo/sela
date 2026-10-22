@@ -90,6 +90,11 @@ pub(crate) struct SettingsState {
     /// The wait bound expired: the close skips the settings wait and only
     /// the schedule guard still applies.
     close_forced: bool,
+    /// Don't Save was chosen for the quit: the schedule as it was then
+    /// (document generation and pins). The settings wait that follows closes
+    /// without asking about those edits again, but an edit made during the
+    /// wait still prompts.
+    discarded: Option<(u64, Vec<Pin>)>,
     /// `None` while the monitor list is loading.
     pub(crate) monitors: Option<Vec<MonitorInfo>>,
     slot: Arc<MonitorSlot>,
@@ -139,6 +144,7 @@ impl SettingsState {
             applied: false,
             closing: None,
             close_forced: false,
+            discarded: None,
             monitors: None,
             slot: config.slot,
             draft: None,
@@ -330,6 +336,12 @@ impl Operator {
         self.settings.pending_saves == 0
     }
 
+    /// The worker's initial `Loaded` reply has landed; OK is ignored before it.
+    #[cfg(test)]
+    pub(crate) fn settings_loaded(&self) -> bool {
+        self.settings.loaded
+    }
+
     /// Notes about the settings, shown until resolved or replaced.
     pub(crate) fn settings_note(&self) -> Option<String> {
         let mut notes = Vec::new();
@@ -444,7 +456,7 @@ impl Operator {
                             // The prompt already owns the decision.
                             return true;
                         }
-                        if this.may_close(window, cx) {
+                        if this.discard_still_holds() || this.may_close(window, cx) {
                             window.remove_window();
                         }
                         true
@@ -469,6 +481,23 @@ impl Operator {
     pub(crate) fn cancel_close_request(&mut self) {
         self.settings.closing = None;
         self.settings.close_forced = false;
+        self.settings.discarded = None;
+    }
+
+    /// Records Don't Save for the quit in progress.
+    pub(crate) fn discard_for_quit(&mut self) {
+        self.settings.discarded = Some((self.schedule.document(), self.schedule.pins().collect()));
+    }
+
+    /// Don't Save was chosen and the schedule has not changed since.
+    fn discard_still_holds(&self) -> bool {
+        self.settings
+            .discarded
+            .as_ref()
+            .is_some_and(|(document, pins)| {
+                *document == self.schedule.document()
+                    && self.schedule.pins().eq(pins.iter().copied())
+            })
     }
 
     fn choose_monitor(&mut self, index: usize) {

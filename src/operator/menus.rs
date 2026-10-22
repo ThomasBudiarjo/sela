@@ -961,7 +961,12 @@ impl Operator {
             BarItem::SaveSchedule => self.save_schedule(cx),
             BarItem::SaveScheduleAs => self.save_schedule_as(cx),
             BarItem::CloseSchedule => self.guard(Then::New, window, cx),
-            BarItem::Recent(index) => self.guard(Then::Recent(usize::from(index)), window, cx),
+            BarItem::Recent(index) => {
+                match self.recent_schedules().get(usize::from(index)).cloned() {
+                    Some(path) => self.guard(Then::Recent(path), window, cx),
+                    None => self.schedule_message = Some(t!(Msg::ScheduleEmpty).into()),
+                }
+            }
             BarItem::Exit => {
                 window.dispatch_action(Box::new(Quit), cx);
             }

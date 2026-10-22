@@ -1429,7 +1429,7 @@ fn schedule_add_reorder_select_navigate_and_remove(cx: &mut TestAppContext) {
     // Remove From Schedule asks first; Keep leaves it.
     click(&mut cx, "schedule-remove");
     assert_eq!(
-        operator.read_with(&cx, |o, _| o.dialog),
+        operator.read_with(&cx, |o, _| o.dialog.clone()),
         Some(Dialog::Remove(ids[1]))
     );
     assert_control(&mut cx, &operator, Control::DialogCancel);
@@ -1443,7 +1443,7 @@ fn schedule_add_reorder_select_navigate_and_remove(cx: &mut TestAppContext) {
     click(&mut cx, "dialog-confirm");
     operator.read_with(&cx, |o, _| {
         assert_eq!(entry_titles(o), ["Signal Hymn", SECOND_SONG]);
-        assert_eq!((o.dialog, o.selected_entry), (None, None));
+        assert_eq!((o.dialog.clone(), o.selected_entry), (None, None));
     });
 
     // Right-click menu, then Ctrl+Del (no confirmation).
@@ -1452,7 +1452,7 @@ fn schedule_add_reorder_select_navigate_and_remove(cx: &mut TestAppContext) {
     cx.simulate_mouse_up(position, gpui::MouseButton::Right, Default::default());
     click(&mut cx, "item-menu-remove");
     assert_eq!(
-        operator.read_with(&cx, |o, _| o.dialog),
+        operator.read_with(&cx, |o, _| o.dialog.clone()),
         Some(Dialog::Remove(ids[2]))
     );
     click(&mut cx, "dialog-cancel");
@@ -1701,7 +1701,7 @@ fn save_and_reopen_pin_revisions_behind_an_unsaved_guard(cx: &mut TestAppContext
         cx.did_prompt_for_new_path(),
         "untitled: the native Save dialog"
     );
-    assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+    assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
     cx.simulate_new_path_selection(|_| None);
     cx.run_until_parked();
     operator.read_with(&cx, |o, _| {
@@ -1748,7 +1748,7 @@ fn save_and_reopen_pin_revisions_behind_an_unsaved_guard(cx: &mut TestAppContext
     assert!(operator.read_with(&cx, |o, _| o.schedule.is_dirty()));
     cx.simulate_keystrokes("ctrl-o");
     assert_eq!(
-        operator.read_with(&cx, |o, _| o.dialog),
+        operator.read_with(&cx, |o, _| o.dialog.clone()),
         Some(Dialog::Unsaved(Then::Open))
     );
     cx.simulate_keystrokes("enter");
@@ -1785,7 +1785,7 @@ fn save_and_reopen_pin_revisions_behind_an_unsaved_guard(cx: &mut TestAppContext
     click(&mut cx, "schedule-down");
     cx.simulate_keystrokes("ctrl-s");
     assert!(!cx.did_prompt_for_new_path());
-    assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+    assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
     settle(&mut cx, &operator, "saved again", |o| {
         !o.schedule.is_dirty()
     });
@@ -1814,7 +1814,7 @@ fn quit_and_new_schedule_are_guarded(cx: &mut TestAppContext) {
     add_song(&mut cx, &operator, "Signal Hymn");
     assert!(!may_close(&mut cx));
     assert_eq!(
-        operator.read_with(&cx, |o, _| o.dialog),
+        operator.read_with(&cx, |o, _| o.dialog.clone()),
         Some(Dialog::Unsaved(Then::Quit))
     );
     click(&mut cx, "dialog-cancel");
@@ -1826,7 +1826,7 @@ fn quit_and_new_schedule_are_guarded(cx: &mut TestAppContext) {
     click(&mut cx, "new-menu");
     click(&mut cx, "new-schedule-menu");
     assert_eq!(
-        operator.read_with(&cx, |o, _| o.dialog),
+        operator.read_with(&cx, |o, _| o.dialog.clone()),
         Some(Dialog::Unsaved(Then::New))
     );
     click(&mut cx, "dialog-confirm");
@@ -2240,7 +2240,7 @@ fn deleting_a_scheduled_live_song_keeps_snapshots_and_the_live_scene(cx: &mut Te
     right_click(&mut cx, hymn);
     click(&mut cx, "song-menu-delete");
     assert_eq!(
-        operator.read_with(&cx, |o, _| o.dialog),
+        operator.read_with(&cx, |o, _| o.dialog.clone()),
         Some(Dialog::DeleteSong(pinned))
     );
     assert_control(&mut cx, &operator, Control::DialogCancel);
@@ -2415,8 +2415,10 @@ mod settings_ui {
         let (mut cx, operator, _) =
             with_settings(cx, Some(library_with_song(dir)), "apply", config);
         cx.simulate_resize(size(px(1280.), px(800.)));
-        settle(&mut cx, &operator, "monitors", |o| {
-            o.settings.monitors.is_some()
+        // OK does nothing until the settings file has loaded, and that reply
+        // can trail the monitor scan when the machine is busy.
+        settle(&mut cx, &operator, "monitors and settings", |o| {
+            o.settings.monitors.is_some() && o.settings_loaded()
         });
         (cx, operator, slot)
     }
@@ -2438,7 +2440,7 @@ mod settings_ui {
         assert_eq!(slot.get(), "secondary");
         open_options(&mut vcx);
         assert_eq!(
-            operator.read_with(&vcx, |o, _| o.dialog),
+            operator.read_with(&vcx, |o, _| o.dialog.clone()),
             Some(Dialog::Options)
         );
         for section in [
@@ -2459,7 +2461,7 @@ mod settings_ui {
         }
         click(&mut vcx, "options-monitor-2");
         click(&mut vcx, "dialog-confirm");
-        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog.clone()), None);
         assert_eq!(slot.get(), r"name:\\.\DISPLAY6");
         settle(&mut vcx, &operator, "file written", |_| {
             file(&dir).is_some()
@@ -2594,7 +2596,7 @@ mod settings_ui {
         open_options(&mut vcx);
         click(&mut vcx, "options-monitor-2");
         click(&mut vcx, "dialog-cancel");
-        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog.clone()), None);
         assert_eq!(slot.get(), "secondary");
         assert!(operator.read_with(&vcx, |o, _| o.settings.current.output_monitor.is_none()));
         vcx.run_until_parked();
@@ -2658,7 +2660,7 @@ mod settings_ui {
             started.elapsed() < Duration::from_millis(1000),
             "OK waited for the write"
         );
-        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog.clone()), None);
         assert_eq!(slot.get(), r"name:\\.\DISPLAY6");
         // The UI still takes input and paints while the write is pending.
         open_options(&mut vcx);
@@ -2778,8 +2780,12 @@ mod settings_ui {
         (writer, release)
     }
 
+    /// Releases the writer and waits until the operator has seen the reply and
+    /// resolved any close request. The file appearing is not enough: the reply
+    /// is polled on the operator's own clock, so a single fixed tick races.
     fn drain_writer(
         vcx: &mut VisualTestContext,
+        operator: &Entity<Operator>,
         dir: &tempfile::TempDir,
         release: &std::sync::atomic::AtomicBool,
     ) {
@@ -2789,7 +2795,12 @@ mod settings_ui {
             assert!(Instant::now() < end, "bounded wait for the write");
             std::thread::sleep(Duration::from_millis(5));
         }
-        vcx.executor().advance_clock(Duration::from_millis(200));
+        while !operator.read_with(vcx, |o, _| o.settings_idle() && !o.close_pending()) {
+            assert!(Instant::now() < end, "bounded wait for the reply");
+            vcx.executor().advance_clock(Duration::from_millis(200));
+            vcx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(5));
+        }
         vcx.run_until_parked();
     }
 
@@ -2809,12 +2820,62 @@ mod settings_ui {
         click(&mut vcx, "dialog-confirm");
         assert!(!quit(&mut vcx, &operator));
         add_song(&mut vcx, &operator, "Signal Hymn");
-        drain_writer(&mut vcx, &dir, &release);
+        drain_writer(&mut vcx, &operator, &dir, &release);
         assert_eq!(windows(&mut vcx), 1, "the edit is not lost");
         operator.read_with(&vcx, |o, _| {
             assert_eq!(o.dialog, Some(Dialog::Unsaved(Then::Quit)));
             assert!(!o.close_pending());
         });
+    }
+
+    #[gpui::test]
+    fn dont_save_during_the_settings_wait_closes_without_asking_again(cx: &mut TestAppContext) {
+        use crate::operator::{Dialog, Then};
+        let dir = tempfile::tempdir().unwrap();
+        let (writer, release) = gated_writer();
+        let (mut vcx, operator, _slot) = start(cx, &dir, writer);
+        settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == 1);
+        add_song(&mut vcx, &operator, "Signal Hymn");
+        open_options(&mut vcx);
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        assert!(!quit(&mut vcx, &operator));
+        assert_eq!(
+            operator.read_with(&vcx, |o, _| o.dialog.clone()),
+            Some(Dialog::Unsaved(Then::Quit))
+        );
+        click(&mut vcx, "dialog-confirm");
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        let end = Instant::now() + Duration::from_secs(10);
+        while windows(&mut vcx) > 0 {
+            assert!(Instant::now() < end, "Don't Save closes the window");
+            vcx.executor().advance_clock(Duration::from_millis(200));
+            vcx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[gpui::test]
+    fn an_edit_after_dont_save_during_the_settings_wait_prompts_again(cx: &mut TestAppContext) {
+        use crate::operator::{Dialog, Then};
+        let dir = tempfile::tempdir().unwrap();
+        let (writer, release) = gated_writer();
+        let (mut vcx, operator, _slot) = start(cx, &dir, writer);
+        settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == 1);
+        add_song(&mut vcx, &operator, "Signal Hymn");
+        open_options(&mut vcx);
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        assert!(!quit(&mut vcx, &operator));
+        click(&mut vcx, "dialog-confirm");
+        assert_eq!(windows(&mut vcx), 1, "still waiting for the write");
+        add_song(&mut vcx, &operator, "Signal Hymn");
+        drain_writer(&mut vcx, &operator, &dir, &release);
+        assert_eq!(windows(&mut vcx), 1, "the later edit is not lost");
+        assert_eq!(
+            operator.read_with(&vcx, |o, _| o.dialog.clone()),
+            Some(Dialog::Unsaved(Then::Quit))
+        );
     }
 
     #[gpui::test]
@@ -2831,14 +2892,14 @@ mod settings_ui {
         add_song(&mut vcx, &operator, "Signal Hymn");
         assert!(!quit(&mut vcx, &operator));
         assert_eq!(
-            operator.read_with(&vcx, |o, _| o.dialog),
+            operator.read_with(&vcx, |o, _| o.dialog.clone()),
             Some(Dialog::Unsaved(Then::Quit))
         );
         click(&mut vcx, "dialog-cancel");
         assert!(!operator.read_with(&vcx, |o, _| o.close_pending()));
-        drain_writer(&mut vcx, &dir, &release);
+        drain_writer(&mut vcx, &operator, &dir, &release);
         assert_eq!(windows(&mut vcx), 1, "Cancel keeps the window open");
-        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&vcx, |o, _| o.dialog.clone()), None);
     }
 
     #[gpui::test]
@@ -2857,7 +2918,7 @@ mod settings_ui {
         vcx.run_until_parked();
         assert_eq!(windows(&mut vcx), 1);
         assert_eq!(
-            operator.read_with(&vcx, |o, _| o.dialog),
+            operator.read_with(&vcx, |o, _| o.dialog.clone()),
             Some(Dialog::Unsaved(Then::Quit))
         );
         click(&mut vcx, "dialog-confirm");
@@ -3205,17 +3266,17 @@ mod menu_bar {
 
         // New Schedule clears without asking (nothing unsaved).
         cx.simulate_keystrokes("alt-f down enter");
-        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
         assert_eq!(operator.read_with(&cx, |o, _| o.bar_menu), None);
 
         // Options opens the existing Options dialog.
         cx.simulate_keystrokes("alt-e enter");
         assert_eq!(
-            operator.read_with(&cx, |o, _| o.dialog),
+            operator.read_with(&cx, |o, _| o.dialog.clone()),
             Some(Dialog::Options)
         );
         click(&mut cx, "dialog-cancel");
-        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
 
         // Exit dispatches Quit, the same as Ctrl+Q (probe counts; window stays).
         cx.simulate_keystrokes("alt-f up enter");
@@ -3235,7 +3296,7 @@ mod menu_bar {
                 "{id} did not close the menu"
             );
         }
-        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
         assert_eq!(seen.get(), 0);
         cx.simulate_keystrokes("escape");
 
@@ -4717,7 +4778,7 @@ mod preflight_ui {
         open_saved(&mut cx, &operator, &fixture.schedule);
         settle(&mut cx, &operator, "report", report_shown);
         click(&mut cx, "dialog-cancel");
-        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
 
         click(&mut cx, "live-output");
         settle(&mut cx, &operator, "output connection", connected);
@@ -5214,7 +5275,7 @@ mod schedule_files_ui {
             });
             assert_eq!(std::fs::read(&path).unwrap(), bytes);
             click(&mut cx, "dialog-cancel");
-            assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+            assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
         }
         assert_eq!(recent(&cx, &operator), [good]);
     }
@@ -5301,7 +5362,7 @@ mod schedule_files_ui {
         cx.simulate_keystrokes("alt-f");
         click(&mut cx, "bar-file-close");
         assert_eq!(
-            operator.read_with(&cx, |o, _| o.dialog),
+            operator.read_with(&cx, |o, _| o.dialog.clone()),
             Some(Dialog::Unsaved(Then::New))
         );
         click(&mut cx, "dialog-save");
@@ -5313,6 +5374,144 @@ mod schedule_files_ui {
             o.schedule.entries().is_empty() && o.schedule.path().is_none()
         });
         assert_eq!(schedule_file::read(&file).unwrap().items.len(), 1);
+    }
+
+    /// A schedule writer that blocks until the returned flag is set.
+    fn gated_loaded(
+        cx: &mut TestAppContext,
+        dir: &tempfile::TempDir,
+    ) -> (
+        VisualTestContext,
+        Entity<Operator>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hold = release.clone();
+        let inner = schedule_file::default_writer();
+        let config = crate::operator::SettingsConfig {
+            schedule_writer: Arc::new(move |path, bytes| {
+                while !hold.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                inner(path, bytes)
+            }),
+            ..Default::default()
+        };
+        let (mut cx, operator, _) =
+            with_settings(cx, Some(library_with_songs(dir)), "apply", config);
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+        (cx, operator, release)
+    }
+
+    /// Starts an untitled save to `path` that stays in flight until released.
+    fn begin_blocked_save(cx: &mut VisualTestContext, operator: &Entity<Operator>, path: PathBuf) {
+        cx.simulate_keystrokes("ctrl-s");
+        assert!(cx.did_prompt_for_new_path());
+        cx.simulate_new_path_selection(move |_| Some(path));
+        settle(cx, operator, "save in flight", |o| o.saving_file());
+    }
+
+    #[gpui::test]
+    fn recent_after_a_guarded_save_opens_the_chosen_file(cx: &mut TestAppContext) {
+        use crate::operator::Then;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator) = loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        cx.simulate_keystrokes("ctrl-s");
+        let a = dir.path().join("A.selaschedule");
+        save_new(&mut cx, &operator, a.clone());
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-save-as");
+        let b = dir.path().join("B.selaschedule");
+        save_new(&mut cx, &operator, b.clone());
+        assert_eq!(recent(&cx, &operator), [b.clone(), a.clone()]);
+
+        // An untitled, edited schedule picks A (index 1); saving it first
+        // puts the new file at the top of the list and shifts every index.
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-close");
+        assert!(operator.read_with(&cx, |o, _| o.schedule.path().is_none()));
+        add_song(&mut cx, &operator, "Signal Hymn");
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-recent-1");
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.dialog.clone()),
+            Some(Dialog::Unsaved(Then::Recent(a.clone())))
+        );
+        click(&mut cx, "dialog-save");
+        let c = dir.path().join("C.selaschedule");
+        assert!(cx.did_prompt_for_new_path());
+        let target = c.clone();
+        cx.simulate_new_path_selection(move |_| Some(target));
+        settle(&mut cx, &operator, "opened A", |o| {
+            o.schedule.path() == Some(a.as_path()) && o.settings_idle()
+        });
+        assert!(c.exists(), "the guarded Save wrote the new file");
+    }
+
+    #[gpui::test]
+    fn an_edit_during_a_guarded_save_prompts_again(cx: &mut TestAppContext) {
+        use crate::operator::Then;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, release) = gated_loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-close");
+        click(&mut cx, "dialog-save");
+        assert!(cx.did_prompt_for_new_path());
+        let file = dir.path().join("Guarded.selaschedule");
+        cx.simulate_new_path_selection(move |_| Some(file));
+        settle(&mut cx, &operator, "save in flight", |o| o.saving_file());
+        add_song(&mut cx, &operator, SECOND_SONG);
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut cx, &operator, "prompted again", |o| {
+            o.dialog == Some(Dialog::Unsaved(Then::New))
+        });
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(entry_titles(o), ["Signal Hymn", SECOND_SONG]);
+            assert!(o.schedule.is_dirty());
+        });
+    }
+
+    #[gpui::test]
+    fn new_close_and_open_are_refused_while_a_save_runs(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, release) = gated_loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        let file = dir.path().join("Busy.selaschedule");
+        begin_blocked_save(&mut cx, &operator, file.clone());
+        cx.simulate_keystrokes("alt-f");
+        click(&mut cx, "bar-file-close");
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.dialog, None);
+            assert_eq!(entry_titles(o), ["Signal Hymn"]);
+        });
+        click(&mut cx, "open-schedule");
+        assert!(!cx.did_prompt_for_paths(), "Open is refused too");
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut cx, &operator, "saved", |o| {
+            o.schedule.path() == Some(file.as_path()) && !o.schedule.is_dirty()
+        });
+    }
+
+    #[gpui::test]
+    fn a_save_that_finishes_late_leaves_the_new_document_alone(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut cx, operator, release) = gated_loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        let file = dir.path().join("Late.selaschedule");
+        begin_blocked_save(&mut cx, &operator, file.clone());
+        operator.update(&mut cx, |o, _| o.schedule.clear());
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut cx, &operator, "write finished", |o| {
+            !o.saving_file() && o.settings_idle()
+        });
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.schedule.path(), None, "still untitled");
+            assert!(!o.schedule.is_dirty());
+        });
+        assert!(file.exists(), "the file itself was written");
     }
 }
 
@@ -5654,7 +5853,7 @@ mod schedule_remainder_ui {
         );
 
         click(&mut cx, "dialog-cancel");
-        assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+        assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
         assert_eq!(versions(&cx, &operator), before, "Cancel leaves the items");
 
         open_update(&mut cx, &operator);

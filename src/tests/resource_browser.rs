@@ -214,7 +214,7 @@ fn delete_asks_with_yes_no_defaults_to_no_and_selection_moves_to_a_neighbour(
 
     click(&mut cx, "song-1");
     cx.simulate_keystrokes("delete escape");
-    assert_eq!(operator.read_with(&cx, |o, _| o.dialog), None);
+    assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
     assert_eq!(operator.read_with(&cx, |o, _| o.catalog.len()), 4);
 
     cx.simulate_keystrokes("delete");

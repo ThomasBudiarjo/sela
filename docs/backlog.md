@@ -783,6 +783,13 @@ hidden schedule-only song revisions; see
 [operator shell](operator-shell.md#schedule-files--native-evidence-and-open-points-2026-10-15).
 Open: EW title-bar/default-folder observation (UNOBSERVED EW8-OBS-067..069),
 Export Standalone Schedule, theme/asset snapshots in the file.
+Sunday-core scrutiny fixes (2026-10-22, SC-SCHFILE-01..03, SC-SCHED-01,
+SC-HARNESS-01): Open Recent keeps the chosen path across a guarded save, an
+edit during a guarded save prompts again, New/Close/Open/Recent are refused
+while a save runs, a late save never retitles a replaced document, Update items
+shows full multiline slides, and Don't Save on quit still prompts for edits
+made during the settings wait. Native re-runs are pending (work log
+"fix-sunday-schedule-documents").
 
 - [x] Schedule documents: Save/Save As/Open/Open Recent/Close, versioned JSON,
   limits, atomic worker writes, hidden revisions (VAL-SCHFILE-001..007).

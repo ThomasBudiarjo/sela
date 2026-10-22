@@ -70,7 +70,7 @@ def saved_file(path: pathlib.Path) -> tuple[str, list[bytes]] | None:
     if not path.is_file():
         return None
     document = json.loads(path.read_text(encoding="utf-8"))
-    if document["format"] != "sela-schedule" or document["version"] != 2:
+    if document["format"] != "sela-schedule" or document["version"] != 3:
         raise nw.Failure(f"unexpected schedule document header in {path}")
     return document["title"], [bytes.fromhex(i["song_id"]) for i in document["items"]]
 

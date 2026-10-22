@@ -7,17 +7,18 @@ actions!(operator, [DismissDialog]);
 const TRAP_HOPS: usize = 4096;
 
 /// What follows once unsaved schedule changes are discarded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Then {
     Open,
-    /// Open Recent entry (index into the recent list).
-    Recent(usize),
+    /// Open Recent entry. Holds the path, not a list index: saving first
+    /// reorders the recent list.
+    Recent(PathBuf),
     /// New Schedule and Close Schedule.
     New,
     Quit,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Dialog {
     /// Save / Don't Save / Cancel before a command that would drop edits.
     Unsaved(Then),
@@ -134,7 +135,11 @@ impl Operator {
 
     /// Runs `then` now, or asks first when the schedule has unsaved changes.
     pub(crate) fn guard(&mut self, then: Then, window: &mut Window, cx: &mut Context<Self>) {
-        if self.schedule.is_dirty() {
+        // A running save would otherwise land on whichever document replaced
+        // the one it was saving.
+        if self.schedule_busy() {
+            self.report_busy();
+        } else if self.schedule.is_dirty() {
             self.open_dialog(Dialog::Unsaved(then), window, cx);
         } else {
             self.proceed(then, window, cx);
@@ -144,7 +149,7 @@ impl Operator {
     pub(crate) fn proceed(&mut self, then: Then, window: &mut Window, cx: &mut Context<Self>) {
         match then {
             Then::Open => self.prompt_open(cx),
-            Then::Recent(index) => self.open_recent(index),
+            Then::Recent(path) => self.open_recent(path),
             Then::New => {
                 self.schedule.clear();
                 self.clear_entry_selection();
@@ -159,7 +164,7 @@ impl Operator {
     }
 
     pub(crate) fn dialog_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let dialog = self.dialog?;
+        let dialog = self.dialog.clone()?;
         let heading = match dialog {
             Dialog::Unsaved(_) => t!(Msg::DialogUnsaved).to_string(),
             Dialog::FileError => t!(Msg::ScheduleFileHeading).into(),
