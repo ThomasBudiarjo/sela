@@ -440,6 +440,31 @@ mod tests {
     }
 
     #[test]
+    fn extreme_window_coordinates_fall_back_to_the_default_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_in(dir.path());
+        for window in [
+            "-2147483648,0,1280,800",
+            "0,-2147483648,1280,800",
+            "2147483647,2147483647,1280,800",
+            "0,0,4294967295,4294967295",
+        ] {
+            std::fs::write(
+                &path,
+                format!(
+                    "sela-settings 1\nlanguage=id\npane_ratios=2000,5000,7000\nwindow={window}\n"
+                ),
+            )
+            .unwrap();
+            assert_eq!(peek_layout(&path), None, "startup read of window={window}");
+            let loaded = load(&path);
+            assert_eq!(loaded.note, None, "window={window}");
+            assert_eq!(loaded.settings.layout, None, "window={window}");
+            assert_eq!(loaded.settings.language, Language::Indonesian);
+        }
+    }
+
+    #[test]
     fn language_round_trips_and_defaults_to_english() {
         let mut settings = chosen(r"\\.\DISPLAY6");
         assert!(!render(&settings).contains("language="));

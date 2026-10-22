@@ -241,6 +241,56 @@ fn list_monitors() -> Vec<sela::settings::MonitorInfo> {
         .unwrap_or_default()
 }
 
+/// The operator window at its saved placement, fitted to the connected work
+/// areas and opened on the monitor that holds it: without a `display_id` GPUI
+/// opens on the primary monitor and replaces bounds that are not on it.
+fn operator_window_options(
+    saved: Option<sela::pane_layout::Placement>,
+    work_areas: &[(gpui::DisplayId, Bounds<gpui::Pixels>)],
+    primary: Option<gpui::DisplayId>,
+    default_bounds: Bounds<gpui::Pixels>,
+) -> WindowOptions {
+    let (window_bounds, display_id) = match saved {
+        Some(saved) => {
+            let areas: Vec<_> = work_areas
+                .iter()
+                .map(|(_, b)| sela::pane_layout::Area {
+                    x: f32::from(b.origin.x).round() as i32,
+                    y: f32::from(b.origin.y).round() as i32,
+                    width: f32::from(b.size.width).round().max(1.) as u32,
+                    height: f32::from(b.size.height).round().max(1.) as u32,
+                })
+                .collect();
+            let primary = work_areas
+                .iter()
+                .position(|(id, _)| Some(*id) == primary)
+                .unwrap_or(0);
+            let (fit, area) = sela::pane_layout::fit_placement(saved, &areas, primary);
+            let bounds = Bounds::new(
+                point(px(fit.x as f32), px(fit.y as f32)),
+                size(px(fit.width as f32), px(fit.height as f32)),
+            );
+            let bounds = if fit.maximized {
+                WindowBounds::Maximized(bounds)
+            } else {
+                WindowBounds::Windowed(bounds)
+            };
+            (bounds, area.map(|index| work_areas[index].0))
+        }
+        None => (WindowBounds::Windowed(default_bounds), None),
+    };
+    WindowOptions {
+        window_bounds: Some(window_bounds),
+        display_id,
+        titlebar: Some(TitlebarOptions {
+            title: Some("Sela — Technical preview".into()),
+            ..Default::default()
+        }),
+        window_min_size: Some(size(px(720.), px(440.))),
+        ..Default::default()
+    }
+}
+
 enum Mode {
     Operator(Option<std::path::PathBuf>),
     Editor(std::path::PathBuf),
@@ -307,50 +357,18 @@ fn main() {
             .as_deref()
             .and_then(std::path::Path::parent)
             .and_then(|profile| sela::settings::peek_layout(&sela::settings::path_in(profile)));
-        let default_bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
-        let window_bounds = match layout.and_then(|l| l.window) {
-            Some(saved) => {
-                let primary = cx.primary_display().map(|d| d.id());
-                let displays = cx.displays();
-                let areas: Vec<_> = displays
-                    .iter()
-                    .map(|d| {
-                        let b = d.visible_bounds();
-                        sela::pane_layout::Area {
-                            x: f32::from(b.origin.x).round() as i32,
-                            y: f32::from(b.origin.y).round() as i32,
-                            width: f32::from(b.size.width).round().max(1.) as u32,
-                            height: f32::from(b.size.height).round().max(1.) as u32,
-                        }
-                    })
-                    .collect();
-                let primary = displays
-                    .iter()
-                    .position(|d| Some(d.id()) == primary)
-                    .unwrap_or(0);
-                let fit = sela::pane_layout::fit_placement(saved, &areas, primary);
-                let bounds = Bounds::new(
-                    point(px(fit.x as f32), px(fit.y as f32)),
-                    size(px(fit.width as f32), px(fit.height as f32)),
-                );
-                if fit.maximized {
-                    WindowBounds::Maximized(bounds)
-                } else {
-                    WindowBounds::Windowed(bounds)
-                }
-            }
-            None => WindowBounds::Windowed(default_bounds),
-        };
+        let work_areas: Vec<_> = cx
+            .displays()
+            .iter()
+            .map(|d| (d.id(), d.visible_bounds()))
+            .collect();
         if let Err(error) = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(window_bounds),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Sela — Technical preview".into()),
-                    ..Default::default()
-                }),
-                window_min_size: Some(size(px(720.), px(440.))),
-                ..Default::default()
-            },
+            operator_window_options(
+                layout.and_then(|l| l.window),
+                &work_areas,
+                cx.primary_display().map(|d| d.id()),
+                Bounds::centered(None, size(px(1280.), px(800.)), cx),
+            ),
             |window, cx| {
                 let slot = std::sync::Arc::new(operator::MonitorSlot::default());
                 let config = operator::SettingsConfig {
