@@ -828,7 +828,11 @@ impl Operator {
             caps,
             sizing: self.sizing,
             background,
-            footer: item.copyright.clone(),
+            footer: item
+                .footers
+                .as_ref()
+                .and_then(|footers| footers.get(index).cloned())
+                .or_else(|| item.copyright.clone()),
         };
         let sizing = job.sizing;
         if self.cue_preparer.is_none() {

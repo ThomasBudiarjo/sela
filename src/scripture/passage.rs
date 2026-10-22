@@ -7,11 +7,102 @@
 //! splitting ("Automatically Flow Scripture on Multiple Slides", minimum
 //! font size, EW8-OBS-056) is unobserved, so the budget is a best guess
 //! (docs/reference-observations.md, Scriptures best guesses).
+use super::books::Book;
 use super::model::{Inventory, VerseId};
+use super::reference::{Reference, Span};
 use crate::i18n::Language;
 
 /// Characters per slide: about five lines of 60 at the default size.
 pub const SLIDE_BUDGET: usize = 280;
+
+/// Where a reference lands in one translation: the whole chapters it
+/// touches (what the verse list shows) and the referenced verses inside
+/// them (what gets selected).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Located {
+    pub chapters: (VerseId, VerseId),
+    pub selected: (VerseId, VerseId),
+}
+
+/// Why a parsed reference does not exist in a translation (VAL-BIBLE-009).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Missing {
+    /// The translation lacks the whole book (a New Testament only text).
+    Book(Book),
+    /// The translation lacks the chapter (another versification).
+    Chapter(Book, u16),
+    /// The chapter has only `count` verses here.
+    Verse {
+        book: Book,
+        chapter: u16,
+        count: u16,
+    },
+}
+
+/// The whole chapters a reference touches in a translation, checking only
+/// that the book and those chapters exist there (a translation switch keeps
+/// the selected verses and reports the ones the new translation lacks).
+pub fn chapters(
+    reference: &Reference,
+    inventory: &Inventory,
+) -> Result<(VerseId, VerseId), Missing> {
+    let book = reference.book();
+    if !inventory.has_book(book) {
+        return Err(Missing::Book(book));
+    }
+    let (first, last) = match reference.span() {
+        Span::Chapters { first, last } => (first, last),
+        Span::Verses { start, end } => (start.chapter, end.chapter),
+    };
+    for chapter in [first, last] {
+        inventory
+            .last_verse(book, chapter)
+            .ok_or(Missing::Chapter(book, chapter))?;
+    }
+    let final_count = inventory.last_verse(book, last).unwrap_or(1);
+    VerseId::new(book, first, 1)
+        .zip(VerseId::new(book, last, final_count))
+        .ok_or(Missing::Chapter(book, first))
+}
+
+/// Checks a reference against a translation's own verse inventory.
+pub fn locate(reference: &Reference, inventory: &Inventory) -> Result<Located, Missing> {
+    let book = reference.book();
+    if !inventory.has_book(book) {
+        return Err(Missing::Book(book));
+    }
+    let last = |chapter: u16| {
+        inventory
+            .last_verse(book, chapter)
+            .ok_or(Missing::Chapter(book, chapter))
+    };
+    let at =
+        |chapter, verse| VerseId::new(book, chapter, verse).ok_or(Missing::Chapter(book, chapter));
+    let (first, final_chapter, start, end) = match reference.span() {
+        Span::Chapters { first, last: end } => (first, end, (first, 1), (end, last(end)?)),
+        Span::Verses { start, end } => (
+            start.chapter,
+            end.chapter,
+            (start.chapter, start.verse),
+            (end.chapter, end.verse),
+        ),
+    };
+    let first_count = last(first)?;
+    let final_count = last(final_chapter)?;
+    for (chapter, verse, count) in [(start.0, start.1, first_count), (end.0, end.1, final_count)] {
+        if verse > count {
+            return Err(Missing::Verse {
+                book,
+                chapter,
+                count,
+            });
+        }
+    }
+    Ok(Located {
+        chapters: (at(first, 1)?, at(final_chapter, final_count)?),
+        selected: (at(start.0, start.1)?, at(end.0, end.1)?),
+    })
+}
 
 /// One audience slide of a passage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,6 +329,75 @@ mod tests {
             "Yohanes 3:16-17"
         );
         assert_eq!(label(&[], &inv, en), "");
+    }
+
+    #[test]
+    fn references_are_located_in_the_translations_own_versification() {
+        let inv = inventory();
+        let reference = |text| crate::scripture::parse(text).unwrap();
+        assert_eq!(
+            locate(&reference("John 3:16-18"), &inv),
+            Ok(Located {
+                chapters: (v(43, 3, 1), v(43, 3, 36)),
+                selected: (v(43, 3, 16), v(43, 3, 18)),
+            })
+        );
+        assert_eq!(
+            locate(&reference("John 3:36-4:2"), &inv),
+            Ok(Located {
+                chapters: (v(43, 3, 1), v(43, 4, 54)),
+                selected: (v(43, 3, 36), v(43, 4, 2)),
+            })
+        );
+        assert_eq!(
+            locate(&reference("John 4"), &inv),
+            Ok(Located {
+                chapters: (v(43, 4, 1), v(43, 4, 54)),
+                selected: (v(43, 4, 1), v(43, 4, 54)),
+            })
+        );
+        let john = Book::from_number(43).unwrap();
+        assert_eq!(
+            locate(&reference("John 3:37"), &inv),
+            Err(Missing::Verse {
+                book: john,
+                chapter: 3,
+                count: 36
+            })
+        );
+        assert_eq!(
+            locate(&reference("John 3:1-4:60"), &inv),
+            Err(Missing::Verse {
+                book: john,
+                chapter: 4,
+                count: 54
+            })
+        );
+        assert_eq!(
+            locate(&reference("John 5:1"), &inv),
+            Err(Missing::Chapter(john, 5))
+        );
+        assert_eq!(
+            locate(&reference("John 2-3"), &inv),
+            Err(Missing::Chapter(john, 2))
+        );
+        assert_eq!(
+            locate(&reference("Gen 1:1"), &inv),
+            Err(Missing::Book(Book::from_number(1).unwrap()))
+        );
+        // A switch only needs the chapters: John 3:30-4:60 still lists both.
+        assert_eq!(
+            chapters(&reference("John 3:30-4:60"), &inv),
+            Ok((v(43, 3, 1), v(43, 4, 54)))
+        );
+        assert_eq!(
+            chapters(&reference("John 5"), &inv),
+            Err(Missing::Chapter(john, 5))
+        );
+        assert_eq!(
+            chapters(&reference("Gen 1"), &inv),
+            Err(Missing::Book(Book::from_number(1).unwrap()))
+        );
     }
 
     fn verses(list: &[(VerseId, &str)]) -> Vec<(VerseId, String)> {

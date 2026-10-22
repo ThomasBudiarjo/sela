@@ -6,7 +6,8 @@ impl Operator {
             | self.poll_images()
             | self.poll_preflight()
             | self.poll_settings()
-            | self.poll_schedule_files();
+            | self.poll_schedule_files()
+            | self.poll_scripture(cx);
         changed |= self.poll_cues();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());
@@ -291,6 +292,7 @@ impl Operator {
                         chosen,
                         copyright: slides::copyright_strip(&song).map(Into::into),
                         resolved: None,
+                        footers: None,
                     });
                     self.preview_slide = 0;
                     if self.live_on_load == Some(version) && self.selected_entry.is_none() {

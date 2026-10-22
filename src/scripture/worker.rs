@@ -9,6 +9,7 @@ use super::import;
 use super::model::{Inventory, MAX_ID, TranslationInfo, VerseId, derive_id, valid_id};
 use super::store::{self, MAX_PASSAGE, Translation};
 use std::{
+    cell::Cell,
     collections::BTreeMap,
     io::Read,
     path::{Path, PathBuf},
@@ -97,13 +98,24 @@ pub struct Imported {
     pub warnings: Vec<import::Warning>,
 }
 
+/// Something the catalog refresh did or could not do, for the UI to phrase.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CatalogNote {
+    /// A bundled translation file was missing its checks and was rebuilt.
+    Rebuilt(String),
+    /// A bundled translation could not be installed: id and reason.
+    Failed(String, String),
+    /// The Scripture folder could not be created.
+    Folder(String),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
     /// Installed translations, bundled first, then by id. `notes` reports
     /// bundled files that were (re)built or could not be.
     Catalog {
         entries: Vec<Entry>,
-        notes: Vec<String>,
+        notes: Vec<CatalogNote>,
     },
     Passage {
         generation: u64,
@@ -122,6 +134,7 @@ pub struct Worker {
     commands: Option<SyncSender<Command>>,
     replies: Receiver<Reply>,
     thread: Option<JoinHandle<()>>,
+    stopped: Cell<bool>,
 }
 
 impl Worker {
@@ -149,6 +162,7 @@ impl Worker {
             commands: Some(commands),
             replies,
             thread: Some(thread),
+            stopped: Cell::new(false),
         })
     }
 
@@ -165,11 +179,20 @@ impl Worker {
     /// The next reply, if one is ready. `None` also when the thread stopped;
     /// `stopped` tells the two apart.
     pub fn poll(&self) -> Option<Reply> {
-        self.replies.try_recv().ok()
+        match self.replies.try_recv() {
+            Ok(reply) => Some(reply),
+            Err(TryRecvError::Disconnected) => {
+                self.stopped.set(true);
+                None
+            }
+            Err(TryRecvError::Empty) => None,
+        }
     }
 
+    /// The thread has ended (it panicked or could not continue); seen by
+    /// the `poll` that found its reply queue closed.
     pub fn stopped(&self) -> bool {
-        matches!(self.replies.try_recv(), Err(TryRecvError::Disconnected))
+        self.stopped.get()
     }
 }
 
@@ -252,10 +275,10 @@ impl Provider {
 
     /// Installs bundles that are missing, outdated or damaged, then opens
     /// every other `.selabible` file in the folder.
-    fn refresh(&mut self) -> Vec<String> {
+    fn refresh(&mut self) -> Vec<CatalogNote> {
         let mut notes = Vec::new();
         if let Err(error) = std::fs::create_dir_all(&self.dir) {
-            notes.push(format!("{}: {error}", self.dir.display()));
+            notes.push(CatalogNote::Folder(error.to_string()));
             return notes;
         }
         self.open.clear();
@@ -271,7 +294,7 @@ impl Provider {
                     let existed = path.exists();
                     let built = install(&path, &bundle);
                     if built.is_ok() && existed {
-                        notes.push(format!("{}: rebuilt", bundle.id));
+                        notes.push(CatalogNote::Rebuilt(bundle.id.to_owned()));
                     }
                     built
                 }
@@ -281,7 +304,7 @@ impl Provider {
                     self.open.insert(bundle.id.to_owned(), translation);
                 }
                 Err(why) => {
-                    notes.push(format!("{}: {why}", bundle.id));
+                    notes.push(CatalogNote::Failed(bundle.id.to_owned(), why.clone()));
                     let info = placeholder(bundle.id, true);
                     self.damaged.insert(bundle.id.to_owned(), (info, why));
                 }
@@ -494,7 +517,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn catalog(worker: &Worker) -> (Vec<Entry>, Vec<String>) {
+    fn catalog(worker: &Worker) -> (Vec<Entry>, Vec<CatalogNote>) {
         worker.submit(Command::Catalog).unwrap();
         match wait(worker) {
             Reply::Catalog { entries, notes } => (entries, notes),
@@ -580,7 +603,7 @@ pub(crate) mod tests {
         std::fs::write(store::path_for(&folder, "USER"), b"also garbage").unwrap();
         let worker = Worker::start(folder.clone(), synthetic_bundles()).unwrap();
         let (entries, notes) = catalog(&worker);
-        assert_eq!(notes, ["SYA: rebuilt"]);
+        assert_eq!(notes, [CatalogNote::Rebuilt("SYA".into())]);
         assert!(matches!(entries[0].state, State::Ready { .. }));
         let user = entries.iter().find(|e| e.info.id == "USER").unwrap();
         assert!(matches!(&user.state, State::Damaged(why) if why.starts_with("damaged")));
@@ -594,7 +617,13 @@ pub(crate) mod tests {
         std::fs::remove_file(store::path_for(&folder, "SYB")).unwrap();
         let worker = Worker::start(folder, bad).unwrap();
         let (entries, notes) = catalog(&worker);
-        assert_eq!(notes, ["SYB: checksum mismatch"]);
+        assert_eq!(
+            notes,
+            [CatalogNote::Failed(
+                "SYB".into(),
+                "checksum mismatch".into()
+            )]
+        );
         assert!(matches!(&entries[1].state, State::Damaged(_)));
     }
 

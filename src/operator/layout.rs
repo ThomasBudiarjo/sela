@@ -433,6 +433,9 @@ impl Render for Operator {
             )
             .when(!self.collapsed, |d| {
                 let detail = self.resource_detail(cx);
+                let sidebar = (self.tab == 1).then(|| self.scripture_sidebar(cx));
+                let scripture_footer = (self.tab == 1).then(|| self.scripture_footer(cx));
+                let collections = sidebar.is_none();
                 d.child(
                     div()
                         .flex_1()
@@ -484,17 +487,20 @@ impl Render for Operator {
                                         .border_r_1()
                                         .border_color(rgb(BORDER))
                                         .bg(rgb(CHROME))
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(t!(Msg::CollectionsHeader)),
-                                        )
-                                        .child(
-                                            div()
-                                                .mt_2()
-                                                .text_color(rgb(MUTED))
-                                                .child(t!(Msg::NoCollections)),
-                                        ),
+                                        .when(collections, |d| {
+                                            d.child(
+                                                div()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child(t!(Msg::CollectionsHeader)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .mt_2()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(t!(Msg::NoCollections)),
+                                            )
+                                        })
+                                        .children(sidebar),
                                 )
                                 .child(
                                     div()
@@ -510,6 +516,7 @@ impl Render for Operator {
                                 ),
                         ),
                 )
+                .children(scripture_footer)
                 .when(self.tab == 0, |d| {
                     let normalized = self.sizing == Sizing::Normalized;
                     d.child(

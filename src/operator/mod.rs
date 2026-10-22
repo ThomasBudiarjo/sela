@@ -71,6 +71,8 @@ use menus::{MenuCloseSub, MenuOpenSub};
 pub(super) use menus::{SONG_MENU, SongItem, TOP_MENUS};
 pub(super) use options::{MonitorSlot, SettingsConfig};
 use options::{RecentChange, SettingsState};
+#[cfg(test)]
+pub(crate) use resources::ScriptureTab;
 use resources::{
     ClearSongSearch, DeleteSongRow, ExtendFirstSongRow, ExtendLastSongRow, ExtendNextSongRow,
     ExtendPreviousSongRow, FirstSongRow, LastSongRow, NextSongRow, PageDownSongRow, PageUpSongRow,
@@ -159,6 +161,10 @@ pub(super) struct Item {
     /// Per-slide face resolution, `None` until the background resolver lands.
     /// Until then the current live scene stays and a deferred cue waits.
     pub(super) resolved: Option<Arc<[fonts::Resolved]>>,
+    /// Per-slide footer replacing `copyright` (a scripture slide's own
+    /// reference and translation, EW "Reference Location: After Each
+    /// Slide", EW8-OBS-056); `None` for songs.
+    pub(super) footers: Option<Arc<[Arc<str>]>>,
 }
 
 impl Item {
@@ -370,6 +376,8 @@ pub(super) struct Operator {
     pub(super) _search_waker: Option<Task<()>>,
     _poller: Option<Task<()>>,
     _receipt_waker: Option<Task<()>>,
+    /// Scriptures tab state and its provider worker (M4-03/M4-04).
+    pub(super) scripture: resources::ScriptureTab,
 }
 
 impl Operator {
@@ -504,6 +512,8 @@ impl Operator {
                 }
             }
         });
+        resources::bind_scripture_keys(cx);
+        let scripture = resources::ScriptureTab::new(cx);
         let schedule_writer = config.schedule_writer.clone();
         let layout = config.initial_layout.unwrap_or_default();
         let settings = SettingsState::start(profile.as_deref(), config, cx);
@@ -609,6 +619,7 @@ impl Operator {
             _search_waker: None,
             _poller: Some(poller),
             _receipt_waker: Some(receipt_waker),
+            scripture,
         }
     }
 }
