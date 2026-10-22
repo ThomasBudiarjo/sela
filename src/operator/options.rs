@@ -456,7 +456,14 @@ impl Operator {
                             // The prompt already owns the decision.
                             return true;
                         }
-                        if this.discard_still_holds() || this.may_close(window, cx) {
+                        // Don't Save still holds: only the autosave flush
+                        // (M1-12) may still have to finish first.
+                        let close = if this.discard_still_holds() {
+                            this.autosave_allow_close(window, cx)
+                        } else {
+                            this.may_close(window, cx)
+                        };
+                        if close {
                             window.remove_window();
                         }
                         true
@@ -490,7 +497,7 @@ impl Operator {
     }
 
     /// Don't Save was chosen and the schedule has not changed since.
-    fn discard_still_holds(&self) -> bool {
+    pub(crate) fn discard_still_holds(&self) -> bool {
         self.settings
             .discarded
             .as_ref()

@@ -947,6 +947,11 @@ impl Policy {
         }
     }
 
+    /// Fingerprint of the newest successful commit (or the initial one).
+    pub fn committed(&self) -> u64 {
+        self.committed
+    }
+
     /// The newest observed schedule differs from the newest commit.
     pub fn uncommitted(&self) -> bool {
         self.seen != self.committed

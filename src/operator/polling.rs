@@ -7,6 +7,7 @@ impl Operator {
             | self.poll_preflight()
             | self.poll_settings()
             | self.poll_schedule_files();
+        changed |= self.poll_autosave(cx);
         changed |= self.poll_cues();
         if let Some(output) = &mut self.output {
             changed |= output.poll(Instant::now());

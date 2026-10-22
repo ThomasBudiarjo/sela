@@ -35,6 +35,8 @@ pub(crate) enum Dialog {
     GoLiveMissing,
     /// Songs menu → Update items in Schedule: the reviewable diff.
     UpdateItems,
+    /// The previous run ended uncleanly: restore its autosave (M1-12).
+    Recovery,
 }
 
 impl Operator {
@@ -156,7 +158,7 @@ impl Operator {
                 self.schedule_message = None;
             }
             Then::Quit => {
-                if self.settings_allow_close(window, cx) {
+                if self.allow_close(window, cx) {
                     window.remove_window();
                 }
             }
@@ -176,6 +178,8 @@ impl Operator {
             Dialog::Preflight => t!(Msg::PreflightHeading).into(),
             Dialog::GoLiveMissing => t!(Msg::GoLiveMissingHeading).into(),
             Dialog::UpdateItems => t!(Msg::MenuUpdateSchedule).into(),
+            Dialog::Recovery if self.recovery_restorable() => t!(Msg::RecoveryHeading).into(),
+            Dialog::Recovery => t!(Msg::RecoveryLostHeading).into(),
             Dialog::DeleteSong(version) => match self.catalog.iter().find(|(v, _)| *v == version) {
                 Some((_, title)) => t!(Msg::DialogDeleteTitled, title = shown_title(title)),
                 None => t!(Msg::DialogDeleteGeneric).into(),
@@ -188,6 +192,7 @@ impl Operator {
             Dialog::Options | Dialog::Preflight | Dialog::FileError => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
             Dialog::UpdateItems => Some(t!(Msg::UpdateItemsConfirm)),
+            Dialog::Recovery => self.recovery_restorable().then(|| t!(Msg::RecoveryRestore)),
         };
         let body = match dialog {
             Dialog::FileError => self.file_error.clone().map(|message| {
@@ -205,6 +210,7 @@ impl Operator {
             Dialog::Preflight => Some(self.preflight_body(cx)),
             Dialog::GoLiveMissing => Some(self.go_live_missing_body()),
             Dialog::UpdateItems => Some(self.update_items_body()),
+            Dialog::Recovery => Some(self.recovery_body()),
             Dialog::DeleteSong(_) => Some(
                 div()
                     .text_size(px(TEXT_SMALL))
@@ -218,7 +224,10 @@ impl Operator {
             .debug_selector(|| "schedule-dialog".into())
             .max_w_full()
             .w(px(
-                if matches!(dialog, Dialog::Preflight | Dialog::UpdateItems) {
+                if matches!(
+                    dialog,
+                    Dialog::Preflight | Dialog::UpdateItems | Dialog::Recovery
+                ) {
                     PREFLIGHT_DIALOG_W
                 } else {
                     380.
@@ -270,8 +279,12 @@ impl Operator {
                             t!(Msg::ButtonKeep)
                         } else if dialog == Dialog::Preflight {
                             t!(Msg::PreflightClose)
-                        } else if dialog == Dialog::FileError {
+                        } else if dialog == Dialog::FileError
+                            || (dialog == Dialog::Recovery && !self.recovery_restorable())
+                        {
                             t!(Msg::ButtonOk)
+                        } else if dialog == Dialog::Recovery {
+                            t!(Msg::RecoveryDiscard)
                         } else {
                             t!(Msg::ButtonCancel)
                         },

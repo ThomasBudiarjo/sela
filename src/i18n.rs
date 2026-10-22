@@ -548,6 +548,37 @@ pub enum Msg {
     StyleTab,
     SwatchesTab,
     ValuesTab,
+    // Autosave and recovery (M1-12).
+    RecoveryHeading,
+    RecoveryLostHeading,
+    RecoveryUnclean,
+    RecoveryRevision,
+    RecoveryNotInFile,
+    RecoveryLost,
+    RecoveryNoCopy,
+    RecoveryDamaged,
+    RecoveryInterrupted,
+    RecoveryKept,
+    RecoveryRestore,
+    RecoveryDiscard,
+    RecoveryRestored,
+    RecoveryUntitled,
+    AgoJustNow,
+    AgoMinutes,
+    AgoHours,
+    AgoDays,
+    AutosaveProtected,
+    AutosaveFailed,
+    AutosaveOff,
+    AutosaveCleanup,
+    AutosaveClosing,
+    ReasonDiskFull,
+    ReasonReadOnly,
+    ReasonLocked,
+    ReasonBudget,
+    ReasonIo,
+    AlreadyRunningTitle,
+    AlreadyRunningBody,
 }
 
 impl Msg {
@@ -1020,6 +1051,36 @@ impl Msg {
         Msg::StyleTab,
         Msg::SwatchesTab,
         Msg::ValuesTab,
+        Msg::RecoveryHeading,
+        Msg::RecoveryLostHeading,
+        Msg::RecoveryUnclean,
+        Msg::RecoveryRevision,
+        Msg::RecoveryNotInFile,
+        Msg::RecoveryLost,
+        Msg::RecoveryNoCopy,
+        Msg::RecoveryDamaged,
+        Msg::RecoveryInterrupted,
+        Msg::RecoveryKept,
+        Msg::RecoveryRestore,
+        Msg::RecoveryDiscard,
+        Msg::RecoveryRestored,
+        Msg::RecoveryUntitled,
+        Msg::AgoJustNow,
+        Msg::AgoMinutes,
+        Msg::AgoHours,
+        Msg::AgoDays,
+        Msg::AutosaveProtected,
+        Msg::AutosaveFailed,
+        Msg::AutosaveOff,
+        Msg::AutosaveCleanup,
+        Msg::AutosaveClosing,
+        Msg::ReasonDiskFull,
+        Msg::ReasonReadOnly,
+        Msg::ReasonLocked,
+        Msg::ReasonBudget,
+        Msg::ReasonIo,
+        Msg::AlreadyRunningTitle,
+        Msg::AlreadyRunningBody,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1560,6 +1621,48 @@ impl Msg {
             Self::StyleTab => "Style",
             Self::SwatchesTab => "Swatches",
             Self::ValuesTab => "Values",
+            Self::RecoveryHeading => "Recover the unsaved schedule?",
+            Self::RecoveryLostHeading => "Unsaved changes were lost",
+            Self::RecoveryUnclean => "Sela did not close normally last time.",
+            Self::RecoveryRevision => {
+                "The last autosave ({ago}) holds “{name}” with {count} item(s)."
+            }
+            Self::RecoveryNotInFile => "Those changes were never saved to the schedule file.",
+            Self::RecoveryLost => {
+                "Newer changes (made {ago}) were not autosaved and cannot be recovered; the schedule then had {count} item(s)."
+            }
+            Self::RecoveryNoCopy => "No autosaved copy of the schedule exists.",
+            Self::RecoveryDamaged => "{count} newer autosave copies were damaged and skipped.",
+            Self::RecoveryInterrupted => {
+                "An autosave was cut off when Sela stopped; its partial copy was discarded."
+            }
+            Self::RecoveryKept => {
+                "If you don't restore, the copies stay in the profile's Recovery folder until newer autosaves replace them."
+            }
+            Self::RecoveryRestore => "Restore",
+            Self::RecoveryDiscard => "Don't Restore",
+            Self::RecoveryRestored => "Restored the autosaved schedule ({count} item(s))",
+            Self::RecoveryUntitled => "Untitled schedule",
+            Self::AgoJustNow => "less than a minute ago",
+            Self::AgoMinutes => "{count} min ago",
+            Self::AgoHours => "{count} h ago",
+            Self::AgoDays => "{count} days ago",
+            Self::AutosaveProtected => "Unsaved changes are autosaved",
+            Self::AutosaveFailed => {
+                "Autosave failed: {reason}. Unsaved changes are not protected; Sela retries every 30 seconds."
+            }
+            Self::AutosaveOff => "Autosave is off: {reason}.",
+            Self::AutosaveCleanup => "Old autosave copies could not be removed: {reason}.",
+            Self::AutosaveClosing => "Finishing the autosave…",
+            Self::ReasonDiskFull => "the disk is full",
+            Self::ReasonReadOnly => "the profile folder is read-only",
+            Self::ReasonLocked => "another program is holding a recovery file",
+            Self::ReasonBudget => "the schedule is larger than the autosave budget",
+            Self::ReasonIo => "disk error ({kind})",
+            Self::AlreadyRunningTitle => "Sela is already running",
+            Self::AlreadyRunningBody => {
+                "Another Sela window is already using this profile ({path}). Switch to that window. This copy closes without changing anything."
+            }
         }
     }
 
@@ -2121,6 +2224,50 @@ impl Msg {
             Self::StyleTab => "Gaya",
             Self::SwatchesTab => "Palet Warna",
             Self::ValuesTab => "Nilai",
+            Self::RecoveryHeading => "Pulihkan jadwal yang belum disimpan?",
+            Self::RecoveryLostHeading => "Perubahan yang belum disimpan hilang",
+            Self::RecoveryUnclean => "Sela tidak ditutup dengan normal terakhir kali.",
+            Self::RecoveryRevision => {
+                "Simpan otomatis terakhir ({ago}) berisi “{name}” dengan {count} item."
+            }
+            Self::RecoveryNotInFile => "Perubahan itu belum pernah disimpan ke file jadwal.",
+            Self::RecoveryLost => {
+                "Perubahan yang lebih baru (dibuat {ago}) belum tersimpan otomatis dan tidak dapat dipulihkan; saat itu jadwal berisi {count} item."
+            }
+            Self::RecoveryNoCopy => "Tidak ada salinan jadwal yang tersimpan otomatis.",
+            Self::RecoveryDamaged => {
+                "{count} salinan simpan otomatis yang lebih baru rusak dan dilewati."
+            }
+            Self::RecoveryInterrupted => {
+                "Sebuah simpan otomatis terputus saat Sela berhenti; salinan setengah jadinya dibuang."
+            }
+            Self::RecoveryKept => {
+                "Jika tidak dipulihkan, salinannya tetap di folder Recovery profil sampai diganti simpan otomatis yang lebih baru."
+            }
+            Self::RecoveryRestore => "Pulihkan",
+            Self::RecoveryDiscard => "Jangan Pulihkan",
+            Self::RecoveryRestored => "Jadwal simpan otomatis dipulihkan ({count} item)",
+            Self::RecoveryUntitled => "Jadwal tanpa judul",
+            Self::AgoJustNow => "kurang dari semenit yang lalu",
+            Self::AgoMinutes => "{count} menit yang lalu",
+            Self::AgoHours => "{count} jam yang lalu",
+            Self::AgoDays => "{count} hari yang lalu",
+            Self::AutosaveProtected => "Perubahan yang belum disimpan sudah tersimpan otomatis",
+            Self::AutosaveFailed => {
+                "Simpan otomatis gagal: {reason}. Perubahan yang belum disimpan tidak terlindungi; Sela mencoba lagi tiap 30 detik."
+            }
+            Self::AutosaveOff => "Simpan otomatis mati: {reason}.",
+            Self::AutosaveCleanup => "Salinan simpan otomatis lama tidak dapat dihapus: {reason}.",
+            Self::AutosaveClosing => "Menyelesaikan simpan otomatis…",
+            Self::ReasonDiskFull => "disk penuh",
+            Self::ReasonReadOnly => "folder profil hanya-baca",
+            Self::ReasonLocked => "program lain sedang memakai file pemulihan",
+            Self::ReasonBudget => "jadwal lebih besar dari batas simpan otomatis",
+            Self::ReasonIo => "galat disk ({kind})",
+            Self::AlreadyRunningTitle => "Sela sudah berjalan",
+            Self::AlreadyRunningBody => {
+                "Jendela Sela lain sudah memakai profil ini ({path}). Beralihlah ke jendela itu. Salinan ini ditutup tanpa mengubah apa pun."
+            }
         }
     }
 }
@@ -2190,7 +2337,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 468);
+        assert_eq!(Msg::ALL.len(), 498);
     }
 
     #[test]

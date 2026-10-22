@@ -370,7 +370,7 @@ impl Operator {
         } else if self.schedule.is_dirty() {
             self.open_dialog(Dialog::Unsaved(Then::Quit), window, cx);
         } else {
-            return self.settings_allow_close(window, cx);
+            return self.allow_close(window, cx);
         }
         cx.notify();
         false
@@ -617,6 +617,7 @@ impl Operator {
                     .truncate()
                     .child(message)
             }))
+            .children(self.autosave_footer())
             .when(self.assets.needs_review(), |d| {
                 d.child(
                     div()

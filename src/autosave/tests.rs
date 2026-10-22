@@ -561,7 +561,7 @@ fn a_rotation_failure_is_a_warning_on_a_committed_revision() {
     store.commit(1, &untitled()).unwrap();
     fs.fail(
         Op::Remove,
-        &"autosave-000000000001"[..],
+        "autosave-000000000001",
         io::ErrorKind::PermissionDenied,
     );
     let (committed, warning) = store.commit(2, &untitled()).unwrap();

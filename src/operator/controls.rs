@@ -393,6 +393,10 @@ impl Operator {
                     self.close_dialog(window, cx);
                     self.apply_update_review();
                 }
+                Some(Dialog::Recovery) => {
+                    self.close_dialog(window, cx);
+                    self.restore_recovery();
+                }
                 Some(Dialog::Preflight | Dialog::FileError) | None => return,
             },
             Control::DialogCancel if self.dialog.is_some() => {
@@ -404,6 +408,9 @@ impl Operator {
                 }
                 if self.dialog == Some(Dialog::GoLiveMissing) {
                     self.hold_go_live_back();
+                }
+                if self.dialog == Some(Dialog::Recovery) {
+                    self.decline_recovery();
                 }
                 self.close_dialog(window, cx);
             }
