@@ -3038,6 +3038,12 @@ impl Render for Library {
     }
 }
 
+/// The close prompt's question. Yes saves and closes and No discards
+/// (EW8-OBS-012: "Would you like to save changes before closing?"), so the
+/// question asks whether to save; "Close without saving?" inverted both
+/// answers, also for screen readers that announce it (SC2-I18N-02).
+const CLOSE_PROMPT_QUESTION: Msg = Msg::SaveBeforeClosing;
+
 impl Library {
     /// The Yes/No/Cancel close prompt (EW8-OBS-012): a full-window backdrop
     /// that keeps the pointer from the editor behind it, with Tab wrapping
@@ -3076,7 +3082,13 @@ impl Library {
             )
             .child(
                 div()
+                    .id("close-prompt-panel")
                     .debug_selector(|| "close-prompt-panel".into())
+                    // Announced as a dialog with its question (SC2-A11Y-01).
+                    .role(Role::Dialog)
+                    .aria_label(t!(CLOSE_PROMPT_QUESTION))
+                    .aria_description(t!(Msg::UnsavedChanges))
+                    .accessibility_id("close-prompt")
                     .w(px(380.))
                     .max_w_full()
                     .p(px(theme::DIALOG_PAD))
@@ -3091,7 +3103,7 @@ impl Library {
                     .child(
                         div()
                             .font_weight(FontWeight::MEDIUM)
-                            .child(t!(Msg::CloseWithoutSaving)),
+                            .child(t!(CLOSE_PROMPT_QUESTION)),
                     )
                     .child(
                         div()
@@ -5283,6 +5295,19 @@ mod tests {
             "7654321"
         );
         assert!(!view.read_with(&cx, |v, cx| v.dirty(cx)));
+    }
+
+    /// SC2-I18N-02: the question matches its answers (Yes saves, No discards).
+    #[test]
+    fn the_close_prompt_asks_whether_to_save() {
+        assert_eq!(
+            CLOSE_PROMPT_QUESTION.english(),
+            "Save changes before closing?"
+        );
+        assert_eq!(
+            CLOSE_PROMPT_QUESTION.indonesian(),
+            "Simpan perubahan sebelum menutup?"
+        );
     }
 
     #[gpui::test]

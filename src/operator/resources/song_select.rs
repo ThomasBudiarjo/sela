@@ -126,6 +126,9 @@ impl Operator {
         self.selected_song = Some(version);
         self.clear_entry_selection();
         self.live_on_load = None;
+        // A Live-pane Page Down waiting for its entry's preview is cancelled
+        // by picking a song, like by picking another entry (SC2-LIVE-03).
+        self.live_entry_on_load = None;
     }
 
     /// Plain click or keyboard move: this song alone.

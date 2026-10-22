@@ -132,10 +132,17 @@ impl Render for Operator {
             // Live shortcuts must not reach the main window behind a modal dialog.
             .key_context(if self.dialog.is_some() {
                 "Sela"
+            } else if self.popup_menu_open() {
+                // An open popup menu is modal for the keyboard too
+                // (SC2-FOCUS-02), like the Songs and menu bar menus.
+                "Sela SelaPopupOpen"
             } else {
                 "Sela SelaShow"
             })
             .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &MenuDismiss, window, cx| {
+                this.dismiss_popup_menus(true, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 if this.may_close(window, cx) {
                     window.remove_window();
@@ -281,7 +288,15 @@ impl Render for Operator {
                     .gap_1()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(self.button(Control::NewMenu, "new-menu", t!(Msg::ToolbarNewMenu), cx))
+                    .child(
+                        self.button(Control::NewMenu, "new-menu", t!(Msg::ToolbarNewMenu), cx)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event: &gpui::MouseDownEvent, _, _| {
+                                    this.new_button_pressed(event.position);
+                                }),
+                            ),
+                    )
                     .child(self.button(
                         Control::OpenSchedule,
                         "open-schedule",
@@ -646,36 +661,46 @@ impl Render for Operator {
                     )
                 })
             })
-            .when_some(
-                self.image_menu.filter(|_| self.tab == 2 && !self.collapsed),
-                |d, position| {
-                    d.child(
-                        div()
-                            .id("image-menu-popup")
-                            .role(Role::Menu)
-                            .aria_label(t!(Msg::A11yImageMenu))
-                            .accessibility_id("image-menu-popup")
-                            .occlude()
-                            .absolute()
-                            .left(position.x)
-                            .top(position.y)
-                            .bg(rgb(SURFACE))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .shadow_md()
-                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                                this.image_menu = None;
-                                cx.notify();
-                            }))
-                            .child(self.button(
-                                Control::ImageMenuLogo,
-                                "image-menu-logo",
-                                t!(Msg::UseAsLogo),
-                                cx,
-                            )),
-                    )
-                },
-            )
+            .when_some(self.image_menu_shown(), |d, position| {
+                d.child(
+                    div()
+                        .id("image-menu-popup")
+                        .role(Role::Menu)
+                        .aria_label(t!(Msg::A11yImageMenu))
+                        .accessibility_id("image-menu-popup")
+                        .key_context("SelaPopupMenu")
+                        .on_action(cx.listener(|this, _: &MenuNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &MenuPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
+                        // Tab stays inside the open menu.
+                        .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &FocusPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
+                        .occlude()
+                        .absolute()
+                        .left(position.x)
+                        .top(position.y)
+                        .bg(rgb(SURFACE))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .shadow_md()
+                        .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                            this.dismiss_popup_menus(false, window, cx);
+                        }))
+                        .child(self.button(
+                            Control::ImageMenuLogo,
+                            "image-menu-logo",
+                            t!(Msg::UseAsLogo),
+                            cx,
+                        )),
+                )
+            })
             .when(self.new_menu, |d| {
                 d.child(
                     div()
@@ -683,6 +708,21 @@ impl Render for Operator {
                         .role(Role::Menu)
                         .aria_label(t!(Msg::A11yNewMenu))
                         .accessibility_id("new-menu-popup")
+                        .key_context("SelaPopupMenu")
+                        .on_action(cx.listener(|this, _: &MenuNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &MenuPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
+                        // A press elsewhere closes it; one on the New button
+                        // itself closes it without reopening.
+                        .on_mouse_down_out(cx.listener(
+                            |this, event: &gpui::MouseDownEvent, window, cx| {
+                                this.new_menu_pressed_outside(event);
+                                this.dismiss_popup_menus(false, window, cx);
+                            },
+                        ))
                         .occlude()
                         .absolute()
                         .top(px(MENU_BAR_H + TOP_BAR_H))
@@ -712,6 +752,20 @@ impl Render for Operator {
                         .role(Role::Menu)
                         .aria_label(t!(Msg::A11yScheduleItemMenu))
                         .accessibility_id("item-menu-popup")
+                        .key_context("SelaPopupMenu")
+                        .on_action(cx.listener(|this, _: &MenuNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &MenuPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
+                        // Tab stays inside the open menu.
+                        .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &FocusPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
                         .occlude()
                         .absolute()
                         .left(position.x)
@@ -720,9 +774,8 @@ impl Render for Operator {
                         .border_1()
                         .border_color(rgb(BORDER))
                         .shadow_md()
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.item_menu = None;
-                            cx.notify();
+                        .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                            this.dismiss_popup_menus(false, window, cx);
                         }))
                         .child(self.button(
                             Control::ItemMenuDuplicate,

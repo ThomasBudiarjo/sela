@@ -374,7 +374,7 @@ pub enum Msg {
     AllSlidesSelected,
     ApplyToSchedule,
     CannotBeShown,
-    CloseWithoutSaving,
+    SaveBeforeClosing,
     ConfirmDeleteHint,
     ContinueEditing,
     CursorInLyrics,
@@ -606,6 +606,9 @@ pub enum Msg {
     ImportDialogBusy,
     ImportQuitBlocked,
     ImportErrBatchBytes,
+    LiveItemNotShown,
+    WindowTitleIdle,
+    WindowTitleUntitledDirty,
 }
 
 impl Msg {
@@ -905,7 +908,7 @@ impl Msg {
         Msg::AllSlidesSelected,
         Msg::ApplyToSchedule,
         Msg::CannotBeShown,
-        Msg::CloseWithoutSaving,
+        Msg::SaveBeforeClosing,
         Msg::ConfirmDeleteHint,
         Msg::ContinueEditing,
         Msg::CursorInLyrics,
@@ -1135,6 +1138,9 @@ impl Msg {
         Msg::ImportDialogBusy,
         Msg::ImportQuitBlocked,
         Msg::ImportErrBatchBytes,
+        Msg::LiveItemNotShown,
+        Msg::WindowTitleIdle,
+        Msg::WindowTitleUntitledDirty,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1462,7 +1468,7 @@ impl Msg {
             Self::AllSlidesSelected => "All slides selected · formatting applies to every slide",
             Self::ApplyToSchedule => "Apply changes to items in schedule",
             Self::CannotBeShown => "Cannot be shown",
-            Self::CloseWithoutSaving => "Close without saving?",
+            Self::SaveBeforeClosing => "Save changes before closing?",
             Self::ConfirmDeleteHint => {
                 "Click Confirm delete to remove this library entry. Schedule snapshots remain."
             }
@@ -1746,6 +1752,9 @@ impl Msg {
             Self::ImportErrBatchBytes => {
                 "Not read: one import holds at most {max} MiB of song text"
             }
+            Self::LiveItemNotShown => "{title} is not on screen yet; use Go Live first",
+            Self::WindowTitleIdle => "Sela — Technical preview",
+            Self::WindowTitleUntitledDirty => "Untitled schedule* — Sela",
         }
     }
 
@@ -2086,7 +2095,7 @@ impl Msg {
             Self::AllSlidesSelected => "Semua slide dipilih · format berlaku untuk setiap slide",
             Self::ApplyToSchedule => "Terapkan perubahan ke item di jadwal",
             Self::CannotBeShown => "Tidak dapat ditampilkan",
-            Self::CloseWithoutSaving => "Tutup tanpa menyimpan?",
+            Self::SaveBeforeClosing => "Simpan perubahan sebelum menutup?",
             Self::ConfirmDeleteHint => {
                 "Klik Konfirmasi hapus untuk menghapus entri pustaka ini. Salinan di jadwal tetap ada."
             }
@@ -2382,6 +2391,9 @@ impl Msg {
             Self::ImportErrBatchBytes => {
                 "Tidak dibaca: satu impor paling banyak {max} MiB teks lagu"
             }
+            Self::LiveItemNotShown => "{title} belum tampil; gunakan Tayangkan dulu",
+            Self::WindowTitleIdle => "Sela — Pratinjau teknis",
+            Self::WindowTitleUntitledDirty => "Jadwal tanpa judul* — Sela",
         }
     }
 }
@@ -2451,7 +2463,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 525);
+        assert_eq!(Msg::ALL.len(), 528);
     }
 
     #[test]

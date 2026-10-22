@@ -312,6 +312,87 @@ Common Windows prerequisites are listed once in
 
 ## Stream: scrutiny-r2
 
+- [ ] **PP-SC2-01 Keys while a context menu is open** (SC2-FOCUS-01;
+  EW8-OBS-010, -018). Steps: with A1 live, right-click a Songs row so its
+  context menu opens, then press B, period, Ctrl+B and Page Down; repeat with
+  the Schedule item menu open; record whether the audience or the toolbar
+  Black state changes and whether the menu stays open; also open the
+  toolbar New ▾ dropdown and the Media image row menu and press the same
+  keys, then Esc. Sela now: the Songs row menu, the Schedule item menu
+  (Duplicate/Remove) and the image menu take the focus, and while any of
+  them or New ▾ is open every show shortcut (B, period, Ctrl+B/C/L, Page
+  Down, arrows, Home/End, Ctrl+Delete) is inert; Esc closes the menu and
+  returns the focus to the row or button that opened it (SC2-FOCUS-01, -02;
+  UNOBSERVED best guess). Also on New ▾: with its menu open, press the left
+  button on New ▾, drag away and release, then press Enter (and separately
+  right-press New ▾, then left-click it); record whether the menu opens.
+  Sela now: the press closes it, and the next Enter or left click opens it
+  (SC2-FOCUS-03). Re-run: `scenario-s02-windows.py` (Songs, Schedule item and
+  New ▾ menus).
+- [ ] **PP-SC2-02 Next/Previous after a Go Live that did not show**
+  (SC2-LIVE-01; EW8-OBS-014, -050). Steps: hard to force in EW; the nearest
+  case is Go Live on an item whose background media is missing. Record
+  which slide Next/Previous then send and what the Live pane footer says.
+  Sela now: until a slide of the new live item has been shown, Next/Previous
+  send nothing and say "<title> is not on screen yet; use Go Live first"; the
+  footer says "<title> · not sent" (UNOBSERVED best guess). Re-run:
+  `navigation-windows.py`, `scenario-s02-windows.py`.
+- [ ] **PP-SC2-03 Go Live on a duplicate schedule item while the original is
+  stepping** (SC2-LIVE-02; EW8-OBS-013). Steps: schedule A1 twice, take the
+  first live, press Right and immediately select the second A1 and Go Live;
+  record whether the first item's next slide flashes on the audience. Sela
+  now: a Go Live on another entry, even of the same song revision, drops the
+  earlier entry's cues still being prepared, so only the duplicate's slide is
+  shown. Re-run: `schedule-remainder-windows.py`.
+- [ ] **PP-SC2-04 Live Page Down then a Songs click** (SC2-LIVE-03;
+  EW8-OBS-050). Steps: with schedule item 1 live and the Live pane focused,
+  press Page Down and at once click a song in Songs; then press Page Down in
+  Live again; record which schedule item goes live. Sela now: picking a song
+  cancels the waiting Page Down, and the next Page Down goes to the item
+  after the one on screen. Re-run: `navigation-windows.py`.
+- [ ] **PP-SC2-05 Screen reader announcement of dialogs and the window
+  title** (SC2-A11Y-01, -02; VAL-A11Y). Steps: with Narrator on, open the
+  unsaved-schedule prompt (Ctrl+Q with an unsaved schedule), the Delete song
+  confirmation, Options and the Song Editor close prompt; then add an item to
+  an untitled schedule. Record what Narrator reads. Sela now: each dialog is a
+  UIA Window element (AccessKit Dialog) named with its question (the editor
+  prompt is named "Save changes before closing?" and carries "Unsaved
+  changes. Save, discard, or keep editing." as its description; Delete song
+  carries its note "Schedules that use this song keep their copy. Live
+  output does not change." and a file error its message), and the title change reaches
+  UIA with the next frame Sela requests. Re-run: `a11y-windows.py`,
+  `scenario-s01-windows.py` (unsaved prompt, Options, editor close prompt).
+- [ ] **PP-SC2-06 Indonesian window title** (SC2-I18N-01). Steps: switch to
+  Bahasa Indonesia, add an item to an untitled schedule, read the title bar.
+  Sela now: "Sela — Pratinjau teknis" and "Jadwal tanpa judul* — Sela"
+  (EW8-OBS-067 itself is still unobserved). Re-run: `i18n-windows.py`.
+- [ ] **PP-SC2-08 Normalize text size while a Go Live is in flight**
+  (SC2-LIVE-04; EW8-OBS-014). Steps: with item A live, select item B, press
+  Go Live and immediately click "Normalize text size across slides"; record
+  the size B's first slide lands with and whether it changes on the next
+  slide; also under Black double-click a Live slide and click Normalize at
+  once, and record whether the mask lifts. Sela now: the toggle rebuilds the
+  newest requested slide (B's Verse 1 here) in place, so B lands once, with
+  the new sizing and no intermediate old-sizing frame, and a double-click
+  unmask still lifts the mask over that slide (SC2-LIVE-04, -05; UNOBSERVED
+  best guess; the timing window is short on fast hardware). Re-run:
+  `live-output-windows.py`.
+- [ ] **PP-SC2-09 Song Editor close prompt wording** (SC2-I18N-02;
+  EW8-OBS-012). Steps: edit a song, press Cancel (and close the editor
+  window), read the prompt and press each of Yes, No and Cancel in turn on a
+  fresh edit. EW 8.0.49 observed: "You have unsaved changes. Would you like
+  to save changes before closing?", Yes/No/Cancel, No discarded. Sela now:
+  heading "Save changes before closing?" (ID "Simpan perubahan sebelum
+  menutup?"), Yes saves and closes, No discards, Cancel or Esc keeps editing;
+  it said "Close without saving?", which inverted Yes and No. Re-run:
+  `scenario-s01-windows.py`, `song-metadata-windows.py`.
+- [ ] **PP-SC2-07 Run the S01 and S02 Windows scenarios** (not run: no
+  Windows host on 2026-10-22). Steps: `python scripts\scenario-s01-windows.py`
+  then `python scripts\scenario-s02-windows.py` with a secondary monitor and
+  the keyboard idle; attach `.amp/in/artifacts/scenario-s0{1,2}-windows/`.
+  Sela now: both PASS on Linux/X11 (`scenario-s0{1,2}-x11.py`, xvfb `:111`,
+  2026-10-22). Re-run: these two scripts.
+
 ## Stream: import-framework
 
 Added 2026-10-22 (M1-14, M4-07 OpenSong/ChordPro; docs/import.md "Import
@@ -447,6 +528,8 @@ timing):
 | 21 | `prep-windows.py` | release binary (`--binary target\release\sela.exe`); seed (`--heavy-song`); audience on the laptop panel (`--monitor name:\\.\DISPLAY1`, the default) |
 | 22 | `reference-w03-windows.py` | not a Sela check: EasyWorship 8.0.49 open and maximized with one song previewed from the Songs tab; observation only |
 | 23 | `song-import-windows.py` | seed; secondary monitor; native folder dialog; the batch fixtures in `tests\fixtures\import\batch` |
+| 24 | `scenario-s01-windows.py` | none seeded (fresh profile); secondary monitor; native Save dialog |
+| 25 | `scenario-s02-windows.py` | seed (`--second-song`); secondary monitor |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

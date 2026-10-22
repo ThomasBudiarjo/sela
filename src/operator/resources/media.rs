@@ -146,10 +146,11 @@ impl Operator {
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                            this.image_rows[index].focus(window, cx);
                             select(this);
-                            this.image_menu = Some(event.position);
-                            cx.notify();
+                            // The menu takes the keys and the focus, not the row
+                            // (SC2-FOCUS-02).
+                            window.prevent_default();
+                            this.open_image_menu(index, event.position, window, cx);
                         }),
                     )
                     .child(div().truncate().child(label))

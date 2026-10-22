@@ -17,6 +17,11 @@ Files:
   `live-output-x11.py`, `schedule-x11.py`, `song-editor-x11.py` (from the
   `*-windows.py` scripts of the same name). New with a Windows counterpart:
   `song-import-x11.py` (import-framework; `song-import-windows.py`).
+  End-to-end scenarios (backlog "Repeatable end-to-end scenarios"):
+  `scenario-s01-x11.py` (fresh profile, New Song, schedule, save, reopen,
+  Go Live) and `scenario-s02-x11.py` (present A, edit B, Next/Previous,
+  masks, Go Live under Black), with Windows counterparts
+  `scenario-s0{1,2}-windows.py` (scrutiny-r2).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -151,7 +156,12 @@ Processes and profile:
   `app.control(id).center`: AccessKit ids (the same ids UIA exposes on
   Windows, e.g. `live-next`, `mask-black`, `song-0`) with window-relative
   rectangles, read over AT-SPI with `gdbus`. Positions hold only for the
-  layout at the time of the call.
+  layout at the time of the call. `Control.role` is the AT-SPI role name
+  ("dialog", "push button", "list item", ...): AccessKit's adapter answers
+  GetRoleName with an empty string, so the harness maps GetRole's number
+  (scrutiny-r2; before that every role read as ""). Controls are looked up
+  under the window's current title, which GPUI hands to AT-SPI when a frame
+  begins.
 - `app.file_dialog()`, `app.drive_file_dialog(path, cancel=False,
   owner=window)`: the portal Save/Open dialog; the path is typed into the
   location entry (Ctrl+L) in one burst because GTK's inline completion
@@ -253,6 +263,18 @@ portal window that `App.file_dialog()` may return, so the pointer is parked
 away before the chooser opens; GPUI reads the X keymap at start and ignores
 xdotool's on-the-fly mapping for characters outside the US layout, so "ñ" is
 mapped to a spare keycode with `xmodmap` before the operator starts.
+
+scrutiny-r2 (2026-10-22, `:111` = `serve --display :111`, HEAD of
+`wave/scrutiny-r2`): `scenario-s01-x11.py` and `scenario-s02-x11.py` PASS,
+and the three ported scripts above PASS again on the same binary (exact
+commands and timings in the work-log record "scrutiny-r2"). Review round 1:
+`native_x11.viewable(wid)` answers "exists and mapped" from one xwininfo
+query (a window vanishing between two queries counts as gone), used by
+`App.wait_exit`, the file dialog close wait and the scenario scripts; S01 now
+also checks Options and the editor close prompt, S02 the Schedule item menu.
+Review round 2: S02 step 2c drives New ▾ (show keys inert while open; a
+press released 300 px away closes it and the first Enter reopens it) with
+`nx.drag`; it FAILS on the binary without the SC2-FOCUS-03 fix.
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live

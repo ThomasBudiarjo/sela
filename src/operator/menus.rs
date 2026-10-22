@@ -436,6 +436,184 @@ impl Operator {
 }
 
 // ---------------------------------------------------------------------------
+// New, Schedule item and image popup menus (SC2-FOCUS-02). Like the Songs
+// menu they are modal for the keyboard while open: the operator root drops
+// `SelaShow` (so show keys, row keys and Ctrl+Delete are inert), a
+// right-click menu takes the focus, Up/Down and Tab stay inside it, and Esc
+// closes it with focus back where it came from.
+
+/// Items of each popup menu, in order.
+const NEW_MENU_ITEMS: [Control; 2] = [Control::NewSongItem, Control::NewSchedule];
+const ITEM_MENU_ITEMS: [Control; 2] = [Control::ItemMenuDuplicate, Control::ItemMenuRemove];
+const IMAGE_MENU_ITEMS: [Control; 1] = [Control::ImageMenuLogo];
+
+impl Operator {
+    /// A New, Schedule item or (shown) image popup menu is open.
+    pub(crate) fn popup_menu_open(&self) -> bool {
+        self.new_menu || self.item_menu.is_some() || self.image_menu_shown().is_some()
+    }
+
+    /// The image menu is drawn only on the Media tab of open Resources.
+    pub(crate) fn image_menu_shown(&self) -> Option<Point<Pixels>> {
+        self.image_menu.filter(|_| self.tab == 2 && !self.collapsed)
+    }
+
+    fn popup_items(&self) -> &'static [Control] {
+        if self.item_menu.is_some() {
+            &ITEM_MENU_ITEMS
+        } else if self.image_menu_shown().is_some() {
+            &IMAGE_MENU_ITEMS
+        } else if self.new_menu {
+            &NEW_MENU_ITEMS
+        } else {
+            &[]
+        }
+    }
+
+    /// Opens the Schedule item menu on row `index` with focus on its first
+    /// item.
+    pub(crate) fn open_item_menu(
+        &mut self,
+        index: usize,
+        id: EntryId,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_menu = false;
+        self.image_menu = None;
+        self.item_menu = Some((id, position));
+        self.popup_origin = self.schedule_rows.get(index).cloned();
+        self.controls[Control::ItemMenuDuplicate].focus(window, cx);
+        cx.notify();
+    }
+
+    /// Opens the image menu on image row `index` with focus on its item.
+    pub(crate) fn open_image_menu(
+        &mut self,
+        index: usize,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_menu = false;
+        self.item_menu = None;
+        self.image_menu = Some(position);
+        self.popup_origin = self.image_rows.get(index).cloned();
+        self.controls[Control::ImageMenuLogo].focus(window, cx);
+        cx.notify();
+    }
+
+    /// Toolbar New ▾: opens or closes the New menu; focus stays on the
+    /// button, Tab reaches the items. Keyboard activation always toggles: a
+    /// swallow left by a press that never completed a click is dropped here
+    /// (SC2-FOCUS-03).
+    pub(crate) fn toggle_new_menu(&mut self) {
+        self.bar_menu = None;
+        self.new_menu_swallow_click = false;
+        self.new_menu_closed_at = None;
+        self.new_menu = !self.new_menu;
+        if self.new_menu {
+            self.item_menu = None;
+            self.image_menu = None;
+            self.popup_origin = Some(self.controls[Control::NewMenu].clone());
+        }
+    }
+
+    /// A left press on the New button: when the same press just closed the
+    /// menu from outside, the click that follows must not reopen it. Every
+    /// press replaces the previous verdict, so it never outlives its click.
+    pub(crate) fn new_button_pressed(&mut self, position: Point<Pixels>) {
+        self.new_menu_swallow_click = self.new_menu_closed_at.take() == Some(position);
+    }
+
+    /// A press outside the open New menu closed it. Only a left press can be
+    /// the start of a click on New ▾, so only its position is kept.
+    pub(crate) fn new_menu_pressed_outside(&mut self, event: &gpui::MouseDownEvent) {
+        self.new_menu_closed_at =
+            (event.button == gpui::MouseButton::Left).then_some(event.position);
+    }
+
+    /// A mouse click on New ▾ whose press already closed the menu: consumed
+    /// without reopening it. Only the mouse click path asks.
+    pub(crate) fn swallow_new_menu_click(&mut self) -> bool {
+        if !std::mem::take(&mut self.new_menu_swallow_click) {
+            return false;
+        }
+        self.bar_menu = None;
+        self.new_menu = false;
+        true
+    }
+
+    /// A popup item (rendered or just closed) holds the keyboard focus.
+    fn popup_item_focused(&self, window: &Window) -> bool {
+        NEW_MENU_ITEMS
+            .iter()
+            .chain(&ITEM_MENU_ITEMS)
+            .chain(&IMAGE_MENU_ITEMS)
+            .any(|c| self.controls[*c].is_focused(window))
+    }
+
+    /// The focus a dialog or the menu bar returns to: a popup item that is
+    /// closing gives way to the row or button that opened its menu.
+    pub(crate) fn focus_to_return(&self, window: &Window, cx: &App) -> Option<FocusHandle> {
+        if self.popup_item_focused(window) {
+            self.popup_origin.clone()
+        } else {
+            window.focused(cx)
+        }
+    }
+
+    /// Closes every popup menu. With `refocus` (Esc, a menu choice) focus
+    /// returns to the menu's origin; otherwise (a press elsewhere) only a
+    /// focus left on a vanished popup item does.
+    pub(crate) fn dismiss_popup_menus(
+        &mut self,
+        refocus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let open = self.popup_menu_open();
+        self.new_menu = false;
+        self.item_menu = None;
+        self.image_menu = None;
+        if (open && refocus) || self.popup_item_focused(window) {
+            match self.popup_origin.clone() {
+                Some(origin) => origin.focus(window, cx),
+                None => self.focus.focus(window, cx),
+            }
+        }
+        cx.notify();
+    }
+
+    /// Up/Down (and Tab in the right-click menus) move among a popup's items,
+    /// wrapping.
+    pub(crate) fn move_popup_focus(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let items = self.popup_items();
+        if items.is_empty() {
+            return;
+        }
+        let count = items.len();
+        let next = match items
+            .iter()
+            .position(|c| self.controls[*c].is_focused(window))
+        {
+            None if forward => 0,
+            None => count - 1,
+            Some(index) if forward => (index + 1) % count,
+            Some(index) => (index + count - 1) % count,
+        };
+        self.controls[items[next]].focus(window, cx);
+        cx.notify();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main menu bar (M1-02/M1-03): File, Edit, Live, Profiles, View, Help in the
 // observed EW 8.0.49 order (EW8-OBS-010/053). GPUI app menus are macOS-only
 // (zed rev a846890 gpui/src/app.rs set_menus), so this is an in-window menu
@@ -864,7 +1042,7 @@ impl Operator {
             return;
         }
         if self.bar_menu.is_none() {
-            self.bar_return = window.focused(cx);
+            self.bar_return = self.focus_to_return(window, cx);
         }
         self.new_menu = false;
         self.item_menu = None;

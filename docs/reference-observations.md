@@ -714,3 +714,23 @@ import into the reference profile unless it is a disposable one). IDs use an
 | EW8-OBS-IMP-5 | UNOBSERVED | What follows an import: Sela selects the imported songs in the Songs list, previews the first, moves focus to its row and reports counts in the Songs footer; Live is untouched. |
 | EW8-OBS-IMP-6 | UNOBSERVED | Cancel during an import and partial failures. Sela commits all accepted songs in one transaction; cancel or any failure saves none of them. |
 | EW8-OBS-IMP-7 | UNOBSERVED | Quit (Ctrl+Q, File › Exit, window close) while EW's import dialog or progress is open. Sela refuses to close while its import preview is reading, checking, in review or committing, and says "Finish or cancel the import before quitting." in the dialog (its own line; an import error stays shown); any other dialog that would replace the preview cancels the import first. A quit resumed after Don't Save (settings write pending) or after Save is refused the same way when the preview opened meanwhile. |
+
+## Scrutiny round 2 — UNOBSERVED best guesses (2026-10-22, scrutiny-r2)
+
+EasyWorship 8.0.49 was not run for scrutiny round 2 (no Windows host). The
+fixes below keep Sela's own rules consistent; none of them is an
+observation. Each has an item in [parity-pending.md](parity-pending.md)
+(Stream: scrutiny-r2).
+
+| Fix | Related record | Sela rule now (best guess) |
+|---|---|---|
+| SC2-FOCUS-01 | EW8-OBS-010 (menus, Esc), EW8-OBS-018 (show keys) | While the Songs row context menu is open, B, period, Ctrl+B/C/L, Page Down, arrows and label keys do nothing; Esc or a menu choice closes it first (PP-SC2-01). |
+| SC2-LIVE-01 | EW8-OBS-014, -050 | After Go Live on another item, Next/Previous step only from a slide of that item that was shown; if its Go Live failed they send nothing and say so, and the footer reads "<title> · not sent" (PP-SC2-02). |
+| SC2-LIVE-02 | EW8-OBS-013 | Go Live on a duplicate schedule entry drops the earlier entry's cues still being prepared (PP-SC2-03). |
+| SC2-LIVE-03 | EW8-OBS-050 | Picking a song in Songs cancels a Live-pane Page Down that is still waiting for its item to load (PP-SC2-04). |
+| SC2-I18N-01 | EW8-OBS-067 (unobserved title) | The idle and untitled window titles follow the UI language (PP-SC2-06). |
+| SC2-FOCUS-02 | EW8-OBS-010 (menus, Esc), EW8-OBS-018 (show keys) | The Schedule item and Media image right-click menus take the focus (Up/Down/Tab move inside, Esc closes back to the row), and while one of them or the toolbar New ▾ menu is open every show shortcut, the Schedule row keys and Ctrl+Delete are inert; a press outside closes the menu (PP-SC2-01). |
+| SC2-LIVE-04 | EW8-OBS-014 | Normalize text size re-sends the newest requested live slide, including a Go Live or step still being prepared, not only the acknowledged one (PP-SC2-08). |
+| SC2-LIVE-05 | EW8-OBS-014, -016 (double-click unmask) | Normalize text size rebuilds that newest request in place: the cue still being prepared with the old sizing is cancelled (never shown), and a double-click unmask intent armed for it still lifts the mask when it lands (PP-SC2-08). |
+| SC2-FOCUS-03 | EW8-OBS-010 (menus) | A press on New ▾ that closes its open menu only swallows the click that completes on New ▾; a press released elsewhere or a right press leaves nothing behind, so the next Enter or left click on New ▾ opens the menu (PP-SC2-01). |
+| SC2-I18N-02 | EW8-OBS-012 (observed wording) | Not a guess for the wording: the Song Editor close prompt asks "Save changes before closing?" to match its observed Yes = save, No = discard answers (it said "Close without saving?"). The shortened question and Sela's description line are Sela's own (PP-SC2-09). |

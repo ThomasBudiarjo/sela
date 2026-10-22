@@ -705,8 +705,17 @@ impl Operator {
     /// The Go Live cue itself, once any file check has passed or been waived.
     pub(crate) fn go_live_item(&mut self, item: Item, index: usize) {
         if self.ready_for_cue() {
-            if self.live.as_ref().map(|live| live.version) != Some(item.version) {
+            // Another item, including another schedule entry of the same
+            // revision (SC2-LIVE-02): cues still being prepared for the old
+            // one are stale, and its presented slide index means nothing for
+            // the new one (SC2-LIVE-01). Until a cue of the new item lands,
+            // nothing of it is on screen.
+            let same = |live: &Item| {
+                (live.version, live.entry, live.chosen) == (item.version, item.entry, item.chosen)
+            };
+            if !self.live.as_ref().is_some_and(same) {
                 self.cancel_cues();
+                self.live_slide = None;
             }
             self.live = Some(item);
             self.send(index);
@@ -718,7 +727,11 @@ impl Operator {
             self.live.as_ref().map(|item| item.slides.len()),
             self.requested_slide(),
         ) else {
-            self.live_message = Some(t!(Msg::LiveNothingLive).into());
+            self.live_message = Some(match &self.live {
+                // Its Go Live failed or was dropped: nothing to step from.
+                Some(item) => t!(Msg::LiveItemNotShown, title = item.title),
+                None => t!(Msg::LiveNothingLive).into(),
+            });
             return;
         };
         let target = if forward {
@@ -1184,6 +1197,20 @@ impl Operator {
         lines
     }
 
+    /// Live pane footer: the live item and the slide last presented from it.
+    pub(crate) fn live_footer(&self) -> String {
+        match (&self.live, self.live_slide) {
+            (Some(item), Some(index)) => t!(
+                Msg::PreviewFooter,
+                title = item.title,
+                index = index + 1,
+                count = item.slides.len()
+            ),
+            (Some(item), None) => t!(Msg::LiveNotSent, title = item.title),
+            _ => t!(Msg::NothingLive).into(),
+        }
+    }
+
     pub(crate) fn live_pane(&mut self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let output = self.output.as_ref();
         let confirmed = output.and_then(|o| match o.live() {
@@ -1193,16 +1220,7 @@ impl Operator {
         let confirmed = self.live_index(confirmed);
         let sending = self.live_index(output.and_then(|o| o.wanted().or(o.in_flight())));
         let lines = self.live_lines();
-        let footer = match (&self.live, self.live_slide) {
-            (Some(item), Some(index)) => t!(
-                Msg::PreviewFooter,
-                title = item.title,
-                index = index + 1,
-                count = item.slides.len()
-            ),
-            (Some(item), None) => t!(Msg::LiveNotSent, title = item.title),
-            _ => t!(Msg::NothingLive).into(),
-        };
+        let footer = self.live_footer();
         let tiles = self.live.as_ref().map(|item| {
             item.slides
                 .iter()

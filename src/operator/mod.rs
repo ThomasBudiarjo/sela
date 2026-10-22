@@ -227,7 +227,7 @@ pub(super) struct Operator {
     drag: Option<(usize, Point<gpui::Pixels>, f32)>,
     activation: Option<Subscription>,
     pub(super) library_error: Option<String>,
-    new_menu: bool,
+    pub(super) new_menu: bool,
     library: Option<PathBuf>,
     pub(super) worker: Option<Worker>,
     request: Option<Request>,
@@ -291,9 +291,9 @@ pub(super) struct Operator {
     /// File › Import › Songs: worker, staged preview and commit (M1-14).
     pub(super) song_import: song_import::SongImport,
     pub(super) images: Vec<String>,
-    image_rows: Vec<FocusHandle>,
+    pub(super) image_rows: Vec<FocusHandle>,
     pub(super) selected_image: Option<String>,
-    image_menu: Option<Point<Pixels>>,
+    pub(super) image_menu: Option<Point<Pixels>>,
     pub(super) media_message: Option<String>,
     /// Not persisted yet.
     pub(super) sizing: Sizing,
@@ -308,7 +308,7 @@ pub(super) struct Operator {
     pub(super) selected_entry: Option<EntryId>,
     /// Multi-selection, drag and update-review state of the Schedule pane.
     pub(super) view: schedule::ScheduleView,
-    schedule_rows: Vec<FocusHandle>,
+    pub(super) schedule_rows: Vec<FocusHandle>,
     pub(super) schedule_message: Option<String>,
     /// One schedule storage job waiting for the worker.
     queued: Option<(storage::Command, Request)>,
@@ -332,7 +332,14 @@ pub(super) struct Operator {
     /// Ancestor of every modal dialog control; Tab wraps inside it.
     pub(super) dialog_scope: FocusHandle,
     pub(super) dialog_message: Option<String>,
-    item_menu: Option<(EntryId, Point<Pixels>)>,
+    pub(super) item_menu: Option<(EntryId, Point<Pixels>)>,
+    /// Where keyboard focus returns when the New, Schedule item or image
+    /// popup menu closes (SC2-FOCUS-02).
+    popup_origin: Option<FocusHandle>,
+    /// A pointer press outside the New menu closed it at this position; the
+    /// same press on the New button must not reopen it.
+    new_menu_closed_at: Option<Point<Pixels>>,
+    new_menu_swallow_click: bool,
     pub(super) song_menu: Option<SongMenu>,
     song_menu_focus: FocusHandle,
     /// Open main-menu-bar popup, if any (File/Edit/Live/Profiles/View/Help).
@@ -452,6 +459,10 @@ impl Operator {
             KeyBinding::new("enter", MenuConfirm, Some("SelaSongMenu")),
             KeyBinding::new("space", MenuConfirm, Some("SelaSongMenu")),
             KeyBinding::new("escape", MenuDismiss, Some("SelaSongMenu")),
+            // New, Schedule item and image popups (SC2-FOCUS-02).
+            KeyBinding::new("down", MenuNext, Some("SelaPopupMenu")),
+            KeyBinding::new("up", MenuPrevious, Some("SelaPopupMenu")),
+            KeyBinding::new("escape", MenuDismiss, Some("SelaPopupOpen")),
             KeyBinding::new("escape", ClearSongSearch, Some("SelaSongSearch")),
         ]);
         song_import::bind_keys(cx);
@@ -593,6 +604,9 @@ impl Operator {
             dialog_scope: cx.focus_handle(),
             dialog_message: None,
             item_menu: None,
+            popup_origin: None,
+            new_menu_closed_at: None,
+            new_menu_swallow_click: false,
             song_menu: None,
             song_menu_focus: cx.focus_handle(),
             bar_menu: None,

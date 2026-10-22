@@ -253,10 +253,7 @@ impl Operator {
                 self.collapsed = false;
                 self.drag = None;
             }
-            Control::NewMenu => {
-                self.bar_menu = None;
-                self.new_menu = !self.new_menu;
-            }
+            Control::NewMenu => self.toggle_new_menu(),
             Control::Quit => window.dispatch_action(Box::new(Quit), cx),
             Control::CollapseResources => {
                 self.collapsed = !self.collapsed;
@@ -301,14 +298,18 @@ impl Operator {
                     Sizing::Normalized => Sizing::PerSlide,
                 };
                 // Applies to the live slide now, so its size never changes
-                // only on the next navigation.
-                if let Some(index) = self.live_slide
-                    && matches!(
-                        self.output.as_ref().map(Supervisor::status),
-                        Some(Status::Connected { .. })
-                    )
-                {
-                    self.send(index);
+                // only on the next navigation. The newest request, not only
+                // the acknowledged slide: a cue still in preparation (a new
+                // item's Go Live, a step) was built with the old sizing
+                // (SC2-LIVE-04). It is rebuilt in place under its own
+                // generation, so the stale-sized cue never reaches the
+                // audience and a double-click unmask intent stays with it
+                // (SC2-LIVE-05).
+                if matches!(
+                    self.output.as_ref().map(Supervisor::status),
+                    Some(Status::Connected { .. })
+                ) {
+                    self.refresh_live_request();
                 }
             }
             Control::Arrangement => self.cycle_arrangement(),
@@ -344,12 +345,15 @@ impl Operator {
                 None => self.schedule_message = Some(t!(Msg::SelectScheduleItem).into()),
             },
             Control::ItemMenuRemove => {
-                if let Some((id, _)) = self.item_menu.take() {
+                if let Some((id, _)) = self.item_menu {
+                    // The dialog returns focus to the row, not the menu item.
+                    self.dismiss_popup_menus(true, window, cx);
                     self.open_dialog(Dialog::Remove(id), window, cx);
                 }
             }
             Control::ItemMenuDuplicate => {
-                if let Some((id, _)) = self.item_menu.take() {
+                if let Some((id, _)) = self.item_menu {
+                    self.dismiss_popup_menus(true, window, cx);
                     self.duplicate_entries(id);
                 }
             }
@@ -446,6 +450,10 @@ impl Operator {
                     return;
                 }
                 this.controls[control].focus(window, cx);
+                if control == Control::NewMenu && this.swallow_new_menu_click() {
+                    cx.notify();
+                    return;
+                }
                 this.activate(control, window, cx);
             }))
     }

@@ -10,7 +10,19 @@ packages=(
   libfontconfig-dev fonts-dejavu-core libwayland-dev libxkbcommon-x11-dev
   libvulkan1 mesa-vulkan-drivers vulkan-tools
   xvfb xauth xdotool x11-utils openbox xcompmgr imagemagick ffmpeg
+  # Linux native E2E harness (docs/e2e-linux.md): private session bus,
+  # AT-SPI control lookup, portal file dialogs, two-monitor dummy display.
+  dbus-daemon libglib2.0-bin at-spi2-core xdg-desktop-portal
+  xdg-desktop-portal-gtk x11-xserver-utils xserver-xorg-video-dummy
+  python3 python3-pip
+  # Windows cross check (cargo check --target x86_64-pc-windows-gnu).
+  mingw-w64
 )
+# Root in a container has no use for sudo (and may not have it).
+as_root=()
+if [[ "$(id -u)" != 0 ]]; then
+  as_root=(sudo -n)
+fi
 missing=()
 for package in "${packages[@]}"; do
   if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != "install ok installed" ]]; then
@@ -18,8 +30,8 @@ for package in "${packages[@]}"; do
   fi
 done
 if ((${#missing[@]})); then
-  sudo -n apt-get update -qq
-  sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+  "${as_root[@]}" apt-get update -qq
+  "${as_root[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
 fi
 echo "[setup] System packages ready ($((SECONDS - started))s elapsed)"
 
@@ -46,13 +58,40 @@ PROFILE
 fi
 
 echo "[setup] Ensuring repository-pinned Rust toolchain and components"
-# Read rust-toolchain.toml explicitly; do not rely on deprecated auto-installation.
-rustup toolchain install --no-self-update --no-update
+# Read rust-toolchain.toml explicitly; do not rely on deprecated
+# auto-installation. Only flags this rustup knows are passed: rustup 1.28
+# has no --no-update, older releases lack other flags.
+channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+if [[ -z "$channel" ]]; then
+  echo "[setup] rust-toolchain.toml names no channel" >&2
+  exit 1
+fi
+windows_target=x86_64-pc-windows-gnu
+install_help=$(rustup toolchain install --help 2>&1 || true)
+install_flags=(--profile minimal --component rustfmt --component clippy --target "$windows_target")
+for flag in --no-self-update --no-update; do
+  if grep -q -- "$flag\b" <<<"$install_help"; then
+    install_flags+=("$flag")
+  fi
+done
+rustup toolchain install "$channel" "${install_flags[@]}"
+# Idempotent when the install above already added them.
+rustup component add --toolchain "$channel" rustfmt clippy
+rustup target add --toolchain "$channel" "$windows_target"
 rustup show active-toolchain
 rustc --version
 cargo --version
 cargo fmt --version
 cargo clippy --version
+echo "[setup] Ensuring ruff for the native E2E scripts"
+ruff_version=0.17.1
+if ! python3 -m ruff --version 2>/dev/null | grep -qx "ruff $ruff_version"; then
+  # Ubuntu 24.04 marks the system Python as externally managed (PEP 668);
+  # a --user install is still kept out of the system site-packages.
+  python3 -m pip install --user --quiet "ruff==$ruff_version" ||
+    python3 -m pip install --user --quiet --break-system-packages "ruff==$ruff_version"
+fi
+python3 -m ruff --version
 if [[ -f Cargo.lock ]]; then
   echo "[setup] Fetching locked Rust dependencies"
   cargo fetch --locked
