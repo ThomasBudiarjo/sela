@@ -318,6 +318,68 @@ Common Windows prerequisites are listed once in
 
 ## Stream: autosave-recovery
 
+Sela side: [autosave.md](autosave.md); best guesses EW8-OBS-071..075 in
+reference-observations.md. Observe only on a disposable EW profile and
+schedule; never on a service in use.
+
+- [ ] **PP-AUTO-01 Does EW autosave schedules?** (EW8-OBS-071). Steps: on a
+  disposable profile create a new schedule, add two songs, do not save; note
+  the time; wait 1, 5 and 10 minutes, each time listing the profile folder
+  (`%ProgramData%\Softouch\EasyWorship\<profile>\` and
+  `%LOCALAPPDATA%`/`%APPDATA%` EasyWorship folders) with timestamps; record
+  any new or changed file and its name. Sela now (best guess): revisions in
+  `<profile>\Recovery\` 2 s after the last change, at most 10 s after the
+  first. Re-run: `autosave-windows.py`.
+- [ ] **PP-AUTO-02 EW after a forced termination** (EW8-OBS-072, -073).
+  Steps: with an unsaved two-song schedule (and once with a saved schedule
+  plus one unsaved change), end `EasyWorship.exe` in Task Manager (End task)
+  or `taskkill /F`; relaunch; capture any prompt (wording, buttons, default
+  button, Esc), which schedule appears, its title bar and unsaved marker,
+  and whether Live/audience state comes back. Sela now (best guess): modal
+  "Recover the unsaved schedule?" with Restore (default) / Don't Restore,
+  lost-work disclosure, original file and baseline kept, Live untouched.
+  Re-run: `autosave-windows.py`, then `cargo test --bin sela autosave_recovery`.
+- [ ] **PP-AUTO-03 EW second instance** (EW8-OBS-074). Steps: with EW
+  running, start `EasyWorship.exe` again (Start menu and a double-clicked
+  `.ews` file); record whether the running window comes to the front, a
+  message appears (capture its text), or a second window opens. Sela now:
+  "Sela is already running" naming the profile, exits 0, no profile change.
+  Re-run: `autosave-windows.py`.
+- [ ] **PP-AUTO-04 EW profile/schedule backups and retention** (EW8-OBS-075).
+  Steps: open the Profiles menu and Options; record every backup/restore
+  item, its default folder and any count or age limit; list the profile
+  folder for backup files after several saves. Sela now: newest 20 autosave
+  revisions within 4 MiB, kept across sessions and after Don't Restore.
+  Re-run: none (record only; M1-13 owns explicit backup/restore).
+- [ ] **PP-AUTO-05 EW Exit with an unsaved schedule after a recovery**.
+  Steps: after PP-AUTO-02, change the restored schedule and choose File ›
+  Exit; record the prompt (EW8-OBS-070 wording) and whether a later launch
+  asks about recovery again. Sela now: the normal unsaved guard; Don't Save
+  marks the run clean and the next start asks nothing. Re-run:
+  `autosave-windows.py`.
+- [ ] **PP-AUTO-06 Run `autosave-windows.py`** (M1-12, S03; NOT RUN: no
+  Windows host on 2026-10-22). Checks LockFileEx as the profile lock and
+  TerminateProcess as the kill, which the Linux run (`autosave-x11.py`,
+  PASS) cannot. Prerequisites: seed (`--second-song`), secondary monitor.
+- [ ] **PP-AUTO-07 Real Windows failure conditions** (M1-12 checklist 5).
+  Steps: on a disposable profile, (a) put the profile on a small nearly full
+  VHD and edit until autosave fails, then free space; (b) deny write on
+  `Recovery\` with an ACL; (c) hold `Recovery\session.json` open with a
+  sharing lock (e.g. PowerShell `[IO.File]::Open(..., 'Open', 'Read', 'None')`);
+  record the footer notes and that editing and Live continue. Sela now:
+  fault-adapter tests only (`autosave::tests`, `tests::autosave_recovery`).
+  Re-run: the same steps after any fix.
+- [ ] **PP-AUTO-08 Power loss and the autosave hitch** (M1-12 acceptance,
+  P/H). Steps: (a) pull power (or hard-reset a VM) during repeated
+  autosaves on a disposable profile, then reopen and record the prompt and
+  restored schedule; (b) during the 90-minute rehearsal on the older
+  integrated-GPU laptop, edit the schedule every few seconds while Live
+  output runs a slide sequence and record frame pacing around commits
+  (`frame_log`). Sela now: process-kill tests (SIGKILL, Linux) and a GPUI
+  check that Live receipts arrive while a commit is held; no physical
+  power-loss or hardware timing evidence. Re-run: `autosave-windows.py`,
+  `prep-windows.py`.
+
 ## Stream: bundle-backup-restore
 
 ## Stream: songs-browser
@@ -372,6 +434,7 @@ timing):
 | 20 | `resource-browser-windows.py` | seed (`--second-song`, `--extra-songs`); release binary and a 20k library for the scrolling timings |
 | 21 | `prep-windows.py` | release binary (`--binary target\release\sela.exe`); seed (`--heavy-song`); audience on the laptop panel (`--monitor name:\\.\DISPLAY1`, the default) |
 | 22 | `reference-w03-windows.py` | not a Sela check: EasyWorship 8.0.49 open and maximized with one song previewed from the Songs tab; observation only |
+| 23 | `autosave-windows.py` | seed (`--second-song`); secondary monitor; no other Sela instance (it starts a second one on purpose) |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

@@ -368,6 +368,32 @@ fn esc_declines_keeps_the_copies_and_the_next_start_asks_nothing(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn closing_with_the_prompt_unanswered_offers_it_again(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_songs(&dir);
+    let songs = versions(&library);
+    let committed = Snapshot {
+        path: None,
+        entries: vec![entry_of(songs[0].0, &songs[0].1)],
+        baseline: Vec::new(),
+    };
+    crashed_profile(&library, &committed, 2);
+    let (mut cx, operator) = start(cx, library, Arc::default(), "apply");
+    settle(&mut cx, &operator, "the recovery prompt", |o| {
+        o.dialog == Some(Dialog::Recovery)
+    });
+    let closes =
+        cx.update(|window, cx| operator.update(cx, |o, cx| o.autosave_allow_close(window, cx)));
+    assert!(closes, "nothing of this run to flush");
+    advance(&mut cx, &operator, Duration::from_secs(1));
+    assert_eq!(session(dir.path())["state"], "running", "not marked clean");
+    let (_, startup) = Store::open(dir.path(), &config(Arc::default())).unwrap();
+    let offer = startup.offer.expect("offered again on the next start");
+    assert_eq!(offer.revision.unwrap().snapshot, committed);
+    assert!(offer.lost.is_some());
+}
+
+#[gpui::test]
 fn a_corrupt_newest_revision_restores_the_previous_one_and_says_so(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let library = library_with_songs(&dir);

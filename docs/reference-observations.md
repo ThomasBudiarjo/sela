@@ -696,3 +696,20 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 - CCLI maps to the Song Number field.
 - Metadata search covers authors, copyright, license, administrator and song number.
 - Close prompt: Yes saves and closes, No discards, Cancel or Esc keeps editing; it is modal.
+
+### Autosave and recovery — UNOBSERVED best guesses (2026-10-22, autosave-recovery)
+
+EasyWorship 8.0.49 was not run for M1-12 (no Windows host). No earlier
+observation in this ledger covers autosave, crash recovery, backups or a
+second instance (searched: autosave, recover, crash, backup, instance,
+profile). Each row is a reversible best guess; the steps to observe them are
+PP-AUTO-01..05 in [parity-pending.md](parity-pending.md#stream-autosave-recovery).
+IDs may be renumbered when parallel streams merge.
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-071 | UNOBSERVED | Whether EW autosaves an unsaved schedule at all, and where. Sela commits schedule revisions to `<profile>\Recovery\` 2 s after the last change (at most 10 s after the first), off the UI thread. |
+| EW8-OBS-072 | UNOBSERVED | EW after a forced termination with an unsaved schedule: any recovery prompt, its wording, buttons and default. Sela shows a modal "Recover the unsaved schedule?" with Restore (default) / Don't Restore and discloses lost newer edits, damaged and interrupted autosaves. |
+| EW8-OBS-073 | UNOBSERVED | What a restored schedule looks like in EW (title bar, unsaved marker, file association). Sela restores the entries with their original file and baseline, so only unsaved changes show as unsaved; Live is untouched. |
+| EW8-OBS-074 | UNOBSERVED | EW's behaviour on a second launch while running (focus the running window, a message, or a second window). Sela shows "Sela is already running" naming the profile and exits without touching it. |
+| EW8-OBS-075 | UNOBSERVED | EW schedule/profile backups and their retention (Profiles menu, backup folders). Sela keeps the newest 20 autosave revisions within 4 MiB, across sessions; declined copies stay. |

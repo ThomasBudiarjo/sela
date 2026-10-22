@@ -408,6 +408,9 @@ impl Operator {
             || matches!(state.health, Health::Absent | Health::Off(_))
             || state.forced
             || flushed
+            // An unanswered recovery prompt: closing must not mark the run
+            // clean, or the previous run's work would never be offered again.
+            || state.offer.is_some()
         {
             return true;
         }

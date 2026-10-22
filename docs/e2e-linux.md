@@ -15,7 +15,9 @@ Files:
   external tools; no pip packages).
 - `scripts/<feature>-x11.py`: one script per feature. Ported so far:
   `live-output-x11.py`, `schedule-x11.py`, `song-editor-x11.py` (from the
-  `*-windows.py` scripts of the same name).
+  `*-windows.py` scripts of the same name). Feature scripts written on the
+  harness: `autosave-x11.py` (M1-12, S03; Windows counterpart
+  `autosave-windows.py`).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -243,6 +245,7 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `live-output-x11.py --kind dual --tolerate-audience-focus` | private dual, audience `secondary` 1920x1080 | PASS, four tolerated focus thefts |
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
+| `autosave-x11.py --display :113` (2026-10-22, autosave-recovery) | xvfb `serve --display :113` | PASS (19 s) |
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live

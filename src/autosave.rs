@@ -314,7 +314,10 @@ pub fn fingerprint(schedule: &Schedule) -> u64 {
             },
             &mut hasher,
         );
-        entry.title.hash(&mut hasher);
+        // Titles change only with the pinned revision (insert, re-pin,
+        // open, restore), so their length is enough and keeps a 32-entry
+        // fingerprint cheap on the UI thread.
+        entry.title.len().hash(&mut hasher);
     }
     schedule.baseline().len().hash(&mut hasher);
     for p in schedule.baseline() {

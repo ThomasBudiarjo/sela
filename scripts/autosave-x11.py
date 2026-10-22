@@ -93,7 +93,9 @@ def click_control(app: nx.App, window: int, aid: str) -> None:
 def body(session: nx.Session) -> str:
     args, summary = session.args, session.summary
     profile = session.temp("sela-autosave-")
-    library = nx.seed_library(profile / "library.sqlite", "--second-song", seed=args.seed)
+    library = nx.seed_library(
+        profile / "library.sqlite", "--second-song", seed=args.seed
+    )
     first_id, second_id = nx.catalog_song_ids(library)
 
     # 1. First run: a committed revision while Live output is on.
@@ -115,7 +117,9 @@ def body(session: nx.Session) -> str:
     blank = nx.digest(screen)
     nx.click(operator, *controls["song-0"].center)
     nx.click(operator, *controls["add-to-schedule"].center)
-    nx.wait_until(lambda: len(revisions(profile)) == 1, 10, "the first autosave revision")
+    nx.wait_until(
+        lambda: len(revisions(profile)) == 1, 10, "the first autosave revision"
+    )
     first = read_revision(revisions(profile)[0])
     pinned = [bytes.fromhex(i["song_id"]) for i in first["items"]]
     summary["first_revision"] = {"sequence": first["sequence"], "items": len(pinned)}
@@ -123,7 +127,9 @@ def body(session: nx.Session) -> str:
         raise nx.Failure(f"unexpected first revision {first}")
     click_control(app, operator, "schedule-item-0")
     nx.click(operator, *app.control("go-live", operator).center)
-    image, summary["go_live_observed_ms"] = nx.wait_for_change(screen, blank, 5.0, "go_live")
+    image, summary["go_live_observed_ms"] = nx.wait_for_change(
+        screen, blank, 5.0, "go_live"
+    )
     session.save(image, "audience-live")
     session.save(operator, "first-run-autosaved")
 
@@ -146,10 +152,14 @@ def body(session: nx.Session) -> str:
     nx.press(notice, "enter")
     summary["second_instance_exit"] = second.wait_exit()
     if summary["second_instance_exit"] != 0:
-        raise nx.Failure(f"second instance exit status {summary['second_instance_exit']}")
+        raise nx.Failure(
+            f"second instance exit status {summary['second_instance_exit']}"
+        )
     after = {str(p): digest(p) for p in watched}
     if after != before:
-        raise nx.Failure(f"the second instance changed profile files: {before} -> {after}")
+        raise nx.Failure(
+            f"the second instance changed profile files: {before} -> {after}"
+        )
     if [w for w in app.windows() if nx.window_name(w) == ALREADY_RUNNING_TITLE]:
         raise nx.Failure("the first operator showed the notice")
     session.close_app(second)
@@ -177,7 +187,9 @@ def body(session: nx.Session) -> str:
     if (session_file(profile) or {}).get("state") != "running":
         raise nx.Failure("the killed run is not recorded as running")
     if not nx.alive(audience_pid):
-        raise nx.Failure("the audience died with the operator (expected it to keep its scene)")
+        raise nx.Failure(
+            "the audience died with the operator (expected it to keep its scene)"
+        )
     summary["audience_survived_kill"] = True
     os.kill(audience_pid, signal.SIGTERM)
     if not nx.wait_dead(audience_pid, 5):
@@ -209,7 +221,9 @@ def body(session: nx.Session) -> str:
     )
     restored = app.controls(operator)
     if "schedule-item-0" not in restored or "schedule-item-1" in restored:
-        raise nx.Failure(f"expected exactly one restored item ({sorted(restored)[:40]})")
+        raise nx.Failure(
+            f"expected exactly one restored item ({sorted(restored)[:40]})"
+        )
     nx.wait_until(
         lambda: nx.window_name(operator) == "Untitled schedule* — Sela",
         5,

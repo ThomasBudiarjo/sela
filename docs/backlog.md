@@ -894,14 +894,29 @@ Acceptance: failed imports/preflight preserve current library and live scene.
 
 Depends on: M1-01, M1-09. Tests: U, I, N, P; S03.
 
-- [ ] Define committed/dirty state, bounded autosave cadence, flush/close behavior,
+Progress (autosave-recovery, 2026-10-22): **implemented-unqualified**; see
+[autosave](autosave.md). Checksummed revision files in `<profile>/Recovery/`
+(temp + fsync + rename), 2 s quiet / 10 s maximum cadence on the worker
+thread, close flush, OS profile lock with a second-instance notice, recovery
+prompt with honest loss disclosure, 20-revision / 4 MiB retention. Linux U/I,
+GPUI and `scripts/autosave-x11.py` pass; `autosave-windows.py`, EW
+observations (EW8-OBS-071..075 UNOBSERVED), real disk/ACL faults, power loss
+and the older-hardware hitch measurement are open (PP-AUTO-01..08).
+
+- [x] Define committed/dirty state, bounded autosave cadence, flush/close behavior,
   profile location and single-instance/concurrent-open policy.
-- [ ] Commit schedule revisions transactionally without UI-thread filesystem work.
-- [ ] Implement recovery prompt and backup rotation with documented retention.
-- [ ] Inject termination before/during/after commit; recover the last committed
+  (docs/autosave.md; the editor-only `--library` mode takes no lock.)
+- [x] Commit schedule revisions transactionally without UI-thread filesystem work.
+  (Atomic file publication, not SQLite: revisions pin committed song revisions.)
+- [x] Implement recovery prompt and backup rotation with documented retention.
+  (Recovery folder copies only; portable backup/restore stays with M1-13.)
+- [x] Inject termination before/during/after commit; recover the last committed
   revision and disclose newer unsaved work rather than claiming zero loss.
-- [ ] Test disk full, locked/read-only profile, corrupt latest revision, exhausted
+  (SIGKILL child-process tests and the X11 script; TerminateProcess on Windows
+  not run.)
+- [x] Test disk full, locked/read-only profile, corrupt latest revision, exhausted
   backup budget and autosave while output is active.
+  (Injected faults and GPUI receipts; real volumes/ACLs on Windows: PP-AUTO-07.)
 
 Acceptance: S03 passes and live rendering shows no autosave-induced sustained hitch.
 
