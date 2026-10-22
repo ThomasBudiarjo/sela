@@ -19,6 +19,20 @@ Shared rules (`src/import/mod.rs`):
 - Section codes shared by OpenLyrics and OpenSong map to Sela labels with
   `label_for_code` (`v1` is "Verse 1", `c` is "Chorus").
 - Anything a parser drops or guesses is reported as a `Warning`.
+- Every accepted file fits the song model, so it can always be stored
+  (M5-02). OpenLyrics applies the limits as it reads; OpenSong, ChordPro and
+  EasyWorship words end with `ParsedSong::fit_to_model`, which applies the
+  same rules: title over 1,024 bytes, authors joined over 4,096, copyright
+  over 4,096, administrator over 256 and section labels over 256 bytes are
+  cut at a grapheme boundary with `Truncated(field)`; slides past the shared
+  text budget (240 KiB of labels and slide text, 24 bytes per slide on top)
+  are dropped from the end with one `LimitReached`; order entries past 512
+  expanded slides are dropped with `LimitReached`; a song whose first slide
+  alone is over the budget is `TooLarge`. `MissingTitle` is always the first
+  warning, so it survives a full warning list (`warn_missing_title`).
+- Seeded property and fuzz suites in `src/fuzz/` check these rules for every
+  parser on mutated fixtures, token soups and worst-case 1 MiB inputs
+  ([security.md](security.md#fuzzing)).
 
 ## OpenLyrics
 
@@ -141,9 +155,10 @@ Sela's song model has no chord data, so nothing keeps them as hidden data.
 Every warning is reported once per file, however often its cause repeats.
 A song over the limits keeps its first `MAX_SECTIONS` sections, its first
 `MAX_SLIDES` slides and its first `MAX_ORDER` order entries, with
-`LimitReached`. A file with no lyric text is `Rejected::NoLyrics`. A missing
-title is `Warning::MissingTitle` with an empty title, and the caller
-substitutes the file name. A CCLI number that is not ASCII digits
+`LimitReached`; the text budget, field limits and the expanded-order cap of
+the shared rules apply on top. A file with no lyric text is
+`Rejected::NoLyrics`. A missing title is `Warning::MissingTitle` with an
+empty title, and the caller substitutes the file name. A CCLI number that is not ASCII digits
 (`storage::song_number_ok`) is dropped with `InvalidField("ccli")`.
 
 ### OpenSong
@@ -326,7 +341,8 @@ may start with a label line such as `Verse 1`.
   removed. A slide left empty is dropped. So is a section left with no slides,
   with one `EmptySection(label)` warning per section. Words without any
   slide are `Rejected::NoLyrics`. Hitting `MAX_SECTIONS` or `MAX_SLIDES` stops
-  the parse with `LimitReached`.
+  the parse with `LimitReached`, and so does the shared text budget; one
+  slide over the whole budget is `TooLarge`.
 
 ### Decoding
 

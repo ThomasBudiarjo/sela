@@ -23,6 +23,7 @@ pub fn parse(words: &[u8]) -> Parsed {
         Dialect::Legacy => legacy_sections(&document.paragraphs),
     };
     finish(drafts, &mut song)?;
+    song.fit_to_model()?;
     Ok(song)
 }
 
@@ -621,6 +622,7 @@ fn finish(drafts: Vec<Draft>, song: &mut ParsedSong) -> Result<(), Rejected> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::import::SLIDE_BYTES;
     use proptest::prelude::*;
     use proptest::test_runner::FileFailurePersistence;
 
@@ -1051,12 +1053,17 @@ mod tests {
             fonts += &format!("\\f{last}\\fcharset204 ");
         }
         fonts += &format!("}}\\f{last} ");
-        while fonts.len() < MAX_FILE_BYTES - 8 {
+        // Each escape decodes to two bytes; the slide stays inside the text
+        // budget, so the song is accepted (`fit_to_model`).
+        let mut escapes = 0;
+        while fonts.len() < MAX_FILE_BYTES - 8 && escapes < (SLIDE_BYTES - 64) / 2 {
             fonts += "\\'e9";
+            escapes += 1;
         }
         fonts += "}";
         let song = parse(fonts.as_bytes()).unwrap();
         assert!(song.sections[0].slides[0].starts_with("\u{439}\u{439}"));
+        assert_eq!(song.sections[0].slides[0].chars().count(), escapes);
         assert_fast(started);
     }
 

@@ -170,7 +170,7 @@ impl Song {
         }
         Ok(())
     }
-    fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         for s in [&self.title, &self.authors, &self.copyright, &self.license]
             .into_iter()
@@ -181,7 +181,7 @@ impl Song {
         }
         out
     }
-    fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > MAX_SONG_BYTES {
             return Err(Error::Corrupt);
         }
@@ -313,6 +313,29 @@ impl Drop for Staging {
 }
 const MAX_BACKUP_BYTES: i64 = 256 * 1024 * 1024;
 
+/// SQLite's settings for database files that may be hostile (a restored
+/// backup can come from anywhere): defensive mode refuses schema and
+/// page-level corruption tricks, and an untrusted schema may not run
+/// functions with side effects from views, triggers or defaults.
+fn harden(db: &Connection) -> Result<()> {
+    use rusqlite::config::DbConfig;
+    db.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+    db.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+    Ok(())
+}
+
+/// Sela never creates triggers or views. A library that has one was not
+/// written by Sela, and its trigger would run on every later save.
+fn check_schema_objects(db: &Connection) -> Result<()> {
+    let foreign = db
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type IN ('trigger','view')")?
+        .exists([])?;
+    if foreign {
+        return Err(Error::Unsupported);
+    }
+    Ok(())
+}
+
 fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicBool) -> Result<()> {
     use rusqlite::backup::{Backup, StepResult};
     if destination.as_os_str().len() > 4096 || destination.file_name().is_none() {
@@ -395,6 +418,7 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     target.execute_batch("PRAGMA journal_mode=DELETE;")?;
     target.close().map_err(|(_, e)| Error::from(e))?;
     let verified = Repository::open_internal(&path, false)?;
+    check_schema_objects(&verified.db)?;
     verified.verify_history(cancel, start)?;
     verified.db.close().map_err(|(_, e)| Error::from(e))?;
     // Windows FlushFileBuffers requires a handle with write access.
@@ -435,6 +459,7 @@ impl Repository {
             source,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        harden(&db)?;
         db.busy_timeout(Duration::from_millis(100))?;
         db.execute_batch("PRAGMA cache_size=-2048;")?;
         copy_new(&db, destination, cancel)
@@ -570,6 +595,7 @@ impl Repository {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        harden(&db)?;
         db.busy_timeout(Duration::from_millis(100))?;
         db.set_limit(Limit::SQLITE_LIMIT_LENGTH, (MAX_SONG_BYTES + 4096) as i32)?;
         db.execute_batch(
@@ -1959,6 +1985,49 @@ mod tests {
             );
         }
     }
+    // M5-02 audit finding: a restored backup is an untrusted file. One that
+    // carries a trigger (or view) would run it on every later save of the
+    // restored library, for example deleting songs as they are written.
+    #[test]
+    fn restore_refuses_a_library_with_triggers_or_views() {
+        let (d, p, mut repo) = fixture();
+        repo.save_song(None, song()).unwrap();
+        drop(repo);
+        let cancel = AtomicBool::new(false);
+        for (name, sql) in [
+            (
+                "trigger",
+                "CREATE TRIGGER wipe AFTER INSERT ON song_revisions BEGIN DELETE FROM songs; END",
+            ),
+            ("view", "CREATE VIEW everything AS SELECT * FROM songs"),
+        ] {
+            let source = d.path().join(format!("{name}.sqlite"));
+            std::fs::copy(&p, &source).unwrap();
+            Connection::open(&source)
+                .unwrap()
+                .execute_batch(sql)
+                .unwrap();
+            let restored = d.path().join(format!("{name}-restored.sqlite"));
+            assert_eq!(
+                Repository::restore_new(&source, &restored, &cancel),
+                Err(Error::Unsupported),
+                "{name}"
+            );
+            assert!(!restored.exists(), "{name}");
+        }
+        // The untouched library still restores.
+        let restored = d.path().join("clean-restored.sqlite");
+        Repository::restore_new(&p, &restored, &cancel).unwrap();
+        assert_eq!(
+            Repository::open(&restored)
+                .unwrap()
+                .heads(false, None)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn backup_failures_never_publish_or_replace() {
         let (d, p, mut repo) = fixture();

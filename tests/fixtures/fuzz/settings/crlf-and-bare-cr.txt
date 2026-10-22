@@ -1,0 +1,3 @@
+sela-settings 1
+language=id
+recent=C:/s/b.selaschedule

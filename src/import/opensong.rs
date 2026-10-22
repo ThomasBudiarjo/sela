@@ -78,8 +78,9 @@ pub fn parse(bytes: &[u8]) -> Parsed {
         }
     }
     if song.title.is_empty() {
-        warn(&mut song, Warning::MissingTitle);
+        song.warn_missing_title();
     }
+    song.fit_to_model()?;
     Ok(song)
 }
 

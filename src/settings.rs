@@ -47,8 +47,28 @@ pub struct Settings {
 /// The saved layout of `path`, read without side effects. Unreadable or
 /// corrupt files give `None` here; `load` handles the backup and note.
 pub fn peek_layout(path: &Path) -> Option<Layout> {
-    let text = String::from_utf8(std::fs::read(path).ok()?).ok()?;
+    let text = String::from_utf8(read_bounded(path).ok()?).ok()?;
     parse(&text).ok()?.layout
+}
+
+/// Largest settings file read. A real one is a few hundred bytes; ten recent
+/// paths of the longest Windows length still fit. A larger file is damaged
+/// and is treated as unreadable instead of being read into memory.
+pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "settings file is too large",
+        ));
+    }
+    Ok(bytes)
 }
 
 impl Settings {
@@ -73,7 +93,13 @@ pub enum ParseError {
 }
 
 pub fn parse(text: &str) -> Result<Settings, ParseError> {
-    let mut lines = text.lines();
+    if text.is_empty() {
+        return Err(ParseError::Empty);
+    }
+    // LF, CRLF and a bare CR (old Mac line ends, a stray CR from an editor)
+    // all end a line, so a CR never becomes part of a path or name.
+    let text = text.replace("\r\n", "\n");
+    let mut lines = text.split(['\n', '\r']);
     let header = lines.next().ok_or(ParseError::Empty)?;
     let version = header
         .strip_prefix(HEADER)
@@ -92,7 +118,10 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
         if layout.accept(key, value) {
             continue;
         }
-        if key == "output_monitor" && !value.is_empty() {
+        // A name or path with control characters cannot be saved faithfully
+        // (`render` leaves it out), so it is ignored like an unknown value.
+        let usable = !value.is_empty() && !value.chars().any(char::is_control);
+        if key == "output_monitor" && usable {
             settings.output_monitor = Some(value.to_owned());
         } else if key == "language" {
             // Unknown codes are ignored like unknown keys: English applies.
@@ -101,7 +130,7 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
             settings.song_order.sort = SongSort::from_code(value).unwrap_or_default();
         } else if key == "song_sort_descending" {
             settings.song_order.descending = value == "1";
-        } else if key == "recent" && !value.is_empty() {
+        } else if key == "recent" && usable {
             // Lines are newest first; keep the first occurrence of a path.
             let path = PathBuf::from(value);
             if settings.recent_schedules.len() < MAX_RECENT
@@ -117,9 +146,10 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
 
 pub fn render(settings: &Settings) -> String {
     let mut text = format!("{HEADER} {VERSION}\n");
-    if let Some(name) = &settings.output_monitor {
-        // Names never contain line breaks; strip them so one cannot corrupt the file.
-        let name: String = name.chars().filter(|c| !c.is_control()).collect();
+    // A value with a control character (a line break would corrupt the
+    // file) is left out rather than saved as a different name or path.
+    let writable = |value: &str| !value.is_empty() && !value.chars().any(char::is_control);
+    if let Some(name) = settings.output_monitor.as_deref().filter(|n| writable(n)) {
         text.push_str(&format!("output_monitor={name}\n"));
     }
     if settings.language != Language::default() {
@@ -132,12 +162,10 @@ pub fn render(settings: &Settings) -> String {
         text.push_str("song_sort_descending=1\n");
     }
     for path in settings.recent_schedules.iter().take(MAX_RECENT) {
-        let path: String = path
-            .to_string_lossy()
-            .chars()
-            .filter(|c| !c.is_control())
-            .collect();
-        text.push_str(&format!("recent={path}\n"));
+        // A path that is not valid Unicode cannot be written back either.
+        if let Some(path) = path.to_str().filter(|p| writable(p)) {
+            text.push_str(&format!("recent={path}\n"));
+        }
     }
     if let Some(layout) = &settings.layout {
         text.push_str(&layout.render());
@@ -159,7 +187,7 @@ pub struct Loaded {
 /// Reads the settings. A missing file gives defaults silently; an unreadable
 /// one gives defaults plus a note, and is renamed aside (never deleted).
 pub fn load(path: &Path) -> Loaded {
-    let text = match std::fs::read(path) {
+    let text = match read_bounded(path) {
         Ok(bytes) => String::from_utf8(bytes).map_err(|_| ()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Loaded {
@@ -715,5 +743,69 @@ mod tests {
         assert!(monitor_missing(Some("B"), Some(&list)));
         assert!(!monitor_missing(Some("B"), None));
         assert!(!monitor_missing(Some("A"), Some(&list)));
+    }
+
+    // M5-02 fuzz finding: a bare CR (old Mac line ends, an editor's stray
+    // CR) stayed inside a recent path, which then never opened, and saving
+    // silently rewrote it into another path.
+    #[test]
+    fn a_bare_cr_ends_a_line_and_never_joins_a_path() {
+        let parsed = parse("sela-settings 1\rlanguage=id\rrecent=C:/s/b.selaschedule\r").unwrap();
+        assert_eq!(parsed.language, Language::Indonesian);
+        assert_eq!(
+            parsed.recent_schedules,
+            [PathBuf::from("C:/s/b.selaschedule")]
+        );
+        let parsed = parse("sela-settings 1\r\nrecent=C:/a\rrecent=C:/b\r\n").unwrap();
+        assert_eq!(
+            parsed.recent_schedules,
+            [PathBuf::from("C:/a"), PathBuf::from("C:/b")]
+        );
+        assert_eq!(parse(&render(&parsed)), Ok(parsed));
+    }
+
+    // M5-02 fuzz finding: `render` stripped control characters, so loading
+    // and saving changed a path or monitor name into a different one.
+    #[test]
+    fn values_with_control_characters_are_left_out_not_rewritten() {
+        let mut settings = Settings {
+            output_monitor: Some("DISPLAY\u{1}6".into()),
+            ..Settings::default()
+        };
+        settings.remember_recent(PathBuf::from("C:/s/kept.selaschedule"));
+        settings.remember_recent(PathBuf::from("C:/s/a\tb.selaschedule"));
+        let text = render(&settings);
+        assert!(!text.contains("output_monitor"), "{text:?}");
+        assert!(!text.contains("ab.selaschedule"), "{text:?}");
+        let loaded = parse(&text).unwrap();
+        assert_eq!(loaded.output_monitor, None);
+        assert_eq!(
+            loaded.recent_schedules,
+            [PathBuf::from("C:/s/kept.selaschedule")]
+        );
+        assert_eq!(
+            parse("sela-settings 1\noutput_monitor=X\u{7f}\nrecent=a\u{85}b\n").unwrap(),
+            Settings::default()
+        );
+    }
+
+    // M5-02 audit finding: the whole file was read into memory, so a damaged
+    // multi-gigabyte settings.txt stalled or exhausted startup.
+    #[test]
+    fn an_oversized_file_is_unreadable_and_kept_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_in(dir.path());
+        let mut text = String::from("sela-settings 1\nlanguage=id\npane_ratios=2000,5000,7000\n");
+        text.push_str(&"\n".repeat(MAX_FILE_BYTES as usize));
+        std::fs::write(&path, &text).unwrap();
+        assert_eq!(peek_layout(&path), None);
+        let loaded = load(&path);
+        assert_eq!(loaded.settings, Settings::default());
+        assert!(loaded.note.is_some());
+        assert!(dir.path().join("settings.txt.bad").exists());
+        // Exactly at the bound still loads.
+        std::fs::write(&path, &text[..MAX_FILE_BYTES as usize]).unwrap();
+        assert!(peek_layout(&path).is_some());
+        assert_eq!(load(&path).settings.language, Language::Indonesian);
     }
 }
