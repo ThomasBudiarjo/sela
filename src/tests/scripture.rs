@@ -546,7 +546,7 @@ fn scripture_schedule_items_are_pinned_snapshots_that_survive_save_and_reopen(
     // Nonconsecutive verses make a second item.
     type_box(&mut cx, &operator, "John 3:36-4:2");
     settle(&mut cx, &operator, "second passage", |o| {
-        selected(o).len() == 3
+        selected(o) == [43_003_036, 43_004_001, 43_004_002]
     });
     let ctrl = gpui::Modifiers {
         control: true,

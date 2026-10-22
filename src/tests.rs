@@ -5259,7 +5259,8 @@ mod schedule_files_ui {
         save_new(&mut cx, &operator, good.clone());
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&good).unwrap()).unwrap();
-        value["version"] = 4.into();
+        // Version 4 (scripture items) is readable now; 5 is newer.
+        value["version"] = 5.into();
         let cases = [
             ("garbage", b"not a schedule".to_vec()),
             ("truncated", std::fs::read(&good).unwrap()[..40].to_vec()),

@@ -245,6 +245,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let song = repository.song(version).map_err(|e| format!("{e:?}"))?;
         let document = sela::schedule_file::ScheduleFile {
             title: "Sunday".into(),
+            scripture: Vec::new(),
             items: vec![sela::schedule_file::Item {
                 source: version,
                 song,

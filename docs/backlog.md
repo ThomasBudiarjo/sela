@@ -1312,14 +1312,25 @@ Acceptance: timed announcements remain predictable under edit/prepare load.
 
 Depends on: M1-01, M1-13. Tests: U, I, L.
 
-- [ ] Define translation metadata, canon/book/verse identity, versification and
+- [x] Define translation metadata, canon/book/verse identity, versification and
   provider capabilities without assuming all translations share verse numbering.
-- [ ] Establish a lawful bundled test translation or synthetic corpus and a
+  (scripture stream 2026-10-22: `TranslationInfo`, `VerseId`, per-translation
+  `Inventory` built from the verses present; docs/scripture.md.)
+- [x] Establish a lawful bundled test translation or synthetic corpus and a
   rights-aware import/provider mechanism; no scraped proprietary Bible databases.
-- [ ] Support offline installed texts, integrity/version checks and index rebuild.
-- [ ] Test missing books, differing versification, Unicode, corrupt provider files
-  and restricted export/redistribution flags.
-- [ ] Document translation availability and permissions independently from UI parity.
+  (Public-domain KJV and WEB from seven1m/open-bibles at a pinned commit with
+  SHA-256s; OSIS/USFX/Zefania import marked restricted; synthetic test texts.)
+- [x] Support offline installed texts, integrity/version checks and index rebuild.
+  (One SQLite file per translation: application id, format version,
+  quick_check, verse count and content hash; damaged FTS index rebuilt;
+  damaged bundled files rebuilt from the bundle; worker thread.)
+- [x] Test missing books, differing versification, Unicode, corrupt provider files
+  and restricted export/redistribution flags. (Unit and GPUI tests; the
+  restricted flag travels with schedule snapshots; stripping restricted text
+  from portable exports belongs to M1-13 and is open.)
+- [x] Document translation availability and permissions independently from UI parity.
+  (docs/scripture.md "Bundled translations and provenance".) State:
+  implemented-unqualified (no Windows run; work-log record "scripture").
 
 Acceptance: a functional offline provider path; "90+ translations" cannot be
 claimed from a generic provider interface without licensed content.
@@ -1334,11 +1345,20 @@ Depends on: M4-03, M1-04, M1-08, M1-10. Tests: U, I, R, N.
   Parser core only (`src/scripture/`, docs/scripture.md): EN/ID names and aliases,
   ranges, cross-chapter ranges, chapter checks, completion; implemented-unqualified
   until the Scriptures tab uses it and EW completion is observed (VAL-BIBLE-010).
+  The Scriptures tab uses it since 2026-10-22 (EN/ID error wording); EW
+  completion is still unobserved (PP-BIB-01).
 - [ ] Add translation selection, verse/reference labels, theme/pagination and
-  schedule snapshots respecting content permissions.
-- [ ] Test cross-chapter ranges, nonconsecutive verses, translation switches,
+  schedule snapshots respecting content permissions. Progress (scripture
+  stream 2026-10-22): translation picker, per-slide reference footer,
+  readable pagination (44-character lines, 6 lines a slide), pinned schedule
+  snapshots with the redistribution flag (`.selaschedule` version 4) are
+  implemented-unqualified; a scripture theme (EW Scripture Theme) is open.
+- [x] Test cross-chapter ranges, nonconsecutive verses, translation switches,
   mismatched canon, empty search and long passages with readable splitting.
+  (`tests::scripture` GPUI tests and scripture unit tests.)
 - [ ] Inspect browser/editor/output, including malformed reference recovery.
+  Progress: Linux X11 captures inspected (`scripture-x11.py` PASS); the
+  Windows run and the 1080p reference strip are open (PP-BIB-09).
 
 Acceptance: selected verses appear in intended order with correct translation
 and references; historical support documentation alone is not UX verification.

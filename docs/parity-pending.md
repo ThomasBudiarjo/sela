@@ -288,8 +288,10 @@ Common Windows prerequisites are listed once in
   Re-run: none yet (stream `ew-library-import`).
 - [ ] **PP-BIB-01 Scripture reference entry** (VAL-BIBLE-010). Steps: type
   references in the Scriptures tab: completion order and accept key, "Jude 5",
-  "John 3 16", "John 3:16-4:2". Sela now: parser only; `John 3 16` is
-  malformed, no UI. Re-run: none yet (stream `scripture`).
+  "John 3 16", "John 3:16-4:2". Sela now: the Scriptures tab parses as you
+  type; `John 3 16` is malformed, `Jude 5` is chapter 5 (missing); book
+  suggestions in canonical order, Tab or a click takes one (best guess).
+  Re-run: `scripture-windows.py`, `cargo test --bin sela tests::scripture`.
 
 ## Windows-only Sela runs
 
@@ -327,6 +329,60 @@ Common Windows prerequisites are listed once in
 ## Stream: video-playback
 
 ## Stream: scripture
+
+Observe each in EasyWorship 8.0.49 on a disposable profile with a
+public-domain translation (KJV if the install has it; never save). Every item
+is a Sela best guess recorded in docs/reference-observations.md
+("Scriptures — UNOBSERVED best guesses").
+
+- [ ] **PP-BIB-02 Scriptures tab layout** (M4-04). Steps: open Resources ›
+  Scriptures; capture the left pane (translation list or tree?), the search
+  box position, any mode switch, the verse list columns and the footer.
+  Sela now: translations in the left column, Reference/Keyword switch and box
+  above the verse list, footer Import Bible… / Add to Schedule / count.
+  Re-run: `scripture-windows.py`, then compare captures.
+- [ ] **PP-BIB-03 Keyword search** (M4-04). Steps: search "only begotten" and
+  "light"; record whether a separate mode is needed, the minimum length, the
+  match rule (all words, prefix, phrase), the hit order and the hit row
+  format. Sela now: Keyword mode, all words with the last as a prefix,
+  canonical order, 200 hits, from two characters (owner decision).
+  Re-run: `scripture-windows.py`.
+- [ ] **PP-BIB-04 Verse selection and Go Live** (M4-04). Steps: type "John
+  3:16-18"; click, Shift+click and Ctrl+click verses; double-click a verse;
+  record what is selected, what Preview shows and what goes live. Sela now:
+  click one, Shift range, Ctrl toggle, double-click sends the selection after
+  the first click selected that verse alone. Re-run: `scripture-windows.py`,
+  `cargo test --bin sela tests::scripture`.
+- [ ] **PP-BIB-05 Slide flow and reference placement** (M4-04, EW8-OBS-056).
+  Steps: send Psalm 119:1-24 live with the default Options › Scripture
+  settings; count the slides, note where each break falls, the font size, and
+  where and how the reference appears ("After Each Slide": per slide or the
+  whole passage?). Sela now: 44-character lines, 6 lines per slide, breaks
+  between verses, each slide's own reference over the translation name as the
+  footer strip. Re-run: `cargo test --bin sela tests::scripture::long_passages_split_into_readable_slides_in_order`.
+- [ ] **PP-BIB-06 Malformed or missing references** (VAL-BIBLE-009). Steps:
+  type "John 3:99", "Hezekiah 1", "John 3:18-16"; record the message and
+  whether the previous verses stay. Sela now: red note, previous list,
+  selection and Preview kept. Re-run: `scripture-windows.py`.
+- [ ] **PP-BIB-07 Translation switch** (M4-03). Steps: with John 3:16-18
+  shown, pick another installed translation; then pick one lacking the book.
+  Sela now: the same verses in the new translation, missing ones named; a
+  translation lacking the book or chapter is refused. Re-run:
+  `cargo test --bin sela tests::scripture::translation_switch_keeps_the_verses_and_reports_mismatched_canon`.
+- [ ] **PP-BIB-08 Scripture schedule items** (M4-04). Steps: add a passage to
+  the schedule, save the schedule, reopen it; record the item title, whether
+  the text is stored in the `.ews` and whether it follows a later Bible
+  change. Sela now: a pinned snapshot titled "John 3:16-18 (KJV)",
+  `.selaschedule` version 4. Re-run: `scripture-windows.py`.
+- [ ] **PP-BIB-09 Windows run of the Sela check** (M4-03/M4-04). Steps: run
+  `python scripts/scripture-windows.py` (row 23 below) on the three-monitor
+  setup and inspect its captures, including the per-slide reference strip
+  on the 1080p audience (not visible on the 351 px X11 window). Not run: no
+  Windows host on 2026-10-22.
+- [ ] **PP-BIB-10 Bible import** (M4-03). Steps: in EW, import one
+  public-domain OSIS/Zefania file if EW offers it; record the dialog and the
+  rights wording. Sela now: Import Bible… for OSIS/USFX/Zefania, imported
+  texts marked restricted. Re-run: `cargo test --bin sela tests::scripture::importing_a_user_file_adds_a_restricted_translation`.
 
 ## Stream: themes
 
@@ -372,6 +428,7 @@ timing):
 | 20 | `resource-browser-windows.py` | seed (`--second-song`, `--extra-songs`); release binary and a 20k library for the scrolling timings |
 | 21 | `prep-windows.py` | release binary (`--binary target\release\sela.exe`); seed (`--heavy-song`); audience on the laptop panel (`--monitor name:\\.\DISPLAY1`, the default) |
 | 22 | `reference-w03-windows.py` | not a Sela check: EasyWorship 8.0.49 open and maximized with one song previewed from the Songs tab; observation only |
+| 23 | `scripture-windows.py` | seed only (the script seeds); secondary monitor; first run installs the bundled KJV/WEB |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.
