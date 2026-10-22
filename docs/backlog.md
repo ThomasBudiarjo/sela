@@ -239,6 +239,12 @@ Depends on: M0-01. Tests: U, I, N, E feasibility.
 
 Bounded slice **implemented-unqualified**; see `docs/native-testing.md` and the
 M0-03 work-log record. Windows/native accessibility and physical checks remain open.
+Shared Linux X11 harness (2026-10-22, **implemented-unqualified**):
+`scripts/native_x11.py` with private Xvfb or two-monitor Xorg displays, private
+profiles and D-Bus sessions, AT-SPI control ids, portal file dialogs and tagged
+cleanup; `live-output-x11.py`, `schedule-x11.py`, `song-editor-x11.py` pass. See
+`docs/e2e-linux.md`; the owner's Windows/reference checklist is
+`docs/parity-pending.md`. Fixed clocks and failure injection remain open.
 
 - [ ] Add synthetic fixture conventions, isolated temporary profiles, fixed clocks
   and reproducible failure injection without production-only test shortcuts.
@@ -827,6 +833,12 @@ Images and picture logo) are **implemented-unqualified**; see
 - [ ] Bound preview work and give audience rendering priority under overload.
 - [ ] Test delayed/rejected apply, repeated Go Live, rapid navigation, live item
   removal and masked Go Live; inspect audience and operator state together.
+- [ ] Linux/X11: keep the operator's input focus when the audience window maps.
+  winit 0.30's X11 backend ignores `with_active(false)`, so Openbox focuses the
+  monitor-covering audience (found by `scripts/live-output-x11.py --kind dual`,
+  2026-10-22; Windows is unaffected). Fix in the audience window setup (for
+  example `_NET_WM_USER_TIME` 0 or a non-focus input hint) and drop
+  `--tolerate-audience-focus` from the dual run.
 
 Acceptance: Live reflects renderer acknowledgment; preview/selection never leaks
 to audience and rapid input cannot apply an older scene last. Reference records:
