@@ -13,11 +13,14 @@ pub const MAX_OUTLINE_SIZE: u8 = 50;
 pub const MAX_SHADOW_OFFSET: u8 = 100;
 pub const MAX_SHADOW_BLUR: u8 = 50;
 pub const MAX_OPACITY: u8 = 100;
+/// Largest text margin, in 1080-reference px per side (themes, M1-08). Two
+/// opposite margins still leave 280 of 1080 lines and 1120 of 1920 columns.
+pub const MAX_MARGIN: u16 = 400;
 /// Encoded size bound, checked by storage before decoding.
 pub const MAX_ENCODED: usize = 256;
 
 const CODEC: u8 = 1;
-const FIELDS: u16 = 10;
+const FIELDS: u16 = 11;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Size {
@@ -61,6 +64,25 @@ pub struct Shadow {
     pub opacity: u8,
 }
 
+/// Text › Layout margins (EW8-OBS-030), in 1080-reference px: the text box
+/// is the canvas inset by these on each side. `None` on a format keeps
+/// Sela's fixed 32 px renderer inset.
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+pub struct Margins {
+    pub left: u16,
+    pub right: u16,
+    pub top: u16,
+    pub bottom: u16,
+}
+
+impl Margins {
+    pub fn is_valid(&self) -> bool {
+        [self.left, self.right, self.top, self.bottom]
+            .iter()
+            .all(|m| *m <= MAX_MARGIN)
+    }
+}
+
 #[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct SlideFormat {
     pub font: Option<String>,
@@ -73,11 +95,32 @@ pub struct SlideFormat {
     pub valign: Option<VAlign>,
     pub outline: Option<Outline>,
     pub shadow: Option<Shadow>,
+    /// Text box margins (M1-08 theme layout; field 10 of the codec).
+    pub margins: Option<Margins>,
 }
 
 impl SlideFormat {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// This format's fields over `base`: every field set here wins, every
+    /// unset field takes `base`'s value. Lays a slide's own format over its
+    /// theme, field by field (M1-08 inheritance).
+    pub fn over(&self, base: &SlideFormat) -> SlideFormat {
+        SlideFormat {
+            font: self.font.clone().or_else(|| base.font.clone()),
+            bold: self.bold.or(base.bold),
+            italic: self.italic.or(base.italic),
+            underline: self.underline.or(base.underline),
+            size: self.size.or(base.size),
+            color: self.color.or(base.color),
+            align: self.align.or(base.align),
+            valign: self.valign.or(base.valign),
+            outline: self.outline.or(base.outline),
+            shadow: self.shadow.or(base.shadow),
+            margins: self.margins.or(base.margins),
+        }
     }
 
     pub fn is_valid(&self) -> bool {
@@ -96,7 +139,8 @@ impl SlideFormat {
                 && s.blur <= MAX_SHADOW_BLUR
                 && s.opacity <= MAX_OPACITY
         });
-        font && size && outline && shadow
+        let margins = self.margins.is_none_or(|m| m.is_valid());
+        font && size && outline && shadow && margins
     }
 
     /// Canonical bytes: codec, presence mask, then present fields in order.
@@ -148,6 +192,11 @@ impl SlideFormat {
             body.extend_from_slice(&s.color);
             body.extend_from_slice(&s.angle.to_le_bytes());
             body.extend_from_slice(&[s.offset, s.blur, s.opacity]);
+        }
+        if let Some(m) = self.margins.filter(|_| field(10, true)) {
+            for side in [m.left, m.right, m.top, m.bottom] {
+                body.extend_from_slice(&side.to_le_bytes());
+            }
         }
         let mut out = vec![CODEC];
         out.extend_from_slice(&mask.to_le_bytes());
@@ -229,6 +278,14 @@ impl SlideFormat {
                 opacity: r.u8()?,
             });
         }
+        if has(10) {
+            format.margins = Some(Margins {
+                left: r.u16()?,
+                right: r.u16()?,
+                top: r.u16()?,
+                bottom: r.u16()?,
+            });
+        }
         (r.0.is_empty() && format.is_valid()).then_some(format)
     }
 }
@@ -253,6 +310,9 @@ impl Reader<'_> {
     }
     fn rgb(&mut self) -> Option<[u8; 3]> {
         self.take(3)?.try_into().ok()
+    }
+    fn u16(&mut self) -> Option<u16> {
+        Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
     }
 }
 
@@ -284,7 +344,37 @@ pub(crate) mod tests {
                 blur: 9,
                 opacity: 90,
             }),
+            margins: Some(Margins {
+                left: 23,
+                right: 23,
+                top: 14,
+                bottom: 14,
+            }),
         }
+    }
+
+    #[test]
+    fn over_takes_each_set_field_and_falls_back_per_field() {
+        let theme = full();
+        let slide = SlideFormat {
+            italic: Some(true),
+            outline: Some(Outline {
+                enabled: false,
+                ..theme.outline.unwrap()
+            }),
+            margins: Some(Margins::default()),
+            ..Default::default()
+        };
+        let merged = slide.over(&theme);
+        assert_eq!(merged.italic, Some(true), "slide wins");
+        assert_eq!(merged.font, theme.font, "theme fills the gap");
+        assert_eq!(merged.bold, theme.bold);
+        // An explicit "off" on the slide is not re-enabled by the theme.
+        assert!(!merged.outline.unwrap().enabled);
+        assert_eq!(merged.margins, Some(Margins::default()));
+        assert_eq!(SlideFormat::default().over(&theme), theme);
+        assert_eq!(theme.over(&SlideFormat::default()), theme);
+        assert_eq!(slide.over(&SlideFormat::default()), slide);
     }
 
     #[test]
@@ -335,6 +425,10 @@ pub(crate) mod tests {
                 shadow: all.shadow,
                 ..Default::default()
             },
+            SlideFormat {
+                margins: all.margins,
+                ..Default::default()
+            },
         ];
         for (bit, format) in singles.iter().enumerate() {
             let bytes = format.encode();
@@ -357,7 +451,7 @@ pub(crate) mod tests {
         codec[0] = 2;
         assert_eq!(SlideFormat::decode(&codec), None);
         let mut unknown = bytes.clone();
-        unknown[2] |= 0x04;
+        unknown[2] |= 0x08;
         assert_eq!(SlideFormat::decode(&unknown), None);
         for len in 0..bytes.len() {
             assert_eq!(SlideFormat::decode(&bytes[..len]), None, "{len}");
@@ -436,6 +530,13 @@ pub(crate) mod tests {
                 shadow: Some(Shadow {
                     blur: MAX_SHADOW_BLUR + 1,
                     ..base.shadow.unwrap()
+                }),
+                ..base.clone()
+            },
+            SlideFormat {
+                margins: Some(Margins {
+                    left: MAX_MARGIN + 1,
+                    ..Margins::default()
                 }),
                 ..base.clone()
             },

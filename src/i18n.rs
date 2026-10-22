@@ -548,6 +548,62 @@ pub enum Msg {
     StyleTab,
     SwatchesTab,
     ValuesTab,
+    // Themes (M1-08).
+    ThemeNew,
+    ThemeNewName,
+    ThemeEdit,
+    ThemeDuplicate,
+    ThemeCopyName,
+    ThemeDelete,
+    ThemeConfirmDelete,
+    ThemeSetDefault,
+    ThemeApplySong,
+    ThemeApplyItem,
+    ThemeItemSongTheme,
+    ThemeBuiltIn,
+    ThemeDefaultBadge,
+    ThemeInPreview,
+    ThemeRendering,
+    ThemeSavedNamed,
+    ThemeDeleted,
+    ThemeDefaultSet,
+    ThemeAppliedSong,
+    ThemeAppliedItem,
+    ThemeItemCleared,
+    ThemeLimit,
+    ThemeStorageFailed,
+    ThemeBusy,
+    ThemeMissing,
+    ThemeWarnFont,
+    ThemeWarnContrast,
+    ThemeWarnStretch,
+    ThemeWarnBars,
+    ThemeWarnCrop,
+    ThemeBuiltInReadOnly,
+    ThemeSelectTheme,
+    ThemeSelectSong,
+    ThemeSelectItem,
+    ThemeDeleteHint,
+    ThemeEditorWindowTitle,
+    ThemeNamePlaceholder,
+    ThemeEditing,
+    ThemeNameInvalid,
+    ThemeResetDone,
+    ThemeReset,
+    ThemeSavedStatus,
+    ThemeSampleHint,
+    ThemeElementsHeader,
+    ThemeShowCopyright,
+    ThemeMarginsHeader,
+    MarginLeft,
+    MarginRight,
+    MarginTop,
+    MarginBottom,
+    MarginInvalid,
+    MarginsSet,
+    MarginsDefault,
+    MarginsUseDefault,
+    ThemeUsing,
 }
 
 impl Msg {
@@ -1020,6 +1076,61 @@ impl Msg {
         Msg::StyleTab,
         Msg::SwatchesTab,
         Msg::ValuesTab,
+        Msg::ThemeNew,
+        Msg::ThemeNewName,
+        Msg::ThemeEdit,
+        Msg::ThemeDuplicate,
+        Msg::ThemeCopyName,
+        Msg::ThemeDelete,
+        Msg::ThemeConfirmDelete,
+        Msg::ThemeSetDefault,
+        Msg::ThemeApplySong,
+        Msg::ThemeApplyItem,
+        Msg::ThemeItemSongTheme,
+        Msg::ThemeBuiltIn,
+        Msg::ThemeDefaultBadge,
+        Msg::ThemeInPreview,
+        Msg::ThemeRendering,
+        Msg::ThemeSavedNamed,
+        Msg::ThemeDeleted,
+        Msg::ThemeDefaultSet,
+        Msg::ThemeAppliedSong,
+        Msg::ThemeAppliedItem,
+        Msg::ThemeItemCleared,
+        Msg::ThemeLimit,
+        Msg::ThemeStorageFailed,
+        Msg::ThemeBusy,
+        Msg::ThemeMissing,
+        Msg::ThemeWarnFont,
+        Msg::ThemeWarnContrast,
+        Msg::ThemeWarnStretch,
+        Msg::ThemeWarnBars,
+        Msg::ThemeWarnCrop,
+        Msg::ThemeBuiltInReadOnly,
+        Msg::ThemeSelectTheme,
+        Msg::ThemeSelectSong,
+        Msg::ThemeSelectItem,
+        Msg::ThemeDeleteHint,
+        Msg::ThemeEditorWindowTitle,
+        Msg::ThemeNamePlaceholder,
+        Msg::ThemeEditing,
+        Msg::ThemeNameInvalid,
+        Msg::ThemeResetDone,
+        Msg::ThemeReset,
+        Msg::ThemeSavedStatus,
+        Msg::ThemeSampleHint,
+        Msg::ThemeElementsHeader,
+        Msg::ThemeShowCopyright,
+        Msg::ThemeMarginsHeader,
+        Msg::MarginLeft,
+        Msg::MarginRight,
+        Msg::MarginTop,
+        Msg::MarginBottom,
+        Msg::MarginInvalid,
+        Msg::MarginsSet,
+        Msg::MarginsDefault,
+        Msg::MarginsUseDefault,
+        Msg::ThemeUsing,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1560,6 +1671,79 @@ impl Msg {
             Self::StyleTab => "Style",
             Self::SwatchesTab => "Swatches",
             Self::ValuesTab => "Values",
+            Self::ThemeNew => "New Theme",
+            Self::ThemeNewName => "New Theme",
+            Self::ThemeEdit => "Edit…",
+            Self::ThemeDuplicate => "Duplicate",
+            Self::ThemeCopyName => "{name} copy",
+            Self::ThemeDelete => "Delete",
+            Self::ThemeConfirmDelete => "Confirm Delete",
+            Self::ThemeSetDefault => "Set as Default",
+            Self::ThemeApplySong => "Apply to Song",
+            Self::ThemeApplyItem => "Apply to Item",
+            Self::ThemeItemSongTheme => "Item: Song Theme",
+            Self::ThemeBuiltIn => "Default (built-in)",
+            Self::ThemeDefaultBadge => "Default",
+            Self::ThemeInPreview => "In Preview",
+            Self::ThemeRendering => "Rendering…",
+            Self::ThemeSavedNamed => "Saved theme “{name}”.",
+            Self::ThemeDeleted => {
+                "Deleted theme “{name}”. Songs using it now show the default theme."
+            }
+            Self::ThemeDefaultSet => "“{name}” is now the default song theme.",
+            Self::ThemeAppliedSong => {
+                "Applied “{name}” to {count} song(s). Live changes only on the next Go Live."
+            }
+            Self::ThemeAppliedItem => {
+                "Applied “{name}” to {count} schedule item(s). Live changes only on the next Go Live."
+            }
+            Self::ThemeItemCleared => {
+                "{count} schedule item(s) take their song theme again when next shown."
+            }
+            Self::ThemeLimit => "A library holds at most {max} themes.",
+            Self::ThemeStorageFailed => "Theme change failed: {error}",
+            Self::ThemeBusy => "A theme change is still running. Try again in a moment.",
+            Self::ThemeMissing => "This song's theme is missing · showing the default theme",
+            Self::ThemeWarnFont => "Font “{name}” is not installed · showing DejaVu Sans",
+            Self::ThemeWarnContrast => "Low contrast {ratio}:1 · text may be hard to read",
+            Self::ThemeWarnStretch => {
+                "Image aspect differs from the output by {percent}% · Stretch distorts it"
+            }
+            Self::ThemeWarnBars => {
+                "Image aspect differs from the output · Maintain adds black bars"
+            }
+            Self::ThemeWarnCrop => {
+                "Image aspect differs from the output · Zoom crops {percent}% of it"
+            }
+            Self::ThemeBuiltInReadOnly => {
+                "The built-in theme cannot be edited or deleted. Duplicate it to make your own."
+            }
+            Self::ThemeSelectTheme => "Select a theme first.",
+            Self::ThemeSelectSong => "Select a song in Songs first.",
+            Self::ThemeSelectItem => "Select a schedule item first.",
+            Self::ThemeDeleteHint => {
+                "Press Confirm Delete to remove “{name}”. Songs using it will show the default theme."
+            }
+            Self::ThemeEditorWindowTitle => "Theme Editor - {title}",
+            Self::ThemeNamePlaceholder => "Theme name",
+            Self::ThemeEditing => "Editing a theme. Preview only: Live does not change.",
+            Self::ThemeNameInvalid => "Give the theme a name of at most {max} bytes.",
+            Self::ThemeResetDone => "Theme reset to the built-in look.",
+            Self::ThemeReset => "Reset Look",
+            Self::ThemeSavedStatus => "Theme saved.",
+            Self::ThemeSampleHint => "Sample text: type to try long or short lyrics (not saved)",
+            Self::ThemeElementsHeader => "THEME ELEMENTS",
+            Self::ThemeShowCopyright => "Copyright",
+            Self::ThemeMarginsHeader => "MARGINS",
+            Self::MarginLeft => "Left",
+            Self::MarginRight => "Right",
+            Self::MarginTop => "Top",
+            Self::MarginBottom => "Bottom",
+            Self::MarginInvalid => "Margins are whole numbers from 0 to {max}.",
+            Self::MarginsSet => "Points at 1080 lines",
+            Self::MarginsDefault => "Default inset (32)",
+            Self::MarginsUseDefault => "Use default",
+            Self::ThemeUsing => "Theme: {name}",
         }
     }
 
@@ -2121,6 +2305,81 @@ impl Msg {
             Self::StyleTab => "Gaya",
             Self::SwatchesTab => "Palet Warna",
             Self::ValuesTab => "Nilai",
+            Self::ThemeNew => "Tema Baru",
+            Self::ThemeNewName => "Tema Baru",
+            Self::ThemeEdit => "Sunting…",
+            Self::ThemeDuplicate => "Duplikat",
+            Self::ThemeCopyName => "Salinan {name}",
+            Self::ThemeDelete => "Hapus",
+            Self::ThemeConfirmDelete => "Konfirmasi Hapus",
+            Self::ThemeSetDefault => "Jadikan Utama",
+            Self::ThemeApplySong => "Terapkan ke Lagu",
+            Self::ThemeApplyItem => "Terapkan ke Item",
+            Self::ThemeItemSongTheme => "Item: Tema Lagu",
+            Self::ThemeBuiltIn => "Bawaan Sela",
+            Self::ThemeDefaultBadge => "Utama",
+            Self::ThemeInPreview => "Di Pratinjau",
+            Self::ThemeRendering => "Merender…",
+            Self::ThemeSavedNamed => "Tema “{name}” disimpan.",
+            Self::ThemeDeleted => {
+                "Tema “{name}” dihapus. Lagu yang memakainya kini menampilkan tema utama."
+            }
+            Self::ThemeDefaultSet => "“{name}” kini menjadi tema lagu utama.",
+            Self::ThemeAppliedSong => {
+                "“{name}” diterapkan ke {count} lagu. Live berubah hanya pada Go Live berikutnya."
+            }
+            Self::ThemeAppliedItem => {
+                "“{name}” diterapkan ke {count} item jadwal. Live berubah hanya pada Go Live berikutnya."
+            }
+            Self::ThemeItemCleared => {
+                "{count} item jadwal kembali memakai tema lagunya saat ditampilkan lagi."
+            }
+            Self::ThemeLimit => "Pustaka memuat paling banyak {max} tema.",
+            Self::ThemeStorageFailed => "Perubahan tema gagal: {error}",
+            Self::ThemeBusy => "Perubahan tema masih berjalan. Coba lagi sebentar lagi.",
+            Self::ThemeMissing => "Tema lagu ini tidak ada · menampilkan tema utama",
+            Self::ThemeWarnFont => "Fon “{name}” tidak terpasang · menampilkan DejaVu Sans",
+            Self::ThemeWarnContrast => "Kontras rendah {ratio}:1 · teks mungkin sulit dibaca",
+            Self::ThemeWarnStretch => {
+                "Rasio gambar berbeda {percent}% dari output · Regangkan membuatnya terdistorsi"
+            }
+            Self::ThemeWarnBars => {
+                "Rasio gambar berbeda dari output · Pertahankan menambah bilah hitam"
+            }
+            Self::ThemeWarnCrop => {
+                "Rasio gambar berbeda dari output · Perbesar memotong {percent}% gambar"
+            }
+            Self::ThemeBuiltInReadOnly => {
+                "Tema bawaan tidak dapat disunting atau dihapus. Duplikat untuk membuat tema sendiri."
+            }
+            Self::ThemeSelectTheme => "Pilih tema terlebih dahulu.",
+            Self::ThemeSelectSong => "Pilih lagu di Lagu terlebih dahulu.",
+            Self::ThemeSelectItem => "Pilih item jadwal terlebih dahulu.",
+            Self::ThemeDeleteHint => {
+                "Tekan Konfirmasi Hapus untuk menghapus “{name}”. Lagu yang memakainya akan menampilkan tema utama."
+            }
+            Self::ThemeEditorWindowTitle => "Editor Tema - {title}",
+            Self::ThemeNamePlaceholder => "Nama tema",
+            Self::ThemeEditing => "Menyunting tema. Hanya pratinjau: Live tidak berubah.",
+            Self::ThemeNameInvalid => "Beri tema nama paling panjang {max} byte.",
+            Self::ThemeResetDone => "Tema dikembalikan ke tampilan bawaan.",
+            Self::ThemeReset => "Atur Ulang Tampilan",
+            Self::ThemeSavedStatus => "Tema disimpan.",
+            Self::ThemeSampleHint => {
+                "Teks contoh: ketik untuk mencoba lirik panjang atau pendek (tidak disimpan)"
+            }
+            Self::ThemeElementsHeader => "ELEMEN TEMA",
+            Self::ThemeShowCopyright => "Hak cipta",
+            Self::ThemeMarginsHeader => "MARGIN",
+            Self::MarginLeft => "Kiri",
+            Self::MarginRight => "Kanan",
+            Self::MarginTop => "Atas",
+            Self::MarginBottom => "Bawah",
+            Self::MarginInvalid => "Margin berupa bilangan bulat 0 sampai {max}.",
+            Self::MarginsSet => "Poin pada 1080 baris",
+            Self::MarginsDefault => "Jarak bawaan (32)",
+            Self::MarginsUseDefault => "Pakai bawaan",
+            Self::ThemeUsing => "Tema: {name}",
         }
     }
 }
@@ -2190,7 +2449,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 468);
+        assert_eq!(Msg::ALL.len(), 523);
     }
 
     #[test]

@@ -21,8 +21,8 @@ const MAX_LINES: usize = 32;
 const MAX_TEXT_BYTES: usize = 4096;
 const MAX_SIDE: u32 = 4096;
 const MAX_AREA: usize = 16 * 1024 * 1024;
-/// Renderer text inset on each side, matching the slide fit.
-const INSET: u32 = 32;
+/// Renderer text inset on each side without margins, matching the slide fit.
+const INSET: u32 = slides::INSET;
 const LINE_HEIGHT: f32 = 1.3;
 /// Ink threshold that seeds dilation; antialiased edges grow from it.
 const SEED: u8 = 128;
@@ -89,31 +89,34 @@ pub fn layers(cue: &PreparedCue) -> Result<Layers, TextError> {
     );
     let (rows, row) = (area_height as usize, area_width as usize);
     if let Some(text) = cue.text() {
-        let lyrics_height = area_height.saturating_sub(cue.footer().map_or(0, |strip| {
+        // The same box the cue's size was fitted in (theme margins, M1-08).
+        let footer = cue.footer().map_or(0, |strip| {
             slides::footer_height(strip.content().lines().count(), strip.font_size())
-        }));
+        });
+        let lyrics = slides::lyrics_box(extent, cue.insets(), footer).ok_or(TextError::Bounds)?;
         let style = text.style();
         let size = f32::from(text.font_size());
         let mut area = glyph_coverage(
             text.font(),
             text.face_index(),
             text.content(),
-            area_width,
-            lyrics_height,
+            lyrics.width,
+            lyrics.height,
             size,
             &style,
         )?;
         if style.synth_bold {
             dilate(
                 &mut area,
-                area_width as usize,
-                lyrics_height as usize,
+                lyrics.width as usize,
+                lyrics.height as usize,
                 size / 48.,
             );
         }
-        for y in 0..lyrics_height as usize {
-            let start = (y + INSET as usize) * width + INSET as usize;
-            fill[start..start + row].copy_from_slice(&area[y * row..(y + 1) * row]);
+        let (x, y0, w) = (lyrics.x as usize, lyrics.y as usize, lyrics.width as usize);
+        for y in 0..lyrics.height as usize {
+            let start = (y + y0) * width + x;
+            fill[start..start + w].copy_from_slice(&area[y * w..(y + 1) * w]);
         }
     }
     if let Some(strip) = cue.footer() {

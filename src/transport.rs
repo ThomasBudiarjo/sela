@@ -209,6 +209,12 @@ impl Frame {
         // (styled owned text; tag 1 was removed in M1-05g2).
         put_text(&mut f.bytes, cue.text());
         put_text(&mut f.bytes, cue.footer());
+        if let Some(insets) = cue.insets() {
+            f.bytes.push(1);
+            for side in [insets.left, insets.right, insets.top, insets.bottom] {
+                f.bytes.extend_from_slice(&side.to_le_bytes());
+            }
+        }
         f.len = f.bytes.len();
         if f.len - HEADER > MAX_RESOURCE_BODY {
             return Err(invalid());
@@ -303,12 +309,31 @@ impl Frame {
             };
             let text = payload.text()?;
             let footer = payload.text()?;
+            // Optional trailing lyrics box (M1-08 margins): tag 1 then the
+            // four insets; absent for the fixed inset.
+            let insets = if payload.0.is_empty() {
+                None
+            } else {
+                if payload.byte()? != 1 {
+                    return Err(invalid());
+                }
+                Some(crate::scene::Insets {
+                    left: payload.u32()?,
+                    right: payload.u32()?,
+                    top: payload.u32()?,
+                    bottom: payload.u32()?,
+                })
+            };
             if !payload.0.is_empty() {
                 return Err(invalid());
             }
             let cue = PreparedCue::from_owned(version, extent, background, text, caps);
-            match footer {
+            let cue = match footer {
                 Some(footer) => cue.and_then(|cue| cue.with_footer(footer)),
+                None => cue,
+            };
+            match insets {
+                Some(insets) => cue.and_then(|cue| cue.with_insets(insets)),
                 None => cue,
             }
         } else {

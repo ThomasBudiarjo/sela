@@ -198,9 +198,9 @@ impl Operator {
     }
 
     pub(crate) fn poll_library(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(worker) = &mut self.worker else {
+        if self.worker.is_none() {
             return false;
-        };
+        }
         let mut changed = false;
         let mut live_now = false;
         let mut resolve_now = false;
@@ -210,7 +210,7 @@ impl Operator {
         let mut scanned = None;
         let mut rescan = false;
         let mut deleted_at = None;
-        if let Some(reply) = worker.poll() {
+        if let Some(reply) = self.worker.as_mut().and_then(Worker::poll) {
             changed = true;
             match (self.request.take(), reply) {
                 (Some(Request::Open), Ok(Reply::Opened)) => self.catalog_stale = true,
@@ -272,26 +272,12 @@ impl Operator {
                     ));
                     self.catalog_stale = true;
                 }
-                (Some(Request::Song(version)), Ok(Reply::Song(song)))
+                (Some(Request::Song(version)), Ok(Reply::ThemedSong(song, song_theme)))
                     if self.selected_song == Some(version) =>
                 {
-                    let chosen = schedule::entry_arrangement(&self.schedule, self.selected_entry);
-                    let projection = slides::project(&song, chosen);
-                    self.preview = Some(Item {
-                        version,
-                        entry: self.selected_entry,
-                        title: song.title.clone(),
-                        slides: projection.slides.into(),
-                        pages: projection.pages.into(),
-                        arrangements: song
-                            .variants
-                            .iter()
-                            .map(|v| (v.id, v.name.clone()))
-                            .collect(),
-                        chosen,
-                        copyright: slides::copyright_strip(&song).map(Into::into),
-                        resolved: None,
-                    });
+                    // The song under its theme (M1-08): an entry's snapshot,
+                    // else the library theme.
+                    self.preview = Some(self.themed_item(version, &song, song_theme));
                     self.preview_slide = 0;
                     if self.live_on_load == Some(version) && self.selected_entry.is_none() {
                         self.live_on_load = None;
@@ -307,7 +293,11 @@ impl Operator {
                     // of its slides can go live (M1-05g2b).
                     resolve_now = true;
                 }
-                (Some(Request::SaveSchedule(job)), Ok(Reply::Songs(songs))) => {
+                (Some(Request::Themes(job)), Ok(Reply::Themes(set))) => {
+                    self.themes_replied(job, Ok(set));
+                }
+                (Some(Request::Themes(job)), Err(error)) => self.themes_replied(job, Err(error)),
+                (Some(Request::SaveSchedule(job)), Ok(Reply::ThemedSongs(songs))) => {
                     to_write = Some((job, songs));
                 }
                 (Some(Request::ImportSchedule(path, arrangements)), Ok(Reply::Imported(items))) => {
@@ -340,6 +330,7 @@ impl Operator {
                             self.selected_entry,
                             schedule::entry_arrangement(&self.schedule, self.selected_entry),
                         )
+                        || p.theme_key != self.wanted_theme_key(p)
                 })
             });
             let request = if let Some(job) = self.followup.take() {
@@ -347,7 +338,12 @@ impl Operator {
             } else if let Some(job) = self.queued.take() {
                 Some(job)
             } else if let Some(version) = wanted {
-                Some((storage::Command::Song(version), Request::Song(version)))
+                Some((
+                    storage::Command::ThemedSong(version),
+                    Request::Song(version),
+                ))
+            } else if let Some(job) = self.take_theme_job() {
+                Some(job)
             } else if let Some(command) = self.search.take_command() {
                 Some((command, Request::Search))
             } else if self.catalog_stale {
@@ -364,7 +360,12 @@ impl Operator {
                         | Request::ImportSchedule(..)
                         | Request::UpdateScan { .. }
                 );
-                match worker.submit(command) {
+                let theme = matches!(request, Request::Themes(_));
+                let submitted = match self.worker.as_mut() {
+                    Some(worker) => worker.submit(command),
+                    None => Err(storage::Error::Closed),
+                };
+                match submitted {
                     Ok(_) => self.request = Some(request),
                     Err(error) if matches!(request, Request::DeleteSong(..)) => {
                         self.song_message =
@@ -374,6 +375,13 @@ impl Operator {
                     Err(error) if schedule => {
                         self.schedule_message =
                             Some(t!(Msg::ScheduleStorageFailed, error = format!("{error:?}")));
+                        changed = true;
+                    }
+                    Err(error) if theme => {
+                        self.themes.message = Some((
+                            t!(Msg::ThemeStorageFailed, error = format!("{error:?}")),
+                            true,
+                        ));
                         changed = true;
                     }
                     Err(error) => {

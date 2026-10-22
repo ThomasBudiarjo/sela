@@ -8,7 +8,12 @@
 //! four slides exercise M1-05h backgrounds: a 4:1 profile image (red, green,
 //! blue bands) with Zoom, the same image with Maintain, a missing image, and
 //! the song master's color; `--metadata-songs` seeds "Metadata Hymn" (author,
-//! copyright, administrator, song number) and "Plain Hymn" (none); --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
+//! copyright, administrator, song number) and "Plain Hymn" (none); `--themes`
+//! adds four library themes to the default library (M1-08,
+//! `scripts/themes-x11.py`): "Evening Navy" (gold bold left text on navy with
+//! margins, copyright hidden), "Low Contrast" (white on near white), "Missing
+//! Face" (a family no system has) and "Wide Picture" (a 4:1 image, Stretch);
+//! --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
 use image::ImageEncoder;
 use sela::{
     arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId},
@@ -18,7 +23,11 @@ use sela::{
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs] [--themes]";
+
+/// `scripts/themes-x11.py` samples these.
+const NAVY: [u8; 3] = [20, 30, 90];
+const GOLD: [u8; 3] = [255, 214, 90];
 
 /// `scripts/live-output-windows.py` samples these.
 const BANDS: [[u8; 3]; 3] = [[200, 40, 40], [40, 160, 60], [40, 60, 200]];
@@ -66,6 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut second, mut formatted, mut background, mut heavy, mut vanished, mut arranged) =
         (false, false, false, false, false, false);
     let mut metadata = false;
+    let mut themes = false;
     let mut extra = 0usize;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -83,6 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             flag if flag == "--vanished-schedule" => vanished = true,
             flag if flag == "--arranged-song" => arranged = true,
             flag if flag == "--metadata-songs" => metadata = true,
+            flag if flag == "--themes" => themes = true,
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -249,6 +260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 source: version,
                 song,
                 arrangement: None,
+                theme: None,
             }],
         };
         let bytes = sela::schedule_file::encode(&document).map_err(|e| format!("{e:?}"))?;
@@ -383,6 +395,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )
         .map_err(|e| format!("{e:?}"))?;
+    if themes {
+        use sela::theme::Theme;
+        let image = backdrop(path)?;
+        for theme in [
+            Theme {
+                format: SlideFormat {
+                    bold: Some(true),
+                    color: Some(GOLD),
+                    align: Some(Align::Left),
+                    margins: Some(sela::format::Margins {
+                        left: 160,
+                        right: 160,
+                        top: 90,
+                        bottom: 90,
+                    }),
+                    ..Default::default()
+                },
+                background: Some(Background::color(NAVY)),
+                show_copyright: false,
+                ..Theme::new("Evening Navy")
+            },
+            Theme {
+                format: SlideFormat {
+                    color: Some([255, 255, 255]),
+                    ..Default::default()
+                },
+                background: Some(Background::color([240, 240, 236])),
+                ..Theme::new("Low Contrast")
+            },
+            Theme {
+                format: SlideFormat {
+                    font: Some("Sela Missing Face".into()),
+                    ..Default::default()
+                },
+                ..Theme::new("Missing Face")
+            },
+            Theme {
+                background: Some(Background {
+                    aspect: Aspect::Stretch,
+                    ..Background::image(image)
+                }),
+                ..Theme::new("Wide Picture")
+            },
+        ] {
+            repository
+                .save_theme(&theme)
+                .map_err(|e| format!("{e:?}"))?;
+        }
+    }
     if second {
         repository
             .save_song(

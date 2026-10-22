@@ -17,6 +17,7 @@ pub(super) use songs::{
     ExtendPreviousSongRow, FirstSongRow, LastSongRow, NextSongRow, PageDownSongRow, PageUpSongRow,
     PreviousSongRow, SEARCH_TAB_INDEX, SelectAllSongRows,
 };
+pub(crate) use themes::{ThemeJob, ThemeState};
 
 /// Tab labels, translated at render time.
 pub(crate) const TABS: [Msg; 5] = [
@@ -57,7 +58,7 @@ impl Operator {
             1 => scriptures::detail(),
             2 => self.image_list(cx),
             3 => presentations::detail(),
-            _ => themes::detail(),
+            _ => self.theme_list(cx),
         }
     }
 }

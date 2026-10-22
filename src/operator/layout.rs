@@ -565,6 +565,7 @@ impl Render for Operator {
                             ),
                     )
                 })
+                .when(self.tab == 4, |d| d.child(self.theme_footer(cx)))
                 .when(self.tab == 2, |d| {
                     d.when(!self.assets.import_notes.is_empty(), |d| {
                         d.child(

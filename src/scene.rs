@@ -123,6 +123,28 @@ pub struct ShadowStyle {
     pub opacity: u8,
 }
 
+/// The lyrics text box's distance from each canvas edge, in output pixels
+/// (theme or slide margins, M1-08). A cue without insets uses the renderer's
+/// fixed inset (`slides::INSET`) on every side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Insets {
+    pub left: u32,
+    pub right: u32,
+    pub top: u32,
+    pub bottom: u32,
+}
+
+impl Insets {
+    pub const fn uniform(side: u32) -> Self {
+        Self {
+            left: side,
+            right: side,
+            top: side,
+            bottom: side,
+        }
+    }
+}
+
 /// Owned text as the cue carries it: content, face, pixel size and style.
 #[derive(Clone)]
 pub struct OwnedText {
@@ -192,6 +214,7 @@ pub struct PreparedCue {
     background: PreparedBackground,
     text: Option<PreparedText>,
     footer: Option<PreparedText>,
+    insets: Option<Insets>,
     bytes: usize,
 }
 
@@ -257,8 +280,22 @@ impl PreparedCue {
             background,
             text,
             footer: None,
+            insets: None,
             bytes,
         })
+    }
+
+    /// Lays the lyrics out in this box instead of the fixed renderer inset.
+    /// Refused when the box leaves no room inside the extent.
+    pub fn with_insets(mut self, insets: Insets) -> Result<Self, PrepareError> {
+        let fits = |a: u32, b: u32, side: u32| a.checked_add(b).is_some_and(|sum| sum < side);
+        if !fits(insets.left, insets.right, self.extent.width)
+            || !fits(insets.top, insets.bottom, self.extent.height)
+        {
+            return Err(PrepareError::InvalidScene);
+        }
+        self.insets = Some(insets);
+        Ok(self)
     }
 
     /// Adds the copyright strip: a second text drawn over the bottom of the
@@ -291,6 +328,7 @@ impl PreparedCue {
             background: PreparedBackground::Color(color),
             text: None,
             footer: None,
+            insets: None,
             bytes: 0,
         })
     }
@@ -310,6 +348,10 @@ impl PreparedCue {
     /// The copyright strip, if the slide shows one.
     pub fn footer(&self) -> Option<&PreparedText> {
         self.footer.as_ref()
+    }
+    /// The lyrics box, when margins replace the fixed renderer inset.
+    pub fn insets(&self) -> Option<Insets> {
+        self.insets
     }
     pub fn resource_bytes(&self) -> usize {
         self.bytes

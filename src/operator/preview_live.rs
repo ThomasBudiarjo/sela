@@ -12,6 +12,9 @@ const MAX_THUMBNAILS: usize = 32;
 pub(crate) struct Projected {
     version: Version,
     chosen: Option<VariantId>,
+    /// `Theme::key` of the look the slides were built with (M1-08): a font
+    /// job for another theme of the same revision never lands on them.
+    theme: u64,
 }
 
 /// A revision's default projection: no stored choice, so the first
@@ -21,6 +24,7 @@ impl From<Version> for Projected {
         Self {
             version,
             chosen: None,
+            theme: 0,
         }
     }
 }
@@ -30,6 +34,7 @@ impl Item {
         Projected {
             version: self.version,
             chosen: self.chosen,
+            theme: self.theme_key,
         }
     }
 }
@@ -1085,6 +1090,8 @@ impl Operator {
             ));
         }
         notes.extend(self.preview_warning().map(|w| (w, DARK_ERROR)));
+        notes.extend(self.theme_label().map(|w| (w, DARK_MUTED)));
+        notes.extend(self.theme_notes().into_iter().map(|w| (w, DARK_ERROR)));
         let warning = (!notes.is_empty()).then_some(notes);
         let toolbar = self.arrangement_button(cx);
         slide_pane(
