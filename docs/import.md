@@ -427,7 +427,9 @@ UI never waits on it). Both items are disabled while an import runs.
   levels deep without following symbolic links; hidden entries are skipped;
   only regular files are candidates (a named pipe, socket or device is
   counted as not a song file, and a chosen one is refused from its metadata
-  before it is opened, so it can never block the worker); at most 20,000
+  before it is opened; on Unix the open itself does not wait
+  (`O_NONBLOCK`) and the opened file's type is checked again, so a pipe
+  swapped in after the first check cannot block the worker either); at most 20,000
   directory entries are looked at per chosen folder, and a folder cut there
   is named in the preview ("Folder has more than 20000 entries; files after
   that were not looked at: …"). Which entries fall past the budget depends
@@ -519,8 +521,13 @@ are only read, never written (tested by content and modification time).
 While the preview is reading, checking, in review or committing, Quit
 (Ctrl+Q, which still reaches the main window behind a dialog) and the
 window's close request are refused with "Finish or cancel the import before
-quitting." in the dialog, so an Unsaved prompt can never replace the
-preview and strand the import (UNOBSERVED, EW8-OBS-IMP-7). Any other
+quitting." in the dialog (on its own line, so an import error such as a
+failed duplicate check stays visible), so an Unsaved prompt can never
+replace the preview and strand the import (UNOBSERVED, EW8-OBS-IMP-7). This
+also holds for a quit that resumes later, after Don't Save while a settings
+write was pending or after a Save, when the preview was opened in the
+meantime: the quit is dropped and the operator quits again once the import
+is finished or cancelled. Any other
 dialog that replaces the preview cancels the import first. A chooser that
 returns while another dialog is open drops its choice with "Close the open
 dialog, then import again."

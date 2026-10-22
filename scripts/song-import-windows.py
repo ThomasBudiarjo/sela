@@ -19,7 +19,9 @@ Windows counterpart of scripts/song-import-x11.py, through UI Automation
   one OpenLyrics song; clicking it previews four slides, slide 2 is
   selected, Live > Show Live Output and Go Live put text on the audience;
 - the same folder again shows three duplicates with Skip chosen and
-  Import (0); Esc cancels and the library is unchanged; Ctrl+Q exits 0.
+  Import (0); Ctrl+Q and WM_CLOSE with that preview open keep the
+  operator and the preview and show the quit note (PP-IMPF-09); Esc
+  cancels and the library is unchanged; Ctrl+Q exits 0.
 
 Takes over the real keyboard and mouse; never run with EasyWorship open.
 NOT RUN yet: written on Linux without a Windows host (import-framework
@@ -60,6 +62,8 @@ a11y = _load("a11y_windows", "a11y-windows.py")
 
 BATCH = ROOT / "tests" / "fixtures" / "import" / "batch"
 FOLDER_ITEM_DOWNS = 7  # New Song -> ... -> Import > Song Folder...
+QUIT_NOTE = "Finish or cancel the import before quitting."
+WM_CLOSE = 0x0010
 IMPORTED = {"Canción del Alba", "Lantern Hymn", "Sungai Kehidupan"}
 ROWS = [
     "Sungai Kehidupan",
@@ -281,6 +285,29 @@ def main() -> int:
             and "import-bulk" in found,
             "duplicate rows offer Skip and the bulk choice exists",
         )
+        # Ctrl+Q and WM_CLOSE with the preview open keep the operator and the
+        # preview and say why (PP-IMPF-09).
+        press("ctrl+q")
+        note = None
+        deadline = time.monotonic() + 5.0
+        while note is None and time.monotonic() < deadline:
+            note = a11y.nodes_by_id(a11y.uia(hwnd)).get("import-quit-note")
+            time.sleep(0.2)
+        summary["quit_note"] = note["name"] if note else None
+        check.expect(
+            bool(note) and note["name"] == QUIT_NOTE,
+            f"Ctrl+Q with the preview open shows the quit note: {summary['quit_note']!r}",
+        )
+        nw.user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        time.sleep(1.0)
+        found = a11y.nodes_by_id(a11y.uia(hwnd))
+        check.expect(
+            app.process.poll() is None
+            and "import-dialog" in found
+            and "import-confirm" in found,
+            "WM_CLOSE with the preview open keeps the operator and the preview",
+        )
+        save("07-import-quit-refused")
         press("escape")
         time.sleep(0.8)
         check.expect(

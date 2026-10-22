@@ -110,6 +110,9 @@ pub(crate) struct SongImport {
     pub(crate) truncated: Vec<PathBuf>,
     /// Shown in the dialog (commit failure, replace conflict).
     pub(crate) error: Option<String>,
+    /// Quit or window close asked while the preview is open. Its own slot,
+    /// so it never hides `error` (e.g. a failed duplicate check).
+    pub(crate) quit_note: Option<String>,
     /// A storage command waiting for the storage worker.
     storage: Option<storage::Command>,
     storage_cancel: Option<storage::Cancel>,
@@ -141,6 +144,30 @@ impl SongImport {
             self.phase,
             Phase::Reading | Phase::Checking | Phase::Review | Phase::Committing
         )
+    }
+
+    /// The notes under the summary: ignored files, files past the batch
+    /// limit and folders cut at the entry budget.
+    pub(crate) fn notes(&self) -> Vec<String> {
+        let mut notes = Vec::new();
+        if self.ignored > 0 {
+            notes.push(t!(Msg::ImportIgnored, count = self.ignored));
+        }
+        if self.over_limit > 0 {
+            notes.push(t!(
+                Msg::ImportOverLimit,
+                count = self.over_limit,
+                max = batch::MAX_FILES
+            ));
+        }
+        for folder in &self.truncated {
+            notes.push(t!(
+                Msg::ImportFolderTruncated,
+                max = batch::MAX_FOLDER_ENTRIES,
+                name = folder.display()
+            ));
+        }
+        notes
     }
 
     pub(crate) fn staged(&self) -> usize {
@@ -198,6 +225,7 @@ impl SongImport {
         self.over_limit = 0;
         self.truncated.clear();
         self.error = None;
+        self.quit_note = None;
         self.storage = None;
         self.storage_cancel = None;
     }
@@ -1022,24 +1050,7 @@ impl Operator {
             failed = import.failed(),
             duplicates = import.duplicates()
         );
-        let mut notes = Vec::new();
-        if import.ignored > 0 {
-            notes.push(t!(Msg::ImportIgnored, count = import.ignored));
-        }
-        if import.over_limit > 0 {
-            notes.push(t!(
-                Msg::ImportOverLimit,
-                count = import.over_limit,
-                max = batch::MAX_FILES
-            ));
-        }
-        for folder in &import.truncated {
-            notes.push(t!(
-                Msg::ImportFolderTruncated,
-                max = batch::MAX_FOLDER_ENTRIES,
-                name = folder.display()
-            ));
-        }
+        let notes = import.notes();
         let library_duplicates = import
             .rows
             .iter()
@@ -1047,6 +1058,7 @@ impl Operator {
         let writes = import.writes();
         let can_import = phase == Phase::Review && writes > 0;
         let error = import.error.clone();
+        let quit_note = import.quit_note.clone();
         let rows: Vec<gpui::AnyElement> = (0..self.song_import.rows.len())
             .map(|index| {
                 let row = &self.song_import.rows[index];
@@ -1154,7 +1166,13 @@ impl Operator {
             }))
             .children(notes.into_iter().enumerate().map(|(index, note)| {
                 div()
+                    .id(("import-note", index))
                     .debug_selector(move || format!("import-note-{index}"))
+                    .role(Role::Label)
+                    // AccessKit names a Label from its value (AT-SPI, UIA).
+                    .aria_label(note.clone())
+                    .aria_value(note.clone())
+                    .accessibility_id(format!("import-note-{index}"))
                     .text_size(px(TEXT_CAPTION))
                     .text_color(rgb(MUTED))
                     .child(note)
@@ -1191,7 +1209,21 @@ impl Operator {
                     .debug_selector(|| "import-error".into())
                     .role(Role::Label)
                     .aria_label(message.clone())
+                    .aria_value(message.clone())
                     .accessibility_id("import-error")
+                    .text_size(px(TEXT_SMALL))
+                    .text_color(rgb(ERROR))
+                    .whitespace_normal()
+                    .child(message)
+            }))
+            .children(quit_note.map(|message| {
+                div()
+                    .id("import-quit-note")
+                    .debug_selector(|| "import-quit-note".into())
+                    .role(Role::Label)
+                    .aria_label(message.clone())
+                    .aria_value(message.clone())
+                    .accessibility_id("import-quit-note")
                     .text_size(px(TEXT_SMALL))
                     .text_color(rgb(ERROR))
                     .whitespace_normal()

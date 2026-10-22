@@ -245,13 +245,7 @@ pub fn read(path: &Path) -> Result<Vec<u8>, FileError> {
     if !meta.is_file() {
         return Err(FileError::Unsupported);
     }
-    let file = std::fs::File::open(path).map_err(|e| FileError::Unreadable(e.to_string()))?;
-    let meta = file
-        .metadata()
-        .map_err(|e| FileError::Unreadable(e.to_string()))?;
-    if !meta.is_file() {
-        return Err(FileError::Unsupported);
-    }
+    let (file, meta) = open_regular(path)?;
     if meta.len() > MAX_FILE_BYTES as u64 {
         return Err(FileError::Rejected(None, Rejected::TooLarge));
     }
@@ -263,6 +257,30 @@ pub fn read(path: &Path) -> Result<Vec<u8>, FileError> {
         return Err(FileError::Rejected(None, Rejected::TooLarge));
     }
     Ok(bytes)
+}
+
+/// Opens `path` and checks the opened file is a regular one. On Unix the
+/// open does not wait (`O_NONBLOCK`), so a named pipe swapped in after the
+/// type check above returns at once and is refused here instead of
+/// blocking the thread; reads from a regular file ignore the flag.
+fn open_regular(path: &Path) -> Result<(std::fs::File, std::fs::Metadata), FileError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options
+        .open(path)
+        .map_err(|e| FileError::Unreadable(e.to_string()))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| FileError::Unreadable(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(FileError::Unsupported);
+    }
+    Ok((file, meta))
 }
 
 /// XML content: after a BOM and whitespace, the first character is `<`.
@@ -596,7 +614,9 @@ mod tests {
     #[test]
     fn a_named_pipe_is_never_opened() {
         let dir = tempfile::tempdir().unwrap();
-        let pipe = dir.path().join("pipe");
+        // Named like a song file, so only the regular-file check keeps the
+        // walk from staging it.
+        let pipe = dir.path().join("pipe.cho");
         let made = std::process::Command::new("mkfifo")
             .arg(&pipe)
             .status()
@@ -616,6 +636,28 @@ mod tests {
         let result = rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("read returns instead of blocking");
+        assert_eq!(result, Err(FileError::Unsupported));
+    }
+
+    /// A pipe swapped in between the type check and the open: the open
+    /// itself must not wait for a writer.
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_named_pipe_returns_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("swapped.cho");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(open_regular(&pipe).map(|_| ()));
+        });
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the open returns instead of blocking");
         assert_eq!(result, Err(FileError::Unsupported));
     }
 

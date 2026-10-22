@@ -23,8 +23,10 @@ byte for byte). Typing "mañana" into the Songs search box must leave the one
 OpenLyrics song; clicking it previews its four slides, a click selects
 slide 2, Live output on and Go Live must show text on the audience output.
 Importing the same folder again must mark the three songs as duplicates
-with Skip chosen and Import (0); Esc cancels and the library stays the
-same. Ctrl+Q then quits with exit status 0.
+with Skip chosen and Import (0). Ctrl+Q and Alt+F4 (WM_DELETE_WINDOW) with that preview open
+must keep the operator and the preview and show the quit note
+(PP-IMPF-09); Esc then cancels and the library stays the same. Ctrl+Q
+then quits with exit status 0.
 
 X11 differences: the chooser is the GTK folder chooser of
 xdg-desktop-portal-gtk (Windows: the common folder dialog), driven by
@@ -53,6 +55,7 @@ IMPORTED = {"Canción del Alba", "Lantern Hymn", "Sungai Kehidupan"}
 # the X keymap when it starts and ignores the mapping xdotool would add on
 # the fly for a character outside the US layout.
 SPARE_KEYCODE = 93
+QUIT_NOTE = "Finish or cancel the import before quitting."
 
 
 def titles(library: Path) -> list[str]:
@@ -256,6 +259,25 @@ def run(session: nx.Session, library: Path, folder: Path, before: list[str]) -> 
             raise nx.Failure(f"row {row} offers no Skip choice")
     if "import-bulk" not in controls:
         raise nx.Failure("no bulk choice for the duplicates")
+    # Ctrl+Q and a window-manager close with the preview open must keep the
+    # operator and the preview (PP-IMPF-09) and say why.
+    nx.press(operator, "ctrl+q")
+    note = nx.wait_until(
+        lambda: app.controls(operator).get("import-quit-note"),
+        5,
+        "the quit note in the preview",
+    )
+    summary["quit_note"] = note.name
+    if note.name != QUIT_NOTE:
+        raise nx.Failure(f"unexpected quit note {note.name!r}")
+    nx.wm_close(operator)
+    time.sleep(1.0)
+    if not app.running() or not nx.window_exists(operator):
+        raise nx.Failure("closing the window with the preview open quit the operator")
+    controls = app.controls(operator)
+    if "import-dialog" not in controls or "import-confirm" not in controls:
+        raise nx.Failure("quit or close replaced the open preview")
+    session.save(operator, "operator-import-quit-refused")
     nx.press(operator, "escape")
     time.sleep(0.8)
     if "import-dialog" in app.controls(operator):
@@ -272,7 +294,8 @@ def run(session: nx.Session, library: Path, folder: Path, before: list[str]) -> 
         "File > Import > Song Folder... by keyboard stages 3 songs and 2 failures with warnings, "
         "Import commits exactly the 3 songs with accented words intact, 'mañana' finds the "
         "OpenLyrics song, its slide 2 previews and goes live with text, a second import marks "
-        "3 duplicates as Skip and Esc cancels without changes"
+        "3 duplicates as Skip, Ctrl+Q and Alt+F4 are refused while that preview is open, "
+        "and Esc cancels without changes"
     )
 
 

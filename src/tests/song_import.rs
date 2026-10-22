@@ -11,7 +11,7 @@ use sela::import::{
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, atomic::AtomicBool, mpsc};
 
-fn batch_dir(dir: &tempfile::TempDir) -> PathBuf {
+pub(super) fn batch_dir(dir: &tempfile::TempDir) -> PathBuf {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/import/batch");
     let target = dir.path().join("songs");
     std::fs::create_dir(&target).unwrap();
@@ -67,7 +67,11 @@ fn open(
 }
 
 /// File › Import › Song Folder… answered with `folder`.
-fn import_folder(cx: &mut VisualTestContext, operator: &Entity<Operator>, folder: PathBuf) {
+pub(super) fn import_folder(
+    cx: &mut VisualTestContext,
+    operator: &Entity<Operator>,
+    folder: PathBuf,
+) {
     click(cx, "bar-file");
     click(cx, "bar-file-import-folder");
     assert_eq!(
@@ -81,7 +85,7 @@ fn import_folder(cx: &mut VisualTestContext, operator: &Entity<Operator>, folder
     cx.run_until_parked();
 }
 
-fn settle_review(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+pub(super) fn settle_review(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
     settle(cx, operator, "staged preview", |o| {
         o.song_import.phase == Phase::Review
     });
@@ -696,6 +700,20 @@ fn quit_waits_for_an_open_import_and_a_replaced_preview_cancels_it(cx: &mut Test
     add_song(&mut cx, &operator, "Signal Hymn");
     import_folder(&mut cx, &operator, folder.clone());
     settle_review(&mut cx, &operator);
+    // The duplicate check failed: that warning must survive the quit note.
+    operator.update(&mut cx, |o, cx| {
+        o.song_import.phase = Phase::Checking;
+        let job = o.song_import.job();
+        o.song_import_reply(job, Err(sela::storage::Error::Busy));
+        cx.notify();
+    });
+    let check_failed = operator.read_with(&cx, |o, _| o.song_import.error.clone());
+    assert!(
+        check_failed
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Duplicates could not be checked")),
+        "{check_failed:?}"
+    );
     // Ctrl+Q reaches the "Sela" context behind the dialog; it must neither
     // replace the preview with the Unsaved prompt nor close the window.
     cx.simulate_keystrokes("ctrl-q");
@@ -707,10 +725,12 @@ fn quit_waits_for_an_open_import_and_a_replaced_preview_cancels_it(cx: &mut Test
         assert_eq!(o.song_import.phase, Phase::Review);
         assert_eq!(o.song_import.rows.len(), 5);
         assert_eq!(
-            o.song_import.error.as_deref(),
+            o.song_import.quit_note.as_deref(),
             Some("Finish or cancel the import before quitting.")
         );
+        assert_eq!(o.song_import.error, check_failed, "the warning is kept");
     });
+    assert!(cx.debug_bounds("import-quit-note").is_some());
     assert!(cx.debug_bounds("import-error").is_some());
     // Any other dialog that replaces the preview cancels the import, so the
     // menu entries come back instead of staying disabled.
@@ -851,20 +871,32 @@ fn a_cancel_after_the_commit_reached_storage_rolls_back_or_reports_late(cx: &mut
 fn a_folder_cut_at_the_entry_budget_is_noted_in_the_preview(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let folder = batch_dir(&dir);
+    // The real walk on the `sela-import` thread: one entry past the budget
+    // (empty notes, ignored as non-song files) cuts the folder.
+    let filler = folder.join("filler");
+    std::fs::create_dir(&filler).unwrap();
+    for n in 0..sela::import::batch::MAX_FOLDER_ENTRIES {
+        std::fs::File::create(filler.join(format!("{n:05}.txt"))).unwrap();
+    }
     let (mut cx, operator) = open(cx, library_with_songs(&dir), 2);
     import_folder(&mut cx, &operator, folder.clone());
     settle_review(&mut cx, &operator);
-    let notes = operator.read_with(&cx, |o, _| {
-        usize::from(o.song_import.ignored > 0) + usize::from(o.song_import.over_limit > 0)
+    let expected = format!(
+        "Folder has more than {} entries; files after that were not looked at: {}",
+        sela::import::batch::MAX_FOLDER_ENTRIES,
+        folder.display()
+    );
+    let (truncated, notes) = operator.read_with(&cx, |o, _| {
+        (o.song_import.truncated.clone(), o.song_import.notes())
     });
-    let note = selector(format!("import-note-{notes}"));
-    assert!(cx.debug_bounds(note).is_none());
-    // As the worker reports a folder whose walk hit MAX_FOLDER_ENTRIES
-    // (the walk itself is tested in `import::batch`).
-    operator.update(&mut cx, |o, cx| {
-        o.song_import.truncated = vec![folder];
-        cx.notify();
-    });
-    cx.run_until_parked();
-    assert!(cx.debug_bounds(note).is_some());
+    assert_eq!(truncated, std::slice::from_ref(&folder));
+    let index = notes
+        .iter()
+        .position(|note| *note == expected)
+        .unwrap_or_else(|| panic!("no truncation note in {notes:?}"));
+    assert!(
+        cx.debug_bounds(selector(format!("import-note-{index}")))
+            .is_some()
+    );
+    std::fs::remove_dir_all(&filler).unwrap();
 }

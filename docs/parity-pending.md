@@ -376,9 +376,17 @@ framework", reference-observations "Song import — UNOBSERVED best guesses").
   the window's close button; record whether EW closes, prompts about the
   schedule, or refuses, and whether the import survives. Sela now: the
   close is refused with "Finish or cancel the import before quitting." in
-  the import dialog; after Cancel the usual Save / Don't Save / Cancel
-  prompt appears. Re-run: GPUI
-  `quit_waits_for_an_open_import_and_a_replaced_preview_cancels_it`.
+  the import dialog (its own line under any import error, which stays);
+  after Cancel the usual Save / Don't Save / Cancel prompt appears. The same
+  refusal holds when the preview was opened while an earlier quit waited
+  for a settings write after Don't Save, or for a Save before quitting.
+  Also observe in EW: if a quit is pending (prompt answered, still saving)
+  can the import dialog be opened at all. Re-run: GPUI
+  `quit_waits_for_an_open_import_and_a_replaced_preview_cancels_it`,
+  `an_import_opened_during_the_settings_wait_after_dont_save_keeps_the_window`,
+  `an_import_opened_during_a_save_then_quit_keeps_the_window`; native
+  `python3 scripts/song-import-x11.py` (Ctrl+Q and Alt+F4 on the duplicate
+  preview) and `scripts/song-import-windows.py` (Ctrl+Q and WM_CLOSE).
 
 ## Stream: ew-library-import
 

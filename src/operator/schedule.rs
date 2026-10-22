@@ -372,7 +372,7 @@ impl Operator {
         if self.song_import.holds_dialog() {
             let message: String = t!(Msg::ImportQuitBlocked).into();
             if self.dialog == Some(Dialog::ImportSongs) {
-                self.song_import.error = Some(message);
+                self.song_import.quit_note = Some(message);
             } else {
                 self.song_message = Some((message, true));
             }

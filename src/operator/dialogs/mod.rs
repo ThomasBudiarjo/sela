@@ -162,6 +162,11 @@ impl Operator {
                 self.clear_entry_selection();
                 self.schedule_message = None;
             }
+            // A Save-then-Quit resumes after the write; an import preview
+            // opened meanwhile still holds the close back (PP-IMPF-09).
+            Then::Quit if self.song_import.holds_dialog() => {
+                self.may_close(window, cx);
+            }
             Then::Quit => {
                 if self.settings_allow_close(window, cx) {
                     window.remove_window();

@@ -456,7 +456,12 @@ impl Operator {
                             // The prompt already owns the decision.
                             return true;
                         }
-                        if this.discard_still_holds() || this.may_close(window, cx) {
+                        // Don't Save covers the schedule only: an import
+                        // preview opened during the wait still holds the
+                        // close back (EW8-OBS-IMP-7, PP-IMPF-09).
+                        let discarded =
+                            !this.song_import.holds_dialog() && this.discard_still_holds();
+                        if discarded || this.may_close(window, cx) {
                             window.remove_window();
                         }
                         true
