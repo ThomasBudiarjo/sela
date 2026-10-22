@@ -1,10 +1,14 @@
 //! Options dialog and the operator's view of the settings store. The sections
-//! follow the observed EW Options inventory (EW8-OBS-054); only Main Output ›
-//! General (output monitor) exists so far, the rest are marked unavailable.
+//! follow the observed EW Options inventory (EW8-OBS-054); Main Output ›
+//! General (language, output monitor) and Main Output › Song (Copyright Info,
+//! `song.rs`) exist so far, the rest are marked unavailable.
 
 use super::*;
 use sela::settings::{self, MonitorInfo, Settings};
 use std::sync::Mutex;
+
+mod song;
+pub(crate) use song::OptionsTab;
 
 /// The `--audience` monitor argument the audience launcher reads at spawn time.
 #[derive(Default)]
@@ -105,6 +109,8 @@ pub(crate) struct SettingsState {
     rows: Vec<FocusHandle>,
     language_rows: Vec<FocusHandle>,
     _monitor_scan: Option<Task<()>>,
+    /// Main Output tab choice and the Song tab's copyright drafts.
+    pub(crate) song: song::SongOptions,
 }
 
 impl SettingsState {
@@ -152,6 +158,7 @@ impl SettingsState {
             rows: Vec::new(),
             language_rows: Vec::new(),
             _monitor_scan: Some(monitor_scan),
+            song: song::SongOptions::new(cx),
         };
         state.sync_slot();
         state
@@ -208,7 +215,7 @@ const SECTIONS: [(Msg, &str, bool); 6] = [
 
 const MAIN_OUTPUT_TABS: [(Msg, &str, bool); 6] = [
     (Msg::OptionsTabGeneral, "general", true),
-    (Msg::OptionsTabSong, "song", false),
+    (Msg::OptionsTabSong, "song", true),
     (Msg::OptionsTabScripture, "scripture", false),
     (Msg::TabPresentations, "presentations", false),
     (Msg::OptionsTabTransitions, "transitions", false),
@@ -221,7 +228,7 @@ const MONITOR_TAB_INDEX: isize = 800;
 const LANGUAGE_TAB_INDEX: isize = 780;
 
 impl Operator {
-    pub(crate) fn poll_settings(&mut self) -> bool {
+    pub(crate) fn poll_settings(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         // The queue holds a handful of replies at most; bound the loop anyway.
         for _ in 0..4 {
@@ -246,6 +253,8 @@ impl Operator {
                             self.settings.draft =
                                 Some(self.settings.current.output_monitor.clone());
                             self.settings.language_draft = Some(self.settings.current.language);
+                            let copyright = self.settings.current.copyright.clone();
+                            self.reset_song_options(copyright, cx);
                         }
                     } else {
                         self.settings.current.recent_schedules = loaded.settings.recent_schedules;
@@ -371,6 +380,7 @@ impl Operator {
         }
         self.settings.draft = Some(self.settings.current.output_monitor.clone());
         self.settings.language_draft = Some(self.settings.current.language);
+        self.begin_song_options(cx);
         self.open_dialog(Dialog::Options, window, cx);
     }
 
@@ -381,6 +391,8 @@ impl Operator {
         let Some(draft) = self.settings.draft.take() else {
             return;
         };
+        let copyright = self.song_options_draft(cx);
+        self.settings.song.draft = None;
         if !self.settings.loaded {
             self.settings.language_draft = None;
             return;
@@ -390,14 +402,18 @@ impl Operator {
             .language_draft
             .take()
             .unwrap_or(self.settings.current.language);
+        let copyright = copyright.unwrap_or_else(|| self.settings.current.copyright.clone());
         let monitor_changed = draft != self.settings.current.output_monitor;
         let language_changed = language != self.settings.current.language;
-        if !monitor_changed && !language_changed {
+        // Reaches the next cue built for Live; the live scene is not redrawn.
+        let copyright_changed = copyright != self.settings.current.copyright;
+        if !monitor_changed && !language_changed && !copyright_changed {
             return;
         }
         self.settings.applied = true;
         self.settings.current.output_monitor = draft;
         self.settings.current.language = language;
+        self.settings.current.copyright = copyright;
         self.settings.sync_slot();
         if let Some(worker) = &self.settings.worker {
             if worker.save(self.settings.current.clone()) {
@@ -659,21 +675,9 @@ impl Operator {
                     d.child(div().text_size(px(TEXT_TILE)).child(t!(Msg::NotAvailable)))
                 })
         });
-        let tabs = MAIN_OUTPUT_TABS.map(|(msg, slug, available)| {
-            div()
-                .debug_selector(move || format!("options-tab-{slug}"))
-                .h_full()
-                .px_2()
-                .flex()
-                .items_center()
-                .border_b_2()
-                .border_color(rgb(if available { ACCENT } else { SURFACE }))
-                .when(available, |d| {
-                    d.font_weight(FontWeight::MEDIUM).text_color(rgb(TEXT))
-                })
-                .when(!available, |d| d.text_color(rgb(DISABLED)))
-                .child(t!(msg))
-        });
+        let tabs = self.options_tabs(&MAIN_OUTPUT_TABS, cx);
+        let song_tab = self.settings.song.tab == OptionsTab::Song;
+        let song_page = song_tab.then(|| self.song_options_page(cx));
         let loading = monitors.is_none();
         let settings_loaded = self.settings.loaded;
         let dialog = {
@@ -738,68 +742,77 @@ impl Operator {
                                         .border_color(rgb(BORDER))
                                         .children(tabs),
                                 )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .p(px(DIALOG_PAD))
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(DIALOG_GAP))
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(t!(Msg::LanguageHeading)),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(TEXT_SMALL))
-                                                .text_color(rgb(MUTED))
-                                                .child(t!(Msg::LanguageHint)),
-                                        )
-                                        .child(
-                                            div().flex().flex_col().gap_1().children(language_rows),
-                                        )
-                                        .child(
-                                            div()
-                                                .mt_2()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(t!(Msg::MonitorHeading)),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(TEXT_SMALL))
-                                                .text_color(rgb(MUTED))
-                                                .child(t!(Msg::MonitorHint)),
-                                        )
-                                        .children((!settings_loaded).then(|| {
-                                            div()
-                                                .debug_selector(|| "options-loading".into())
-                                                .text_size(px(TEXT_SMALL))
-                                                .text_color(rgb(MUTED))
-                                                .child(t!(Msg::LoadingSettings))
-                                        }))
-                                        .children(loading.then(|| {
-                                            div()
-                                                .text_size(px(TEXT_SMALL))
-                                                .text_color(rgb(MUTED))
-                                                .child(t!(Msg::DetectingMonitors))
-                                        }))
-                                        .child(div().flex().flex_col().gap_1().children(rows))
-                                        .children(draft_missing.then(|| {
-                                            div()
-                                                .debug_selector(|| "options-missing".into())
-                                                .text_size(px(TEXT_SMALL))
-                                                .text_color(rgb(SENDING))
-                                                .child(t!(
-                                                    Msg::MonitorMissingDialog,
-                                                    name = draft
-                                                        .as_deref()
-                                                        .map(short)
-                                                        .unwrap_or_default()
-                                                ))
-                                        })),
-                                ),
+                                .children(song_page.map(|page| {
+                                    div().flex_1().min_h_0().p(px(DIALOG_PAD)).child(page)
+                                }))
+                                .when(!song_tab, |d| {
+                                    d.child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .p(px(DIALOG_PAD))
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(DIALOG_GAP))
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child(t!(Msg::LanguageHeading)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(TEXT_SMALL))
+                                                    .text_color(rgb(MUTED))
+                                                    .child(t!(Msg::LanguageHint)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_1()
+                                                    .children(language_rows),
+                                            )
+                                            .child(
+                                                div()
+                                                    .mt_2()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child(t!(Msg::MonitorHeading)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(TEXT_SMALL))
+                                                    .text_color(rgb(MUTED))
+                                                    .child(t!(Msg::MonitorHint)),
+                                            )
+                                            .children((!settings_loaded).then(|| {
+                                                div()
+                                                    .debug_selector(|| "options-loading".into())
+                                                    .text_size(px(TEXT_SMALL))
+                                                    .text_color(rgb(MUTED))
+                                                    .child(t!(Msg::LoadingSettings))
+                                            }))
+                                            .children(loading.then(|| {
+                                                div()
+                                                    .text_size(px(TEXT_SMALL))
+                                                    .text_color(rgb(MUTED))
+                                                    .child(t!(Msg::DetectingMonitors))
+                                            }))
+                                            .child(div().flex().flex_col().gap_1().children(rows))
+                                            .children(draft_missing.then(|| {
+                                                div()
+                                                    .debug_selector(|| "options-missing".into())
+                                                    .text_size(px(TEXT_SMALL))
+                                                    .text_color(rgb(SENDING))
+                                                    .child(t!(
+                                                        Msg::MonitorMissingDialog,
+                                                        name = draft
+                                                            .as_deref()
+                                                            .map(short)
+                                                            .unwrap_or_default()
+                                                    ))
+                                            })),
+                                    )
+                                }),
                         ),
                 )
                 .child(

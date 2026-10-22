@@ -117,6 +117,17 @@ pub enum Msg {
     MenuSortAscending,
     MenuSortDescending,
     A11ySortMenu,
+    MenuSortAuthor,
+    MenuSortCopyright,
+    MenuSortAdministrator,
+    MenuSortSongNumber,
+    OptionsCopyrightHeading,
+    OptionsCopyrightDisplay,
+    OptionsCopyrightFirstSlide,
+    OptionsCopyrightHint,
+    OptionsLicenseInfo,
+    OptionsLicenseInfoPlaceholder,
+    OptionsLicenseInfoHint,
     A11ySongScrollbar,
     SongSearchMore,
     ConfirmYes,
@@ -603,6 +614,17 @@ impl Msg {
         Msg::MenuSortAscending,
         Msg::MenuSortDescending,
         Msg::A11ySortMenu,
+        Msg::MenuSortAuthor,
+        Msg::MenuSortCopyright,
+        Msg::MenuSortAdministrator,
+        Msg::MenuSortSongNumber,
+        Msg::OptionsCopyrightHeading,
+        Msg::OptionsCopyrightDisplay,
+        Msg::OptionsCopyrightFirstSlide,
+        Msg::OptionsCopyrightHint,
+        Msg::OptionsLicenseInfo,
+        Msg::OptionsLicenseInfoPlaceholder,
+        Msg::OptionsLicenseInfoHint,
         Msg::A11ySongScrollbar,
         Msg::SongSearchMore,
         Msg::ConfirmYes,
@@ -1075,6 +1097,21 @@ impl Msg {
             Self::MenuSortAscending => "Ascending",
             Self::MenuSortDescending => "Descending",
             Self::A11ySortMenu => "Sort songs by",
+            Self::MenuSortAuthor => "Author",
+            Self::MenuSortCopyright => "Copyright",
+            Self::MenuSortAdministrator => "Administrator",
+            Self::MenuSortSongNumber => "Song Number",
+            Self::OptionsCopyrightHeading => "Copyright Info",
+            Self::OptionsCopyrightDisplay => "Display Copyright Information",
+            Self::OptionsCopyrightFirstSlide => "Show on first displayed slide only",
+            Self::OptionsCopyrightHint => {
+                "The strip under a song with copyright text. Changes apply from the next slide sent to Live."
+            }
+            Self::OptionsLicenseInfo => "License Info",
+            Self::OptionsLicenseInfoPlaceholder => "For example: CCLI License # 1234567",
+            Self::OptionsLicenseInfoHint => {
+                "When filled in, a third strip line shows it after the song's CCLI number."
+            }
             Self::A11ySongScrollbar => "Songs scroll bar",
             Self::SongSearchMore => {
                 "More songs match than are shown. Type more to narrow the search."
@@ -1616,6 +1653,21 @@ impl Msg {
             Self::MenuSortAscending => "Menaik",
             Self::MenuSortDescending => "Menurun",
             Self::A11ySortMenu => "Urutkan lagu menurut",
+            Self::MenuSortAuthor => "Penulis",
+            Self::MenuSortCopyright => "Hak Cipta",
+            Self::MenuSortAdministrator => "Administrator",
+            Self::MenuSortSongNumber => "Nomor Lagu",
+            Self::OptionsCopyrightHeading => "Info Hak Cipta",
+            Self::OptionsCopyrightDisplay => "Tampilkan informasi hak cipta",
+            Self::OptionsCopyrightFirstSlide => "Tampilkan hanya pada slide pertama",
+            Self::OptionsCopyrightHint => {
+                "Strip di bawah lagu yang punya teks hak cipta. Perubahan berlaku mulai slide berikutnya yang dikirim ke Live."
+            }
+            Self::OptionsLicenseInfo => "Info Lisensi",
+            Self::OptionsLicenseInfoPlaceholder => "Contoh: CCLI License # 1234567",
+            Self::OptionsLicenseInfoHint => {
+                "Jika diisi, baris ketiga strip menampilkannya setelah nomor CCLI lagu."
+            }
             Self::A11ySongScrollbar => "Bilah gulir lagu",
             Self::SongSearchMore => {
                 "Lebih banyak lagu cocok daripada yang ditampilkan. Ketik lebih banyak untuk mempersempit."
@@ -2190,7 +2242,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 468);
+        assert_eq!(Msg::ALL.len(), 479);
     }
 
     #[test]

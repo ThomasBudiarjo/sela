@@ -233,38 +233,127 @@ pub fn size_cap_with_footer(
 const FOOTER_EM: f32 = 0.032;
 /// Below this output height the strip is not drawn: it would leave no room.
 const FOOTER_MIN_HEIGHT: u32 = 360;
-const FOOTER_LINES: usize = 2;
+/// "Title - Author" and the copyright, plus an optional licensing line.
+const FOOTER_LINES: std::ops::RangeInclusive<usize> = 2..=3;
+/// Longest License Info text kept (Options › Main Output › Song).
+pub const MAX_LICENSE_INFO: usize = 256;
 /// Pixel height of `lines` lines of strip text at `size`; the audience raster
 /// and the cue reserve the same box.
 pub fn footer_height(lines: usize, size: u16) -> u32 {
     (lines as f32 * f32::from(size) * LINE_HEIGHT).ceil() as u32 + 2
 }
 
-/// The strip text of a song, or `None` for a song without copyright text
-/// (EW8-OBS-063): "Title - Author" over the Copyright line. Administrator and
-/// Song Number are not drawn (unobserved). Line breaks inside a field become
-/// spaces so the strip is always two lines.
+/// The strip text of a song with the default options, or `None` for a song
+/// without copyright text; see `CopyrightStrip`.
 pub fn copyright_strip(song: &Song) -> Option<String> {
-    let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-    let copyright = one_line(&song.copyright);
-    if copyright.is_empty() {
-        return None;
+    CopyrightStrip::of(song).map(|strip| strip.text(&CopyrightOptions::default()))
+}
+
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Options › Main Output › Song › Copyright Info (EW8-OBS-055, EW8-OBS-056):
+/// "Display Copyright Information" (on), "Show on first displayed slide only"
+/// (off) and the License Info box (empty), with EW's observed defaults. The
+/// Copyright Font menu is not implemented.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopyrightOptions {
+    pub display: bool,
+    /// UNOBSERVED best guess: "first displayed slide" is the item's first
+    /// slide in presentation order (slide 1 of the chosen arrangement), not
+    /// whichever slide happens to go live first.
+    pub first_slide_only: bool,
+    /// One line, at most `MAX_LICENSE_INFO` bytes; see `CopyrightStrip::text`.
+    pub license_info: String,
+}
+
+impl Default for CopyrightOptions {
+    fn default() -> Self {
+        Self {
+            display: true,
+            first_slide_only: false,
+            license_info: String::new(),
+        }
     }
-    let (title, authors) = (one_line(&song.title), one_line(&song.authors));
-    let first = if authors.is_empty() {
-        title
-    } else {
-        format!("{title} - {authors}")
-    };
-    Some(format!("{first}\n{copyright}"))
+}
+
+impl CopyrightOptions {
+    /// Whether slide `index` of an item draws the strip.
+    pub fn shown_on(&self, index: usize) -> bool {
+        self.display && (!self.first_slide_only || index == 0)
+    }
+
+    /// License Info as stored: one line without control characters,
+    /// trimmed, at most `MAX_LICENSE_INFO` bytes on a character boundary.
+    pub fn clean_license(text: &str) -> String {
+        let mut line = one_line(&text.replace(char::is_control, " "));
+        if line.len() > MAX_LICENSE_INFO {
+            let mut end = MAX_LICENSE_INFO;
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            line.truncate(end);
+            line = line.trim_end().to_owned();
+        }
+        line
+    }
+}
+
+/// What a song contributes to its copyright strip (EW8-OBS-063): "Title -
+/// Author" over the Copyright line. Administrator is not drawn (unobserved).
+/// Line breaks inside a field become spaces so each part is one line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopyrightStrip {
+    first: String,
+    copyright: String,
+    song_number: String,
+}
+
+impl CopyrightStrip {
+    /// `None` for a song without copyright text: it shows no strip.
+    pub fn of(song: &Song) -> Option<Self> {
+        let copyright = one_line(&song.copyright);
+        if copyright.is_empty() {
+            return None;
+        }
+        let (title, authors) = (one_line(&song.title), one_line(&song.authors));
+        let first = if authors.is_empty() {
+            title
+        } else {
+            format!("{title} - {authors}")
+        };
+        Some(Self {
+            first,
+            copyright,
+            song_number: one_line(&song.song_number),
+        })
+    }
+
+    /// The strip text under `options`. A non-empty License Info adds a third
+    /// line, "CCLI Song # N · License Info" ("CCLI Song # N · " only when the
+    /// song has a Song Number). UNOBSERVED best guess (EW8-OBS-063).
+    pub fn text(&self, options: &CopyrightOptions) -> String {
+        let license = CopyrightOptions::clean_license(&options.license_info);
+        let mut text = format!("{}\n{}", self.first, self.copyright);
+        if !license.is_empty() {
+            text.push('\n');
+            if !self.song_number.is_empty() {
+                text.push_str(&format!("CCLI Song # {} \u{b7} ", self.song_number));
+            }
+            text.push_str(&license);
+        }
+        text
+    }
 }
 
 /// Strip font size and box height that fit the width, or `None` when it
 /// cannot be drawn (small output, a glyph the face lacks, too much text).
 fn footer_plan(text: &str, resolved: &Resolved, extent: Extent) -> Option<(u16, u32)> {
+    let lines = text.lines().count();
     if extent.height < FOOTER_MIN_HEIGHT
         || text.len() > MAX_TEXT_BYTES
-        || text.lines().count() != FOOTER_LINES
+        || !FOOTER_LINES.contains(&lines)
     {
         return None;
     }
@@ -283,7 +372,7 @@ fn footer_plan(text: &str, resolved: &Resolved, extent: Extent) -> Option<(u16, 
     let size = (width / (widest * 1.05).max(f32::EPSILON))
         .min(target)
         .floor();
-    (size >= 8.).then(|| (size as u16, footer_height(FOOTER_LINES, size as u16)))
+    (size >= 8.).then(|| (size as u16, footer_height(lines, size as u16)))
 }
 
 /// The extent the lyrics are fitted in: the canvas without the strip's box
@@ -632,6 +721,78 @@ mod tests {
             copyright_strip(&s).as_deref(),
             Some("Signal Hymn - A. Writer\n(c) 2020 Some Owner")
         );
+    }
+
+    #[test]
+    fn copyright_options_pick_the_slides_and_add_a_licensing_line() {
+        let mut s = song(&[("A", "one")]);
+        s.copyright = "(c) 2020 Some Owner".into();
+        let strip = CopyrightStrip::of(&s).unwrap();
+        let defaults = CopyrightOptions::default();
+        assert!(defaults.display && !defaults.first_slide_only);
+        assert!((0..4).all(|i| defaults.shown_on(i)), "every slide");
+        let first = CopyrightOptions {
+            first_slide_only: true,
+            ..Default::default()
+        };
+        assert!(first.shown_on(0) && !first.shown_on(1) && !first.shown_on(7));
+        let hidden = CopyrightOptions {
+            display: false,
+            ..Default::default()
+        };
+        assert!(!hidden.shown_on(0));
+        assert_eq!(strip.text(&defaults), "Signal Hymn\n(c) 2020 Some Owner");
+        let licensed = CopyrightOptions {
+            license_info: "  CCLI License #\t11223344\n".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            strip.text(&licensed),
+            "Signal Hymn\n(c) 2020 Some Owner\nCCLI License # 11223344"
+        );
+        s.song_number = "7654321".into();
+        assert_eq!(
+            CopyrightStrip::of(&s).unwrap().text(&licensed),
+            "Signal Hymn\n(c) 2020 Some Owner\nCCLI Song # 7654321 \u{b7} CCLI License # 11223344"
+        );
+        let long = "é".repeat(200);
+        let clean = CopyrightOptions::clean_license(&long);
+        assert!(clean.len() <= MAX_LICENSE_INFO && clean.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn a_three_line_strip_is_drawn_taller_than_two_lines() {
+        let slide = Slide {
+            label: String::new(),
+            text: "one\ntwo".into(),
+            format: Default::default(),
+            background: None,
+        };
+        let resolved = Resolved::bundled(&slide.format);
+        let version = ContentVersion { id: 4, revision: 1 };
+        let build = |strip: &str| {
+            cue_with_footer(
+                version,
+                &slide,
+                Some(strip),
+                &resolved,
+                EXTENT,
+                CAPS,
+                None,
+                black(),
+            )
+            .unwrap()
+        };
+        let two = build("Signal Hymn\n(c) 2020");
+        let three = build("Signal Hymn\n(c) 2020\nCCLI License # 1");
+        assert_eq!(three.footer().unwrap().content().lines().count(), 3);
+        let height = |cue: &PreparedCue| {
+            let f = cue.footer().unwrap();
+            footer_height(f.content().lines().count(), f.font_size())
+        };
+        assert!(height(&three) > height(&two));
+        // Four lines are refused like other strips that cannot be drawn.
+        assert!(build("a\nb\nc\nd").footer().is_none());
     }
 
     #[test]

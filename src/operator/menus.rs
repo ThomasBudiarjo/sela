@@ -99,6 +99,10 @@ impl SongLine {
         match self {
             Self::Item(item) => item.label(),
             Self::Sort(SongSort::Title) => t!(Msg::MenuSortTitle),
+            Self::Sort(SongSort::Author) => t!(Msg::MenuSortAuthor),
+            Self::Sort(SongSort::Copyright) => t!(Msg::MenuSortCopyright),
+            Self::Sort(SongSort::Administrator) => t!(Msg::MenuSortAdministrator),
+            Self::Sort(SongSort::SongNumber) => t!(Msg::MenuSortSongNumber),
             Self::Sort(SongSort::Modified) => t!(Msg::MenuSortModified),
             Self::Descending(false) => t!(Msg::MenuSortAscending),
             Self::Descending(true) => t!(Msg::MenuSortDescending),
@@ -109,6 +113,10 @@ impl SongLine {
         match self {
             Self::Item(item) => item.id(),
             Self::Sort(SongSort::Title) => "song-sort-title",
+            Self::Sort(SongSort::Author) => "song-sort-author",
+            Self::Sort(SongSort::Copyright) => "song-sort-copyright",
+            Self::Sort(SongSort::Administrator) => "song-sort-administrator",
+            Self::Sort(SongSort::SongNumber) => "song-sort-song-number",
             Self::Sort(SongSort::Modified) => "song-sort-modified",
             Self::Descending(false) => "song-sort-ascending",
             Self::Descending(true) => "song-sort-descending",

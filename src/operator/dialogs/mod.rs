@@ -62,6 +62,7 @@ impl Operator {
         self.dialog_message = None;
         self.settings.draft = None;
         self.settings.language_draft = None;
+        self.settings.song.draft = None;
         match self.dialog_return.take() {
             Some(handle) => handle.focus(window, cx),
             None => self.focus.focus(window, cx),

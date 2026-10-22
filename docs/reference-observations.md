@@ -685,14 +685,46 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 ## Owner-approved deviations from observations
 
 - **EW8-OBS-045, search minimum length:** EW filters from one character; Sela starts at two (owner decision, bounds the one-letter p95 of 109 ms measured in M1-07a). One character shows the full list and issues no query.
-- **EW8-OBS-045, label matching:** EW also matches slide/section text labels; Sela does not index them (recorded gap, docs/search.md and docs/backlog.md).
-- **EW8-OBS-064, Sort by:** Sela offers Title and Date modified with Ascending/Descending; Author, Copyright, Administrator and Song Number are backlog (docs/backlog.md M1-04). The checked direction in EW was unconfirmed, Sela defaults to Ascending. The choices open in place under Sort by instead of a flyout.
+- **EW8-OBS-045, label matching:** resolved by songs-browser (2026-10-22): schema 7 indexes the distinct section labels of each song, so a label-only query finds the song (word prefix like the other columns). Until then Sela did not index labels.
+- **EW8-OBS-064, Sort by:** Sela offers EW's Title, Author, Copyright, Administrator and Song Number (songs-browser, 2026-10-22) plus its own Date modified (last in the list), with Ascending/Descending. The checked direction in EW was unconfirmed, Sela defaults to Ascending. The choices open in place under Sort by instead of a flyout.
 - **EW8-OBS-065, Delete confirmation:** wording and Yes/No with default No follow EW; Esc closes the dialog as No in Sela (EW ignored Esc).
 
 ## Song metadata best guesses (song-metadata-fields)
 
-- Copyright footer is drawn on every slide (EW8-OBS-063, first-slide-only option unchecked).
+- Copyright footer is drawn on every slide (EW8-OBS-063, first-slide-only option unchecked); since songs-browser the Options › Song tab can switch it to the first slide or off (see below).
 - Administrator is stored and shown in the Inspector but not drawn in the footer (unobserved).
 - CCLI maps to the Song Number field.
 - Metadata search covers authors, copyright, license, administrator and song number.
 - Close prompt: Yes saves and closes, No discards, Cancel or Esc keeps editing; it is modal.
+
+## Songs browser — UNOBSERVED best guesses (songs-browser, 2026-10-22)
+
+EasyWorship 8.0.49 was not run for this stream (no Windows host). Each item
+is a reversible best guess; the steps to observe them are in
+[parity-pending.md](parity-pending.md#stream-songs-browser).
+
+- **Sort by keys (EW8-OBS-064):** Author, Copyright and Administrator compare
+  the field text with runs of whitespace collapsed, ignoring ASCII case
+  (SQLite `NOCASE`; accented letters compare by code point); Song Number
+  compares numerically (`0042` sorts as 42). Songs whose key is empty sort
+  **last in both directions**; equal keys fall back to Title ascending, then
+  the song id. Copyright is compared as typed, so "(c) 1999" sorts before
+  "© 2001". The list keeps showing titles only; whether EW shows the key or
+  a column is unobserved.
+- **Search results and Sort by:** while a query is active the results stay
+  in relevance order (title, then lyrics, metadata and labels); Sort by
+  applies to the unfiltered list. EW showed no ranking for one song only.
+- **Label ranking (EW8-OBS-046):** labels weigh 0.5 in bm25 against title 10,
+  lyrics 1 and metadata 2, so a label-only hit ranks below a title or lyric
+  hit for the same word. Each distinct label is indexed once per song.
+- **Options › Main Output › Song › Copyright Info (EW8-OBS-055/056):** Sela
+  builds the observed "Display Copyright Information" (default on), "Show on
+  first displayed slide only" (default off) and License Info (empty).
+  Best guesses: "first displayed slide" means slide 1 of the item in
+  presentation order (not whichever slide happens to go live first); a
+  non-empty License Info adds a third strip line "CCLI Song # N · License
+  Info" (just the License Info when the song has no Song Number); changes
+  apply to the next cue sent to Live and never redraw the live slide; a song
+  without copyright text shows no strip whatever License Info holds. The
+  Copyright Font menu, Song Font and "Show Verse/Chorus Label" controls of
+  the same tab are not built.

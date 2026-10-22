@@ -8,7 +8,10 @@
 //! four slides exercise M1-05h backgrounds: a 4:1 profile image (red, green,
 //! blue bands) with Zoom, the same image with Maintain, a missing image, and
 //! the song master's color; `--metadata-songs` seeds "Metadata Hymn" (author,
-//! copyright, administrator, song number) and "Plain Hymn" (none); --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
+//! copyright, administrator, song number) and "Plain Hymn" (none);
+//! `--sort-songs` seeds five songs whose Author, Copyright, Administrator
+//! and Song Number orders all differ, one with the slide label "Etsaer"
+//! (`scripts/songs-browser-x11.py`); --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
 use image::ImageEncoder;
 use sela::{
     arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId},
@@ -18,7 +21,7 @@ use sela::{
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs] [--sort-songs]";
 
 /// `scripts/live-output-windows.py` samples these.
 const BANDS: [[u8; 3]; 3] = [[200, 40, 40], [40, 160, 60], [40, 60, 200]];
@@ -66,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut second, mut formatted, mut background, mut heavy, mut vanished, mut arranged) =
         (false, false, false, false, false, false);
     let mut metadata = false;
+    let mut sort = false;
     let mut extra = 0usize;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -83,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             flag if flag == "--vanished-schedule" => vanished = true,
             flag if flag == "--arranged-song" => arranged = true,
             flag if flag == "--metadata-songs" => metadata = true,
+            flag if flag == "--sort-songs" => sort = true,
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -109,6 +114,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format,
         background: None,
     };
+    if sort {
+        /// Title, authors, copyright, administrator, song number, labels.
+        type Keyed = (
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static [&'static str],
+        );
+        let songs: [Keyed; 5] = [
+            (
+                "Delta Hymn",
+                "bravo writer",
+                "© 2001 Zeta",
+                "Northwind",
+                "900",
+                &["Verse 1"],
+            ),
+            ("Alpha Hymn", "", "", "", "", &["Verse 1"]),
+            (
+                "Echo Hymn",
+                "Alpha Writer",
+                "(c) 1999 Omega",
+                "acme",
+                "10",
+                &["Verse 1", "Etsaer"],
+            ),
+            (
+                "Bravo Hymn",
+                "Charlie Writer",
+                "© 2001 Zeta",
+                "",
+                "0042",
+                &["Verse 1"],
+            ),
+            (
+                "Etsaer Praise",
+                "Delta Writer",
+                "© 2010 Kappa",
+                "Bureau",
+                "77",
+                &["Verse 1"],
+            ),
+        ];
+        for (title, authors, copyright, admin, number, labels) in songs {
+            let song = Song {
+                title: title.into(),
+                authors: authors.into(),
+                copyright: copyright.into(),
+                license: String::new(),
+                administrator: admin.into(),
+                song_number: number.into(),
+                variants: Vec::new(),
+                sections: labels
+                    .iter()
+                    .map(|label| section(label, &format!("{title} original line")))
+                    .collect(),
+                master: None,
+            };
+            repository
+                .save_song(None, song)
+                .map_err(|e| format!("{e:?}"))?;
+        }
+        return Ok(());
+    }
     if metadata {
         // "Metadata Hymn" carries every song property; "Plain Hymn" has no
         // copyright text, so it must show no strip (VAL-SONG-002).

@@ -511,13 +511,20 @@ B/C/L-in-search best guess), 061, 064, 065 (context menu, sort, delete confirm).
 
 - [ ] Implement observed resource tabs, list/grid sizing, sorting, context actions,
   collections/folders and selection behavior; audit any missing browser controls.
-  (Songs: Sort by Title/Date modified with Ascending/Descending persisted, multi-select, Delete with Yes/No default No are done; Author, Copyright, Administrator and Song Number sort remain.)
+  (Songs: Sort by Title/Date modified with Ascending/Descending persisted, multi-select, Delete with Yes/No default No are done; Author, Copyright, Administrator and Song Number sort added by songs-browser 2026-10-22 (schema 7 sort keys, empty keys last, Song Number numeric; implemented-unqualified, EW order rules UNOBSERVED, parity-pending PP-SB-01..03). Media/other tabs, grid sizing and collections remain.)
 - [ ] Add asynchronous, cancellable search with result generations to reject
   stale queries; implement empty/loading/error states without list selection drift.
 - [ ] Virtualize large lists and bound thumbnail requests/cache ownership.
   (Songs list virtualized and measured on 20k; Media and other lists and thumbnails remain.)
-- [ ] Test a slow earlier query completing after a newer one, deletion of selected
+- [x] Test a slow earlier query completing after a newer one, deletion of selected
   resource, large libraries and keyboard navigation through virtualized rows.
+  (songs-browser 2026-10-22, `src/tests/songs_browser.rs`: a reply for an
+  earlier query taken after a newer one was typed, and an even later stale
+  generation, are dropped without touching rows or selection; deleting the
+  selected search hit selects the neighbour hit and keeps focus in the list;
+  Down/Up/Page Up/End through a 300-row virtual list sorted by Song Number
+  keep the cursor row built and focused. Large libraries: 400-row GPUI test,
+  20k Windows run of focus-scopes-resource-browser and the 20k benchmark.)
 - [ ] Defer decoder-specific thumbnail production to M2-05, not browser behavior.
 
 Acceptance: resource browsing remains responsive and cannot act on stale results.
@@ -609,6 +616,8 @@ Follow-ups:
   - Open for the whole ticket: Linux/macOS native checks, IME and screen
     reader qualification, mixed-value display (unobserved).
 - [x] M1-05 residual: song metadata fields (administrator, song number), schema 6 modified stamp, modal editor close prompt (implemented-unqualified).
+- [x] M1-05 copyright display follow-up (songs-browser, 2026-10-22, implemented-unqualified): Options › Main Output › Song › Copyright Info with the observed Display Copyright Information (on), Show on first displayed slide only (off) and License Info (EW8-OBS-055/056), persisted in settings.txt; first-slide meaning and the "CCLI Song # N · License Info" third line are UNOBSERVED best guesses (PP-SB-05..07). Open: Copyright Font, Song Font and Show Verse/Chorus Label of the same tab (PP-SB-08, M1-05t below).
+- M1-05t Options › Main Output › Song: Song Font, Show Verse/Chorus Label with Label Font, and the Copyright Font menu (EW8-OBS-056). Planned; needs the font menu control shared with themes.
 - M1-05j Text › Style superscript/subscript and indent (EW8-OBS-028), and
   bullets (EW8-OBS-029). Planned.
 - M1-05k Text › Layout: margins, auto sizing with normalize, word wrap,
@@ -735,10 +744,11 @@ painted list p95 81.5-83.8 ms (three runs of 30 two-letter queries, release).
 Truncation hint added in focus-scopes-resource-browser. Open: slide-label search (documented deviation from EW8-OBS-045, see below), Narrator and older-hardware runs.
 
 <a id="m1-07-search-label-matching"></a>Backlog (M1-07 search label matching): EW8-OBS-045 matches slide/section text labels; Sela indexes only title, lyrics and metadata. Index the labels (extra FTS column, schema bump, index rebuild) and add a native check that a label-only query finds the song. Not done because it changes the schema; the two-character minimum is a separate owner-approved deviation.
+**Done, implemented-unqualified (songs-browser, 2026-10-22):** schema 7 adds the `labels` FTS column (distinct labels per song, bm25 weight 0.5 below lyrics), migrated by a rebuild behind the verified `.schema6-backup`; storage and GPUI tests plus `scripts/songs-browser-x11.py` (label-only "etsa" hit) pass on Linux. Open: EW ranking observation (PP-SB-04), the Windows script and the reference-laptop timings (PP-SB-09/10).
 
 - [x] Add indexed/FTS search for observed title/lyrics/metadata queries and filters.
   (Index in M1-07a, Songs search box in M1-07b; EW also matches slide labels,
-  which Sela does not index yet, and no filter UI exists in EW 8.0.49.)
+  indexed since schema 7 (songs-browser), and no filter UI exists in EW 8.0.49.)
 - [x] Define normalization, escaping, ranking and deterministic tie handling;
   keep display text unchanged.
 - [ ] Maintain indexes transactionally on edits/deletes/imports and support rebuild.

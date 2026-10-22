@@ -5,7 +5,7 @@ impl Operator {
         let mut changed = self.poll_library(cx)
             | self.poll_images()
             | self.poll_preflight()
-            | self.poll_settings()
+            | self.poll_settings(cx)
             | self.poll_schedule_files();
         changed |= self.poll_cues();
         if let Some(output) = &mut self.output {
@@ -230,7 +230,7 @@ impl Operator {
                     rescan = std::mem::take(&mut self.view.scan_wanted);
                 }
                 (Some(Request::Search), Ok(Reply::Search(results))) => {
-                    // A stale generation changes nothing and is not shown.
+                    // Same as `search_results`; `worker` still borrows self.
                     changed = self.search.apply(
                         results,
                         self.selected_entry.is_some(),
@@ -289,7 +289,7 @@ impl Operator {
                             .map(|v| (v.id, v.name.clone()))
                             .collect(),
                         chosen,
-                        copyright: slides::copyright_strip(&song).map(Into::into),
+                        copyright: slides::CopyrightStrip::of(&song).map(Arc::new),
                         resolved: None,
                     });
                     self.preview_slide = 0;
@@ -421,6 +421,19 @@ impl Operator {
             self.resolve_fonts(cx);
         }
         changed
+    }
+
+    /// A search reply from the storage worker. A stale generation (an older
+    /// query answered after a newer one was typed) changes nothing and is not
+    /// shown. Returns true when the shown results changed. Test entry for
+    /// replies that arrive later than the worker's single slot allows.
+    #[cfg(test)]
+    pub(crate) fn search_results(&mut self, results: sela::search::Results) -> bool {
+        self.search.apply(
+            results,
+            self.selected_entry.is_some(),
+            &mut self.selected_song,
+        )
     }
 
     /// A Songs reload is wanted or in flight.

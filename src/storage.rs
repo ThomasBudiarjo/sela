@@ -258,8 +258,12 @@ PRAGMA user_version=4;";
 // song a stable INTEGER PRIMARY KEY, because VACUUM may renumber the implicit
 // rowids of `songs`. Diacritic folding mode 2 also folds letters that mode 1
 // leaves unchanged.
-const SEARCH: &str = "CREATE TABLE search_rows(row INTEGER PRIMARY KEY, song BLOB NOT NULL UNIQUE REFERENCES songs(id));
-CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='unicode61 remove_diacritics 2');";
+// Since schema 7 the index also holds the section labels (EW8-OBS-046 matches
+// them) and `search_rows` carries the derived Sort by keys of EW8-OBS-064
+// (Author, Copyright, Administrator, Song Number), so the Songs list sorts
+// without decoding a payload. Schema 5 and 6 files are rebuilt to this shape.
+const SEARCH: &str = "CREATE TABLE search_rows(row INTEGER PRIMARY KEY, song BLOB NOT NULL UNIQUE REFERENCES songs(id), author TEXT NOT NULL DEFAULT '', copyright TEXT NOT NULL DEFAULT '', administrator TEXT NOT NULL DEFAULT '', song_number TEXT NOT NULL DEFAULT '');
+CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, labels, tokenize='unicode61 remove_diacritics 2');";
 // A stored `modified` per song replaces the search index row order as the
 // Date modified key, so it survives an index rebuild. Existing songs take
 // their index row number, which keeps the order the list showed before the
@@ -272,12 +276,17 @@ CREATE INDEX songs_modified ON songs(modified);
 CREATE TABLE song_metadata(song BLOB NOT NULL, revision INTEGER NOT NULL, administrator TEXT NOT NULL CHECK(length(CAST(administrator AS BLOB))<=256), song_number TEXT NOT NULL CHECK(length(CAST(song_number AS BLOB))<=12), PRIMARY KEY(song,revision), FOREIGN KEY(song,revision) REFERENCES song_revisions(id,revision));
 UPDATE songs SET modified=COALESCE((SELECT m.row FROM search_rows m WHERE m.song=songs.id),0);
 PRAGMA user_version=6;";
-const SCHEMA_VERSIONS: [i64; 6] = [1, 2, 3, 4, 5, 6];
-const CURRENT: i64 = 6;
-// bm25 column weights: title, lyrics, metadata.
+// Schema 7 only reshapes the derived search index (labels column and sort
+// keys, see `SEARCH`); the migration rebuilds it from the song payloads.
+const SCHEMA7: &str = "PRAGMA user_version=7;";
+const SCHEMA_VERSIONS: [i64; 7] = [1, 2, 3, 4, 5, 6, 7];
+const CURRENT: i64 = 7;
+// bm25 column weights: title, lyrics, metadata, labels. Labels weigh less than
+// lyrics, so a label-only match ranks below title and lyric matches, and a
+// query that matches no label ranks exactly as before schema 7.
 /// Ranks and limits inside the FTS scan, so only the kept rows are joined to
 /// song heads (about 20% faster on 20k songs than joining every match first).
-const SEARCH_SQL: &str = "SELECT m.song,s.head,t.title FROM (SELECT f.rowid AS row,f.title AS title,bm25(song_search,10.0,1.0,2.0) AS r FROM song_search f WHERE song_search MATCH ?1 ORDER BY r,f.title COLLATE NOCASE,f.title,f.rowid LIMIT ?2) t JOIN search_rows m ON m.row=t.row JOIN songs s ON s.id=m.song WHERE s.deleted=0 ORDER BY t.r,t.title COLLATE NOCASE,t.title,m.song";
+const SEARCH_SQL: &str = "SELECT m.song,s.head,t.title FROM (SELECT f.rowid AS row,f.title AS title,bm25(song_search,10.0,1.0,2.0,0.5) AS r FROM song_search f WHERE song_search MATCH ?1 ORDER BY r,f.title COLLATE NOCASE,f.title,f.rowid LIMIT ?2) t JOIN search_rows m ON m.row=t.row JOIN songs s ON s.id=m.song WHERE s.deleted=0 ORDER BY t.r,t.title COLLATE NOCASE,t.title,m.song";
 
 impl SectionId {
     /// CPU-only allocation with a process-local counter; no random-device I/O.
@@ -509,16 +518,35 @@ impl Repository {
     /// Titles come from the search index, so no song payload is decoded.
     /// "Modified" is the stored `modified` stamp (schema 6), written by every
     /// save, so it is independent of the search index.
+    ///
+    /// Author, Copyright, Administrator and Song Number (schema 7 sort keys)
+    /// put songs with an empty key last in either direction, order the rest
+    /// by the key (ignoring ASCII case; Song Number numerically) and break
+    /// ties by title ascending, then id. These rules are UNOBSERVED best
+    /// guesses (docs/reference-observations.md, EW8-OBS-064).
     pub fn library(&self, order: SongOrder) -> Result<Vec<(Version, String)>> {
         let direction = if order.descending { "DESC" } else { "ASC" };
-        let sql = match order.sort {
-            SongSort::Title => format!(
-                "SELECT s.id,s.head,f.title FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY f.title COLLATE NOCASE {direction},f.title {direction},s.id"
-            ),
-            SongSort::Modified => format!(
-                "SELECT s.id,s.head,f.title FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY s.modified {direction},s.id {direction}"
+        let keyed = |key: &str| {
+            format!(
+                "m.{key}='',m.{key} COLLATE NOCASE {direction},m.{key} {direction},f.title COLLATE NOCASE,f.title,s.id"
+            )
+        };
+        let ordering = match order.sort {
+            SongSort::Title => {
+                format!("f.title COLLATE NOCASE {direction},f.title {direction},s.id")
+            }
+            SongSort::Modified => format!("s.modified {direction},s.id {direction}"),
+            SongSort::Author => keyed("author"),
+            SongSort::Copyright => keyed("copyright"),
+            SongSort::Administrator => keyed("administrator"),
+            // Digits only (`song_number_ok`, at most 12, so it fits i64).
+            SongSort::SongNumber => format!(
+                "m.song_number='',CAST(m.song_number AS INTEGER) {direction},m.song_number {direction},f.title COLLATE NOCASE,f.title,s.id"
             ),
         };
+        let sql = format!(
+            "SELECT s.id,s.head,f.title FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY {ordering}"
+        );
         let mut statement = self.db.prepare_cached(&sql)?;
         let mut rows = statement.query([])?;
         let mut songs = Vec::new();
@@ -593,6 +621,7 @@ impl Repository {
             tx.execute_batch(SCHEMA4)?;
             tx.execute_batch(SEARCH)?;
             tx.execute_batch(SCHEMA6)?;
+            tx.execute_batch(SCHEMA7)?;
             version = CURRENT;
         } else if app != APP || !SCHEMA_VERSIONS.contains(&version) {
             return Err(Error::Unsupported);
@@ -692,6 +721,18 @@ impl Repository {
                 std::process::abort();
             }
         }
+        if version < 7 && upgrade {
+            // A schema 5 or 6 index lacks the labels column and the sort
+            // keys; an older file got the new shape in the schema 5 step.
+            if version >= 5 {
+                rebuild_search(&tx)?;
+            }
+            tx.execute_batch(SCHEMA7)?;
+            #[cfg(test)]
+            if std::env::var_os("SELA_ABORT_MIGRATION_SCHEMA7").is_some() {
+                std::process::abort();
+            }
+        }
         if version >= 2 || upgrade {
             tx.prepare("SELECT section FROM section_ids")?;
             tx.prepare("SELECT variant,name FROM variants")?;
@@ -711,6 +752,10 @@ impl Repository {
         if version >= 6 || upgrade {
             tx.prepare("SELECT id,modified FROM songs")?;
             tx.prepare("SELECT song,revision,administrator,song_number FROM song_metadata")?;
+        }
+        if version >= 7 || upgrade {
+            tx.prepare("SELECT author,copyright,administrator,song_number FROM search_rows")?;
+            tx.prepare("SELECT labels FROM song_search")?;
         }
         tx.commit()?;
         Ok(Self { db })
@@ -984,16 +1029,17 @@ impl Repository {
             "INSERT INTO song_search(song_search) VALUES('integrity-check')",
             [],
         )?;
-        let mut statement = self.db.prepare("SELECT r.payload,f.title,f.lyrics,f.metadata,s.id,s.head FROM search_rows m JOIN songs s ON s.id=m.song JOIN song_revisions r ON r.id=s.id AND r.revision=s.head JOIN song_search f ON f.rowid=m.row")?;
+        let mut statement = self.db.prepare("SELECT r.payload,f.title,f.lyrics,f.metadata,f.labels,s.id,s.head,m.author,m.copyright,m.administrator,m.song_number FROM search_rows m JOIN songs s ON s.id=m.song JOIN song_revisions r ON r.id=s.id AND r.revision=s.head JOIN song_search f ON f.rowid=m.row")?;
         let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
-            let indexed: [String; 3] = [row.get(1)?, row.get(2)?, row.get(3)?];
+            let indexed: [String; 4] = [row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?];
+            let keys: [String; 4] = [row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?];
             let mut song = Song::decode(&row.get::<_, Vec<u8>>(0)?)?;
             apply_metadata(
                 &mut song,
-                read_metadata(&self.db, &row.get::<_, Vec<u8>>(4)?, row.get(5)?)?,
+                read_metadata(&self.db, &row.get::<_, Vec<u8>>(5)?, row.get(6)?)?,
             );
-            if search_fields(&song) != indexed {
+            if search_fields(&song) != indexed || sort_keys(&song) != keys {
                 return Ok(false);
             }
         }
@@ -1176,8 +1222,9 @@ fn quick_check(db: &Connection) -> Result<bool> {
     let check: String = db.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
     Ok(check == "ok")
 }
-/// The indexed columns of a song: title, lyrics, metadata. Labels are not indexed.
-fn search_fields(song: &Song) -> [String; 3] {
+/// The indexed columns of a song: title, lyrics, metadata and its distinct
+/// section labels (schema 7, EW8-OBS-046), in section order.
+fn search_fields(song: &Song) -> [String; 4] {
     let lyrics = song
         .sections
         .iter()
@@ -1193,7 +1240,26 @@ fn search_fields(song: &Song) -> [String; 3] {
     ]
     .map(String::as_str)
     .join("\n");
-    [song.title.clone(), lyrics, metadata]
+    let mut labels: Vec<&str> = Vec::new();
+    for section in &song.sections {
+        let label = section.label.trim();
+        if !label.is_empty() && !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    [song.title.clone(), lyrics, metadata, labels.join("\n")]
+}
+/// The Sort by keys of a song (EW8-OBS-064): Author, Copyright,
+/// Administrator and Song Number, each on one line with runs of whitespace
+/// collapsed, so a line break or stray space does not change its place.
+fn sort_keys(song: &Song) -> [String; 4] {
+    [
+        &song.authors,
+        &song.copyright,
+        &song.administrator,
+        &song.song_number,
+    ]
+    .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 /// Replaces the song's index entry inside the caller's transaction.
 fn index_song(db: &Connection, id: Id, song: &Song) -> Result<()> {
@@ -1217,10 +1283,15 @@ fn index_song(db: &Connection, id: Id, song: &Song) -> Result<()> {
             db.last_insert_rowid()
         }
     };
-    let [title, lyrics, metadata] = search_fields(song);
+    let [author, copyright, administrator, song_number] = sort_keys(song);
     db.execute(
-        "INSERT INTO song_search(rowid,title,lyrics,metadata) VALUES(?,?,?,?)",
-        params![row, title, lyrics, metadata],
+        "UPDATE search_rows SET author=?,copyright=?,administrator=?,song_number=? WHERE row=?",
+        params![author, copyright, administrator, song_number, row],
+    )?;
+    let [title, lyrics, metadata, labels] = search_fields(song);
+    db.execute(
+        "INSERT INTO song_search(rowid,title,lyrics,metadata,labels) VALUES(?,?,?,?,?)",
+        params![row, title, lyrics, metadata, labels],
     )?;
     Ok(())
 }
@@ -1569,9 +1640,10 @@ mod tests {
             repo.db
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            6
+            CURRENT
         );
         // One verified backup of the original schema, not one per step.
+        assert!(!d.path().join("legacy.schema6-backup").exists());
         assert!(!d.path().join("legacy.schema5-backup").exists());
         assert!(!d.path().join("legacy.schema2-backup").exists());
         assert!(!d.path().join("legacy.schema3-backup").exists());
@@ -2021,7 +2093,7 @@ mod tests {
             );
             assert_eq!(std::fs::read(input).unwrap(), bytes);
         }
-        repo.db.execute_batch("PRAGMA user_version=7").unwrap();
+        repo.db.execute_batch("PRAGMA user_version=8").unwrap();
         drop(repo);
         let before = std::fs::read(&p).unwrap();
         assert_eq!(
@@ -2276,7 +2348,7 @@ mod tests {
     }
     #[test]
     fn rejects_newer_foreign_corrupt_without_replacement() {
-        for sql in ["PRAGMA user_version=7", "PRAGMA application_id=42"] {
+        for sql in ["PRAGMA user_version=8", "PRAGMA application_id=42"] {
             let (_d, p, r) = fixture();
             r.db.execute_batch(sql).unwrap();
             drop(r);
@@ -2589,7 +2661,7 @@ mod tests {
         let path = d.path().join("library");
         let v = schema2(&path);
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 6);
+        assert_eq!(schema_of(&path), CURRENT);
         let first = repo.song(v).unwrap();
         assert_eq!(first.sections[1].id, SectionId(Id([11; 16])));
         assert!(first.sections.iter().all(|s| s.format.is_default()));
@@ -2787,7 +2859,7 @@ mod tests {
         let path = d.path().join("library");
         let v = schema3(&path);
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 6);
+        assert_eq!(schema_of(&path), CURRENT);
         let first = repo.song(v).unwrap();
         assert_eq!(first.sections[0].format, crate::format::tests::full());
         assert!(first.master.is_none());
@@ -3530,7 +3602,7 @@ mod tests {
         let path = d.path().join("library");
         let v = schema4(&path);
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 6);
+        assert_eq!(schema_of(&path), CURRENT);
         let head = Version { revision: 2, ..v };
         let current = repo.song(head).unwrap();
         assert_eq!(current.master, Some(Background::color([1, 2, 3])));
@@ -3765,12 +3837,40 @@ mod tests {
         repo.save_song(Some(c), titled("Delta 2")).unwrap();
         assert_eq!(modified_order(&repo).last().unwrap(), "Delta 2");
     }
+    /// The search index as schemas 5 and 6 created it: no labels column, no
+    /// sort keys.
+    const SEARCH5: &str = "CREATE TABLE search_rows(row INTEGER PRIMARY KEY, song BLOB NOT NULL UNIQUE REFERENCES songs(id));
+CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='unicode61 remove_diacritics 2');";
+    /// Fills a `SEARCH5` index the way schema 5 and 6 did.
+    fn fill_search5(db: &Connection) {
+        let metadata = has_table(db, "song_metadata").unwrap();
+        let mut statement = db.prepare("SELECT s.id,r.payload,s.head FROM songs s JOIN song_revisions r ON r.id=s.id AND r.revision=s.head WHERE s.deleted=0 ORDER BY s.id").unwrap();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let id: Vec<u8> = row.get(0).unwrap();
+            let mut song = Song::decode(&row.get::<_, Vec<u8>>(1).unwrap()).unwrap();
+            if metadata {
+                apply_metadata(
+                    &mut song,
+                    read_metadata(db, &id, row.get(2).unwrap()).unwrap(),
+                );
+            }
+            db.execute("INSERT INTO search_rows(song) VALUES(?)", params![id])
+                .unwrap();
+            let [title, lyrics, metadata, _] = search_fields(&song);
+            db.execute(
+                "INSERT INTO song_search(rowid,title,lyrics,metadata) VALUES(?,?,?,?)",
+                params![db.last_insert_rowid(), title, lyrics, metadata],
+            )
+            .unwrap();
+        }
+    }
     /// The schema 4 library after the schema 5 migration: search index only.
     fn schema5(path: &std::path::Path) -> Version {
         let v = schema4(path);
         let db = Connection::open(path).unwrap();
-        db.execute_batch(SEARCH).unwrap();
-        fill_search(&db).unwrap();
+        db.execute_batch(SEARCH5).unwrap();
+        fill_search5(&db);
         db.execute_batch("PRAGMA user_version=5").unwrap();
         v
     }
@@ -3791,7 +3891,7 @@ mod tests {
         };
         assert!(!rows.is_empty());
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 6);
+        assert_eq!(schema_of(&path), CURRENT);
         let db = Connection::open(&path).unwrap();
         for (song, row) in &rows {
             let modified: i64 = db
@@ -3855,5 +3955,289 @@ mod tests {
             .unwrap()
             .verify_history(&AtomicBool::new(false), std::time::Instant::now())
             .unwrap();
+    }
+    fn keyed(title: &str, authors: &str, copyright: &str, admin: &str, number: &str) -> Song {
+        let mut s = titled(title);
+        s.authors = authors.into();
+        s.copyright = copyright.into();
+        s.administrator = admin.into();
+        s.song_number = number.into();
+        s
+    }
+    fn listed(repo: &Repository, sort: SongSort, descending: bool) -> Vec<String> {
+        repo.library(SongOrder { sort, descending })
+            .unwrap()
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect()
+    }
+    #[test]
+    fn library_sorts_by_author_copyright_administrator_and_song_number() {
+        let (_d, _p, mut repo) = fixture();
+        for (title, authors, copyright, admin, number) in [
+            ("Delta", "bravo writer", "© 2001 Zeta", "Northwind", "900"),
+            ("Alpha", "", "", "", ""),
+            ("Echo", "Alpha Writer", "(c) 1999 Omega", "acme", "10"),
+            ("Bravo", "Charlie  Writer", "© 2001 Zeta", "", "0042"),
+            ("Charlie", "Alpha Writer", "", "Acme", "7"),
+        ] {
+            repo.save_song(None, keyed(title, authors, copyright, admin, number))
+                .unwrap();
+        }
+        // Empty keys last; ASCII case ignored; equal keys by title.
+        assert_eq!(
+            listed(&repo, SongSort::Author, false),
+            ["Charlie", "Echo", "Delta", "Bravo", "Alpha"]
+        );
+        assert_eq!(
+            listed(&repo, SongSort::Author, true),
+            ["Bravo", "Delta", "Charlie", "Echo", "Alpha"],
+            "descending reverses the keys, keeps title ties ascending and empties last"
+        );
+        assert_eq!(
+            listed(&repo, SongSort::Copyright, false),
+            ["Echo", "Bravo", "Delta", "Alpha", "Charlie"]
+        );
+        assert_eq!(
+            listed(&repo, SongSort::Administrator, false),
+            ["Charlie", "Echo", "Delta", "Alpha", "Bravo"]
+        );
+        // Numeric, not text: 7 < 10 < 0042 < 900.
+        assert_eq!(
+            listed(&repo, SongSort::SongNumber, false),
+            ["Charlie", "Echo", "Bravo", "Delta", "Alpha"]
+        );
+        assert_eq!(
+            listed(&repo, SongSort::SongNumber, true),
+            ["Delta", "Bravo", "Echo", "Charlie", "Alpha"]
+        );
+        // A key follows the head revision and a deleted song is gone.
+        let alpha = repo
+            .library(SongOrder::default())
+            .unwrap()
+            .into_iter()
+            .find(|(_, t)| t == "Alpha")
+            .unwrap()
+            .0;
+        let alpha = repo
+            .save_song(Some(alpha), keyed("Alpha", "Aaron", "", "", "1"))
+            .unwrap();
+        assert_eq!(listed(&repo, SongSort::Author, false)[0], "Alpha");
+        assert_eq!(listed(&repo, SongSort::SongNumber, false)[0], "Alpha");
+        repo.delete_song(alpha).unwrap();
+        assert_eq!(listed(&repo, SongSort::Author, false).len(), 4);
+        assert!(repo.check_search().unwrap());
+    }
+    #[test]
+    fn section_labels_are_searchable_and_rank_below_title_and_lyric_matches() {
+        let (_d, _p, mut repo) = fixture();
+        let with_labels = |title: &str, lyrics: &str, labels: &[&str]| {
+            let mut s = titled(title);
+            s.authors.clear();
+            s.copyright.clear();
+            s.license.clear();
+            s.sections = labels
+                .iter()
+                .enumerate()
+                .map(|(i, label)| Section {
+                    id: SectionId(Id([i as u8 + 1; 16])),
+                    label: (*label).into(),
+                    lyrics: lyrics.into(),
+                    format: Default::default(),
+                    background: None,
+                })
+                .collect();
+            s
+        };
+        repo.save_song(
+            None,
+            with_labels(
+                "Plain Song",
+                "nothing here",
+                &["Etsaer", "Sadsdasd", "Etsaer"],
+            ),
+        )
+        .unwrap();
+        repo.save_song(
+            None,
+            with_labels("Etsaer Anthem", "other words", &["Verse 1"]),
+        )
+        .unwrap();
+        repo.save_song(
+            None,
+            with_labels("Lyric Song", "we sing etsaer loud", &["Verse 1"]),
+        )
+        .unwrap();
+        // EW8-OBS-046 examples: word prefixes of a label find the song.
+        assert_eq!(titles(&repo, "sad"), ["Plain Song"]);
+        assert_eq!(titles(&repo, "SADS"), ["Plain Song"]);
+        assert!(
+            titles(&repo, "dsd").is_empty(),
+            "word prefix, not substring"
+        );
+        // Title beats lyrics beats a label-only match.
+        assert_eq!(
+            titles(&repo, "ets"),
+            ["Etsaer Anthem", "Lyric Song", "Plain Song"]
+        );
+        // A label with a number: both words must match.
+        assert_eq!(
+            sorted(titles(&repo, "verse 1")),
+            ["Etsaer Anthem", "Lyric Song"]
+        );
+        // The stored label column holds each distinct label once, in order.
+        let labels: String = repo
+            .db
+            .query_row(
+                "SELECT labels FROM song_search WHERE title='Plain Song'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(labels, "Etsaer\nSadsdasd");
+        assert!(repo.check_search().unwrap());
+    }
+    #[test]
+    fn stale_labels_or_sort_keys_fail_the_check_and_are_repaired() {
+        for damage in [
+            "UPDATE search_rows SET author='Nobody'",
+            "UPDATE search_rows SET song_number='1'",
+            "UPDATE song_search SET labels='Ghost'",
+        ] {
+            let (_d, _p, mut repo) = fixture();
+            repo.save_song(None, keyed("Psalm", "Writer", "© Owner", "Admin", "77"))
+                .unwrap();
+            assert!(repo.check_search().unwrap());
+            repo.db.execute_batch(damage).unwrap();
+            assert!(!repo.check_search().unwrap(), "{damage}");
+            assert_eq!(
+                repo.repair_search().unwrap(),
+                search::IndexState::Rebuilt { songs: 1 }
+            );
+            assert!(repo.check_search().unwrap(), "{damage}");
+            assert_eq!(titles(&repo, "verse"), ["Psalm"], "{damage}");
+        }
+    }
+    /// The schema 5 library after the schema 6 migration, with properties on
+    /// the head revision that only `song_metadata` holds.
+    fn schema6(path: &std::path::Path) -> Version {
+        let v = schema5(path);
+        let db = Connection::open(path).unwrap();
+        db.execute_batch(SCHEMA6).unwrap();
+        db.execute(
+            "INSERT INTO song_metadata VALUES(?,2,'Zed Admin','42')",
+            params![&v.id.0[..]],
+        )
+        .unwrap();
+        v
+    }
+    #[test]
+    fn schema6_migration_indexes_labels_and_sort_keys_and_keeps_the_stamps() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        let v = schema6(&path);
+        let stamps = |path: &std::path::Path| -> Vec<(Vec<u8>, i64)> {
+            let db = Connection::open(path).unwrap();
+            let mut s = db
+                .prepare("SELECT id,modified FROM songs ORDER BY id")
+                .unwrap();
+            s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        let before = stamps(&path);
+        {
+            let db = Connection::open(&path).unwrap();
+            assert!(db.prepare("SELECT labels FROM song_search").is_err());
+        }
+        let repo = Repository::open(&path).unwrap();
+        assert_eq!(schema_of(&path), CURRENT);
+        assert_eq!(stamps(&path), before, "Date modified survives");
+        let head = Version { revision: 2, ..v };
+        let current = repo.song(head).unwrap();
+        assert_eq!(
+            (current.administrator.as_str(), current.song_number.as_str()),
+            ("Zed Admin", "42")
+        );
+        assert!(current.sections.iter().any(|s| s.label == "Verse"));
+        assert_eq!(
+            titles(&repo, "vers"),
+            std::slice::from_ref(&current.title),
+            "label search"
+        );
+        assert_eq!(
+            repo.library(SongOrder {
+                sort: SongSort::SongNumber,
+                descending: false
+            })
+            .unwrap(),
+            [(head, current.title.clone())]
+        );
+        let keys: (String, String) = repo
+            .db
+            .query_row(
+                "SELECT administrator,song_number FROM search_rows",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(keys, ("Zed Admin".into(), "42".into()));
+        assert!(repo.check_search().unwrap());
+        let backup = d.path().join("library.schema6-backup");
+        assert_eq!(schema_of(&backup), 6);
+        let old = Repository::open_internal(&backup, false).unwrap();
+        old.verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert_eq!(old.song(head).unwrap(), current);
+        drop((old, repo));
+        // Reopening at schema 7 neither migrates nor rebuilds again.
+        let rows = |path: &std::path::Path| -> Vec<i64> {
+            let db = Connection::open(path).unwrap();
+            let mut s = db
+                .prepare("SELECT row FROM search_rows ORDER BY row")
+                .unwrap();
+            s.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        let after = rows(&path);
+        let repo = Repository::open(&path).unwrap();
+        assert!(repo.check_search().unwrap());
+        drop(repo);
+        assert_eq!(rows(&path), after);
+        assert!(!d.path().join("library.schema7-backup").exists());
+    }
+    #[test]
+    fn schema6_migration_abort_keeps_schema6_and_the_verified_backup() {
+        const CHILD: &str = "SELA_ABORT_MIGRATION_SCHEMA7";
+        if let Some(path) = std::env::var_os(CHILD) {
+            let _ = Repository::open(std::path::Path::new(&path));
+            panic!("schema 7 abort hook did not run");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        schema6(&path);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::schema6_migration_abort_keeps_schema6_and_the_verified_backup",
+            ])
+            .env(CHILD, &path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success());
+        assert_eq!(schema_of(&path), 6);
+        let db = Connection::open(&path).unwrap();
+        assert!(db.prepare("SELECT labels FROM song_search").is_err());
+        assert!(db.prepare("SELECT author FROM search_rows").is_err());
+        Repository::open_internal(&d.path().join("library.schema6-backup"), false)
+            .unwrap()
+            .verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert!(matches!(Repository::open(&path), Err(Error::Exists)));
     }
 }

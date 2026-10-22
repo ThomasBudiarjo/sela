@@ -46,7 +46,7 @@ neither paths nor SQLite messages nor lyric payloads; don't log Commands/Replies
 
 ## Schema and durable meaning
 
-Current schema 6 uses `application_id=0x53454c41`, `user_version=6`, foreign keys on,
+Current schema 7 uses `application_id=0x53454c41`, `user_version=7`, foreign keys on,
 default rollback journal and synchronous FULL. `songs` tracks head/tombstone;
 `song_revisions` stores immutable original UTF-8 payloads. Encoding is repeated
 little-endian u32 byte-length + UTF-8: title, authors, copyright, license, then
@@ -67,9 +67,9 @@ No automatic garbage collection, library-refresh or cascade deletion exists.
 Snapshot occurrence identity currently is `(schedule ID, revision, position)`;
 stable cross-edit/live selection identity belongs to M1-09, not this storage slice.
 
-Fresh schema 0 initializes schema 6. Existing schema 1, 2, 3 or 4 upgrades only after
-the verified backup gate documented below, straight to schema 5 behind exactly
-one `<profile>.schema{N}-backup` (`schema1-backup` to `schema4-backup`, N = the
+Fresh schema 0 initializes schema 7. Existing schema 1 to 6 upgrades only after
+the verified backup gate documented below, straight to schema 7 behind exactly
+one `<profile>.schema{N}-backup` (`schema1-backup` to `schema6-backup`, N = the
 version found on open). A schema-0 database
 with user objects is foreign and rejected. Migration and validation share one
 transaction; failed migration drops/rolls back it. Nonmatching application IDs,
@@ -77,7 +77,7 @@ newer/unsupported versions, SQLite quick-check/foreign-key failures and malforme
 payload reads are rejected. No reset, overwrite, rename or recovery mutation.
 Required column checks run at open; payload semantic validation runs on bounded
 reads. This is not an adversarial SQLite sandbox or exhaustive schema attestation.
-Backup verification never invokes upgrading open. Versions above 5 remain
+Backup verification never invokes upgrading open. Versions above 7 remain
 `Unsupported`; no migration resets, overwrites or replaces those profiles.
 
 ## Bounds and remaining parent work
@@ -490,3 +490,24 @@ operator no longer writes them.
 ## M1-05 residual — schema 6 (song metadata, modified stamp)
 
 Schema 6 (backup schema5-backup, abort hook SELA_ABORT_MIGRATION_SCHEMA6) adds songs.modified INTEGER NOT NULL DEFAULT 0 with index songs_modified, filled from the search_rows.row order so existing libraries keep their Date modified order, and a song_metadata side table (administrator, song number) keyed by song revision. Saves stamp MAX(now_ms, MAX(modified)+1). Sort by Date modified uses the column and survives an FTS rebuild. Limits: administrator 256 chars, song number digits only, up to 12. Schedule files are v3 and carry the copyright footer on prepared cues.
+
+## songs-browser — schema 7 (label index, Sort by keys)
+
+Schema 7 (backup `schema6-backup` or the older `schema{N}-backup`, abort hook
+`SELA_ABORT_MIGRATION_SCHEMA7`) only reshapes the derived search index:
+`song_search` gains a fourth FTS5 column `labels` (each distinct section
+label of the head revision, in section order, newline separated) and
+`search_rows` gains `author`, `copyright`, `administrator` and `song_number`
+(the Sort by keys of EW8-OBS-064, whitespace collapsed). FTS5 has no ALTER
+for columns, so a schema 5 or 6 file is migrated by dropping and rebuilding
+both tables from the song payloads inside the migration transaction (song
+tables are only read; `songs.modified` stamps are untouched, so Date
+modified keeps its order). A schema 1 to 4 file gets the new shape directly
+in its schema 5 step. `check_search` compares labels and sort keys with the
+head revision as well, so stale keys are found and `repair_search` rebuilds
+them. Tests: `schema6_migration_indexes_labels_and_sort_keys_and_keeps_the_stamps`,
+`schema6_migration_abort_keeps_schema6_and_the_verified_backup` (child
+process aborts after the rebuild, before commit: the file stays schema 6
+without the new columns and the verified backup opens),
+`stale_labels_or_sort_keys_fail_the_check_and_are_repaired`,
+`library_sorts_by_author_copyright_administrator_and_song_number`.
