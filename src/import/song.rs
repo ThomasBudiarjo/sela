@@ -8,8 +8,10 @@ use crate::storage::{Error, Section, Song};
 /// edits. A semicolon, because author names may contain commas.
 pub const AUTHOR_SEPARATOR: &str = "; ";
 
-/// One `storage::Section` per slide, carrying its section's label, with fresh
-/// IDs. A presentation order becomes the song's only arrangement, each entry
+/// One `storage::Section` per slide, with fresh IDs. A section's first slide
+/// carries its label and the rest have none, so they join its group in the
+/// editor as in EasyWorship (EW8-OBS-022); a repeated label would start a
+/// new group. A presentation order becomes the song's only arrangement, each entry
 /// expanded into all slides of its section; without an order the song has no
 /// arrangement and plays in stored order, like a song made in the editor.
 ///
@@ -22,12 +24,16 @@ pub fn to_song(parsed: &ParsedSong) -> Result<Song, Error> {
     let mut ids: Vec<Vec<SectionId>> = Vec::new();
     for section in &parsed.sections {
         let mut slides = Vec::new();
-        for lyrics in &section.slides {
+        for (index, lyrics) in section.slides.iter().enumerate() {
             let id = SectionId::allocate();
             slides.push(id);
             sections.push(Section {
                 id,
-                label: section.label.clone(),
+                label: if index == 0 {
+                    section.label.clone()
+                } else {
+                    String::new()
+                },
                 lyrics: lyrics.clone(),
                 format: Default::default(),
                 background: None,
@@ -113,7 +119,7 @@ mod tests {
                 ("Verse 2", v2),
                 ("Chorus", c),
                 ("Bridge", b1),
-                ("Bridge", b2)
+                ("", b2)
             ]
         );
         let expected = [
@@ -122,7 +128,7 @@ mod tests {
             ("Verse 2", v2),
             ("Chorus", c),
             ("Bridge", b1),
-            ("Bridge", b2),
+            ("", b2),
             ("Chorus", c),
         ];
         let arrangement = song.arrangement(VERSION).unwrap();

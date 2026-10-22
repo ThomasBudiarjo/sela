@@ -13,8 +13,9 @@ Shared rules (`src/import/mod.rs`):
 - One UTF-8 BOM is removed and CRLF/CR become LF. Invalid UTF-8 is rejected,
   except where a format defines its own encoding (EasyWorship RTF).
 - A section is a labelled group of slides. Each slide becomes one
-  `storage::Section`, so a two-slide verse yields two sections with the same
-  label.
+  `storage::Section` (`import::song::to_song`). Only a section's first slide
+  keeps the label; the others get an empty label and join its group, as in
+  EasyWorship's editor (EW8-OBS-022).
 - Section codes shared by OpenLyrics and OpenSong map to Sela labels with
   `label_for_code` (`v1` is "Verse 1", `c` is "Chorus").
 - Anything a parser drops or guesses is reported as a `Warning`.

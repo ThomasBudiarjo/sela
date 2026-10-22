@@ -119,13 +119,13 @@ pub fn label_for_code(code: &str) -> Option<String> {
         'o' | 'm' => "Misc",
         _ => return None,
     };
-    // OpenLyrics part suffixes ("v1a", "v1b") share their verse's label.
-    let number = chars
-        .as_str()
-        .trim_end_matches(|c: char| c.is_ascii_alphabetic());
-    if number.is_empty() {
+    let rest = chars.as_str();
+    if rest.is_empty() {
         return Some(kind.to_string());
     }
+    // OpenLyrics part suffixes ("v1a", "v1b") share their verse's label; a
+    // word such as "Coda" is not a code.
+    let number = rest.trim_end_matches(|c: char| c.is_ascii_alphabetic());
     let number: u32 = number.parse().ok()?;
     Some(format!("{kind} {number}"))
 }
@@ -151,6 +151,9 @@ mod tests {
         assert_eq!(label_for_code("p2").as_deref(), Some("Pre-Chorus 2"));
         assert_eq!(label_for_code("v1a").as_deref(), Some("Verse 1"));
         assert_eq!(label_for_code("x1"), None);
+        assert_eq!(label_for_code("Coda"), None);
+        assert_eq!(label_for_code("verse"), None);
+        assert_eq!(label_for_code("va"), None);
         assert_eq!(label_for_code("v1.5"), None);
         assert_eq!(label_for_code(""), None);
         for code in ["v2", "c", "b1", "p", "e", "i", "t", "o"] {
