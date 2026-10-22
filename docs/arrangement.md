@@ -207,8 +207,12 @@ EasyWorship 8.0.49; the editor layout and the Preview button are Sela's own.
   canvas, the same everywhere so the editor and the audience agree) and at
   most `PAGE_BYTES`; a single over-long line is cut only at grapheme-cluster
   boundaries, so combining marks and ZWJ sequences never split. It is
-  deterministic and never drops text. `slides::project` returns the audience
-  slides plus each slide's page (`Page { number, of }`) for a chosen
+  deterministic and never drops text. `slides::section_pages` first drops
+  trailing spaces and the blank lines around a section's text
+  (`section_slide`), then paginates it. The audience projection, the editor
+  preview and the editor's split badge all use it, so a 16-line verse typed
+  with a final Enter is one slide everywhere. `slides::project` returns the
+  audience slides plus each slide's page (`Page { number, of }`) for a chosen
   arrangement; an unknown choice falls back to the first. Feedback: the
   editor footer shows "Splits into N audience slides" (the editor preview
   shows page 1), the Preview pane shows "Split slide N of M…" and tile
@@ -225,10 +229,17 @@ EasyWorship 8.0.49; the editor layout and the Preview button are Sela's own.
   `Pin`s (version + arrangement) the same way.
 - **Live stability.** Live holds its own copy of the sent item, so changing
   the previewed arrangement or the paging of the edited song never changes
-  the audience; Go Live resends. Tests: `tests::arrangements::*`.
+  the audience; Go Live resends. Face resolutions are keyed by the song
+  revision plus the item's stored arrangement choice, and an item takes one
+  only when it has one face per slide. Resolving another arrangement of the
+  live song in Preview therefore leaves Live's faces and slide count alone,
+  and Live still steps through every slide. Tests: `tests::arrangements::*`,
+  `tests::arrangement_rendering::previewing_another_arrangement_keeps_live_faces_and_every_live_slide`.
 
 Tests: `slides::tests` (balanced splits, determinism, combining marks/ZWJ,
-projection with page marks), `arrangement_edit::tests`,
+projection with page marks, `section_pages_paginate_the_normalized_text`),
+`tests::arrangement_rendering::the_editor_pages_a_section_exactly_like_the_audience`,
+`arrangement_edit::tests`,
 `schedule::tests::arrangement_belongs_to_the_entry_and_is_part_of_the_saved_state`,
 `schedule_file::tests::each_item_keeps_its_own_arrangement_and_version_1_still_opens`,
 `song_library::tests::{arrangement_tab_adds_removes_and_reorders_references_and_persists,

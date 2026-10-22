@@ -146,20 +146,11 @@ pub fn project(song: &Song, chosen: Option<VariantId>) -> Projection {
         pages: Vec::new(),
     };
     for section in sections {
-        let slide = section_slide(section, song.master.as_ref());
-        let split = paginate(&slide.text);
-        if split.len() < 2 {
-            out.slides.push(slide);
-            out.pages.push(None);
-            continue;
-        }
+        let split = section_pages(section, song.master.as_ref());
         let of = u16::try_from(split.len()).unwrap_or(u16::MAX);
-        for (index, text) in split.into_iter().enumerate() {
-            out.slides.push(Slide {
-                text,
-                ..slide.clone()
-            });
-            out.pages.push(Some(Page {
+        for (index, slide) in split.into_iter().enumerate() {
+            out.slides.push(slide);
+            out.pages.push((of > 1).then(|| Page {
                 number: u16::try_from(index + 1).unwrap_or(u16::MAX),
                 of,
             }));
@@ -168,9 +159,22 @@ pub fn project(song: &Song, chosen: Option<VariantId>) -> Projection {
     out
 }
 
-/// How many audience slides the section's text becomes.
-pub fn page_count(slide_text: &str) -> usize {
-    paginate(slide_text).len()
+/// The audience slides of one section: its `section_slide`, split into pages
+/// when that text overflows. The editor preview and its split badge use this
+/// too, so they always match the audience.
+pub fn section_pages(section: &Section, master: Option<&Background>) -> Vec<Slide> {
+    let slide = section_slide(section, master);
+    let pages = paginate(&slide.text);
+    if pages.len() < 2 {
+        return vec![slide];
+    }
+    pages
+        .into_iter()
+        .map(|text| Slide {
+            text,
+            ..slide.clone()
+        })
+        .collect()
 }
 
 /// One section's slide: trailing spaces and surrounding blank lines dropped.
@@ -217,7 +221,10 @@ pub fn size_cap_with_footer(
             .iter()
             .zip(resolved)
             .filter(|(s, _)| !s.text.is_empty() && !matches!(s.format.size, Some(Size::Fixed(_))))
-            .filter_map(|(s, r)| fit_size(&s.text, r, text_extent(footer, r, extent)))
+            .filter_map(|(s, r)| {
+                let strip = footer.and_then(|f| footer_plan(f, r, extent));
+                fit_size(&s.text, r, text_extent(strip, extent))
+            })
             .min(),
     }
 }
@@ -279,12 +286,12 @@ fn footer_plan(text: &str, resolved: &Resolved, extent: Extent) -> Option<(u16, 
     (size >= 8.).then(|| (size as u16, footer_height(FOOTER_LINES, size as u16)))
 }
 
-/// The extent the lyrics fit in: the text area is centred, so giving up the
-/// strip's height at both edges keeps the lyrics clear of the strip.
-fn text_extent(footer: Option<&str>, resolved: &Resolved, extent: Extent) -> Extent {
-    match footer.and_then(|f| footer_plan(f, resolved, extent)) {
+/// The extent the lyrics are fitted in: the canvas without the strip's box
+/// (`footer_plan`), which the audience raster also keeps for the strip alone.
+fn text_extent(strip: Option<(u16, u32)>, extent: Extent) -> Extent {
+    match strip {
         Some((_, height)) => Extent {
-            height: extent.height.saturating_sub(2 * height),
+            height: extent.height.saturating_sub(height),
             ..extent
         },
         None => extent,
@@ -328,9 +335,10 @@ pub fn cue(
 }
 
 /// `cue` plus the copyright strip `footer` (`copyright_strip`) drawn centred
-/// at the bottom of the text area. Auto-sized lyrics fit above it; a Fixed
-/// size keeps its size and may reach the strip. A strip that cannot be drawn
-/// (see `footer_plan`) is left out instead of failing the cue.
+/// at the bottom of the text area. The lyrics are fitted above the strip and
+/// never reach it: a Fixed size that fits only without the strip drops the
+/// strip, like a strip that cannot be drawn at all (see `footer_plan`),
+/// instead of failing the cue.
 #[allow(clippy::too_many_arguments)]
 pub fn cue_with_footer(
     version: ContentVersion,
@@ -347,6 +355,7 @@ pub fn cue_with_footer(
     {
         return Err(PrepareError::InvalidImage);
     }
+    let mut strip = footer.and_then(|f| footer_plan(f, resolved, extent));
     let text = if slide.text.is_empty() {
         None
     } else {
@@ -354,17 +363,22 @@ pub fn cue_with_footer(
         // text; the raster still checks the shaped glyphs exactly.
         let size = match slide.format.size {
             Some(Size::Fixed(fixed)) => {
-                let fits =
-                    fit_size(&slide.text, resolved, extent).ok_or(PrepareError::InvalidScene)?;
                 let scaled = (f32::from(fixed) * extent.height as f32 / REFERENCE_HEIGHT as f32)
                     .round()
                     .max(1.) as u16;
-                (scaled <= fits)
-                    .then_some(scaled)
-                    .ok_or(PrepareError::InvalidScene)?
+                let fits = |room: Extent| {
+                    fit_size(&slide.text, resolved, room).is_some_and(|fits| scaled <= fits)
+                };
+                if !fits(text_extent(strip, extent)) {
+                    strip = None;
+                    if !fits(extent) {
+                        return Err(PrepareError::InvalidScene);
+                    }
+                }
+                scaled
             }
             _ => {
-                let size = fit_size(&slide.text, resolved, text_extent(footer, resolved, extent))
+                let size = fit_size(&slide.text, resolved, text_extent(strip, extent))
                     .ok_or(PrepareError::InvalidScene)?;
                 cap.map_or(size, |cap| size.min(cap.max(1)))
             }
@@ -379,8 +393,8 @@ pub fn cue_with_footer(
         })
     };
     let cue = PreparedCue::from_owned(version, extent, background, text, caps)?;
-    match footer.and_then(|f| footer_plan(f, resolved, extent).map(|(size, _)| (f, size))) {
-        Some((content, size)) => cue.with_footer(OwnedText {
+    match footer.zip(strip) {
+        Some((content, (size, _))) => cue.with_footer(OwnedText {
             content: content.to_owned(),
             font_version: resolved.face().version(),
             font: resolved.face().bytes_arc(),
@@ -666,6 +680,83 @@ mod tests {
         )
         .unwrap();
         assert!(small.footer().is_none());
+    }
+
+    #[test]
+    fn a_fixed_size_keeps_the_strip_only_when_it_fits_above_it() {
+        let lines: Vec<String> = (1..=12).map(|n| format!("line {n}")).collect();
+        let fixed = |size| Slide {
+            label: String::new(),
+            text: lines.join("\n"),
+            format: SlideFormat {
+                size: Some(Size::Fixed(size)),
+                ..Default::default()
+            },
+            background: None,
+        };
+        let strip = "Signal Hymn - A. Writer\n(c) 2020 Some Owner";
+        let build = |slide: &Slide, footer| {
+            let resolved = Resolved::bundled(&slide.format);
+            let version = ContentVersion { id: 4, revision: 1 };
+            cue_with_footer(
+                version,
+                slide,
+                footer,
+                &resolved,
+                EXTENT,
+                CAPS,
+                None,
+                black(),
+            )
+        };
+        // The 1016 px text area holds 12 lines up to 65 px; the 93 px strip
+        // box leaves room for 59 px.
+        let beside = build(&fixed(56), Some(strip)).unwrap();
+        assert_eq!(beside.text().unwrap().font_size(), 56);
+        assert_eq!(beside.footer().map(|f| f.content()), Some(strip));
+        let tall = build(&fixed(62), Some(strip)).unwrap();
+        assert_eq!(tall.text().unwrap().font_size(), 62, "Fixed keeps its size");
+        assert!(tall.footer().is_none(), "the strip gives way to the lyrics");
+        assert!(matches!(
+            build(&fixed(66), Some(strip)),
+            Err(PrepareError::InvalidScene)
+        ));
+    }
+
+    #[test]
+    fn section_pages_paginate_the_normalized_text() {
+        let lines: Vec<String> = (1..=16).map(|n| format!("Line {n}")).collect();
+        let padded = |lines: &[String]| {
+            format!(
+                "\n \n{}  \n\n",
+                lines
+                    .iter()
+                    .map(|l| format!("{l}  "))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+        let section = |lyrics: String| Section {
+            id: SectionId::allocate(),
+            label: "Verse".into(),
+            lyrics,
+            format: Default::default(),
+            background: None,
+        };
+        let whole = section_pages(&section(format!("{}\n", lines.join("\n"))), None);
+        assert_eq!(whole.len(), 1, "16 lines and Enter are one slide");
+        assert_eq!(whole[0].text, lines.join("\n"));
+        let one = section_pages(&section(padded(&lines)), None);
+        assert_eq!(one.len(), 1, "blank edges and trailing spaces add no page");
+        assert_eq!(one[0].text, lines.join("\n"));
+        let twenty: Vec<String> = (1..=20).map(|n| format!("Line {n}")).collect();
+        let two = section_pages(&section(padded(&twenty)), None);
+        assert_eq!(
+            two.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
+            [twenty[..10].join("\n"), twenty[10..].join("\n")],
+            "balanced pages of the trimmed lines"
+        );
+        assert!(two.iter().all(|s| s.label == "Verse"));
     }
 
     #[test]

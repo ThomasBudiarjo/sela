@@ -1734,8 +1734,10 @@ impl Library {
     }
 
     /// The current slide as the audience would show it: the caret cell's text
-    /// with the section's stored format and resolved background.
-    fn preview_slide(&self, cx: &App) -> Option<sela::slides::Slide> {
+    /// with the section's stored format and resolved background. Overflow is
+    /// shown as the audience gets it: page one here, with the footer counting
+    /// the pages.
+    pub(crate) fn preview_slide(&self, cx: &App) -> Option<sela::slides::Slide> {
         if self.layouts {
             return Some(sela::slides::section_slide(
                 &Section {
@@ -1748,27 +1750,23 @@ impl Library {
                 self.draft.master.as_ref(),
             ));
         }
-        let cell = self.cells.get(self.section)?;
+        self.audience_pages(cx).into_iter().next()
+    }
+
+    /// The caret cell's section as audience slides, one per page.
+    pub(crate) fn audience_pages(&self, cx: &App) -> Vec<sela::slides::Slide> {
+        let Some(cell) = self.cells.get(self.section) else {
+            return Vec::new();
+        };
         let stored = self.draft.sections.get(self.section);
-        // Overflow is shown as the audience gets it: page one here, with the
-        // footer counting the pages.
-        let text = cell[LYRICS].read(cx).text();
-        let mut pages = sela::slides::paginate(text);
         let section = Section {
             id: SectionId(Id([0; 16])),
             label: String::new(),
-            lyrics: if pages.len() > 1 {
-                pages.swap_remove(0)
-            } else {
-                text.into()
-            },
+            lyrics: cell[LYRICS].read(cx).text().into(),
             format: stored.map_or_else(Default::default, |s| s.format.clone()),
             background: stored.and_then(|s| s.background.clone()),
         };
-        Some(sela::slides::section_slide(
-            &section,
-            self.draft.master.as_ref(),
-        ))
+        sela::slides::section_pages(&section, self.draft.master.as_ref())
     }
 
     /// Latest-wins preview preparation off the UI thread.
@@ -2459,11 +2457,11 @@ impl Render for Library {
             .collect();
         let groups = groups(labels.iter().map(String::as_str));
         let empty = self.preview_slide(cx).is_some_and(|s| s.text.is_empty());
-        let pages = self
-            .cells
-            .get(self.section)
-            .filter(|_| !self.layouts)
-            .map_or(1, |c| sela::slides::page_count(c[LYRICS].read(cx).text()));
+        let pages = if self.layouts {
+            1
+        } else {
+            self.audience_pages(cx).len()
+        };
         let rejected = self.preview.as_ref().is_some_and(|p| p.image.is_none());
         let image = self.preview.as_ref().and_then(|p| p.image.clone());
         let format_pane = show_format.then(|| self.format_pane(window, cx));

@@ -10,7 +10,7 @@ use sela::{
     fonts,
     format::{Align as HAlign, VAlign},
     scene::{PreparedCue, TextStyle},
-    slides::REFERENCE_HEIGHT,
+    slides::{self, REFERENCE_HEIGHT},
 };
 
 /// Scene's owned-text bound; the auto fit stays below 288 px.
@@ -89,6 +89,9 @@ pub fn layers(cue: &PreparedCue) -> Result<Layers, TextError> {
     );
     let (rows, row) = (area_height as usize, area_width as usize);
     if let Some(text) = cue.text() {
+        let lyrics_height = area_height.saturating_sub(cue.footer().map_or(0, |strip| {
+            slides::footer_height(strip.content().lines().count(), strip.font_size())
+        }));
         let style = text.style();
         let size = f32::from(text.font_size());
         let mut area = glyph_coverage(
@@ -96,7 +99,7 @@ pub fn layers(cue: &PreparedCue) -> Result<Layers, TextError> {
             text.face_index(),
             text.content(),
             area_width,
-            area_height,
+            lyrics_height,
             size,
             &style,
         )?;
@@ -104,18 +107,18 @@ pub fn layers(cue: &PreparedCue) -> Result<Layers, TextError> {
             dilate(
                 &mut area,
                 area_width as usize,
-                area_height as usize,
+                lyrics_height as usize,
                 size / 48.,
             );
         }
-        for y in 0..rows {
+        for y in 0..lyrics_height as usize {
             let start = (y + INSET as usize) * width + INSET as usize;
             fill[start..start + row].copy_from_slice(&area[y * row..(y + 1) * row]);
         }
     }
     if let Some(strip) = cue.footer() {
         // The strip shares the lyrics' fill mask, so it takes their colour and
-        // effects; it is laid out in the same inset box, bottom aligned.
+        // effects; it is laid out in the whole inset box, bottom aligned.
         let area = glyph_coverage(
             strip.font(),
             strip.face_index(),
@@ -644,6 +647,86 @@ mod tests {
         let strip_box = bbox(rows, width).unwrap();
         let centre = (strip_box.0 + strip_box.2) / 2;
         assert!(centre.abs_diff(width / 2) <= 2, "strip centre {centre}");
+    }
+
+    /// Rows of `mask` with any ink.
+    fn ink_rows(mask: &[u8], width: usize) -> Vec<usize> {
+        (0..mask.len() / width)
+            .filter(|y| mask[y * width..(y + 1) * width].iter().any(|a| *a != 0))
+            .collect()
+    }
+
+    #[test]
+    fn lyrics_and_the_copyright_strip_never_share_a_row() {
+        let extent = Extent {
+            width: 1280,
+            height: 720,
+        };
+        let strip = "Signal Hymn - A. Writer\n(c) 2020 Some Owner";
+        let lines = |count: usize| {
+            (1..=count)
+                .map(|n| format!("Signal line {n}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let cue = |text: &str, format: &SlideFormat| {
+            let slide = sela::slides::Slide {
+                label: "Verse".into(),
+                text: text.into(),
+                format: format.clone(),
+                background: None,
+            };
+            sela::slides::cue_with_footer(
+                ContentVersion { id: 9, revision: 1 },
+                &slide,
+                Some(strip),
+                &sela::fonts::Resolved::bundled(format),
+                extent,
+                CAPS,
+                None,
+                sela::slides::color_background([0, 0, 0]),
+            )
+            .unwrap()
+        };
+        let valign = |valign| SlideFormat {
+            valign: Some(valign),
+            ..Default::default()
+        };
+        let cases = [
+            ("Bottom", lines(2), valign(VAlign::Bottom)),
+            ("Middle", lines(10), valign(VAlign::Middle)),
+            (
+                "tall Fixed",
+                lines(11),
+                SlideFormat {
+                    size: Some(sela::format::Size::Fixed(60)),
+                    ..valign(VAlign::Middle)
+                },
+            ),
+        ];
+        let width = extent.width as usize;
+        let mut overlaps = Vec::new();
+        for (name, text, format) in cases {
+            let with_lyrics = cue(&text, &format);
+            assert!(with_lyrics.footer().is_some(), "{name}: the strip is drawn");
+            let both = layers(&with_lyrics).unwrap().fill;
+            let strip_only = layers(&cue("", &format)).unwrap().fill;
+            let strip_rows = ink_rows(&strip_only, width);
+            let lyric_rows: Vec<usize> = (0..extent.height as usize)
+                .filter(|y| {
+                    both[y * width..(y + 1) * width] != strip_only[y * width..(y + 1) * width]
+                })
+                .collect();
+            assert!(!strip_rows.is_empty() && !lyric_rows.is_empty(), "{name}");
+            if lyric_rows.last() >= strip_rows.first() {
+                overlaps.push(format!(
+                    "{name}: lyrics end on row {:?}, the strip starts on row {:?}",
+                    lyric_rows.last(),
+                    strip_rows.first()
+                ));
+            }
+        }
+        assert!(overlaps.is_empty(), "{overlaps:#?}");
     }
 
     #[test]
