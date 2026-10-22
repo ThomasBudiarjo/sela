@@ -598,7 +598,11 @@ libavformat    62. 12.103 / 62. 12.103
         pair(&l.install);
         let relative = Path::new("ffmpeg").join("bin");
         let located = locate_with(candidates(Some(&relative), Some(&l.exe), None), |ffmpeg| {
-            assert!(ffmpeg.starts_with(&l.install), "probed {}", ffmpeg.display());
+            assert!(
+                ffmpeg.starts_with(&l.install),
+                "probed {}",
+                ffmpeg.display()
+            );
             lgpl(ffmpeg)
         })
         .unwrap();
