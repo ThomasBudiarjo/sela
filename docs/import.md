@@ -25,8 +25,8 @@ Shared rules (`src/import/mod.rs`):
 `import::song::to_song` turns its result into a `storage::Song`. The format
 reference is the OpenLyrics data format page at docs.openlyrics.org, read on
 2026-10-22. The `version` attribute is not checked, because 0.8 and 0.9 share
-every element mapped here. OpenLyrics 0.7 `<line>` elements are not supported:
-their text is kept on one line and `line` is reported as an unknown element.
+every element mapped here. OpenLyrics 0.7 `<line>` elements are read as one
+line each.
 
 ### Rejected files
 
@@ -51,14 +51,18 @@ their text is kept on one line and `line` is reported as an unknown element.
 
 | OpenLyrics | Sela | Rule |
 | --- | --- | --- |
-| First non-empty `<title>` | Title | Decision: file order wins, because the spec names no primary title. Other titles are reported as `UnknownElement("title")`. No title gives `MissingTitle`. |
+| First non-empty `<title>` | Title | Decision: file order wins, because the spec names no primary title. Other titles are reported as `UnknownElement("title")`. A title of only spaces, Unicode spaces included, counts as none. No title gives `MissingTitle`, which is kept even when the warning list is full. |
 | Each `<author>` | Authors | Duplicates are dropped. `to_song` joins them with `"; "` in the one-line Authors field (names may contain commas). |
 | `<copyright>` | Copyright | |
 | `<ccliNo>` | Song Number | ASCII digits only, at most 12. Anything else gives `InvalidField("ccliNo")` and is dropped. |
 | `<publisher>` | Administrator | Decision: the closest EasyWorship song property. |
 | `<verseOrder>` | Arrangement | See the order rules below. |
-| `<verse name>` | Section label | Names that follow the code convention (a letter, digits, an optional part letter) go through `label_for_code`. Other names stay verbatim, so `bridge` stays "bridge". |
+| `<verse name>` | Section label | XML whitespace in the name collapses to one space. Names that follow the code convention (a letter, digits, an optional part letter) go through `label_for_code`. Other names stay verbatim, so `bridge` stays "bridge". A missing or blank name gives an empty label and `InvalidField("verse name")`. |
 | Each `<lines>` | One slide | See the text rules below. |
+
+`<copyright>`, `<ccliNo>`, `<publisher>` and `<verseOrder>` hold one value.
+The first one in the file is kept and each later one is reported as
+`UnknownElement(name)`.
 
 Fields over the song model's limits are cut at a grapheme boundary with
 `Truncated(field)`. The limits are 1,024 bytes for the title, 4,096 for the
@@ -78,9 +82,9 @@ Order rules:
 
 Text rules inside `<lines>`:
 
-- `<br/>` is a line break. Other XML whitespace (space, tab, CR, LF) collapses
-  to one space and each line is trimmed. Unicode spaces such as U+3000 and
-  U+00A0 stay as written.
+- `<br/>` is a line break, and so is the end of a 0.7 `<line>`. Other XML
+  whitespace (space, tab, CR, LF) collapses to one space and each line is
+  trimmed. Unicode spaces such as U+3000 and U+00A0 stay as written.
 - Blank lines at the start and end of a slide are dropped. Blank lines between
   text lines stay.
 - `<chord>` markup is removed and its text kept, with one `ChordsRemoved`.
@@ -97,6 +101,9 @@ Not imported, reported once each as `UnknownElement(name)`: `<format>`,
 Not imported and not reported: the attributes `author/@type`,
 `author/@lang`, `title/@lang`, `title/@original`, `verse/@lang`,
 `verse/@translit`, `lines/@part`, `lines/@break` and `lines/@repeat`.
+This is an open loss: `Warning` has no attribute variant yet, and adding one
+is a framework decision (M1-14), because the staged preview names every
+warning kind.
 
 Limits: 128 sections, 128 slides, and an order of at most 512 slides after
 expansion. Slide text and labels share a budget of 240 KiB, priced like the

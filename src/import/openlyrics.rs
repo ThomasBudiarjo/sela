@@ -1,11 +1,12 @@
 //! OpenLyrics 0.8/0.9 XML song parser (M1-14). See docs/import.md for the
 //! field mapping and what is reported instead of imported.
 use super::{
-    MAX_ORDER, MAX_SECTIONS, MAX_SLIDES, Parsed, ParsedSection, ParsedSong, Rejected, Warning,
+    MAX_ORDER, MAX_SECTIONS, MAX_SLIDES, MAX_WARNINGS, Parsed, ParsedSection, ParsedSong, Rejected, Warning,
     decode, label_for_code, song::AUTHOR_SEPARATOR,
 };
 use crate::storage::{MAX_ADMINISTRATOR, song_number_ok};
 use roxmltree::Node;
+use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 
 const NAMESPACE: &str = "http://openlyrics.info/namespace/2009/song";
@@ -167,11 +168,11 @@ struct Reader {
     ccli: Option<String>,
     publisher: Option<String>,
     verse_order: Option<String>,
-    /// Lowercased source name of each entry in `song.sections`.
-    names: Vec<String>,
+    /// Indices into `song.sections` by lowercased source name, in file order.
+    names: HashMap<String, Vec<usize>>,
     /// Lowercased names of verses without text or dropped at a limit; the
     /// order skips them without a missing-reference warning.
-    skipped: Vec<String>,
+    skipped: HashSet<String>,
     slides: usize,
     bytes: usize,
 }
@@ -206,20 +207,22 @@ impl Reader {
                         }
                     }
                 }
-                Some("copyright") => {
-                    self.copyright.get_or_insert(text_of(child));
-                }
-                Some("ccliNo") => {
-                    self.ccli.get_or_insert(text_of(child));
-                }
-                Some("publisher") => {
-                    self.publisher.get_or_insert(text_of(child));
-                }
-                Some("verseOrder") => {
-                    self.verse_order.get_or_insert(text_of(child));
-                }
+                Some("copyright") => self.once(child, |r| &mut r.copyright),
+                Some("ccliNo") => self.once(child, |r| &mut r.ccli),
+                Some("publisher") => self.once(child, |r| &mut r.publisher),
+                Some("verseOrder") => self.once(child, |r| &mut r.verse_order),
                 _ => self.not_imported(child),
             }
+        }
+    }
+
+    /// Keeps the first occurrence of a single-valued property and reports
+    /// any later one as not imported.
+    fn once(&mut self, node: Node, slot: fn(&mut Self) -> &mut Option<String>) {
+        if slot(self).is_some() {
+            self.not_imported(node);
+        } else {
+            *slot(self) = Some(text_of(node));
         }
     }
 
@@ -233,11 +236,14 @@ impl Reader {
     }
 
     fn verse(&mut self, node: Node) {
-        let source = node.attribute("name").unwrap_or_default().trim();
-        let label = is_code(source)
-            .then(|| label_for_code(source))
+        let source = collapse(node.attribute("name").unwrap_or_default());
+        if source.is_empty() {
+            self.warn(Warning::InvalidField("verse name".into()));
+        }
+        let label = is_code(&source)
+            .then(|| label_for_code(&source))
             .flatten()
-            .unwrap_or_else(|| source.to_string());
+            .unwrap_or_else(|| source.clone());
         let label = self.fit(label, MAX_LABEL, "section label");
         let mut slides = Vec::new();
         for child in elements(node) {
@@ -253,7 +259,7 @@ impl Reader {
         }
         if slides.is_empty() {
             self.warn(Warning::EmptySection(label));
-            self.skipped.push(source.to_lowercase());
+            self.skipped.insert(source.to_lowercase());
             return;
         }
         let mut kept = Vec::new();
@@ -271,10 +277,13 @@ impl Reader {
             kept.push(slide);
         }
         if kept.is_empty() {
-            self.skipped.push(source.to_lowercase());
+            self.skipped.insert(source.to_lowercase());
             return;
         }
-        self.names.push(source.to_lowercase());
+        self.names
+            .entry(source.to_lowercase())
+            .or_default()
+            .push(self.song.sections.len());
         self.song.sections.push(ParsedSection {
             label,
             slides: kept,
@@ -307,6 +316,11 @@ impl Reader {
             }
             match name(child) {
                 Some("br") => lines.push(String::new()),
+                // OpenLyrics 0.7 wrote each line as an element.
+                Some("line") => {
+                    self.inline(child, lines);
+                    lines.push(String::new());
+                }
                 Some("comment") => {}
                 Some("chord") => {
                     self.warn(Warning::ChordsRemoved);
@@ -344,9 +358,15 @@ impl Reader {
             });
         }
         let mut titles = std::mem::take(&mut self.titles);
-        titles.retain(|t| !t.is_empty());
+        // `Song::validate` trims Unicode spaces, which `collapse` keeps.
+        titles.retain(|t| !t.trim().is_empty());
         match titles.len() {
-            0 => self.warn(Warning::MissingTitle),
+            // The caller substitutes a title on this warning, so it must
+            // survive a full warning list.
+            0 => {
+                self.song.warnings.insert(0, Warning::MissingTitle);
+                self.song.warnings.truncate(MAX_WARNINGS);
+            }
             1 => {}
             _ => self.warn(Warning::UnknownElement("title".into())),
         }
@@ -393,15 +413,12 @@ impl Reader {
         let mut slides = 0;
         for entry in order.split(' ').filter(|e| !e.is_empty()) {
             let entry = entry.to_lowercase();
-            let sections: Vec<usize> = (0..self.names.len())
-                .filter(|&i| self.names[i] == entry)
-                .collect();
-            if sections.is_empty() {
+            let Some(sections) = self.names.get(&entry).cloned() else {
                 if !self.skipped.contains(&entry) {
                     self.warn(Warning::MissingOrderReference(entry));
                 }
                 continue;
-            }
+            };
             for index in sections {
                 let count = self.song.sections[index].slides.len();
                 if slides + count > MAX_ORDER {
@@ -745,7 +762,101 @@ mod tests {
         assert_eq!(song.order, [1, 0]);
     }
 
-    /// A parsed song is always storable once the caller names it.
+    #[test]
+    fn titles_of_only_unicode_spaces_count_as_missing() {
+        let lyrics = r#"<verse name="v1"><lines>words</lines></verse>"#;
+        for title in ["&#xA0;", "&#x3000;", "\u{3000}", " \u{a0} "] {
+            let properties = format!("<titles><title>{title}</title></titles>");
+            let song = parse(song_with(&properties, lyrics).as_bytes()).unwrap();
+            assert_eq!(song.warnings, [Warning::MissingTitle], "{title:?}");
+        }
+        let unknown: String = (0..MAX_WARNINGS + 6)
+            .map(|n| format!("<extra{n}/>"))
+            .collect();
+        let song = parse(song_with(&unknown, lyrics).as_bytes()).unwrap();
+        assert_eq!(song.warnings.len(), MAX_WARNINGS);
+        assert!(
+            song.warnings.contains(&Warning::MissingTitle),
+            "kept when the warning list is full"
+        );
+    }
+
+    #[test]
+    fn a_long_order_of_unknown_names_resolves_within_a_bounded_time() {
+        let mut lyrics = String::from(r#"<verse name="v1"><lines>only words</lines></verse>"#);
+        for n in 0..20_000 {
+            lyrics.push_str(&format!(r#"<verse name="e{n}"/>"#));
+        }
+        let mut order = String::from("v1");
+        let room = MAX_FILE_BYTES - song_with("<verseOrder></verseOrder>", &lyrics).len();
+        while order.len() + 3 <= room {
+            order.push_str(" zz");
+        }
+        let bytes = song_with(&format!("<verseOrder>{order}</verseOrder>"), &lyrics);
+        assert!(bytes.len() <= MAX_FILE_BYTES);
+        let start = Instant::now();
+        let song = parse(bytes.as_bytes()).unwrap();
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+        assert_eq!(song.order, [0]);
+    }
+
+    #[test]
+    fn verse_names_are_collapsed_and_a_missing_name_is_reported() {
+        let lyrics = r#"<verse><lines>a</lines></verse><verse name="  "><lines>b</lines></verse><verse name="last&#10;one"><lines>c</lines></verse>"#;
+        let song = parse(song_with("", lyrics).as_bytes()).unwrap();
+        let labels: Vec<&str> = song.sections.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, ["", "", "last one"]);
+        assert_eq!(
+            sorted(song.warnings),
+            sorted(vec![
+                Warning::MissingTitle,
+                Warning::InvalidField("verse name".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn repeated_single_properties_keep_the_first_and_are_reported() {
+        let properties = "<titles><title>Twice</title></titles>\
+            <copyright>First holder</copyright><copyright>Second holder</copyright>\
+            <ccliNo>111</ccliNo><ccliNo>222</ccliNo>\
+            <publisher>First admin</publisher><publisher>Second admin</publisher>\
+            <verseOrder>v1</verseOrder><verseOrder>v2 v1</verseOrder>";
+        let lyrics = r#"<verse name="v1"><lines>a</lines></verse><verse name="v2"><lines>b</lines></verse>"#;
+        let song = parse(song_with(properties, lyrics).as_bytes()).unwrap();
+        assert_eq!(song.copyright, "First holder");
+        assert_eq!(song.song_number, "111");
+        assert_eq!(song.administrator, "First admin");
+        assert_eq!(song.order, [0]);
+        let unknown = |name: &str| Warning::UnknownElement(name.into());
+        assert_eq!(
+            sorted(song.warnings),
+            sorted(vec![
+                unknown("copyright"),
+                unknown("ccliNo"),
+                unknown("publisher"),
+                unknown("verseOrder"),
+            ])
+        );
+    }
+
+    #[test]
+    fn openlyrics_0_7_line_elements_become_line_breaks() {
+        let lyrics = "<verse name=\"v1\"><lines>\n  <line>first line</line>\n  <line>second <chord name=\"G\"/>line</line>\n</lines></verse>";
+        let song = parse(song_with("", lyrics).as_bytes()).unwrap();
+        assert_eq!(
+            song.sections,
+            [section("Verse 1", &["first line\nsecond line"])]
+        );
+        assert_eq!(
+            sorted(song.warnings),
+            sorted(vec![Warning::MissingTitle, Warning::ChordsRemoved])
+        );
+    }
+
+    /// A parsed song is always storable once the caller names it after a
+    /// `MissingTitle`.
     fn check(bytes: &[u8]) {
         let Ok(mut song) = parse(bytes) else {
             return;
@@ -760,7 +871,7 @@ mod tests {
                 .all(|t| !t.is_empty())
         );
         assert!(song_number_ok(&song.song_number));
-        if song.title.is_empty() {
+        if song.warnings.contains(&Warning::MissingTitle) {
             song.title = "file name".into();
         }
         assert_eq!(to_song(&song).map(|_| ()), Ok(()));
