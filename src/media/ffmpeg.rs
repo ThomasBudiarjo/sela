@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 /// Environment variable naming a directory that holds `ffmpeg` and `ffprobe`.
 pub const ENV_DIR: &str = "SELA_FFMPEG_DIR";
-/// Folder name of the pinned LGPL build under `.amp/in/ffmpeg/`, where
-/// `scripts/fetch_ffmpeg.py` extracts it in a development checkout.
+/// Folder name of the pinned LGPL build under `.amp/in/ffmpeg/` in a
+/// development checkout.
 pub const PINNED_ID: &str = "n8.1.3-lgpl";
 /// Bound on each probe command, from spawn to exit.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -80,6 +80,9 @@ pub enum ProbeError {
 /// Why a candidate directory was passed over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
+    /// The directory is relative, so what it names would depend on the
+    /// directory Sela was started from.
+    RelativeDir,
     Missing(Tool),
     /// Built with `--enable-gpl`.
     Gpl,
@@ -117,7 +120,8 @@ pub struct NotFound {
 
 /// Lookup order: `env_dir` ([`ENV_DIR`], skipped when empty), then
 /// `<exe_dir>/ffmpeg/bin`, then `dev_dir`. PATH is never consulted: it could
-/// hold a GPL build that differs from the one Sela ships.
+/// hold a GPL build that differs from the one Sela ships. A relative
+/// `env_dir` stays a candidate so that [`locate_with`] reports its refusal.
 pub fn candidates(
     env_dir: Option<&Path>,
     exe_dir: Option<&Path>,
@@ -148,9 +152,9 @@ pub fn dev_dir() -> Option<PathBuf> {
     })
 }
 
-/// Returns the first candidate that holds both executables and whose
-/// `ffmpeg` passes [`check_buildconf`] and reports a version. `probe` runs
-/// the `ffmpeg` executable it is given.
+/// Returns the first candidate whose directory is absolute, holds both
+/// executables and whose `ffmpeg` passes [`check_buildconf`] and reports a
+/// version. `probe` runs the `ffmpeg` executable it is given.
 pub fn locate_with(
     candidates: Vec<Candidate>,
     mut probe: impl FnMut(&Path) -> Result<ProbeOutput, ProbeError>,
@@ -159,7 +163,9 @@ pub fn locate_with(
     for candidate in candidates {
         let ffmpeg = candidate.dir.join(Tool::Ffmpeg.file_name());
         let ffprobe = candidate.dir.join(Tool::Ffprobe.file_name());
-        let checked = if !ffmpeg.is_file() {
+        let checked = if !candidate.dir.is_absolute() {
+            Err(Refusal::RelativeDir)
+        } else if !ffmpeg.is_file() {
             Err(Refusal::Missing(Tool::Ffmpeg))
         } else if !ffprobe.is_file() {
             Err(Refusal::Missing(Tool::Ffprobe))
@@ -370,6 +376,7 @@ impl fmt::Display for Source {
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Refusal::RelativeDir => f.write_str("the folder is not an absolute path"),
             Refusal::Missing(tool) => write!(f, "{} is missing", tool.file_name()),
             Refusal::Gpl => f.write_str("the build is configured with --enable-gpl"),
             Refusal::Nonfree => f.write_str("the build is configured with --enable-nonfree"),
@@ -575,14 +582,32 @@ libavformat    62. 12.103 / 62. 12.103
     }
 
     #[test]
-    fn the_dev_copy_is_the_pinned_lgpl_folder_of_this_checkout() {
+    fn the_dev_copy_is_the_pinned_lgpl_folder_of_this_checkout_in_debug_builds_only() {
         let expected = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(".amp")
             .join("in")
             .join("ffmpeg")
             .join("n8.1.3-lgpl")
             .join("bin");
-        assert_eq!(dev_dir(), Some(expected));
+        assert_eq!(dev_dir(), cfg!(debug_assertions).then_some(expected));
+    }
+
+    #[test]
+    fn a_relative_env_dir_is_refused_without_probing() {
+        let l = layout();
+        pair(&l.install);
+        let relative = Path::new("ffmpeg").join("bin");
+        let located = locate_with(candidates(Some(&relative), Some(&l.exe), None), |ffmpeg| {
+            assert!(ffmpeg.starts_with(&l.install), "probed {}", ffmpeg.display());
+            lgpl(ffmpeg)
+        })
+        .unwrap();
+        assert_eq!(located.source, Source::Install);
+        assert_eq!(
+            located.refused,
+            [tried(Source::Env, &relative, Refusal::RelativeDir)]
+        );
+        assert!(Refusal::RelativeDir.to_string().contains("absolute"));
     }
 
     #[test]
