@@ -152,7 +152,9 @@ fn is_code(name: &str) -> bool {
     if !chars.next().is_some_and(|c| c.is_ascii_alphabetic()) {
         return false;
     }
-    let part = chars.as_str().trim_start_matches(|c: char| c.is_ascii_digit());
+    let part = chars
+        .as_str()
+        .trim_start_matches(|c: char| c.is_ascii_digit());
     part.len() <= 1 && part.chars().all(|c| c.is_ascii_alphabetic())
 }
 
@@ -286,7 +288,10 @@ impl Reader {
         self.inline(node, &mut lines);
         let lines: Vec<String> = lines.iter().map(|line| collapse(line)).collect();
         let first = lines.iter().position(|l| !l.is_empty()).unwrap_or(0);
-        let last = lines.iter().rposition(|l| !l.is_empty()).map_or(0, |i| i + 1);
+        let last = lines
+            .iter()
+            .rposition(|l| !l.is_empty())
+            .map_or(0, |i| i + 1);
         lines[first..last.max(first)].join("\n")
     }
 
@@ -353,7 +358,11 @@ impl Reader {
             if author.is_empty() || self.song.authors.contains(&author) {
                 continue;
             }
-            let separator = if joined == 0 { 0 } else { AUTHOR_SEPARATOR.len() };
+            let separator = if joined == 0 {
+                0
+            } else {
+                AUTHOR_SEPARATOR.len()
+            };
             if joined + separator + author.len() > MAX_TEXT_FIELD {
                 self.warn(Warning::Truncated("authors".into()));
                 break;
@@ -490,7 +499,10 @@ mod tests {
                         "Smooth and round\n\nafter a thousand years"
                     ]
                 ),
-                section("Verse 1", &["Batu diam di dasar\ndi bawah air yang mengalir"]),
+                section(
+                    "Verse 1",
+                    &["Batu diam di dasar\ndi bawah air yang mengalir"]
+                ),
                 section("Chorus", &["Carry me, carry me down"]),
                 section("bridge", &["Down to the sea"]),
             ]
@@ -572,26 +584,42 @@ mod tests {
             ))
             .unwrap()
         };
-        let entities = |r: &Rejected| *r == Rejected::Entities;
-        let too_deep = |r: &Rejected| *r == Rejected::TooDeep;
-        let too_large = |r: &Rejected| *r == Rejected::TooLarge;
-        let cases: Vec<(&str, Vec<u8>, &dyn Fn(&Rejected) -> bool)> = vec![
-            ("unclosed tag", file("malformed-unclosed.xml"), &|r| {
-                matches!(r, Rejected::Malformed(_))
-            }),
-            ("entity to a local file", file("xxe-file.xml"), &entities),
-            ("entity to a URL", file("xxe-url.xml"), &entities),
-            ("billion laughs", file("billion-laughs.xml"), &entities),
+        let malformed = Rejected::Malformed(String::new());
+        let cases = [
+            ("unclosed tag", file("malformed-unclosed.xml"), malformed),
+            (
+                "entity to a local file",
+                file("xxe-file.xml"),
+                Rejected::Entities,
+            ),
+            ("entity to a URL", file("xxe-url.xml"), Rejected::Entities),
+            (
+                "billion laughs",
+                file("billion-laughs.xml"),
+                Rejected::Entities,
+            ),
             (
                 "doctype without declarations",
                 format!("<!DOCTYPE song>{}", song_with("", "")).into_bytes(),
-                &entities,
+                Rejected::Entities,
             ),
-            ("one level past the cap", nest(MAX_DEPTH - 3), &too_deep),
-            ("a megabyte of open tags", deepest.into_bytes(), &too_deep),
-            ("too many nodes", many_nodes.into_bytes(), &too_large),
-            ("over the size cap", huge, &too_large),
-            ("invalid UTF-8", invalid, &|r| *r == Rejected::InvalidUtf8),
+            (
+                "one level past the cap",
+                nest(MAX_DEPTH - 3),
+                Rejected::TooDeep,
+            ),
+            (
+                "a megabyte of open tags",
+                deepest.into_bytes(),
+                Rejected::TooDeep,
+            ),
+            (
+                "too many nodes",
+                many_nodes.into_bytes(),
+                Rejected::TooLarge,
+            ),
+            ("over the size cap", huge, Rejected::TooLarge),
+            ("invalid UTF-8", invalid, Rejected::InvalidUtf8),
         ];
         for (case, bytes, expected) in cases {
             let start = Instant::now();
@@ -599,7 +627,11 @@ mod tests {
             let elapsed = start.elapsed();
             assert!(elapsed < Duration::from_secs(5), "{case}: took {elapsed:?}");
             match result {
-                Err(rejected) => assert!(expected(&rejected), "{case}: {rejected:?}"),
+                Err(rejected) => assert_eq!(
+                    std::mem::discriminant(&rejected),
+                    std::mem::discriminant(&expected),
+                    "{case}: {rejected:?}"
+                ),
                 Ok(song) => panic!("{case}: imported {song:?}"),
             }
         }
@@ -633,8 +665,7 @@ mod tests {
             parse(song_with(titled, "").as_bytes()),
             Err(Rejected::NoLyrics)
         );
-        let blank =
-            r#"<verse name="v1"><lines> <br/> <comment>hidden</comment> </lines></verse>"#;
+        let blank = r#"<verse name="v1"><lines> <br/> <comment>hidden</comment> </lines></verse>"#;
         assert_eq!(
             parse(song_with(titled, blank).as_bytes()),
             Err(Rejected::NoLyrics)
@@ -656,9 +687,14 @@ mod tests {
         );
         assert_eq!(song.order, vec![0; MAX_ORDER]);
         assert_eq!(
-            sorted(song.warnings),
+            sorted(song.warnings.clone()),
             sorted(vec![Warning::LimitReached, Warning::MissingTitle])
         );
+        let named = ParsedSong {
+            title: "At every limit".into(),
+            ..song
+        };
+        assert!(to_song(&named).is_ok(), "the capped song is storable");
 
         let order = "<verseOrder>v1 v129</verseOrder>";
         let song = parse(song_with(order, &verses).as_bytes()).unwrap();
@@ -717,7 +753,12 @@ mod tests {
         let slides: usize = song.sections.iter().map(|s| s.slides.len()).sum();
         assert!(song.sections.len() <= MAX_SECTIONS && slides <= MAX_SLIDES);
         assert!(song.order.iter().all(|&i| i < song.sections.len()));
-        assert!(song.sections.iter().flat_map(|s| &s.slides).all(|t| !t.is_empty()));
+        assert!(
+            song.sections
+                .iter()
+                .flat_map(|s| &s.slides)
+                .all(|t| !t.is_empty())
+        );
         assert!(song_number_ok(&song.song_number));
         if song.title.is_empty() {
             song.title = "file name".into();
