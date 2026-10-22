@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE song [
+  <!ENTITY a "ha">
+  <!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+  <!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">
+  <!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">
+  <!ENTITY e "&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;">
+  <!ENTITY f "&e;&e;&e;&e;&e;&e;&e;&e;&e;&e;">
+  <!ENTITY g "&f;&f;&f;&f;&f;&f;&f;&f;&f;&f;">
+  <!ENTITY h "&g;&g;&g;&g;&g;&g;&g;&g;&g;&g;">
+  <!ENTITY i "&h;&h;&h;&h;&h;&h;&h;&h;&h;&h;">
+]>
+<song xmlns="http://openlyrics.info/namespace/2009/song" version="0.9">
+  <properties><titles><title>Laughs</title></titles></properties>
+  <lyrics><verse name="v1"><lines>&i;</lines></verse></lyrics>
+</song>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE song [
+  <!ENTITY secret SYSTEM "file:///C:/Windows/win.ini">
+]>
+<song xmlns="http://openlyrics.info/namespace/2009/song" version="0.9">
+  <properties><titles><title>&secret;</title></titles></properties>
+  <lyrics><verse name="v1"><lines>&secret;</lines></verse></lyrics>
+</song>

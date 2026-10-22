@@ -6,6 +6,7 @@ pub mod chordpro;
 pub mod ew_rtf;
 pub mod openlyrics;
 pub mod opensong;
+pub mod song;
 
 /// Largest song file any parser accepts, checked before parsing.
 pub const MAX_FILE_BYTES: usize = 1024 * 1024;

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<song xmlns="http://openlyrics.info/namespace/2009/song" version="0.9">
+  <properties>
+    <titles>
+      <title>Cahaya Pagi Hari</title>
+    </titles>
+    <authors>
+      <author>Ayu Wulandari</author>
+      <author>José Peña</author>
+    </authors>
+    <copyright>© 2026 Sela Test Fixtures</copyright>
+  </properties>
+  <lyrics>
+    <verse name="v1">
+      <lines>Pagi ini kubuka jendela lebar-lebar<br/>Cahaya-Mu masuk, hatiku jadi tenang</lines>
+    </verse>
+    <verse name="c">
+      <lines>Terima kasih, ya Tuhan, untuk hari yang baru<br/>Kasih-Mu tak pernah berubah</lines>
+    </verse>
+    <verse name="v2">
+      <lines>Canción de la mañana, señor del corazón<br/>Noël à minuit, déjà là, Ångström naïve</lines>
+    </verse>
+    <verse name="v3">
+      <lines>晨光照进窗内　心里充满平安<br/>주님의 빛이 아침을 엽니다<br/>Cafe&#x0301; with a combining accent</lines>
+    </verse>
+  </lyrics>
+</song>

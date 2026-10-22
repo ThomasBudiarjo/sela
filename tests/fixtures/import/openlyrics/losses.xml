@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<song xmlns="http://openlyrics.info/namespace/2009/song" version="0.9">
+  <properties>
+    <titles>
+      <title>River Stones</title>
+      <title lang="id">Batu di Sungai</title>
+    </titles>
+    <authors>
+      <author>Maya Sutanto</author>
+      <author type="translation" lang="id">Maya Sutanto</author>
+    </authors>
+    <ccliNo>CCLI 99</ccliNo>
+    <keywords>water, stones</keywords>
+    <verseOrder>v1 v3 c v1 bridge</verseOrder>
+  </properties>
+  <format>
+    <tags application="Sela fixture">
+      <tag name="red"><open><![CDATA[<span>]]></open><close><![CDATA[</span>]]></close></tag>
+    </tags>
+  </format>
+  <lyrics>
+    <verse name="v1">
+      <lines><chord root="G"/>Stones lie <chord root="C">qui</chord>et<comment>softly</comment><br/>under the <tag name="red">running</tag> water</lines>
+      <lines part="men" break="optional">Smooth and <chord root="D" structure="dom7"/>round<br/><br/>after a thousand years</lines>
+    </verse>
+    <verse name="v1" lang="id">
+      <lines>Batu diam di dasar<br/>di bawah air yang <sparkle>mengalir</sparkle></lines>
+    </verse>
+    <verse name="v2">
+      <lines>   </lines>
+    </verse>
+    <verse name="c">
+      <lines>Carry me, carry me down</lines>
+    </verse>
+    <verse name="bridge">
+      <lines>Down to the sea</lines>
+    </verse>
+    <instrument name="i1">
+      <lines><chord root="G"/><chord root="C"/></lines>
+    </instrument>
+  </lyrics>
+</song>
