@@ -14,8 +14,8 @@ ChordPro, a malformed XML, a ChordPro file without words and a text note)
 into a temporary folder and launches the operator with a private profile.
 By keyboard: Alt+F, Down x7, Enter opens File > Import > Song Folder...; the
 portal folder chooser gets the folder. The staged preview must list five
-files (three songs, two failures) with the summary "3 songs ready ·
-2 not importable · 0 duplicates", a malformed-file error and the
+files (three songs, two failures) with the summary "Ready: 3 ·
+Not importable: 2 · Duplicates: 0", a malformed-file error and the
 OpenLyrics attribute warnings, while the library is unchanged. Shift+Tab,
 Enter presses Import (3); the library must then hold exactly three more
 songs, decoded from SQLite with their titles and words (accented text kept
@@ -28,8 +28,10 @@ same. Ctrl+Q then quits with exit status 0.
 
 X11 differences: the chooser is the GTK folder chooser of
 xdg-desktop-portal-gtk (Windows: the common folder dialog), driven by
-typing the path into its location entry. xdotool types "ñ" through a
-temporary keysym mapping instead of KEYEVENTF_UNICODE. On the default xvfb
+typing the path into its location entry. "ñ" is typed through a spare
+keycode mapped to ntilde (xmodmap) before the operator starts, because
+GPUI does not see xdotool's on-the-fly mapping; Windows types it with
+KEYEVENTF_UNICODE. On the default xvfb
 display the audience is the 624x351 development window.
 """
 
@@ -47,6 +49,10 @@ ROOT = Path(__file__).resolve().parent.parent
 BATCH = ROOT / "tests" / "fixtures" / "import" / "batch"
 FOLDER_ITEM_DOWNS = 7  # New Song -> ... -> Import > Song Folder...
 IMPORTED = {"Canción del Alba", "Lantern Hymn", "Sungai Kehidupan"}
+# A spare keycode that carries ntilde while the operator runs: GPUI reads
+# the X keymap when it starts and ignores the mapping xdotool would add on
+# the fly for a character outside the US layout.
+SPARE_KEYCODE = 93
 
 
 def titles(library: Path) -> list[str]:
@@ -62,23 +68,25 @@ def lyrics_of(library: Path, title: str) -> list[str]:
 
 
 def drive_folder_dialog(app: nx.App, folder: Path, owner: int) -> None:
-    """Types `folder` into the GTK folder chooser and accepts it. In
-    select-folder mode a typed folder may first be entered, so Enter is
-    repeated (bounded) until the dialog closes."""
+    """Types `folder` into the GTK folder chooser and accepts it. The chooser
+    opens on Recent, where Enter in the location entry does nothing, so a
+    click on the sidebar's Home row (client 57,59) first moves it to a real
+    folder; Enter then selects the typed folder (checked 2026-10-22 with
+    xdg-desktop-portal-gtk)."""
     dialog = app.file_dialog()
     time.sleep(0.6)
     nx.activate(dialog)
+    nx.click(dialog, 57, 59)
+    time.sleep(0.8)
     nx.press(dialog, "ctrl+l")
     time.sleep(0.3)
     nx.press(dialog, "ctrl+a", "backspace")
     nx.ensure_focus(dialog, "typing the folder path")
-    nx.tool("xdotool", "type", "--clearmodifiers", "--delay", "0", str(folder), timeout=20)
-    time.sleep(0.4)
-    for _ in range(3):
-        if not nx.window_exists(dialog) or not nx.geometry(dialog).viewable:
-            break
-        nx.press(dialog, "enter")
-        time.sleep(1.2)
+    nx.tool(
+        "xdotool", "type", "--clearmodifiers", "--delay", "0", f"{folder}/", timeout=20
+    )
+    time.sleep(0.6)
+    nx.press(dialog, "enter")
     nx.wait_until(
         lambda: not nx.window_exists(dialog) or not nx.geometry(dialog).viewable,
         12,
@@ -101,6 +109,9 @@ def preview_ready(app: nx.App, operator: int, writes: int):
 
 
 def open_folder_import(app: nx.App, operator: int, folder: Path) -> None:
+    # Park the pointer outside where the chooser opens: a GTK tooltip under
+    # it would be the portal's first visible window.
+    nx.mouse_move(operator, 1270, 790)
     nx.press(operator, "alt+f", *["down"] * FOLDER_ITEM_DOWNS, "enter")
     time.sleep(0.6)
     drive_folder_dialog(app, folder, operator)
@@ -114,6 +125,15 @@ def body(session: nx.Session) -> str:
     shutil.copytree(BATCH, folder)
     before = titles(library)
     summary["library_before"] = before
+    nx.tool("xmodmap", "-e", f"keycode {SPARE_KEYCODE} = ntilde Ntilde")
+    try:
+        return run(session, library, folder, before)
+    finally:
+        nx.tool("xmodmap", "-e", f"keycode {SPARE_KEYCODE} =", check=False)
+
+
+def run(session: nx.Session, library: Path, folder: Path, before: list[str]) -> str:
+    summary = session.summary
     app = session.app(["--operator-library", library], name="operator")
     operator = app.window()
     nx.activate(operator)
@@ -125,11 +145,26 @@ def body(session: nx.Session) -> str:
     )
     session.save(operator, "operator-import-preview")
     summary["summary"] = controls["import-summary"].name
-    if controls["import-summary"].name != "3 songs ready · 2 not importable · 0 duplicates":
-        raise nx.Failure(f"unexpected preview summary {controls['import-summary'].name!r}")
-    rows = [controls[f"import-row-{i}"].name for i in range(5) if f"import-row-{i}" in controls]
+    if (
+        controls["import-summary"].name
+        != "Ready: 3 · Not importable: 2 · Duplicates: 0"
+    ):
+        raise nx.Failure(
+            f"unexpected preview summary {controls['import-summary'].name!r}"
+        )
+    rows = [
+        controls[f"import-row-{i}"].name
+        for i in range(5)
+        if f"import-row-{i}" in controls
+    ]
     summary["rows"] = rows
-    if rows != ["Sungai Kehidupan", "broken.xml", "Canción del Alba", "empty.cho", "Lantern Hymn"]:
+    if rows != [
+        "Sungai Kehidupan",
+        "broken.xml",
+        "Canción del Alba",
+        "empty.cho",
+        "Lantern Hymn",
+    ]:
         raise nx.Failure(f"unexpected preview rows {rows}")
     if "import-choice-1" in controls or "import-choice-0" not in controls:
         raise nx.Failure("choices must exist for songs and not for failed files")
@@ -145,10 +180,15 @@ def body(session: nx.Session) -> str:
     )
     summary["library_after"] = after
     if set(after) - set(before) != IMPORTED:
-        raise nx.Failure(f"unexpected imported titles {sorted(set(after) - set(before))}")
+        raise nx.Failure(
+            f"unexpected imported titles {sorted(set(after) - set(before))}"
+        )
     cancion = lyrics_of(library, "Canción del Alba")
     summary["cancion_sections"] = cancion
-    if cancion[:2] != ["Verse 1", "Despierta el día sobre el mar\nla mañana canta sin cesar"]:
+    if cancion[:2] != [
+        "Verse 1",
+        "Despierta el día sobre el mar\nla mañana canta sin cesar",
+    ]:
         raise nx.Failure(f"Canción del Alba stored as {cancion[:2]}")
     time.sleep(0.8)
     session.save(operator, "operator-imported")
@@ -160,10 +200,16 @@ def body(session: nx.Session) -> str:
     nx.click(operator, *search.center)
     time.sleep(0.3)
     nx.type_text(operator, "mañana")
+
     def one_hit():
         found = app.controls(operator)
         first = found.get("song-0")
-        return first if first and first.name == "Canción del Alba" and "song-1" not in found else None
+        return (
+            first
+            if first and first.name == "Canción del Alba" and "song-1" not in found
+            else None
+        )
+
     hit = nx.wait_until(one_hit, 10, "the accented search hit")
     session.save(operator, "operator-search-accented")
     nx.click(operator, *hit.center)
@@ -202,7 +248,7 @@ def body(session: nx.Session) -> str:
     )
     session.save(operator, "operator-import-duplicates")
     summary["duplicate_summary"] = controls["import-summary"].name
-    if not controls["import-summary"].name.endswith("3 duplicates"):
+    if not controls["import-summary"].name.endswith("Duplicates: 3"):
         raise nx.Failure(f"duplicates not found: {controls['import-summary'].name!r}")
     for row in (0, 2, 4):
         chosen = controls.get(f"import-choice-{row}-skip")

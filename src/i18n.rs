@@ -1677,14 +1677,12 @@ impl Msg {
             Self::ImportChecking => "Checking the library for duplicates…",
             Self::ImportCommitting => "Importing…",
             Self::ImportSummary => {
-                "{songs} songs ready · {failed} not importable · {duplicates} duplicates"
+                "Ready: {songs} · Not importable: {failed} · Duplicates: {duplicates}"
             }
-            Self::ImportIgnored => {
-                "{count} other files in the folder are not song files and were skipped"
-            }
-            Self::ImportOverLimit => "{count} more files were not read (at most {max} per import)",
+            Self::ImportIgnored => "Not song files, skipped: {count}",
+            Self::ImportOverLimit => "Not read, over the limit of {max} files: {count}",
             Self::ImportNothing => "No song files were found.",
-            Self::ImportRowDetail => "{name} · {count} slides",
+            Self::ImportRowDetail => "{name} · Slides: {count}",
             Self::ImportBulkLabel => "All duplicates",
             Self::ImportReplaceNote => {
                 "Replace saves the file's words as a new revision of the library song; schedules keep their copy."
@@ -1706,11 +1704,9 @@ impl Msg {
             }
             Self::ImportCommitFailed => "Nothing was imported: {error}",
             Self::ImportCancelled => "Import cancelled. Nothing was imported.",
-            Self::ImportDone => {
-                "Imported {count} songs · {skipped} skipped · {failed} not importable"
-            }
+            Self::ImportDone => "Imported: {count} · Skipped: {skipped} · Not importable: {failed}",
             Self::ImportDoneLate => {
-                "The import finished before it could be cancelled: {count} songs imported"
+                "The import finished before it could be cancelled. Imported: {count}"
             }
             Self::ImportFailedStart => "Import could not start: {error}",
             Self::ImportBusy => "Another import is still finishing. Try again in a moment.",
@@ -2305,14 +2301,12 @@ impl Msg {
             Self::ImportChecking => "Memeriksa duplikat di pustaka…",
             Self::ImportCommitting => "Mengimpor…",
             Self::ImportSummary => {
-                "{songs} lagu siap · {failed} tidak dapat diimpor · {duplicates} duplikat"
+                "Siap: {songs} · Tidak dapat diimpor: {failed} · Duplikat: {duplicates}"
             }
-            Self::ImportIgnored => "{count} berkas lain di folder bukan berkas lagu dan dilewati",
-            Self::ImportOverLimit => {
-                "{count} berkas lagi tidak dibaca (paling banyak {max} per impor)"
-            }
+            Self::ImportIgnored => "Bukan berkas lagu, dilewati: {count}",
+            Self::ImportOverLimit => "Tidak dibaca, melebihi batas {max} berkas: {count}",
             Self::ImportNothing => "Tidak ada berkas lagu yang ditemukan.",
-            Self::ImportRowDetail => "{name} · {count} slide",
+            Self::ImportRowDetail => "{name} · Slide: {count}",
             Self::ImportBulkLabel => "Semua duplikat",
             Self::ImportReplaceNote => {
                 "Ganti menyimpan kata-kata berkas sebagai revisi baru lagu di pustaka; jadwal tetap memakai salinannya."
@@ -2339,9 +2333,9 @@ impl Msg {
             Self::ImportCommitFailed => "Tidak ada yang diimpor: {error}",
             Self::ImportCancelled => "Impor dibatalkan. Tidak ada yang diimpor.",
             Self::ImportDone => {
-                "{count} lagu diimpor · {skipped} dilewati · {failed} tidak dapat diimpor"
+                "Diimpor: {count} · Dilewati: {skipped} · Tidak dapat diimpor: {failed}"
             }
-            Self::ImportDoneLate => "Impor selesai sebelum dapat dibatalkan: {count} lagu diimpor",
+            Self::ImportDoneLate => "Impor selesai sebelum dapat dibatalkan. Diimpor: {count}",
             Self::ImportFailedStart => "Impor tidak dapat dimulai: {error}",
             Self::ImportBusy => "Impor lain masih berjalan. Coba lagi sebentar lagi.",
             Self::ImportWarnElement => "Tidak diimpor: <{name}>",

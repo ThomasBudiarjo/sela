@@ -231,10 +231,7 @@ fn folder_import_previews_commits_and_finds_accented_words(cx: &mut TestAppConte
         );
         assert_eq!(
             o.song_message.clone(),
-            Some((
-                "Imported 3 songs · 0 skipped · 2 not importable".into(),
-                false
-            ))
+            Some(("Imported: 3 · Skipped: 0 · Not importable: 2".into(), false))
         );
         let mut selected: Vec<String> = o.selected_songs().into_iter().map(|(_, t)| t).collect();
         selected.sort();
@@ -604,7 +601,7 @@ fn duplicate_choices_skip_copy_and_replace(cx: &mut TestAppContext) {
         assert_eq!(replaced.revision, original.revision + 1);
         assert_eq!(
             o.song_message.clone().unwrap().0,
-            "Imported 2 songs · 2 skipped · 2 not importable"
+            "Imported: 2 · Skipped: 2 · Not importable: 2"
         );
     });
     type_search(&mut cx, &operator, "mañana");
