@@ -1,4 +1,5 @@
 use super::*;
+use crate::song_library::{EditorPromptOpen, editor_prompt_open};
 
 impl Operator {
     pub(crate) fn dimensions(&self, width: f32, height: f32) -> [f32; 4] {
@@ -116,6 +117,7 @@ impl Render for Operator {
                     this.drag = None;
                 }
             }));
+            self.watch_window(window, cx);
         }
         let viewport = window.viewport_size();
         let [left, middle, right, upper] =
@@ -739,5 +741,38 @@ impl Render for Operator {
             .children(self.bar_menu_overlay(cx))
             .children(self.dialog_overlay(cx))
             .children(self.options_overlay(cx))
+            .when(editor_prompt_open(cx), |d| {
+                d.child(div().occlude().absolute().size_full())
+            })
+    }
+}
+
+impl Operator {
+    /// First render only: window subscriptions. They are detached because
+    /// they live as long as the operator and its window.
+    fn watch_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A Songs row that scrolled out of the list or was deleted leaves
+        // focus on an element GPUI no longer renders, and keys then dispatch
+        // from the window root, where Page Down is Go Live. The list takes
+        // that focus and keeps the Songs keys.
+        cx.on_focus_lost(window, |this, window, cx| {
+            let list = &this.controls[Control::SongList];
+            if window.focus_lost_restore_target(cx).as_ref() == Some(list) {
+                list.focus(window, cx);
+            }
+        })
+        .detach();
+        // While a song editor's close prompt is open, a backdrop holds back
+        // the pointer and no keystroke reaches this window's bindings, so no
+        // focus or key context can change the audience (VAL-FOCUS-001).
+        cx.observe_global::<EditorPromptOpen>(|_, cx| cx.notify())
+            .detach();
+        let operator = window.window_handle();
+        cx.intercept_keystrokes(move |_, window, cx| {
+            if window.window_handle() == operator && editor_prompt_open(cx) {
+                cx.stop_propagation();
+            }
+        })
+        .detach();
     }
 }

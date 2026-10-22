@@ -66,6 +66,19 @@ fn library_changed(cx: &mut App) {
     cx.default_global::<LibraryChanged>().0 += 1;
 }
 
+/// Song editor windows whose close prompt is open. The prompt is modal for
+/// the whole app (VAL-FOCUS-001): while this is nonzero the operator window
+/// takes no pointer or key input, so the audience cannot change behind it.
+#[derive(Default)]
+pub struct EditorPromptOpen(usize);
+
+impl Global for EditorPromptOpen {}
+
+pub fn editor_prompt_open(cx: &App) -> bool {
+    cx.try_global::<EditorPromptOpen>()
+        .is_some_and(|open| open.0 > 0)
+}
+
 pub fn open(path: PathBuf, cx: &mut App) -> Result<(), String> {
     open_song(path, None, cx)
 }
@@ -562,6 +575,7 @@ pub(crate) struct Library {
     /// True while `status` is a draft rejection that the next edit replaces
     /// (`clear_rejection`); survives translation because it is not a string.
     status_is_rejection: bool,
+    /// Written only by `set_confirm_close`, which keeps `EditorPromptOpen`.
     confirm_close: bool,
     /// Focus scope of the close prompt, and where focus returns on Cancel.
     prompt_scope: FocusHandle,
@@ -718,6 +732,9 @@ impl Library {
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
+        // A window closed with its prompt open must not leave the operator blocked.
+        cx.on_release(|this, cx| this.set_confirm_close(false, cx))
+            .detach();
         for (index, field) in this.fields.iter().enumerate() {
             this.subscriptions
                 .push(cx.observe(field, move |this, field, cx| {
@@ -948,6 +965,17 @@ impl Library {
             cx.notify();
         }
     }
+    fn set_confirm_close(&mut self, open: bool, cx: &mut App) {
+        if self.confirm_close != open {
+            self.confirm_close = open;
+            let count = &mut cx.default_global::<EditorPromptOpen>().0;
+            if open {
+                *count += 1;
+            } else {
+                *count -= 1;
+            }
+        }
+    }
     fn may_close(&mut self, cx: &mut Context<Self>) -> bool {
         if self.pending.is_some() {
             self.set_status(t!(Msg::WaitPendingClose));
@@ -955,7 +983,7 @@ impl Library {
             return false;
         }
         if self.dirty(cx) {
-            self.confirm_close = true;
+            self.set_confirm_close(true, cx);
             self.set_status(t!(Msg::UnsavedChanges));
             cx.notify();
             return false;
@@ -983,7 +1011,7 @@ impl Library {
         if !self.confirm_close {
             return;
         }
-        self.confirm_close = false;
+        self.set_confirm_close(false, cx);
         self.confirm_delete = false;
         self.set_status(t!(Msg::ContinueEditing));
         match self.prompt_return.take() {
@@ -1067,7 +1095,7 @@ impl Library {
         self.variant = 0;
         self.entry = None;
         self.confirm_delete = false;
-        self.confirm_close = false;
+        self.set_confirm_close(false, cx);
         self.load_fields(cx);
         cx.notify();
     }
@@ -1142,7 +1170,7 @@ impl Library {
                 self.baseline = song;
                 self.version = Some(v);
                 self.confirm_delete = false;
-                self.confirm_close = false;
+                self.set_confirm_close(false, cx);
                 self.cursor = None;
                 library_changed(cx);
                 if self.close_after_save {
@@ -1270,9 +1298,12 @@ impl Library {
                 };
                 self.refresh(cx);
             }
-            10 if self.confirm_close => window.remove_window(),
+            10 if self.confirm_close => {
+                self.set_confirm_close(false, cx);
+                window.remove_window();
+            }
             YES if self.confirm_close => {
-                self.confirm_close = false;
+                self.set_confirm_close(false, cx);
                 self.action(15, window, cx);
                 self.prompt_return = None;
             }
