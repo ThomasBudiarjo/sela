@@ -298,7 +298,13 @@ follows EW8-OBS-014–019; cases listed in EW8-OBS-020 are marked provisional.
   Go Live (EW8-OBS-018). They are GPUI actions bound in the
   `SelaShow && !SelaTextInput` context, so they do nothing while a search or
   editor text field has focus. That text-field rule is Sela policy; EasyWorship
-  focus contexts are still open (W04).
+  focus contexts are still open (W04). While a song editor's close prompt is
+  open, the operator window takes no input at all: a backdrop holds back the
+  pointer and a keystroke interceptor drops every key, so no click, show key,
+  Live pane key or menu can change the audience (`EditorPromptOpen`,
+  VAL-FOCUS-001; fix-sunday-focus-modality, SC-SONG-01). Unobserved in
+  EasyWorship: whether a click on the main window brings such a prompt
+  forward; Sela does not.
 - **Live pane**: under a mask it shows "Mask: Black" and "Under mask: Song ·
   Section"; in flight "Sending mask: …"; with Live output off "Mask armed: … ·
   shown when Live output is on"; a renderer refusal "Mask … not shown: …".
@@ -533,8 +539,11 @@ EW8-OBS-021.
   queued says "Not deleted: wait for the library to finish the previous
   change"). Storage soft-deletes the song, so schedule items keep their pinned
   revisions, and nothing is sent to the audience. On success the row leaves
-  Songs, the library selection clears (Preview keeps the slides it shows) and
-  the Songs footer says "Deleted “title”". If the song changed or was deleted
+  Songs, the selection (so Preview) and keyboard focus move to the neighbour
+  row (the one below, or the one above for the last row), and the Songs
+  footer says "Deleted “title”". Deleting the only song clears the
+  selection, Preview keeps the slides it shows and focus stays on the empty
+  list, so Page Down does not go live. If the song changed or was deleted
   elsewhere first, the footer says "Not deleted: “title” was changed or
   deleted elsewhere" in red and the row stays; other storage failures say so
   with the error.

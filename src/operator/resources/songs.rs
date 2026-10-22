@@ -231,11 +231,10 @@ impl Operator {
             .into_any_element()
     }
 
-    /// The list element: rendered whenever a library is open, even with no
-    /// rows, so it can hold keyboard focus for a row that scrolled out or was
-    /// deleted and keep the Songs keys (`watch_window` hands focus to it).
-    /// Without it GPUI dispatches from the window root, where Page Down is
-    /// Go Live.
+    /// The list element, rendered whenever a library is open, rows or not,
+    /// so it can take focus from a row that scrolled out or was deleted
+    /// (`watch_window`). Its `SelaSongRow` context keeps Page Down paging the
+    /// list; without it Page Down from the list resolves to Go Live.
     fn song_list_scope(
         &mut self,
         body: gpui::AnyElement,

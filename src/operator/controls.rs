@@ -46,8 +46,9 @@ pub(crate) enum Control {
     ReviewFiles,
     ItemMenuDuplicate,
     Arrangement,
-    /// The Songs list itself. Its rows are the tab stops and hold focus; the
-    /// list takes it only while the focused row is not rendered.
+    /// The Songs list itself. Its rows are the tab stops; the list holds
+    /// focus after a click below the rows or once the focused row is no
+    /// longer rendered.
     SongList,
 }
 

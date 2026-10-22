@@ -258,10 +258,19 @@ visible rows plus overdraw are built, for the unfiltered list and for results
 alike. GPUI paints no scrollbar, so `songs.rs` draws a thumb and track
 (drag or click maps the pointer to a scroll position). Ctrl+End/Home,
 Page Up/Down and Shift variants move the selection and scroll the row into
-view; the row is focused once built. Sort by Title or Date modified is
-persisted in `settings.txt`; Date modified is the order of the last save
-(`search_rows.row`, moved to the end on every save). A rebuilt index restarts
-in id order, so a rebuild loses dates (no schema change was made).
+view; the row is focused once built. When the focused row scrolls out (wheel
+or scrollbar), keyboard focus moves to the list element (`Control::SongList`,
+context `SelaControl SelaSongRow`), so the list keys keep working from the
+selection and Page Down still pages instead of going live. Deleting the
+selected song moves selection and focus to its neighbour row, or to the list
+element (rendered even when empty) after the only song. Before
+fix-sunday-focus-modality (SC-RES-01), focus stayed on the row that was no
+longer rendered; GPUI then dispatches keys from its root view, which has no
+key context, so every operator key was dead until the next click. Sort by
+Title or Date modified is persisted in `settings.txt`; Date modified is the
+order of the last save (`search_rows.row`, moved to the end on every save). A
+rebuilt index restarts in id order, so a rebuild loses dates (no schema change
+was made).
 
 Frame measurement (release build, 20,000-song `search_bench --keep` corpus,
 `scripts/resource-browser-windows.py --binary target\release\sela.exe

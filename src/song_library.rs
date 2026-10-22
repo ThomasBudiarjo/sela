@@ -732,9 +732,6 @@ impl Library {
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
-        // A window closed with its prompt open must not leave the operator blocked.
-        cx.on_release(|this, cx| this.set_confirm_close(false, cx))
-            .detach();
         for (index, field) in this.fields.iter().enumerate() {
             this.subscriptions
                 .push(cx.observe(field, move |this, field, cx| {

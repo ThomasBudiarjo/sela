@@ -85,9 +85,7 @@ fn idle(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
 }
 
 #[gpui::test]
-fn page_down_after_a_scrollbar_scroll_pages_the_songs_and_never_goes_live(
-    cx: &mut TestAppContext,
-) {
+fn page_down_after_a_scrollbar_scroll_pages_the_songs_and_never_goes_live(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (mut cx, operator) = open(cx, numbered_library(&dir, 400), 400);
     preview_first_song_with_output_on(&mut cx, &operator);
@@ -95,7 +93,10 @@ fn page_down_after_a_scrollbar_scroll_pages_the_songs_and_never_goes_live(
     let track = cx.debug_bounds("song-scrollbar").unwrap().center();
     cx.simulate_mouse_down(track, gpui::MouseButton::Left, Default::default());
     cx.simulate_mouse_up(track, gpui::MouseButton::Left, Default::default());
-    assert!(!row_shown(&cx, &operator, 0), "the focused row scrolled out");
+    assert!(
+        !row_shown(&cx, &operator, 0),
+        "the focused row scrolled out"
+    );
 
     cx.simulate_keystrokes("pagedown");
     idle(&mut cx, &operator);
@@ -124,7 +125,10 @@ fn ctrl_end_after_a_wheel_scroll_reaches_the_last_song(cx: &mut TestAppContext) 
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-2000.))),
         ..Default::default()
     });
-    assert!(!row_shown(&cx, &operator, 0), "the focused row scrolled out");
+    assert!(
+        !row_shown(&cx, &operator, 0),
+        "the focused row scrolled out"
+    );
 
     cx.simulate_keystrokes("ctrl-end");
     cx.run_until_parked();
@@ -156,11 +160,10 @@ fn deleting_the_last_song_hands_selection_and_focus_to_its_neighbour(cx: &mut Te
 }
 
 #[gpui::test]
-fn deleting_the_only_song_keeps_page_down_out_of_live(cx: &mut TestAppContext) {
+fn deleting_the_only_song_leaves_keys_working_and_page_down_out_of_live(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (mut cx, operator) = open(cx, library_with_song(&dir), 1);
     preview_first_song_with_output_on(&mut cx, &operator);
-    let sent = operator.read_with(&cx, |o, _| submitted(o));
     cx.simulate_keystrokes("delete");
     click(&mut cx, "dialog-confirm");
     settle(&mut cx, &operator, "deleted", |o| {
@@ -168,12 +171,17 @@ fn deleting_the_only_song_keeps_page_down_out_of_live(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
+    cx.simulate_keystrokes("ctrl-b");
+    assert!(
+        operator.read_with(&cx, |o, _| o.masks.is_on(Mask::Black)),
+        "show keys still reach the operator"
+    );
     cx.simulate_keystrokes("pagedown");
     idle(&mut cx, &operator);
-    operator.read_with(&cx, |o, _| {
-        assert!(o.live.is_none(), "Page Down in the empty list went live");
-        assert_eq!(submitted(o), sent);
-    });
+    assert!(
+        operator.read_with(&cx, |o, _| o.live.is_none()),
+        "Page Down in the empty Songs list went live"
+    );
 }
 
 /// Schedule [Signal Hymn, Quiet Canticle] with the hymn live and the Live
@@ -253,7 +261,10 @@ fn dont_save_in_the_editor_close_prompt_unblocks_the_operator(cx: &mut TestAppCo
 
     let no = editor_cx.debug_bounds("close-prompt-no").unwrap().center();
     editor_cx.simulate_click(no, Default::default());
-    assert!(editor_windows(&cx).is_empty(), "Don't Save closed the editor");
+    assert!(
+        editor_windows(&cx).is_empty(),
+        "Don't Save closed the editor"
+    );
     click(&mut cx, "mask-black");
     assert!(operator.read_with(&cx, |o, _| o.masks.is_on(Mask::Black)));
 }

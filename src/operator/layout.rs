@@ -748,13 +748,13 @@ impl Render for Operator {
 }
 
 impl Operator {
-    /// First render only: window subscriptions. They are detached because
-    /// they live as long as the operator and its window.
+    /// First render only: window subscriptions, detached because they last
+    /// as long as the operator (the keystroke interceptor checks its window).
     fn watch_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // A Songs row that scrolled out of the list or was deleted leaves
-        // focus on an element GPUI no longer renders, and keys then dispatch
-        // from the window root, where Page Down is Go Live. The list takes
-        // that focus and keeps the Songs keys.
+        // focus on an element GPUI no longer renders. Keys then dispatch from
+        // the root view, which has no key context, so every operator key is
+        // dead. The list takes that focus and keeps the Songs keys.
         cx.on_focus_lost(window, |this, window, cx| {
             let list = &this.controls[Control::SongList];
             if window.focus_lost_restore_target(cx).as_ref() == Some(list) {
