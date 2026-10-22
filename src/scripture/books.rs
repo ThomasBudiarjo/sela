@@ -158,6 +158,34 @@ impl Book {
     }
 }
 
+/// USFM/USFX book codes in canonical order (Genesis to Revelation).
+const USFM: [&str; 66] = [
+    "GEN", "EXO", "LEV", "NUM", "DEU", "JOS", "JDG", "RUT", "1SA", "2SA", "1KI", "2KI", "1CH",
+    "2CH", "EZR", "NEH", "EST", "JOB", "PSA", "PRO", "ECC", "SNG", "ISA", "JER", "LAM", "EZK",
+    "DAN", "HOS", "JOL", "AMO", "OBA", "JON", "MIC", "NAM", "HAB", "ZEP", "HAG", "ZEC", "MAL",
+    "MAT", "MRK", "LUK", "JHN", "ACT", "ROM", "1CO", "2CO", "GAL", "EPH", "PHP", "COL", "1TH",
+    "2TH", "1TI", "2TI", "TIT", "PHM", "HEB", "JAS", "1PE", "2PE", "1JN", "2JN", "3JN", "JUD",
+    "REV",
+];
+
+impl Book {
+    /// The book with this OSIS id (`Gen`, `1Cor`), ignoring ASCII case.
+    /// Books outside the 66-book canon (`Tob`, `1Macc`) have none.
+    pub fn from_osis(id: &str) -> Option<Book> {
+        Book::all().find(|book| book.osis().eq_ignore_ascii_case(id))
+    }
+
+    /// The USFM/USFX code (`GEN`, `1CO`).
+    pub fn usfm(self) -> &'static str {
+        USFM[usize::from(self.0) - 1]
+    }
+
+    /// The book with this USFM/USFX code, ignoring ASCII case.
+    pub fn from_usfm(code: &str) -> Option<Book> {
+        Book::all().find(|book| book.usfm().eq_ignore_ascii_case(code))
+    }
+}
+
 /// Books matching a typed book name or prefix, best first: the book that has
 /// the typed text as an exact name or alias, then every book with a name or
 /// alias starting with it, in canonical order. Case, spaces, dots and hyphens
@@ -213,6 +241,19 @@ mod tests {
         assert_eq!(Book::from_number(1).map(Book::osis), Some("Gen"));
         assert_eq!(Book::from_number(66).map(Book::osis), Some("Rev"));
         assert_eq!(Book::all().count(), 66);
+    }
+
+    #[test]
+    fn osis_and_usfm_codes_round_trip_for_every_book() {
+        for book in Book::all() {
+            assert_eq!(Book::from_osis(book.osis()), Some(book));
+            assert_eq!(Book::from_usfm(book.usfm()), Some(book));
+            assert_eq!(Book::from_usfm(&book.usfm().to_lowercase()), Some(book));
+        }
+        assert_eq!(Book::from_osis("Tob"), None);
+        assert_eq!(Book::from_usfm("FRT"), None);
+        assert_eq!(Book::from_usfm("JHN").map(Book::osis), Some("John"));
+        assert_eq!(Book::from_usfm("PHM").map(Book::osis), Some("Phlm"));
     }
 
     #[test]
