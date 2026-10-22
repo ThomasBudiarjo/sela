@@ -913,12 +913,20 @@ Acceptance: S04 passes; portability does not imply permission to redistribute as
 
 Depends on: M1-05, M1-06. Tests: U, I, N, L.
 
-- [ ] Pin supported OpenLyrics versions/fields and consult authoritative format docs.
+- [x] Pin supported OpenLyrics versions/fields and consult authoritative format docs.
+  (0.8/0.9 parser core, `src/import/openlyrics.rs`; docs/import.md "OpenLyrics".)
 - [ ] Map sections, metadata, line breaks and arrangements with loss diagnostics.
-- [ ] Disable external entity/network resolution; bound input size and nesting.
+  (Parser part done: `ParsedSong` and `import::song::to_song` onto `storage::Song`,
+  with elements and repeated properties reported. Open: dropped attributes such as
+  `lines/@repeat` and `verse/@lang` are not reported yet, see docs/import.md; saving
+  through `save_song` stays with the framework.)
+- [x] Disable external entity/network resolution; bound input size and nesting.
 - [ ] Stage import with preview, duplicates policy and transaction/cancel behavior.
 - [ ] Test malformed XML, unknown fields, repeated labels, Unicode and partial batch
   failure using redistributable fixtures; keep originals untouched.
+  (Parser part done: malformed/hostile XML, unknown fields, repeated labels, Unicode
+  and a bounded property test. Partial batch failure and untouched originals need the
+  framework.)
 
 Acceptance: supported data imports correctly and unsupported content is reported,
 not silently discarded or guessed.
