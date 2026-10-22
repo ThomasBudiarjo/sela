@@ -4,8 +4,10 @@
 //! that never match an entry from an earlier schedule in the same session.
 //! The schedule's document is a `.selaschedule` file (see `schedule_file`).
 use crate::arrangement::VariantId;
+use crate::scripture::Snapshot;
 use crate::storage::{MAX_ITEMS, Version};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EntryId(u64);
@@ -19,6 +21,9 @@ pub struct Entry {
     /// belongs to the entry, never to the library song, so a duplicate can
     /// differ from its original.
     pub arrangement: Option<VariantId>,
+    /// A scripture item's pinned verses (M4-04); `None` for a song. Its
+    /// `version` is `Snapshot::version`, which no library song has.
+    pub scripture: Option<Arc<Snapshot>>,
 }
 
 /// What a saved schedule remembers about one entry.
@@ -99,6 +104,36 @@ impl Schedule {
                 version,
                 title,
                 arrangement: None,
+                scripture: None,
+            },
+        );
+        Ok(id)
+    }
+
+    /// Inserts a scripture item pinning `snapshot`, titled with its
+    /// reference, before the entry at `at` (past the end appends).
+    pub fn insert_scripture(
+        &mut self,
+        at: usize,
+        snapshot: Snapshot,
+        title: String,
+    ) -> Result<EntryId, Error> {
+        if !snapshot.valid() {
+            return Err(Error::Invalid);
+        }
+        if self.entries.len() >= MAX_ITEMS {
+            return Err(Error::Full);
+        }
+        let id = self.allocate();
+        let at = at.min(self.entries.len());
+        self.entries.insert(
+            at,
+            Entry {
+                id,
+                version: snapshot.version(),
+                title,
+                arrangement: None,
+                scripture: Some(Arc::new(snapshot)),
             },
         );
         Ok(id)
@@ -280,18 +315,41 @@ impl Schedule {
     /// Replaces the contents with a schedule file's items (pin, song title),
     /// in file order.
     pub fn open(&mut self, path: PathBuf, items: Vec<(Pin, String)>) -> Result<(), Error> {
-        if items.len() > MAX_ITEMS {
+        self.open_items(
+            path,
+            items
+                .into_iter()
+                .map(|(pin, title)| (pin, title, None))
+                .collect(),
+        )
+    }
+
+    /// `open` for a file that may hold scripture items: each comes with its
+    /// snapshot, whose version must be the pin's.
+    pub fn open_items(
+        &mut self,
+        path: PathBuf,
+        items: Vec<(Pin, String, Option<Snapshot>)>,
+    ) -> Result<(), Error> {
+        if items.len() > MAX_ITEMS
+            || items.iter().any(|(pin, _, snapshot)| {
+                snapshot
+                    .as_ref()
+                    .is_some_and(|s| !s.valid() || s.version() != pin.version)
+            })
+        {
             return Err(Error::Invalid);
         }
         self.document += 1;
-        self.baseline = items.iter().map(|(pin, _)| *pin).collect();
+        self.baseline = items.iter().map(|(pin, _, _)| *pin).collect();
         self.entries = items
             .into_iter()
-            .map(|(pin, title)| Entry {
+            .map(|(pin, title, snapshot)| Entry {
                 id: self.allocate(),
                 version: pin.version,
                 title,
                 arrangement: pin.arrangement,
+                scripture: snapshot.map(Arc::new),
             })
             .collect();
         self.path = Some(path);
@@ -528,6 +586,58 @@ mod tests {
         assert_ne!(opened, first);
         s.clear();
         assert_ne!(s.document(), opened);
+    }
+
+    fn snapshot(text: &str) -> Snapshot {
+        use crate::scripture::{Book, TranslationInfo, VerseId};
+        let info = TranslationInfo {
+            id: "SYN".into(),
+            name: "Synthetic".into(),
+            language: "en".into(),
+            rights: String::new(),
+            source: String::new(),
+            redistributable: true,
+            bundled: false,
+        };
+        let id = VerseId::new(Book::from_number(43).unwrap(), 3, 16).unwrap();
+        Snapshot::new(&info, &[(id, text.into())])
+    }
+
+    #[test]
+    fn scripture_items_pin_their_snapshot_and_reopen_with_it() {
+        let mut s = Schedule::default();
+        let song = s.push(v(1, 1), "Song".into()).unwrap();
+        let verse = s
+            .insert_scripture(0, snapshot("One"), "John 3:16 (SYN)".into())
+            .unwrap();
+        assert_eq!(order(&s), [verse, song]);
+        let entry = s.get(verse).unwrap().clone();
+        assert_eq!(entry.version, snapshot("One").version());
+        assert_eq!(entry.scripture.as_deref(), Some(&snapshot("One")));
+        assert!(s.get(song).unwrap().scripture.is_none());
+        let copies = s.duplicate(&[verse]).unwrap();
+        assert_eq!(s.get(copies[0]).unwrap().scripture, entry.scripture.clone());
+        let mut bad = snapshot("One");
+        bad.verses.clear();
+        assert_eq!(s.insert_scripture(0, bad, "x".into()), Err(Error::Invalid));
+
+        let pins: Vec<Pin> = s.pins().collect();
+        s.mark_saved("a.selaschedule".into(), pins.clone());
+        assert!(!s.is_dirty());
+        let items = vec![
+            (pins[0], "John 3:16 (SYN)".into(), Some(snapshot("One"))),
+            (pins[2], "Song".into(), None),
+        ];
+        s.open_items("b.selaschedule".into(), items).unwrap();
+        assert_eq!(s.entries().len(), 2);
+        assert_eq!(s.entries()[0].scripture.as_deref(), Some(&snapshot("One")));
+        // A snapshot whose content does not match its pin is refused.
+        let mismatched = vec![(pins[0], "x".into(), Some(snapshot("Other")))];
+        assert_eq!(
+            s.open_items("c.selaschedule".into(), mismatched),
+            Err(Error::Invalid)
+        );
+        assert_eq!(s.entries().len(), 2, "a refused open keeps contents");
     }
 
     #[test]

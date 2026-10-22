@@ -54,6 +54,7 @@ fn file(items: Vec<Item>) -> ScheduleFile {
     ScheduleFile {
         title: "Sunday".into(),
         items,
+        scripture: Vec::new(),
     }
 }
 
@@ -169,11 +170,107 @@ fn extension_is_added_once() {
     );
 }
 
+fn scripture(position: usize, translation: &str, redistributable: bool) -> ScriptureItem {
+    use crate::scripture::Book;
+    let john = Book::from_number(43).unwrap();
+    ScriptureItem {
+        position,
+        title: format!("John 3:16, 18 ({translation})"),
+        snapshot: Snapshot {
+            translation: translation.into(),
+            name: "Synthetic “Bible”".into(),
+            language: "id".into(),
+            redistributable,
+            verses: vec![
+                (VerseId::new(john, 3, 16).unwrap(), "Pertama ünïcode".into()),
+                (
+                    VerseId::new(john, 3, 18).unwrap(),
+                    "Third \"quoted\"".into(),
+                ),
+            ],
+        },
+    }
+}
+
+#[test]
+fn songs_only_schedules_stay_version_3_for_older_readers() {
+    let v = value(&file(vec![item(1, "Alpha")]));
+    assert_eq!(v["version"], 3);
+}
+
+#[test]
+fn scripture_items_round_trip_in_place_as_version_4() {
+    let mut original = file(vec![item(1, "Alpha"), item(2, "Beta")]);
+    original.scripture = vec![scripture(0, "SYA", true), scripture(2, "USER", false)];
+    let v = value(&original);
+    assert_eq!(v["version"], 4);
+    let kinds: Vec<&str> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["scripture", "song", "scripture", "song"]);
+    assert_eq!(v["items"][0]["verses"][0][0], 43_003_016);
+    assert_eq!(v["items"][2]["redistributable"], false);
+    assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
+    // Only scripture is fine too.
+    let mut only = file(Vec::new());
+    only.scripture = vec![scripture(0, "SYA", true)];
+    assert_eq!(decode(&encode(&only).unwrap()).unwrap(), only);
+}
+
+#[test]
+fn bad_scripture_items_are_refused_on_write_and_read() {
+    let mut misplaced = file(vec![item(1, "Alpha")]);
+    misplaced.scripture = vec![scripture(5, "SYA", true)];
+    assert_eq!(encode(&misplaced), Err(WriteError::Invalid));
+    let mut unordered = file(Vec::new());
+    unordered.scripture = vec![scripture(1, "SYA", true), scripture(0, "SYA", true)];
+    assert_eq!(encode(&unordered), Err(WriteError::Invalid));
+    let mut empty = file(Vec::new());
+    empty.scripture = vec![scripture(0, "SYA", true)];
+    empty.scripture[0].snapshot.verses.clear();
+    assert_eq!(encode(&empty), Err(WriteError::Invalid));
+
+    let mut good = file(Vec::new());
+    good.scripture = vec![scripture(0, "SYA", true)];
+    let base = value(&good);
+    let corrupt = |edit: &dyn Fn(&mut Value)| {
+        let mut v = base.clone();
+        edit(&mut v);
+        decode(v.to_string().as_bytes())
+    };
+    assert_eq!(
+        corrupt(&|v| v["items"][0]["verses"][0][0] = 99_001_001.into()),
+        Err(ReadError::Corrupt),
+        "a verse outside the canon"
+    );
+    assert_eq!(
+        corrupt(&|v| v["items"][0]["verses"].as_array_mut().unwrap().reverse()),
+        Err(ReadError::Corrupt),
+        "verses out of order"
+    );
+    assert_eq!(
+        corrupt(&|v| v["items"][0]["translation"] = "../x".into()),
+        Err(ReadError::Corrupt)
+    );
+    assert_eq!(
+        corrupt(&|v| v["items"][0]["verses"][0] = Value::from("x")),
+        Err(ReadError::Corrupt)
+    );
+    // A version 3 file cannot carry scripture items.
+    assert_eq!(
+        corrupt(&|v| v["version"] = 3.into()),
+        Err(ReadError::Corrupt)
+    );
+}
+
 #[test]
 fn newer_version_is_rejected_with_its_number() {
     let mut v = value(&file(Vec::new()));
-    v["version"] = 4.into();
-    assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Newer(4)));
+    v["version"] = 5.into();
+    assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Newer(5)));
     v["version"] = 0.into();
     assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Corrupt));
 }

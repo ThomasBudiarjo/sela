@@ -1,19 +1,17 @@
 //! Selected verses as audience slides and reference labels (M4-04).
 //!
 //! Verses always go out in canonical order whatever order they were picked
-//! in. A passage is split between verses into slides of at most `budget`
-//! characters; a single verse longer than that is split between words, and
-//! its continuation slides repeat no verse number. EasyWorship 8.0.49's own
-//! splitting ("Automatically Flow Scripture on Multiple Slides", minimum
-//! font size, EW8-OBS-056) is unobserved, so the budget is a best guess
-//! (docs/reference-observations.md, Scriptures best guesses).
+//! in. Text is word-wrapped into lines (the renderer fits lines, it does not
+//! wrap them) and a passage is split between verses into slides of at most
+//! `LAYOUT.lines` lines; a single verse longer than that is split between
+//! lines, and its continuation slides repeat no verse number. EasyWorship
+//! 8.0.49's own splitting ("Automatically Flow Scripture on Multiple
+//! Slides", minimum font size, EW8-OBS-056) is unobserved, so the layout is
+//! a best guess (docs/reference-observations.md, Scriptures best guesses).
 use super::books::Book;
 use super::model::{Inventory, VerseId};
 use super::reference::{Reference, Span};
 use crate::i18n::Language;
-
-/// Characters per slide: about five lines of 60 at the default size.
-pub const SLIDE_BUDGET: usize = 280;
 
 /// Where a reference lands in one translation: the whole chapters it
 /// touches (what the verse list shows) and the referenced verses inside
@@ -107,36 +105,39 @@ pub fn locate(reference: &Reference, inventory: &Inventory) -> Result<Located, M
 /// One audience slide of a passage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PassageSlide {
+    /// Word-wrapped lines joined by `\n`.
     pub text: String,
     /// The verses whose text is on this slide, in order.
     pub verses: Vec<VerseId>,
 }
 
+/// Slide shape: line width in characters and lines per slide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    pub line_chars: usize,
+    pub lines: usize,
+}
+
+/// About 44 characters a line and six lines a slide: large, readable text
+/// on a 16:9 output once the renderer fits it.
+pub const LAYOUT: Layout = Layout {
+    line_chars: 44,
+    lines: 6,
+};
+
 /// Splits verses into slides. `numbers` prefixes each verse with its number
 /// (EW "Show verse numbers", on by default, EW8-OBS-056); a verse in another
-/// chapter than the one before it gets `chapter:verse`.
-pub fn paginate(verses: &[(VerseId, String)], budget: usize, numbers: bool) -> Vec<PassageSlide> {
-    let budget = budget.max(40);
+/// chapter than the one before it gets `chapter:verse`. Verses flow on from
+/// line to line; a slide break falls between verses unless one verse alone
+/// needs more than a slide.
+pub fn paginate(verses: &[(VerseId, String)], layout: Layout, numbers: bool) -> Vec<PassageSlide> {
+    let width = layout.line_chars.max(8);
+    let max_lines = layout.lines.max(1);
     let mut sorted: Vec<&(VerseId, String)> = verses.iter().collect();
     sorted.sort_by_key(|(id, _)| *id);
     sorted.dedup_by_key(|(id, _)| *id);
-    let mut slides: Vec<PassageSlide> = Vec::new();
-    let mut current = PassageSlide {
-        text: String::new(),
-        verses: Vec::new(),
-    };
+    let mut pieces: Vec<(VerseId, String)> = Vec::new();
     let mut previous: Option<VerseId> = None;
-    let flush = |current: &mut PassageSlide, slides: &mut Vec<PassageSlide>| {
-        if !current.verses.is_empty() {
-            slides.push(std::mem::replace(
-                current,
-                PassageSlide {
-                    text: String::new(),
-                    verses: Vec::new(),
-                },
-            ));
-        }
-    };
     for (id, text) in sorted {
         let prefix = match previous {
             _ if !numbers => String::new(),
@@ -146,70 +147,87 @@ pub fn paginate(verses: &[(VerseId, String)], budget: usize, numbers: bool) -> V
             _ => format!("{} ", id.verse),
         };
         previous = Some(*id);
-        let piece = format!("{prefix}{text}");
-        let separator = usize::from(!current.text.is_empty());
-        if chars(&current.text) + separator + chars(&piece) <= budget {
-            if separator == 1 {
-                current.text.push(' ');
-            }
-            current.text.push_str(&piece);
-            current.verses.push(*id);
+        pieces.push((*id, format!("{prefix}{text}")));
+    }
+    let mut slides: Vec<PassageSlide> = Vec::new();
+    let mut group: Vec<&(VerseId, String)> = Vec::new();
+    let joined = |group: &[&(VerseId, String)]| {
+        group
+            .iter()
+            .map(|(_, piece)| piece.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let flush = |group: &mut Vec<&(VerseId, String)>, slides: &mut Vec<PassageSlide>| {
+        if group.is_empty() {
+            return;
+        }
+        slides.push(PassageSlide {
+            text: wrap(&joined(group), width).join("\n"),
+            verses: group.iter().map(|(id, _)| *id).collect(),
+        });
+        group.clear();
+    };
+    for piece in &pieces {
+        let mut candidate = group.clone();
+        candidate.push(piece);
+        if wrap(&joined(&candidate), width).len() <= max_lines {
+            group = candidate;
             continue;
         }
-        flush(&mut current, &mut slides);
-        // A verse longer than a whole slide continues on the next ones.
-        for part in split_words(&piece, budget) {
-            if !current.verses.is_empty() {
-                flush(&mut current, &mut slides);
-            }
-            current.text = part;
-            current.verses.push(*id);
+        flush(&mut group, &mut slides);
+        let lines = wrap(&piece.1, width);
+        if lines.len() <= max_lines {
+            group.push(piece);
+            continue;
+        }
+        // One verse longer than a slide continues on the next ones.
+        for chunk in lines.chunks(max_lines) {
+            slides.push(PassageSlide {
+                text: chunk.join("\n"),
+                verses: vec![piece.0],
+            });
         }
     }
-    flush(&mut current, &mut slides);
+    flush(&mut group, &mut slides);
     slides
 }
 
-fn chars(text: &str) -> usize {
-    text.chars().count()
-}
-
-/// Pieces of at most `budget` characters, broken between words where there
-/// is a space, else inside the word.
-fn split_words(text: &str, budget: usize) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut part = String::new();
-    for word in text.split(' ') {
-        let mut word = word.to_owned();
+/// Greedy word wrap to lines of at most `width` characters; a word longer
+/// than a line is broken inside it.
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut length = 0usize;
+    for word in text.split_whitespace() {
+        let mut word: Vec<char> = word.chars().collect();
         loop {
-            let separator = usize::from(!part.is_empty());
-            if chars(&part) + separator + chars(&word) <= budget {
+            let separator = usize::from(length > 0);
+            if length + separator + word.len() <= width {
                 if separator == 1 {
-                    part.push(' ');
+                    line.push(' ');
                 }
-                part.push_str(&word);
+                line.extend(word.iter());
+                length += separator + word.len();
                 break;
             }
-            if !part.is_empty() {
-                parts.push(std::mem::take(&mut part));
+            if length > 0 {
+                lines.push(std::mem::take(&mut line));
+                length = 0;
                 continue;
             }
-            // One word longer than the budget.
-            let cut = word
-                .char_indices()
-                .nth(budget)
-                .map_or(word.len(), |(at, _)| at);
-            parts.push(word[..cut].to_owned());
-            word = word[cut..].to_owned();
+            let rest = word.split_off(width);
+            lines.push(word.iter().collect());
+            word = rest;
             if word.is_empty() {
                 break;
             }
         }
     }
-    if !part.is_empty() {
-        parts.push(part);
+    if length > 0 {
+        lines.push(line);
     }
-    parts
+    lines
 }
 
 /// The reference for a set of verses, in canonical order: consecutive
@@ -404,6 +422,10 @@ mod tests {
         list.iter().map(|(id, t)| (*id, t.to_string())).collect()
     }
 
+    fn flat(slide: &PassageSlide) -> String {
+        slide.text.replace('\n', " ")
+    }
+
     #[test]
     fn short_passages_fit_one_slide_with_verse_numbers_in_canonical_order() {
         let slides = paginate(
@@ -412,47 +434,53 @@ mod tests {
                 (v(43, 3, 16), "First."),
                 (v(43, 4, 1), "Next chapter."),
             ]),
-            SLIDE_BUDGET,
+            LAYOUT,
             true,
         );
         assert_eq!(slides.len(), 1);
-        assert_eq!(slides[0].text, "16 First. 18 Third. 4:1 Next chapter.");
+        assert_eq!(flat(&slides[0]), "16 First. 18 Third. 4:1 Next chapter.");
         assert_eq!(slides[0].verses, [v(43, 3, 16), v(43, 3, 18), v(43, 4, 1)]);
-        let plain = paginate(&verses(&[(v(43, 3, 16), "First.")]), SLIDE_BUDGET, false);
+        let plain = paginate(&verses(&[(v(43, 3, 16), "First.")]), LAYOUT, false);
         assert_eq!(plain[0].text, "First.");
     }
 
     #[test]
-    fn long_passages_split_between_verses_and_long_verses_between_words() {
-        let sentence = "word ".repeat(30); // 150 characters
+    fn words_wrap_into_lines_that_fit() {
+        assert_eq!(wrap("aa bb cc", 5), ["aa bb", "cc"]);
+        assert_eq!(wrap("abcdefgh ij", 3), ["abc", "def", "gh", "ij"]);
+        assert_eq!(wrap("  ", 5), Vec::<String>::new());
+        assert_eq!(wrap("ünï cödé", 3), ["ünï", "cöd", "é"]);
+    }
+
+    #[test]
+    fn long_passages_split_between_verses_and_long_verses_between_lines() {
+        let layout = Layout {
+            line_chars: 40,
+            lines: 4,
+        };
+        // Each verse wraps to two lines, so two verses fill a slide.
+        let sentence = "word ".repeat(12); // 59 characters
         let list: Vec<(VerseId, String)> = (1..=6)
             .map(|n| (v(19, 119, n), sentence.trim().to_owned()))
             .collect();
-        let slides = paginate(&list, 320, true);
+        let slides = paginate(&list, layout, true);
         assert_eq!(slides.len(), 3, "two verses per slide");
-        assert!(slides.iter().all(|s| s.text.chars().count() <= 320));
+        for slide in &slides {
+            let lines: Vec<&str> = slide.text.lines().collect();
+            assert!(lines.len() <= 4);
+            assert!(lines.iter().all(|l| l.chars().count() <= 40));
+        }
         assert_eq!(slides[1].verses, [v(19, 119, 3), v(19, 119, 4)]);
         assert!(slides[1].text.starts_with("3 word"));
 
         let long = "x".repeat(10) + &" longword".repeat(80);
-        let slides = paginate(&verses(&[(v(17, 8, 9), &long)]), 100, true);
-        assert!(slides.len() >= 7);
-        assert!(slides.iter().all(|s| s.text.chars().count() <= 100));
+        let slides = paginate(&verses(&[(v(17, 8, 9), &long)]), layout, true);
+        assert!(slides.len() >= 4);
         assert!(slides.iter().all(|s| s.verses == [v(17, 8, 9)]));
         assert!(slides[0].text.starts_with("9 xxx"));
         assert!(!slides[1].text.starts_with('9'));
-        let joined: Vec<String> = slides.iter().map(|s| s.text.clone()).collect();
+        let joined: Vec<String> = slides.iter().map(flat).collect();
         assert_eq!(joined.join(" "), format!("9 {long}"), "nothing lost");
-
-        let unbroken = "y".repeat(250);
-        let slides = paginate(&verses(&[(v(1, 1, 1), &unbroken)]), 100, false);
-        assert_eq!(
-            slides
-                .iter()
-                .map(|s| s.text.chars().count())
-                .collect::<Vec<_>>(),
-            [100, 100, 50]
-        );
-        assert!(paginate(&[], 100, true).is_empty());
+        assert!(paginate(&[], layout, true).is_empty());
     }
 }

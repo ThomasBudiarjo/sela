@@ -269,11 +269,18 @@ impl Operator {
     /// Focuses one entry (Preview follows) without touching the selection set.
     fn focus_entry(&mut self, id: EntryId) {
         if let Some(entry) = self.schedule.get(id) {
+            let scripture = entry.scripture.clone();
             self.selected_entry = Some(id);
             self.selected_song = Some(entry.version);
             self.live_on_load = None;
             self.live_entry_on_load = None;
             self.schedule_message = None;
+            // A scripture item carries its own verses: Preview shows them
+            // at once, with no library read.
+            if let Some(snapshot) = scripture {
+                self.selected_song = None;
+                self.preview_snapshot(id, &snapshot);
+            }
         }
     }
 

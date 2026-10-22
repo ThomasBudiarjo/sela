@@ -7,15 +7,19 @@
 //! item's chosen `arrangement` (a variant id of its embedded song); version 1
 //! files still open, with every item on the song's first arrangement. Version 3
 //! adds the song's optional `administrator` and `song_number`; older files open
-//! with both empty. A later
-//! version adds item kinds, themes or asset snapshots; readers reject a version
-//! they do not know instead of guessing. Formats and backgrounds are embedded as hex of
+//! with both empty. Version 4 adds scripture items (`"kind":"scripture"`): the
+//! pinned verses with their translation id, name, language and redistribution
+//! flag (M4-04). A file without scripture items is still written as version 3,
+//! so an older Sela opens it; one with them is version 4, which an older Sela
+//! refuses as newer. A later version adds themes or asset snapshots; readers
+//! reject a version they do not know instead of guessing. Formats and backgrounds are embedded as hex of
 //! their own library codecs (`SlideFormat::encode`, `Background::encode`).
 //!
 //! All I/O here is blocking. Use `Worker`, which owns a thread, from the UI.
 use crate::arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId};
 use crate::background::Background;
 use crate::format::SlideFormat;
+use crate::scripture::{Snapshot, VerseId};
 use crate::storage::{Id, MAX_ITEMS, Section, Song, Version};
 use serde_json::{Map, Value, json};
 use std::{
@@ -30,7 +34,10 @@ use std::{
 };
 
 pub const FORMAT: &str = "sela-schedule";
-pub const VERSION: u32 = 3;
+/// Newest version this Sela reads and writes.
+pub const VERSION: u32 = 4;
+/// Version written when the schedule has no scripture items.
+pub const SONGS_ONLY_VERSION: u32 = 3;
 pub const EXTENSION: &str = "selaschedule";
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_TITLE_BYTES: usize = 1024;
@@ -45,10 +52,24 @@ pub struct Item {
     pub arrangement: Option<VariantId>,
 }
 
+/// A scripture item (version 4) at its place in the schedule.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptureItem {
+    /// Index in the whole schedule, songs and scripture items together.
+    pub position: usize,
+    /// The reference shown in the Schedule, such as "John 3:16-18 (KJV)".
+    pub title: String,
+    pub snapshot: Snapshot,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScheduleFile {
     pub title: String,
+    /// Song items in schedule order.
     pub items: Vec<Item>,
+    /// Scripture items by ascending `position`; the song items fill the
+    /// other positions in order.
+    pub scripture: Vec<ScriptureItem>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -249,11 +270,65 @@ pub fn song_from_json(value: &Value) -> Option<Song> {
     Some(song)
 }
 
+fn scripture_json(item: &ScriptureItem) -> Value {
+    let verses: Vec<Value> = item
+        .snapshot
+        .verses
+        .iter()
+        .map(|(id, text)| json!([id.key(), text]))
+        .collect();
+    json!({
+        "kind": "scripture",
+        "title": item.title,
+        "translation": item.snapshot.translation,
+        "name": item.snapshot.name,
+        "language": item.snapshot.language,
+        "redistributable": item.snapshot.redistributable,
+        "verses": verses,
+    })
+}
+
+fn scripture_from_json(value: &Value, position: usize) -> Option<ScriptureItem> {
+    let title = text(value, "title")?;
+    if title.len() > MAX_TITLE_BYTES {
+        return None;
+    }
+    let verses = value
+        .get("verses")?
+        .as_array()?
+        .iter()
+        .map(|verse| match verse.as_array()?.as_slice() {
+            [key, text] => Some((VerseId::from_key(key.as_i64()?)?, text.as_str()?.to_owned())),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let snapshot = Snapshot {
+        translation: text(value, "translation")?,
+        name: text(value, "name")?,
+        language: text(value, "language")?,
+        redistributable: value.get("redistributable")?.as_bool()?,
+        verses,
+    };
+    snapshot.valid().then_some(ScriptureItem {
+        position,
+        title,
+        snapshot,
+    })
+}
+
 pub fn encode(file: &ScheduleFile) -> Result<Vec<u8>, WriteError> {
-    if file.items.len() > MAX_ITEMS || file.title.len() > MAX_TITLE_BYTES {
+    let total = file.items.len() + file.scripture.len();
+    let placed = file.scripture.iter().enumerate().all(|(n, item)| {
+        item.position < total && (n == 0 || file.scripture[n - 1].position < item.position)
+    });
+    let scripture_ok = file
+        .scripture
+        .iter()
+        .all(|item| item.snapshot.valid() && item.title.len() <= MAX_TITLE_BYTES);
+    if total > MAX_ITEMS || file.title.len() > MAX_TITLE_BYTES || !placed || !scripture_ok {
         return Err(WriteError::Invalid);
     }
-    let items: Vec<String> = file
+    let songs: Vec<String> = file
         .items
         .iter()
         .map(|item| {
@@ -268,9 +343,24 @@ pub fn encode(file: &ScheduleFile) -> Result<Vec<u8>, WriteError> {
             Value::Object(value).to_string()
         })
         .collect();
+    let mut songs = songs.into_iter();
+    let mut scripture = file.scripture.iter().peekable();
+    let items: Vec<String> = (0..total)
+        .filter_map(
+            |position| match scripture.next_if(|item| item.position == position) {
+                Some(item) => Some(scripture_json(item).to_string()),
+                None => songs.next(),
+            },
+        )
+        .collect();
+    let version = if file.scripture.is_empty() {
+        SONGS_ONLY_VERSION
+    } else {
+        VERSION
+    };
     let title = Value::from(file.title.clone()).to_string();
     let out = format!(
-        "{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"title\":{title},\"items\":[{}]}}\n",
+        "{{\"format\":\"{FORMAT}\",\"version\":{version},\"title\":{title},\"items\":[{}]}}\n",
         items.join(",")
     );
     if out.len() > MAX_FILE_BYTES {
@@ -315,34 +405,42 @@ pub fn decode(bytes: &[u8]) -> Result<ScheduleFile, ReadError> {
     if items.len() > MAX_ITEMS {
         return Err(ReadError::TooManyItems);
     }
-    let items = items
-        .iter()
-        .map(|item| {
-            if item.get("kind")?.as_str()? != "song" {
-                return None;
-            }
-            let revision = item.get("revision")?.as_i64().filter(|r| *r > 0)?;
-            let song = song_from_json(item.get("song")?)?;
-            // A choice the embedded song does not have is dropped, not an error.
-            let arrangement = match item.get("arrangement").filter(|_| version >= 2) {
-                Some(value) => Some(VariantId(id_from(value)?)),
-                None => None,
-            }
-            .filter(|id| song.variants.iter().any(|v| v.id == *id));
-            Some(Item {
-                source: Version {
-                    id: id_from(item.get("song_id")?)?,
-                    revision,
-                },
-                song,
-                arrangement,
-            })
-        })
-        .collect::<Option<Vec<_>>>()
-        .ok_or(ReadError::Corrupt)?;
+    let mut scripture = Vec::new();
+    let mut songs = Vec::new();
+    for (position, item) in items.iter().enumerate() {
+        let kind = item.get("kind").and_then(Value::as_str);
+        if version >= 4 && kind == Some("scripture") {
+            scripture.push(scripture_from_json(item, position).ok_or(ReadError::Corrupt)?);
+        } else {
+            songs.push(song_item(item, version).ok_or(ReadError::Corrupt)?);
+        }
+    }
     Ok(ScheduleFile {
         title: title.to_owned(),
-        items,
+        items: songs,
+        scripture,
+    })
+}
+
+fn song_item(item: &Value, version: u64) -> Option<Item> {
+    if item.get("kind")?.as_str()? != "song" {
+        return None;
+    }
+    let revision = item.get("revision")?.as_i64().filter(|r| *r > 0)?;
+    let song = song_from_json(item.get("song")?)?;
+    // A choice the embedded song does not have is dropped, not an error.
+    let arrangement = match item.get("arrangement").filter(|_| version >= 2) {
+        Some(value) => Some(VariantId(id_from(value)?)),
+        None => None,
+    }
+    .filter(|id| song.variants.iter().any(|v| v.id == *id));
+    Some(Item {
+        source: Version {
+            id: id_from(item.get("song_id")?)?,
+            revision,
+        },
+        song,
+        arrangement,
     })
 }
 

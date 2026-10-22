@@ -11,5 +11,5 @@ pub mod store;
 pub mod worker;
 
 pub use books::{Book, complete};
-pub use model::{Inventory, TranslationInfo, VerseId};
+pub use model::{Inventory, Snapshot, TranslationInfo, VerseId};
 pub use reference::{ParseError, Reference, Span, Verse, parse};

@@ -121,11 +121,11 @@ fn typing_a_reference_previews_it_and_go_live_shows_it_with_its_reference(cx: &m
         assert_eq!(item.slides.len(), 1);
         assert_eq!(
             item.slides[0].text,
-            "16 Alpha verse 16 light 17 Alpha verse 17 light 18 Alpha verse 18 light"
+            "16 Alpha verse 16 light 17 Alpha verse 17\nlight 18 Alpha verse 18 light"
         );
         assert_eq!(
             item.footers.as_ref().unwrap()[0].as_ref(),
-            "John 3:16-18 SYA"
+            "John 3:16-18\nSynthetic SYA (SYA)"
         );
         assert!(o.live.is_none(), "selection never reaches Live");
     });
@@ -256,7 +256,9 @@ fn cross_chapter_ranges_and_nonconsecutive_selection(cx: &mut TestAppContext) {
         assert_eq!(tab(o).rows.len(), 7, "both chapters are listed");
         assert_eq!(preview_title(o), Some("John 3:36-4:2 (SYA)"));
         assert_eq!(
-            o.preview.as_ref().unwrap().slides[0].text,
+            o.preview.as_ref().unwrap().slides[0]
+                .text
+                .replace('\n', " "),
             "36 Alpha end of chapter 4:1 Alpha next chapter 2 Alpha second"
         );
     });
@@ -417,9 +419,9 @@ fn long_passages_split_into_readable_slides_in_order(cx: &mut TestAppContext) {
     assert!(
         slides
             .iter()
-            .all(|s| s.text.chars().count() <= sela::scripture::passage::SLIDE_BUDGET)
+            .all(|s| s.text.lines().count() <= sela::scripture::passage::LAYOUT.lines)
     );
-    let joined: Vec<String> = slides.iter().map(|s| s.text.clone()).collect();
+    let joined: Vec<String> = slides.iter().map(|s| s.text.replace('\n', " ")).collect();
     let all = joined.join(" ");
     let mut at = 0;
     for verse in 1..=24 {
@@ -525,4 +527,115 @@ fn importing_a_user_file_adds_a_restricted_translation(cx: &mut TestAppContext) 
             true
         ))
     );
+}
+
+#[gpui::test]
+fn scripture_schedule_items_are_pinned_snapshots_that_survive_save_and_reopen(
+    cx: &mut TestAppContext,
+) {
+    let (mut cx, operator, dir) = open_tab(cx, |_| {});
+    // Nothing selected yet: Add to Schedule explains instead of adding.
+    click(&mut cx, "scripture-add");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o.schedule.entries().len()),
+        0
+    );
+    type_box(&mut cx, &operator, "John 3:16-18");
+    settle(&mut cx, &operator, "passage", |o| selected(o).len() == 3);
+    click(&mut cx, "scripture-add");
+    // Nonconsecutive verses make a second item.
+    type_box(&mut cx, &operator, "John 3:36-4:2");
+    settle(&mut cx, &operator, "second passage", |o| {
+        selected(o).len() == 3
+    });
+    let ctrl = gpui::Modifiers {
+        control: true,
+        ..Default::default()
+    };
+    let bounds = cx.debug_bounds("verse-5").unwrap();
+    cx.simulate_click(bounds.center(), ctrl);
+    click(&mut cx, "scripture-add");
+    click(&mut cx, "Songs");
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(
+            entry_titles(o),
+            ["John 3:16-18 (SYA)", "John 3:36; 4:2 (SYA)", "Signal Hymn"]
+        );
+        let first = o.schedule.entries()[0].scripture.as_ref().unwrap();
+        assert_eq!(first.translation, "SYA");
+        assert_eq!(first.verses.len(), 3);
+        assert_eq!(
+            tab(o).message.clone(),
+            Some(("Added John 3:36; 4:2 (SYA) to the schedule".into(), false))
+        );
+    });
+    // Selecting the item previews its own verses at once, with no library read.
+    click(&mut cx, "schedule-item-0");
+    operator.read_with(&cx, |o, _| {
+        let entry = o.schedule.entries()[0].id;
+        assert_eq!(previewed(o), Some((Some(entry), "John 3:16-18 (SYA)")));
+        assert!(o.selected_song.is_none());
+    });
+    // Live from the schedule item, then Page Down to the next item.
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "scripture item live", |o| {
+        o.on_screen() == Some("John 3:16-18 (SYA) · John 3:16-18")
+    });
+
+    // Save: version 4 with the verses in place between the song items.
+    cx.update(|window, cx| operator.read(cx).focus.clone().focus(window, cx));
+    cx.simulate_keystrokes("ctrl-s");
+    let typed = dir.path().join("Scripture service");
+    cx.simulate_new_path_selection(move |_| Some(typed));
+    settle(&mut cx, &operator, "saved", |o| {
+        o.schedule.path().is_some() && !o.schedule.is_dirty()
+    });
+    let file = dir.path().join("Scripture service.selaschedule");
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(document["version"], 4);
+    let kinds: Vec<&str> = document["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["scripture", "scripture", "song"]);
+    assert_eq!(document["items"][0]["verses"][1][1], "Alpha verse 17 light");
+
+    // The translation file vanishing does not matter: the snapshot plays.
+    std::fs::remove_file(dir.path().join("Scripture").join("SYA.selabible")).unwrap();
+    let before: Vec<_> = operator.read_with(&cx, |o, _| {
+        o.schedule.entries().iter().map(|e| e.id).collect()
+    });
+    open_file(&mut cx, &operator, &file);
+    settle(&mut cx, &operator, "reopened", |o| {
+        o.schedule.entries().len() == 3
+            && o.schedule.entries().iter().all(|e| !before.contains(&e.id))
+            && !o.schedule.is_dirty()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(
+            entry_titles(o),
+            ["John 3:16-18 (SYA)", "John 3:36; 4:2 (SYA)", "Signal Hymn"]
+        );
+        assert!(o.schedule.entries()[2].scripture.is_none());
+    });
+    click(&mut cx, "schedule-item-1");
+    operator.read_with(&cx, |o, _| {
+        let item = o.preview.as_ref().unwrap();
+        assert_eq!(item.title, "John 3:36; 4:2 (SYA)");
+        assert_eq!(
+            item.slides[0].text.replace('\n', " "),
+            "36 Alpha end of chapter 4:2 Alpha second"
+        );
+    });
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "reopened item live", |o| {
+        o.on_screen() == Some("John 3:36; 4:2 (SYA) · John 3:36; 4:2")
+    });
 }

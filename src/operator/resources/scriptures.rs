@@ -14,7 +14,7 @@
 use super::*;
 use gpui::{ListAlignment, ListState, WeakEntity, list};
 use sela::scripture::{
-    self, Book, ParseError, Reference, VerseId,
+    self, Book, ParseError, Reference, Snapshot, VerseId,
     bundled::{self, Bundle},
     passage::{self, Located, Missing},
     worker::{self, CatalogNote, Command, Entry, ImportError, Reply, State},
@@ -137,6 +137,12 @@ pub(crate) struct ScriptureTab {
     queued: Option<Command>,
     in_flight: bool,
     pub(crate) importing: Option<String>,
+    /// Scripture items of a schedule file being opened, waiting for its
+    /// songs to be imported into the library.
+    pub(crate) opening: Option<Vec<sela::schedule_file::ScriptureItem>>,
+    /// A scripture schedule entry went to Preview without a `cx`; its faces
+    /// resolve on the next poll.
+    resolve_pending: bool,
     pub(crate) list_state: ListState,
     pub(crate) list_focus: FocusHandle,
     mode_focus: [FocusHandle; 2],
@@ -188,6 +194,8 @@ impl ScriptureTab {
             queued: None,
             in_flight: false,
             importing: None,
+            opening: None,
+            resolve_pending: false,
             list_state: ListState::new(0, ListAlignment::Top, px(200.)),
             list_focus: focus(cx, LIST_TAB_INDEX),
             mode_focus: [focus(cx, MODE_TAB_INDEX), focus(cx, MODE_TAB_INDEX + 1)],
@@ -325,27 +333,63 @@ fn import_error(error: &ImportError) -> String {
     }
 }
 
-/// A stable item identity for a selection: the same verses of the same
-/// translation are the same item, so re-selecting them keeps Live's slide.
-fn passage_version(translation: &str, verses: &[(VerseId, String)]) -> Version {
-    use sha2::{Digest, Sha256};
-    let mut hash = Sha256::new();
-    hash.update(b"sela-scripture\0");
-    hash.update(translation.as_bytes());
-    for (id, text) in verses {
-        hash.update(id.key().to_le_bytes());
-        hash.update(text.as_bytes());
-    }
-    let digest = hash.finalize();
-    let mut id = [0u8; 16];
-    id.copy_from_slice(&digest[..16]);
-    Version {
-        id: storage::Id(id),
-        revision: 1,
-    }
-}
-
 impl Operator {
+    /// Preview of a scripture schedule entry: its pinned verses, labelled
+    /// with the installed translation's chapter ends when it is installed.
+    pub(crate) fn preview_snapshot(&mut self, entry: EntryId, snapshot: &Snapshot) {
+        let inventory = self
+            .scripture
+            .inventory_of(&snapshot.translation)
+            .map(|inventory| (*inventory).clone())
+            .unwrap_or_else(|| snapshot.inventory());
+        let mut item = passage_item(&snapshot.info(), &inventory, &snapshot.verses);
+        item.entry = Some(entry);
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|p| (p.version, p.entry) == (item.version, item.entry))
+        {
+            return;
+        }
+        self.preview = Some(item);
+        self.preview_slide = 0;
+        // Faces resolve off the UI thread on the next poll.
+        self.scripture.resolve_pending = true;
+    }
+
+    /// Add to Schedule from the Scriptures tab: a snapshot of the selected
+    /// verses, appended like a song (best guess, EW unobserved).
+    pub(crate) fn add_scripture_to_schedule(&mut self) {
+        let tab = &self.scripture;
+        let (Some(entry), verses) = (tab.current_entry(), tab.selected_verses()) else {
+            return;
+        };
+        if verses.is_empty() {
+            self.scripture.message = Some((t!(Msg::ScriptureSelectVerses).into(), true));
+            return;
+        }
+        let snapshot = Snapshot::new(&entry.info, &verses);
+        let Some(title) = self.scripture_item().map(|item| item.title) else {
+            return;
+        };
+        match self
+            .schedule
+            .insert_scripture(usize::MAX, snapshot, title.clone())
+        {
+            Ok(_) => {
+                self.scripture.message =
+                    Some((t!(Msg::ScriptureAddedToSchedule, reference = title), false));
+                self.schedule_message = None;
+            }
+            Err(sela::schedule::Error::Full) => {
+                self.schedule_message = Some(t!(Msg::ScheduleFull, max = MAX_ITEMS));
+            }
+            Err(_) => {
+                self.scripture.message = Some((t!(Msg::ScriptureSelectVerses).into(), true));
+            }
+        }
+    }
+
     /// Starts the worker and asks for the catalog the first time the tab is
     /// shown; the bundled translations are installed then, off the UI thread.
     pub(crate) fn ensure_scripture_started(&mut self) {
@@ -382,6 +426,10 @@ impl Operator {
 
     pub(crate) fn poll_scripture(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
+        if std::mem::take(&mut self.scripture.resolve_pending) {
+            self.resolve_fonts(cx);
+            changed = true;
+        }
         for _ in 0..worker::QUEUE * 2 {
             let Some(reply) = self
                 .scripture
@@ -624,7 +672,12 @@ impl Operator {
         tab.cursor = first;
         tab.anchor = first;
         if let Some(index) = first {
-            tab.list_state.scroll_to_reveal_item(index);
+            // Rows are not measured yet after a reset, so place the first
+            // selected verse near the top with one verse of context above.
+            tab.list_state.scroll_to(gpui::ListOffset {
+                item_ix: index.saturating_sub(1),
+                offset_in_item: px(0.),
+            });
         }
         self.preview_scripture(cx);
     }
@@ -925,7 +978,7 @@ impl Operator {
     }
 
     /// The selected verses as a Preview/Live item: slides of at most
-    /// `SLIDE_BUDGET` characters, each with its own reference and the
+    /// `passage::LAYOUT` lines, each with its own reference and the
     /// translation id as its footer.
     pub(crate) fn scripture_item(&self) -> Option<Item> {
         let tab = &self.scripture;
@@ -1527,13 +1580,6 @@ impl Operator {
             })
             .into_any_element()
     }
-
-    /// Adds the selected verses to the schedule (schedule slice).
-    pub(crate) fn add_scripture_to_schedule(&mut self) {
-        if self.scripture.selection.is_empty() {
-            self.scripture.message = Some((t!(Msg::ScriptureSelectVerses).into(), true));
-        }
-    }
 }
 
 /// Stable ids of the suggestion buttons.
@@ -1554,7 +1600,7 @@ pub(crate) fn passage_item(
 ) -> Item {
     let language = info.book_language();
     let ids: Vec<VerseId> = verses.iter().map(|(id, _)| *id).collect();
-    let pages = passage::paginate(verses, passage::SLIDE_BUDGET, true);
+    let pages = passage::paginate(verses, passage::LAYOUT, true);
     let title = format!(
         "{} ({})",
         passage::label(&ids, inventory, language),
@@ -1569,12 +1615,19 @@ pub(crate) fn passage_item(
             background: None,
         })
         .collect();
+    // The strip is two lines (`slides::copyright_strip` shape): this
+    // slide's own reference over the translation's name.
+    let name = if info.name.trim().is_empty() {
+        info.id.clone()
+    } else {
+        format!("{} ({})", info.name, info.id)
+    };
     let footers: Arc<[Arc<str>]> = slides
         .iter()
-        .map(|slide| Arc::from(format!("{} {}", slide.label, info.id)))
+        .map(|slide| Arc::from(format!("{}\n{name}", slide.label)))
         .collect();
     Item {
-        version: passage_version(&info.id, verses),
+        version: Snapshot::new(info, verses).version(),
         entry: None,
         title,
         pages: slides.iter().map(|_| None).collect(),
