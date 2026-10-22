@@ -14,6 +14,7 @@ image = { version = "=0.25.10", default-features = false, features = ["png", "jp
 sha2 = "=0.10.9"
 serde_json = "=1.0.151"
 ttf-parser = "=0.25.1"
+roxmltree = "=0.21.1"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false }
 zlog = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
@@ -28,6 +29,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a8468907
 
 [dev-dependencies]
 tempfile = "=3.27.0"
+proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["test-support"] }
 
 [profile.dev]

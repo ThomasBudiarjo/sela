@@ -18,6 +18,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod arrangement_rendering;
+mod focus_modality;
+mod layout_startup;
 mod navigation;
 mod resource_browser;
 
