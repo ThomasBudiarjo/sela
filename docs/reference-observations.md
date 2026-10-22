@@ -711,3 +711,6 @@ observation. Each has an item in [parity-pending.md](parity-pending.md)
 | SC2-LIVE-02 | EW8-OBS-013 | Go Live on a duplicate schedule entry drops the earlier entry's cues still being prepared (PP-SC2-03). |
 | SC2-LIVE-03 | EW8-OBS-050 | Picking a song in Songs cancels a Live-pane Page Down that is still waiting for its item to load (PP-SC2-04). |
 | SC2-I18N-01 | EW8-OBS-067 (unobserved title) | The idle and untitled window titles follow the UI language (PP-SC2-06). |
+| SC2-FOCUS-02 | EW8-OBS-010 (menus, Esc), EW8-OBS-018 (show keys) | The Schedule item and Media image right-click menus take the focus (Up/Down/Tab move inside, Esc closes back to the row), and while one of them or the toolbar New ▾ menu is open every show shortcut, the Schedule row keys and Ctrl+Delete are inert; a press outside closes the menu (PP-SC2-01). |
+| SC2-LIVE-04 | EW8-OBS-014 | Normalize text size re-sends the newest requested live slide, including a Go Live or step still being prepared, not only the acknowledged one (PP-SC2-08). |
+| SC2-I18N-02 | EW8-OBS-012 (observed wording) | Not a guess for the wording: the Song Editor close prompt asks "Save changes before closing?" to match its observed Yes = save, No = discard answers (it said "Close without saving?"). The shortened question and Sela's description line are Sela's own (PP-SC2-09). |

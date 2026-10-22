@@ -15,6 +15,9 @@ output on. Checks, in order:
    the Live status (AT-SPI `Live-status`) names "Signal Hymn · Verse 1".
 2. Songs menu modality (SC2-FOCUS-01): with the Songs row menu open, B and
    Page Down change neither the audience nor the mask; Esc closes the menu.
+   The Schedule item menu (right-click on item 2) is modal the same way
+   (SC2-FOCUS-02): B, Page Down and Ctrl+Delete change nothing and the entry
+   stays; Esc closes it.
 3. Edit B while A is live: Songs menu › Edit Song… opens "Song Editor - Quiet
    Canticle"; a line is added to its verse and Ctrl+S stores revision 2 of B
    (SQLite) while A keeps revision 1. The audience frame and the Live status
@@ -71,10 +74,7 @@ def revisions(library: Path) -> dict[str, int]:
 
 def closed(wid: int) -> bool:
     """The window is gone or unmapped (it may vanish between two queries)."""
-    try:
-        return not nx.window_exists(wid) or not nx.geometry(wid).viewable
-    except nx.Failure:
-        return True
+    return not nx.viewable(wid)
 
 
 def close_saved_editor(app: nx.App, editor: int) -> None:
@@ -169,6 +169,23 @@ def body(session: nx.Session) -> str:
     time.sleep(0.4)
     if "song-menu" in app.controls(operator):
         raise nx.Failure("Esc did not close the Songs menu")
+
+    # 2b. The same for the Schedule item menu (SC2-FOCUS-02): B, Page Down and
+    # Ctrl+Delete neither drive Live nor remove the entry it points at.
+    nx.right_click(operator, *control("schedule-item-1").center)
+    control("item-menu-popup")
+    nx.press(operator, "b", "pagedown", "ctrl+delete")
+    unchanged("B, Page Down and Ctrl+Delete under the Schedule item menu")
+    if "Mask:" in status():
+        raise nx.Failure(f"a mask went on under the item menu: {status()!r}")
+    found = app.controls(operator)
+    if "schedule-item-1" not in found or "item-menu-popup" not in found:
+        raise nx.Failure("a key under the Schedule item menu removed or closed it")
+    session.save(operator, "02b-item-menu")
+    nx.press(operator, "escape")
+    time.sleep(0.4)
+    if "item-menu-popup" in app.controls(operator):
+        raise nx.Failure("Esc did not close the Schedule item menu")
 
     # 3. Edit B while A is live.
     before = revisions(library)

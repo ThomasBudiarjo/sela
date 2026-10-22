@@ -7,10 +7,12 @@ Usage: python scripts/scenario-s01-windows.py [--binary sela.exe] [--out DIR]
 Windows counterpart of scripts/scenario-s01-x11.py, same checks in the same
 order (see that docstring): `sela.exe` with no arguments in a new private
 profile (LOCALAPPDATA/APPDATA/TEMP of one temporary folder, nothing seeded),
+Edit > Options is a UIA Window element named "Options" (Esc closes it),
 New ▾ › New Song in the editor window with two slides and a #FFAA00 Color Fill
-on slide 1 (decoded from SQLite), Add to Schedule, Ctrl+Q shows the
-unsaved-changes dialog as a UIA Window element named with its question
-(SC2-A11Y-01), Cancel, Ctrl+S through the native Save dialog, the saved file
+on slide 1 (decoded from SQLite), Alt+F4 shows the close prompt as a UIA
+Window named "Save changes before closing?" and Esc cancels it, Ctrl+S, Add
+to Schedule, Ctrl+Q shows the unsaved-changes dialog as a UIA Window element
+(controlType and name checked) named with its question (SC2-A11Y-01), Cancel, Ctrl+S through the native Save dialog, the saved file
 pins the stored revision, a splitter drag, Ctrl+Q, a second launch with the
 same profile restores the pane rectangles and File › Open Recent reopens the
 schedule, Live output on (SELA_AUDIENCE_MONITOR=secondary), Page Down shows the
@@ -44,6 +46,10 @@ TITLE = "S01 Hymn"
 NAME = "s01-service"
 ORANGE = (0xFF, 0xAA, 0x00)
 UNSAVED_QUESTION = "The current Schedule is not saved. Would you like to save it now?"
+# Yes saves and closes, No discards (EW8-OBS-012), so the editor asks to save.
+CLOSE_QUESTION = "Save changes before closing?"
+# AccessKit 0.34 maps Role::Dialog to the UIA Window control type.
+DIALOG = "Window"
 LYRICS = [
     "Verse 1",
     "Morning light on quiet water\nevery shore awake and singing",
@@ -163,6 +169,18 @@ def create_song(app: nw.App, operator: int, library: pathlib.Path, out: pathlib.
     summary["editor_orange_samples"] = orange_count(editor)
     if summary["editor_orange_samples"] < 2000:
         raise nw.Failure("the editor preview shows no Color Fill")
+    # Closing with unsaved edits asks whether to save, as an announced dialog
+    # (SC2-A11Y-01, SC2-I18N-02); Esc is Cancel and keeps the editor.
+    nw.press(editor, "alt+f4")
+    prompt = wait_for(10, "the close prompt", lambda: nodes(editor).get("close-prompt"))
+    summary["close_prompt"] = [prompt["controlType"], prompt["name"]]
+    if summary["close_prompt"] != [DIALOG, CLOSE_QUESTION]:
+        raise nw.Failure(f"the close prompt is not announced: {summary['close_prompt']}")
+    shot("04b-editor-close-prompt")
+    keys("escape")
+    wait_for(5, "Esc to cancel the close prompt", lambda: "close-prompt" not in nodes(editor))
+    if not nw.user32.IsWindow(editor):
+        raise nw.Failure("Esc on the close prompt closed the editor")
     keys("ctrl+s")
     expected = [TITLE, "", "", "", *LYRICS]
     stored = wait_for(
@@ -209,6 +227,16 @@ def main() -> int:
         if songs(library) or "song-0" in nodes(operator):
             raise nw.Failure("a fresh profile already has songs")
         shot(operator, "01-fresh")
+        # Options (Edit > Options..., Alt+E) is an announced dialog.
+        nw.press(operator, "alt+e")
+        time.sleep(0.4)
+        nw.press(operator, "enter")
+        options = wait_for(5, "the Options dialog", lambda: nodes(operator).get("options-dialog"))
+        summary["options_dialog"] = [options["controlType"], options["name"]]
+        if summary["options_dialog"] != [DIALOG, "Options"]:
+            raise nw.Failure(f"Options is not an announced dialog: {summary['options_dialog']}")
+        nw.press(operator, "escape")
+        wait_for(5, "Esc to close Options", lambda: "options-dialog" not in nodes(operator))
 
         # 2. Create a song.
         create_song(app, operator, library, args.out, summary)
@@ -223,7 +251,7 @@ def main() -> int:
         time.sleep(0.8)
         dialog = nodes(operator).get("schedule-dialog")
         summary["unsaved_dialog"] = dialog and [dialog["controlType"], dialog["name"]]
-        if not dialog or dialog["name"] != UNSAVED_QUESTION:
+        if summary["unsaved_dialog"] != [DIALOG, UNSAVED_QUESTION]:
             raise nw.Failure(f"the unsaved prompt is not announced: {summary['unsaved_dialog']}")
         shot(operator, "06-unsaved-dialog")
         nw.press(operator, "enter")  # Cancel

@@ -496,9 +496,10 @@ its toolbar/keyboard equivalent.
 - [ ] Test typing in search/editor, open modal, unfocused panes, repeat keys and
   boundary slides so navigation cannot accidentally fire while entering text.
   scrutiny-r2 (2026-10-22): an open Songs row menu now keeps every show key
-  inert (SC2-FOCUS-01, GPUI test and `scenario-s02-x11.py`); the mouse-only
-  Schedule item and image menus still leave the keys live (unconfirmed, see
-  the work log).
+  inert (SC2-FOCUS-01, GPUI test and `scenario-s02-x11.py`); review round 1
+  did the same for the Schedule item, image and New ▾ menus, which now take
+  the focus (right-click menus) and close with Esc (SC2-FOCUS-02, GPUI tests
+  and `scenario-s02-x11.py` step 2b). EW behavior unobserved (PP-SC2-01).
 - [ ] Verify keyboard-only access, visible focus and disabled/unavailable actions.
 
 Acceptance: focus and selection match observed workflows, with no typing-triggered
@@ -842,7 +843,9 @@ Images and picture logo) are **implemented-unqualified**; see
   Go Live on a duplicate entry drops the original's pending cues
   (SC2-LIVE-02), a library pick cancels a waiting Live Page Down
   (SC2-LIVE-03); masked Go Live and Page Up under Black checked natively by
-  `scenario-s02-x11.py`. Windows and physical display runs open.
+  `scenario-s02-x11.py`. Review round 1: Normalize text size re-sends the
+  newest requested slide, so a Go Live still in preparation lands normalized
+  (SC2-LIVE-04, GPUI test). Windows and physical display runs open.
 - [ ] Linux/X11: keep the operator's input focus when the audience window maps.
   winit 0.30's X11 backend ignores `with_active(false)`, so Openbox focuses the
   monitor-covering audience (found by `scripts/live-output-x11.py --kind dual`,
@@ -1037,8 +1040,12 @@ instructions and the work log for precise evidence and limits.
   (SC2-A11Y-01); a title change now reaches the accessibility tree with the
   next frame instead of waiting for an unrelated redraw (SC2-A11Y-02); the
   idle and untitled window titles are localized (SC2-I18N-01). Checked on
-  Linux over AT-SPI (`scenario-s0{1,2}-x11.py`); Narrator/UIA run open
-  (PP-SC2-05).
+  Linux over AT-SPI by `scenario-s01-x11.py`, which asserts role `dialog`
+  and the name of the unsaved-schedule prompt, Options and the Song Editor
+  close prompt ("Save changes before closing?", SC2-I18N-02). Delete song,
+  file error, preflight, Go Live missing and Update items use the same
+  `schedule-dialog` node as the unsaved prompt but their names and
+  descriptions are not asserted natively; Narrator/UIA run open (PP-SC2-05).
 
 Acceptance: another Windows operator can install and rehearse M1 from instructions.
 

@@ -11,13 +11,16 @@ XDG_* folders of one temporary directory, nothing seeded), so the operator
 creates its library at XDG_DATA_HOME/sela/library.sqlite. Checks, in order:
 
 1. Fresh profile: the window title is "Sela — Technical preview", the library
-   file is created and holds no song, Songs shows no row.
+   file is created and holds no song, Songs shows no row. Edit › Options
+   (Alt+E, Enter) is an AT-SPI `dialog` named "Options"; Esc closes it.
 2. Create a song: toolbar New ▾ › New Song opens "Song Editor - Untitled" in
    the same process. By keyboard: two slides ("Verse 1": two lines, "Chorus":
    one line) and the title typed into the toolbar Title box; in the Slides
    tab the Format pane's Slide › Fill sets a Color Fill #FFAA00 on slide 1
-   (the layout/asset stand-in: themes, M1-08, do not exist yet); Ctrl+S
-   saves. The stored revision is decoded from SQLite (labels, lyrics, slide
+   (the layout/asset stand-in: themes, M1-08, do not exist yet). A window
+   manager close then shows the close prompt as a `dialog` named "Save
+   changes before closing?" (Yes saves, No discards); Esc cancels it and the
+   editor stays. Ctrl+S saves. The stored revision is decoded from SQLite (labels, lyrics, slide
    background). The editor closes by the window manager without a prompt.
 3. Schedule: the new song appears as `song-0` in Songs; Add to Schedule makes
    the window title "Untitled schedule* — Sela". Ctrl+Q opens the
@@ -62,6 +65,8 @@ NAME = "s01-service"
 ORANGE = (0xFF, 0xAA, 0x00)
 IDLE_TITLE = "Sela — Technical preview"
 UNSAVED_QUESTION = "The current Schedule is not saved. Would you like to save it now?"
+# Yes saves and closes, No discards (EW8-OBS-012), so the editor asks to save.
+CLOSE_QUESTION = "Save changes before closing?"
 LYRICS = [
     "Verse 1",
     "Morning light on quiet water\nevery shore awake and singing",
@@ -107,10 +112,7 @@ def pane_rects(app: nx.App, wid: int) -> dict[str, list[int]]:
 
 def closed(wid: int) -> bool:
     """The window is gone or unmapped (it may vanish between two queries)."""
-    try:
-        return not nx.window_exists(wid) or not nx.geometry(wid).viewable
-    except nx.Failure:
-        return True
+    return not nx.viewable(wid)
 
 
 def close_saved_editor(app: nx.App, editor: int) -> None:
@@ -209,6 +211,29 @@ def create_song(
     summary["editor_orange_samples"] = orange
     if orange < 2000:
         raise nx.Failure(f"the editor preview shows no Color Fill ({orange})")
+    # Closing with unsaved edits asks whether to save, as an announced dialog
+    # (SC2-A11Y-01, SC2-I18N-02); Esc is Cancel and keeps the editor.
+    nx.wm_close(editor)
+    prompt = nx.wait_until(
+        lambda: app.controls(editor).get("close-prompt"), 10, "the close prompt"
+    )
+    summary["close_prompt"] = [prompt.role, prompt.name]
+    if (prompt.role, prompt.name) != ("dialog", CLOSE_QUESTION):
+        raise nx.Failure(f"the close prompt is not announced: {summary['close_prompt']}")
+    capture("04b-editor-close-prompt")
+    keys("escape")
+
+    def prompt_gone() -> bool:
+        # Without the prompt the editor exposes no author ids at all, which
+        # controls() reports as a timeout.
+        try:
+            return "close-prompt" not in app.controls(editor, timeout=2)
+        except nx.Failure:
+            return True
+
+    nx.wait_until(prompt_gone, 5, "Esc to cancel the close prompt")
+    if closed(editor):
+        raise nx.Failure("Esc on the close prompt closed the editor")
     keys("ctrl+s")
     expected = [TITLE, "", "", "", *LYRICS]
     stored = nx.wait_until(
@@ -245,6 +270,18 @@ def body(session: nx.Session) -> str:
     if songs(library) or "song-0" in app.controls(operator):
         raise nx.Failure("a fresh profile already has songs")
     session.save(operator, "01-fresh")
+    # Options (Edit › Options…, Alt+E) is an announced dialog (SC2-A11Y-01).
+    nx.press(operator, "alt+e", "enter", pause=0.4)
+    options = nx.wait_until(
+        lambda: app.controls(operator).get("options-dialog"), 5, "the Options dialog"
+    )
+    summary["options_dialog"] = [options.role, options.name]
+    if (options.role, options.name) != ("dialog", "Options"):
+        raise nx.Failure(f"Options is not an announced dialog: {summary['options_dialog']}")
+    nx.press(operator, "escape")
+    nx.wait_until(
+        lambda: "options-dialog" not in app.controls(operator), 5, "Esc to close Options"
+    )
 
     # 2. Create a song.
     create_song(session, app, operator, library)
@@ -384,7 +421,8 @@ def body(session: nx.Session) -> str:
     if not nx.wait_dead(pid, 5):
         raise nx.Failure("quitting left the audience output running")
     return (
-        "fresh profile -> New Song with a slide background -> schedule -> announced unsaved "
+        "fresh profile -> announced Options -> New Song with a slide background and an "
+        "announced close prompt -> schedule -> announced unsaved "
         "dialog -> saved file pins the stored revision -> quit -> reopen restores the layout "
         "and Open Recent -> Go Live shows the orange slide on the real audience and the Live "
         "status follows the renderer receipt"

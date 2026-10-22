@@ -45,7 +45,7 @@ impl Operator {
         cx: &mut Context<Self>,
     ) {
         if self.dialog.is_none() {
-            self.dialog_return = window.focused(cx);
+            self.dialog_return = self.focus_to_return(window, cx);
         }
         self.dialog = Some(dialog);
         self.dialog_message = None;

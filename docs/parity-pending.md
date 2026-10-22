@@ -316,11 +316,15 @@ Common Windows prerequisites are listed once in
   EW8-OBS-010, -018). Steps: with A1 live, right-click a Songs row so its
   context menu opens, then press B, period, Ctrl+B and Page Down; repeat with
   the Schedule item menu open; record whether the audience or the toolbar
-  Black state changes and whether the menu stays open. Sela now: the Songs
-  row menu takes the focus and every show shortcut is inert until Esc or a
-  choice closes it (best guess); the mouse-only Schedule item and image menus
-  do not take the focus, so show keys still act there (unconfirmed, see the
-  scrutiny-r2 record). Re-run: `scenario-s02-windows.py`.
+  Black state changes and whether the menu stays open; also open the
+  toolbar New ▾ dropdown and the Media image row menu and press the same
+  keys, then Esc. Sela now: the Songs row menu, the Schedule item menu
+  (Duplicate/Remove) and the image menu take the focus, and while any of
+  them or New ▾ is open every show shortcut (B, period, Ctrl+B/C/L, Page
+  Down, arrows, Home/End, Ctrl+Delete) is inert; Esc closes the menu and
+  returns the focus to the row or button that opened it (SC2-FOCUS-01, -02;
+  UNOBSERVED best guess). Re-run: `scenario-s02-windows.py` (Songs and
+  Schedule item menus).
 - [ ] **PP-SC2-02 Next/Previous after a Go Live that did not show**
   (SC2-LIVE-01; EW8-OBS-014, -050). Steps: hard to force in EW; the nearest
   case is Go Live on an item whose background media is missing. Record
@@ -348,13 +352,32 @@ Common Windows prerequisites are listed once in
   confirmation, Options and the Song Editor close prompt; then add an item to
   an untitled schedule. Record what Narrator reads. Sela now: each dialog is a
   UIA Window element (AccessKit Dialog) named with its question (the editor
-  prompt also carries "There are unsaved changes" as its description), and
-  the title change reaches UIA with the next frame Sela requests. Re-run:
-  `a11y-windows.py`, `scenario-s01-windows.py`.
+  prompt is named "Save changes before closing?" and carries "Unsaved
+  changes. Save, discard, or keep editing." as its description; Delete song
+  carries its note "Schedules that use this song keep their copy. Live
+  output does not change." and a file error its message), and the title change reaches
+  UIA with the next frame Sela requests. Re-run: `a11y-windows.py`,
+  `scenario-s01-windows.py` (unsaved prompt, Options, editor close prompt).
 - [ ] **PP-SC2-06 Indonesian window title** (SC2-I18N-01). Steps: switch to
   Bahasa Indonesia, add an item to an untitled schedule, read the title bar.
   Sela now: "Sela — Pratinjau teknis" and "Jadwal tanpa judul* — Sela"
   (EW8-OBS-067 itself is still unobserved). Re-run: `i18n-windows.py`.
+- [ ] **PP-SC2-08 Normalize text size while a Go Live is in flight**
+  (SC2-LIVE-04; EW8-OBS-014). Steps: with item A live, select item B, press
+  Go Live and immediately click "Normalize text size across slides"; record
+  the size B's first slide lands with and whether it changes on the next
+  slide. Sela now: the toggle re-sends the newest requested slide (B's
+  Verse 1 here), so B lands with the new sizing (UNOBSERVED best guess; the
+  timing window is short on fast hardware). Re-run: `live-output-windows.py`.
+- [ ] **PP-SC2-09 Song Editor close prompt wording** (SC2-I18N-02;
+  EW8-OBS-012). Steps: edit a song, press Cancel (and close the editor
+  window), read the prompt and press each of Yes, No and Cancel in turn on a
+  fresh edit. EW 8.0.49 observed: "You have unsaved changes. Would you like
+  to save changes before closing?", Yes/No/Cancel, No discarded. Sela now:
+  heading "Save changes before closing?" (ID "Simpan perubahan sebelum
+  menutup?"), Yes saves and closes, No discards, Cancel or Esc keeps editing;
+  it said "Close without saving?", which inverted Yes and No. Re-run:
+  `scenario-s01-windows.py`, `song-metadata-windows.py`.
 - [ ] **PP-SC2-07 Run the S01 and S02 Windows scenarios** (not run: no
   Windows host on 2026-10-22). Steps: `python scripts\scenario-s01-windows.py`
   then `python scripts\scenario-s02-windows.py` with a secondary monitor and

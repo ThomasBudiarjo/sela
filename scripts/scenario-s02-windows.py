@@ -9,7 +9,8 @@ Windows counterpart of scripts/scenario-s02-x11.py, same checks in the same
 order (see that docstring): seeded "Signal Hymn" (A) and "Quiet Canticle"
 (B) scheduled as A, B with Live output on (SELA_AUDIENCE_MONITOR=secondary);
 A goes live by Page Down; with the Songs row menu open B and Page Down change
-nothing (SC2-FOCUS-01); Songs menu › Edit Song… on B adds a line and Ctrl+S
+nothing (SC2-FOCUS-01), and with the Schedule item menu open B, Page Down and
+Ctrl+Delete change nothing and Esc closes it (SC2-FOCUS-02); Songs menu › Edit Song… on B adds a line and Ctrl+S
 stores B's revision 2 while A keeps revision 1 and the audience frame and the
 Live status (UIA `Live-status`) stay on A's Verse 1; selecting B is Preview
 only; Next/Previous act on A; Ctrl+B / Ctrl+C toggle and restore the exact
@@ -161,6 +162,25 @@ def main() -> int:
         if "Mask:" in a11y.live_status(operator):
             raise nw.Failure("a mask went on under the Songs menu")
         nw.press(operator, "escape")
+
+        # 2b. Schedule item menu modality (SC2-FOCUS-02).
+        row = nodes()["schedule-item-1"]
+        nw.right_click(
+            operator,
+            row["x"] + row["width"] // 2 - origin_x,
+            row["y"] + row["height"] // 2 - origin_y,
+        )
+        wait_for(5, "the Schedule item menu", lambda: "item-menu-popup" in nodes())
+        for keys in ("b", "pagedown", "ctrl+delete"):
+            nw.press(operator, keys)
+        unchanged("B, Page Down and Ctrl+Delete under the Schedule item menu")
+        if "Mask:" in a11y.live_status(operator):
+            raise nw.Failure("a mask went on under the Schedule item menu")
+        found = nodes()
+        if "schedule-item-1" not in found or "item-menu-popup" not in found:
+            raise nw.Failure("a key under the Schedule item menu removed or closed it")
+        nw.press(operator, "escape")
+        wait_for(5, "Esc to close the item menu", lambda: "item-menu-popup" not in nodes())
 
         # 3. Edit B while A is live.
         before = revisions(library)

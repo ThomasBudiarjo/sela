@@ -283,3 +283,206 @@ fn the_window_title_follows_the_ui_language(cx: &mut TestAppContext) {
         Some("Untitled schedule* — Sela")
     );
 }
+
+/// Show keys that must do nothing while a popup menu is open (SC2-FOCUS-02).
+/// Enter is left out: in an open menu it chooses the focused item.
+const SHOW_KEYS: [&str; 12] = [
+    "pagedown",
+    "b",
+    ".",
+    "ctrl-b",
+    "ctrl-c",
+    "down",
+    "up",
+    "home",
+    "end",
+    "right",
+    "ctrl-delete",
+    "ctrl-l",
+];
+
+/// Presses every show key and checks that none reached the schedule, the
+/// masks or the audience while `open` still holds.
+fn assert_show_keys_inert(
+    cx: &mut VisualTestContext,
+    operator: &Entity<Operator>,
+    what: &str,
+    open: fn(&Operator) -> bool,
+) {
+    let before = operator.read_with(cx, |o, _| {
+        (
+            submitted(o),
+            o.schedule.entries().len(),
+            o.live.as_ref().map(|l| l.entry),
+            o.on_screen().map(str::to_owned),
+        )
+    });
+    for keys in SHOW_KEYS {
+        cx.simulate_keystrokes(keys);
+        idle(cx, operator);
+        operator.read_with(cx, |o, _| {
+            assert!(open(o), "{keys} closed the {what}");
+            assert!(!o.masks.any(), "{keys} toggled a mask under the {what}");
+            let now = (
+                submitted(o),
+                o.schedule.entries().len(),
+                o.live.as_ref().map(|l| l.entry),
+                o.on_screen().map(str::to_owned),
+            );
+            assert_eq!(now, before, "{keys} acted under the {what}");
+        });
+    }
+}
+
+/// SC2-FOCUS-02: right-clicking a Schedule row opened its Duplicate/Remove
+/// menu with the focus left on the row, so Page Down, B, Ctrl+B, the arrows
+/// and Ctrl+Delete still drove the show (or removed the entry the menu
+/// pointed at) and Esc did not close it, unlike the Songs menu.
+#[gpui::test]
+fn show_keys_stay_inert_while_the_schedule_item_menu_is_open(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = two_songs_live(cx, &dir);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    add_song(&mut cx, &operator, SECOND_SONG);
+    click(&mut cx, "schedule-item-0");
+    settle(&mut cx, &operator, "first entry previewed", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.entry.is_some() && p.resolved.is_some())
+    });
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "hymn on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+
+    right_click(&mut cx, "schedule-item-1");
+    cx.run_until_parked();
+    assert!(operator.read_with(&cx, |o, _| o.item_menu.is_some()));
+    assert_control(&mut cx, &operator, Control::ItemMenuDuplicate);
+    assert_show_keys_inert(&mut cx, &operator, "item menu", |o| o.item_menu.is_some());
+
+    // Tab and Up/Down stay inside the menu.
+    cx.simulate_keystrokes("tab");
+    assert_control(&mut cx, &operator, Control::ItemMenuRemove);
+    cx.simulate_keystrokes("tab");
+    assert_control(&mut cx, &operator, Control::ItemMenuDuplicate);
+    cx.simulate_keystrokes("up");
+    assert_control(&mut cx, &operator, Control::ItemMenuRemove);
+
+    // Esc closes it with the focus back on the row; the keys work again.
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(operator.read_with(&cx, |o, _| o.item_menu.is_none()));
+    cx.update(|w, cx| assert!(operator.read(cx).schedule_rows[1].is_focused(w)));
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black after the menu closed", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+
+    // Remove from the menu: the dialog returns focus to the row.
+    right_click(&mut cx, "schedule-item-1");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| o
+            .dialog
+            .clone()
+            .map(|d| matches!(d, crate::operator::Dialog::Remove(_)))),
+        Some(true)
+    );
+    click(&mut cx, "dialog-cancel");
+    cx.update(|w, cx| assert!(operator.read(cx).schedule_rows[1].is_focused(w)));
+}
+
+/// SC2-FOCUS-02: the toolbar New menu and the Media image menu left every
+/// show key live while open, and Esc did not close them.
+#[gpui::test]
+fn show_keys_stay_inert_while_the_new_and_image_menus_are_open(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let images = sela::images::images_dir(dir.path());
+    std::fs::create_dir_all(&images).unwrap();
+    std::fs::write(images.join("logo.png"), png(4, 2, [200, 10, 10, 255])).unwrap();
+    let (mut cx, operator) = two_songs_live(cx, &dir);
+    settle(&mut cx, &operator, "image list", |o| {
+        o.images == ["logo.png"]
+    });
+    preview_song(&mut cx, &operator, "Signal Hymn");
+
+    // New ▾ keeps the focus on its button.
+    click(&mut cx, "new-menu");
+    assert!(operator.read_with(&cx, |o, _| o.new_menu));
+    assert_show_keys_inert(&mut cx, &operator, "New menu", |o| o.new_menu);
+    cx.simulate_keystrokes("escape");
+    assert!(operator.read_with(&cx, |o, _| !o.new_menu));
+    assert_control(&mut cx, &operator, Control::NewMenu);
+    // A press elsewhere closes it, and a press on New ▾ again closes it
+    // without reopening it.
+    click(&mut cx, "new-menu");
+    click(&mut cx, "Live");
+    assert!(operator.read_with(&cx, |o, _| !o.new_menu));
+    click(&mut cx, "new-menu");
+    click(&mut cx, "new-menu");
+    assert!(operator.read_with(&cx, |o, _| !o.new_menu));
+    click(&mut cx, "new-menu");
+    assert!(operator.read_with(&cx, |o, _| o.new_menu));
+    cx.simulate_keystrokes("escape");
+
+    // The image row menu takes the focus like the Schedule item menu.
+    click(&mut cx, "Media");
+    right_click(&mut cx, "image-0");
+    cx.run_until_parked();
+    assert!(operator.read_with(&cx, |o, _| o.image_menu.is_some()));
+    assert_control(&mut cx, &operator, Control::ImageMenuLogo);
+    assert_show_keys_inert(&mut cx, &operator, "image menu", |o| o.image_menu.is_some());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(operator.read_with(&cx, |o, _| o.image_menu.is_none()));
+    cx.update(|w, cx| assert!(operator.read(cx).image_rows[0].is_focused(w)));
+    cx.simulate_keystrokes("ctrl-b");
+    settle(&mut cx, &operator, "Black after the menus closed", |o| {
+        confirmed_mask(o) == Some(Layer::Black)
+    });
+}
+
+/// SC2-LIVE-04: Normalize re-sent only the acknowledged `live_slide`. Between
+/// another item's Go Live and its acknowledgment that is None (SC2-LIVE-01),
+/// so the toggle re-sent nothing and the new item's slide landed with the
+/// old sizing until the next navigation.
+#[gpui::test]
+fn normalize_applies_to_a_go_live_still_in_preparation(cx: &mut TestAppContext) {
+    use sela::slides::Sizing;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = two_songs_live(cx, &dir);
+    preview_song(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "hymn on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+
+    preview_song(&mut cx, &operator, SECOND_SONG);
+    let (open, preparer) = gated_preparer(Default::default());
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(preparer));
+    click(&mut cx, "go-live");
+    assert_eq!(operator.read_with(&cx, |o, _| o.pending_cues.len()), 1);
+    click(&mut cx, "normalize-text");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| (o.sizing, o.pending_cues.len())),
+        (Sizing::Normalized, 2),
+        "the canticle's cue is prepared again with the new sizing"
+    );
+    open.send(()).unwrap();
+    open.send(()).unwrap();
+    settle(&mut cx, &operator, "canticle on screen", |o| {
+        o.pending_cues.is_empty() && o.on_screen() == Some("Quiet Canticle · Verse 1")
+    });
+    operator.read_with(&cx, |o, _| {
+        let (item, _, sizing, _) = o.size_cap.unwrap();
+        assert_eq!(item, o.live.as_ref().unwrap().version);
+        assert_eq!(
+            sizing,
+            Sizing::Normalized,
+            "the slide on screen is normalized"
+        );
+        assert_eq!(o.live_slide, Some(0));
+    });
+}

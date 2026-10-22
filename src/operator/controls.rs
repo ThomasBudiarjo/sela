@@ -253,10 +253,7 @@ impl Operator {
                 self.collapsed = false;
                 self.drag = None;
             }
-            Control::NewMenu => {
-                self.bar_menu = None;
-                self.new_menu = !self.new_menu;
-            }
+            Control::NewMenu => self.toggle_new_menu(),
             Control::Quit => window.dispatch_action(Box::new(Quit), cx),
             Control::CollapseResources => {
                 self.collapsed = !self.collapsed;
@@ -301,8 +298,11 @@ impl Operator {
                     Sizing::Normalized => Sizing::PerSlide,
                 };
                 // Applies to the live slide now, so its size never changes
-                // only on the next navigation.
-                if let Some(index) = self.live_slide
+                // only on the next navigation. The newest request, not only
+                // the acknowledged slide: a cue still in preparation (a new
+                // item's Go Live, a step) was built with the old sizing
+                // (SC2-LIVE-04).
+                if let Some(index) = self.requested_slide()
                     && matches!(
                         self.output.as_ref().map(Supervisor::status),
                         Some(Status::Connected { .. })
@@ -344,12 +344,15 @@ impl Operator {
                 None => self.schedule_message = Some(t!(Msg::SelectScheduleItem).into()),
             },
             Control::ItemMenuRemove => {
-                if let Some((id, _)) = self.item_menu.take() {
+                if let Some((id, _)) = self.item_menu {
+                    // The dialog returns focus to the row, not the menu item.
+                    self.dismiss_popup_menus(true, window, cx);
                     self.open_dialog(Dialog::Remove(id), window, cx);
                 }
             }
             Control::ItemMenuDuplicate => {
-                if let Some((id, _)) = self.item_menu.take() {
+                if let Some((id, _)) = self.item_menu {
+                    self.dismiss_popup_menus(true, window, cx);
                     self.duplicate_entries(id);
                 }
             }

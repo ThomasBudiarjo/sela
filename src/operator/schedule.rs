@@ -473,12 +473,13 @@ impl Operator {
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                            this.schedule_rows[index].focus(window, cx);
                             if !this.is_entry_selected(id) {
                                 this.select_entry(id);
                             }
-                            this.item_menu = Some((id, event.position));
-                            cx.notify();
+                            // The menu takes the keys and the focus, not the row
+                            // (SC2-FOCUS-02).
+                            window.prevent_default();
+                            this.open_item_menu(index, id, event.position, window, cx);
                         }),
                     )
                     .on_drag(EntryDrag(id), move |_, _, _, cx| {

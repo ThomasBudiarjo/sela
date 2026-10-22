@@ -692,6 +692,15 @@ def geometry(wid: int) -> Geometry:
     return Geometry(**values, viewable="IsViewable" in info)
 
 
+def viewable(wid: int) -> bool:
+    """`wid` exists and is mapped, from one xwininfo query: a window can
+    vanish between two queries (BadDrawable), which counts as not viewable."""
+    try:
+        return geometry(wid).viewable
+    except Failure:
+        return False
+
+
 THIEVES: list[str] = []
 
 
@@ -1648,7 +1657,7 @@ class App:
             raise Failure(
                 f"{self.name}: process exit timed out after {timeout}s"
             ) from error
-        if self.wid and window_exists(self.wid) and geometry(self.wid).viewable:
+        if self.wid and viewable(self.wid):
             raise Failure(f"{self.name}: window {self.wid} survived process exit")
         return code
 
@@ -1860,7 +1869,7 @@ class App:
             time.sleep(0.4)
             press(dialog, "enter")
         wait_until(
-            lambda: not window_exists(dialog) or not geometry(dialog).viewable,
+            lambda: not viewable(dialog),
             12,
             "the portal file dialog to close",
         )
