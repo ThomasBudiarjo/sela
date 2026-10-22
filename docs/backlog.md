@@ -1537,7 +1537,7 @@ Depends on: M1-13, M4-06, M4-07, M4-08, M4-09. Tests: U, I, L.
 - [ ] Test interruption/disk-full/corruption across each durable write boundary,
   including imports, migrations, backup restore and cache publication.
 - [x] Document findings, fixes and explicitly accepted residual risks.
-  (fuzz-audit, 2026-10-22: docs/security.md SEC-01..07 and residual risks.)
+  (fuzz-audit, 2026-10-22: docs/security.md SEC-01..08 and residual risks.)
 
 Acceptance: meaningful malformed/adversarial inputs exercise behavior beyond
 input rejection; no high-risk unresolved issue hidden by green happy-path tests.

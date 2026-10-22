@@ -348,7 +348,9 @@ fn family_of(face: &ttf_parser::Face<'_>) -> Option<(String, Box<[String]>)> {
             _ => 5,
         };
         let text = text.trim();
-        if text.is_empty() {
+        // A name with control characters could be listed but never chosen:
+        // `SlideFormat::is_valid` refuses it (M5-02 fuzz finding SEC-08).
+        if text.is_empty() || text.chars().any(char::is_control) {
             continue;
         }
         if display.as_ref().is_none_or(|(best, _)| rank < *best) {
