@@ -495,6 +495,10 @@ its toolbar/keyboard equivalent.
 - [ ] Implement next/previous, Go Live and safety bindings in the proper contexts.
 - [ ] Test typing in search/editor, open modal, unfocused panes, repeat keys and
   boundary slides so navigation cannot accidentally fire while entering text.
+  scrutiny-r2 (2026-10-22): an open Songs row menu now keeps every show key
+  inert (SC2-FOCUS-01, GPUI test and `scenario-s02-x11.py`); the mouse-only
+  Schedule item and image menus still leave the keys live (unconfirmed, see
+  the work log).
 - [ ] Verify keyboard-only access, visible focus and disabled/unavailable actions.
 
 Acceptance: focus and selection match observed workflows, with no typing-triggered
@@ -833,6 +837,12 @@ Images and picture logo) are **implemented-unqualified**; see
 - [ ] Bound preview work and give audience rendering priority under overload.
 - [ ] Test delayed/rejected apply, repeated Go Live, rapid navigation, live item
   removal and masked Go Live; inspect audience and operator state together.
+  scrutiny-r2 (2026-10-22): a failed Go Live of another item no longer borrows
+  the old slide index (footer, Next/Previous, surface refresh; SC2-LIVE-01), a
+  Go Live on a duplicate entry drops the original's pending cues
+  (SC2-LIVE-02), a library pick cancels a waiting Live Page Down
+  (SC2-LIVE-03); masked Go Live and Page Up under Black checked natively by
+  `scenario-s02-x11.py`. Windows and physical display runs open.
 - [ ] Linux/X11: keep the operator's input focus when the audience window maps.
   winit 0.30's X11 backend ignores `with_active(false)`, so Openbox focuses the
   monitor-covering audience (found by `scripts/live-output-x11.py --kind dual`,
@@ -951,6 +961,11 @@ Tests: I, N, E if viable, H, P; S01–S04.
 - [ ] Prepare a complete synthetic service with arrangements, image/color themes,
   saved snapshots, keyboard navigation and expected audience slides.
 - [ ] Execute S01–S04, including failed preparation and safety controls under load.
+  scrutiny-r2 (2026-10-22): S01 and S02 are automated as
+  `scripts/scenario-s0{1,2}-x11.py` (PASS on Xvfb with the real audience
+  process; themes do not exist yet, so S01 uses a slide Color Fill) and
+  `scripts/scenario-s0{1,2}-windows.py` (NOT RUN: no Windows host). S03/S04
+  wait for M1-12/M1-13; load and hardware parts are open.
 - [ ] Run a 90-minute rehearsal on an older Windows integrated-GPU laptop with
   independent projector output while searching, editing and autosaving.
 - [ ] Record frame/control timings, memory trend, recovery outcomes, manual visual
@@ -1017,6 +1032,13 @@ instructions and the work log for precise evidence and limits.
   WM_MOUSELEAVE on Windows (hover can stick after scripted pointer moves),
   and hover paint wins over the focus fill; Narrator qualification and the
   search-box gap stay with M5-03.
+  scrutiny-r2 (2026-10-22): the operator dialogs, Options and the Song
+  Editor close prompt are AccessKit Dialog nodes named with their question
+  (SC2-A11Y-01); a title change now reaches the accessibility tree with the
+  next frame instead of waiting for an unrelated redraw (SC2-A11Y-02); the
+  idle and untitled window titles are localized (SC2-I18N-01). Checked on
+  Linux over AT-SPI (`scenario-s0{1,2}-x11.py`); Narrator/UIA run open
+  (PP-SC2-05).
 
 Acceptance: another Windows operator can install and rehearse M1 from instructions.
 

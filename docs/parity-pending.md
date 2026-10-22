@@ -312,6 +312,56 @@ Common Windows prerequisites are listed once in
 
 ## Stream: scrutiny-r2
 
+- [ ] **PP-SC2-01 Keys while a context menu is open** (SC2-FOCUS-01;
+  EW8-OBS-010, -018). Steps: with A1 live, right-click a Songs row so its
+  context menu opens, then press B, period, Ctrl+B and Page Down; repeat with
+  the Schedule item menu open; record whether the audience or the toolbar
+  Black state changes and whether the menu stays open. Sela now: the Songs
+  row menu takes the focus and every show shortcut is inert until Esc or a
+  choice closes it (best guess); the mouse-only Schedule item and image menus
+  do not take the focus, so show keys still act there (unconfirmed, see the
+  scrutiny-r2 record). Re-run: `scenario-s02-windows.py`.
+- [ ] **PP-SC2-02 Next/Previous after a Go Live that did not show**
+  (SC2-LIVE-01; EW8-OBS-014, -050). Steps: hard to force in EW; the nearest
+  case is Go Live on an item whose background media is missing. Record
+  which slide Next/Previous then send and what the Live pane footer says.
+  Sela now: until a slide of the new live item has been shown, Next/Previous
+  send nothing and say "<title> is not on screen yet; use Go Live first"; the
+  footer says "<title> · not sent" (UNOBSERVED best guess). Re-run:
+  `navigation-windows.py`, `scenario-s02-windows.py`.
+- [ ] **PP-SC2-03 Go Live on a duplicate schedule item while the original is
+  stepping** (SC2-LIVE-02; EW8-OBS-013). Steps: schedule A1 twice, take the
+  first live, press Right and immediately select the second A1 and Go Live;
+  record whether the first item's next slide flashes on the audience. Sela
+  now: a Go Live on another entry, even of the same song revision, drops the
+  earlier entry's cues still being prepared, so only the duplicate's slide is
+  shown. Re-run: `schedule-remainder-windows.py`.
+- [ ] **PP-SC2-04 Live Page Down then a Songs click** (SC2-LIVE-03;
+  EW8-OBS-050). Steps: with schedule item 1 live and the Live pane focused,
+  press Page Down and at once click a song in Songs; then press Page Down in
+  Live again; record which schedule item goes live. Sela now: picking a song
+  cancels the waiting Page Down, and the next Page Down goes to the item
+  after the one on screen. Re-run: `navigation-windows.py`.
+- [ ] **PP-SC2-05 Screen reader announcement of dialogs and the window
+  title** (SC2-A11Y-01, -02; VAL-A11Y). Steps: with Narrator on, open the
+  unsaved-schedule prompt (Ctrl+Q with an unsaved schedule), the Delete song
+  confirmation, Options and the Song Editor close prompt; then add an item to
+  an untitled schedule. Record what Narrator reads. Sela now: each dialog is a
+  UIA Window element (AccessKit Dialog) named with its question (the editor
+  prompt also carries "There are unsaved changes" as its description), and
+  the title change reaches UIA with the next frame Sela requests. Re-run:
+  `a11y-windows.py`, `scenario-s01-windows.py`.
+- [ ] **PP-SC2-06 Indonesian window title** (SC2-I18N-01). Steps: switch to
+  Bahasa Indonesia, add an item to an untitled schedule, read the title bar.
+  Sela now: "Sela — Pratinjau teknis" and "Jadwal tanpa judul* — Sela"
+  (EW8-OBS-067 itself is still unobserved). Re-run: `i18n-windows.py`.
+- [ ] **PP-SC2-07 Run the S01 and S02 Windows scenarios** (not run: no
+  Windows host on 2026-10-22). Steps: `python scripts\scenario-s01-windows.py`
+  then `python scripts\scenario-s02-windows.py` with a secondary monitor and
+  the keyboard idle; attach `.amp/in/artifacts/scenario-s0{1,2}-windows/`.
+  Sela now: both PASS on Linux/X11 (`scenario-s0{1,2}-x11.py`, xvfb `:111`,
+  2026-10-22). Re-run: these two scripts.
+
 ## Stream: import-framework
 
 ## Stream: ew-library-import
@@ -372,6 +422,8 @@ timing):
 | 20 | `resource-browser-windows.py` | seed (`--second-song`, `--extra-songs`); release binary and a 20k library for the scrolling timings |
 | 21 | `prep-windows.py` | release binary (`--binary target\release\sela.exe`); seed (`--heavy-song`); audience on the laptop panel (`--monitor name:\\.\DISPLAY1`, the default) |
 | 22 | `reference-w03-windows.py` | not a Sela check: EasyWorship 8.0.49 open and maximized with one song previewed from the Songs tab; observation only |
+| 23 | `scenario-s01-windows.py` | none seeded (fresh profile); secondary monitor; native Save dialog |
+| 24 | `scenario-s02-windows.py` | seed (`--second-song`); secondary monitor |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

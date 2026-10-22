@@ -144,6 +144,14 @@ display qualification. External FFmpeg supports the opt-in decoder diagnostic;
 it is not bundled with Sela. GPUI is pinned in `Cargo.toml`; transitive versions
 are locked.
 
+Setup also installs the Linux native E2E harness packages
+([docs/e2e-linux.md](docs/e2e-linux.md)), `mingw-w64` with the
+`x86_64-pc-windows-gnu` Rust target for `cargo check --target
+x86_64-pc-windows-gnu`, and ruff 0.17.1 (`python3 -m ruff`, a `--user` pip
+install). It installs the toolchain named in `rust-toolchain.toml` explicitly
+and passes only the rustup flags the installed rustup knows (rustup 1.28 has
+no `--no-update`); as root it runs apt without sudo.
+
 Check setup with `bash -n .agents/setup`, `shellcheck .agents/setup`, and two
 consecutive `.agents/setup` runs. Changes only reach future project orbs after
 merging/pushing them to the project's default branch (or explicitly configuring

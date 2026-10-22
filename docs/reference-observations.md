@@ -696,3 +696,18 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 - CCLI maps to the Song Number field.
 - Metadata search covers authors, copyright, license, administrator and song number.
 - Close prompt: Yes saves and closes, No discards, Cancel or Esc keeps editing; it is modal.
+
+## Scrutiny round 2 — UNOBSERVED best guesses (2026-10-22, scrutiny-r2)
+
+EasyWorship 8.0.49 was not run for scrutiny round 2 (no Windows host). The
+fixes below keep Sela's own rules consistent; none of them is an
+observation. Each has an item in [parity-pending.md](parity-pending.md)
+(Stream: scrutiny-r2).
+
+| Fix | Related record | Sela rule now (best guess) |
+|---|---|---|
+| SC2-FOCUS-01 | EW8-OBS-010 (menus, Esc), EW8-OBS-018 (show keys) | While the Songs row context menu is open, B, period, Ctrl+B/C/L, Page Down, arrows and label keys do nothing; Esc or a menu choice closes it first (PP-SC2-01). |
+| SC2-LIVE-01 | EW8-OBS-014, -050 | After Go Live on another item, Next/Previous step only from a slide of that item that was shown; if its Go Live failed they send nothing and say so, and the footer reads "<title> · not sent" (PP-SC2-02). |
+| SC2-LIVE-02 | EW8-OBS-013 | Go Live on a duplicate schedule entry drops the earlier entry's cues still being prepared (PP-SC2-03). |
+| SC2-LIVE-03 | EW8-OBS-050 | Picking a song in Songs cancels a Live-pane Page Down that is still waiting for its item to load (PP-SC2-04). |
+| SC2-I18N-01 | EW8-OBS-067 (unobserved title) | The idle and untitled window titles follow the UI language (PP-SC2-06). |

@@ -1315,6 +1315,116 @@ class Control:
         return self.x + self.width // 2, self.y + self.height // 2
 
 
+# AT-SPI role numbers 0-99 (at-spi2-core AtspiRole, also atspi-common's
+# Role), named the way atspi_role_get_name spells them.
+_ATSPI_ROLES = [
+    "invalid",
+    "accelerator label",
+    "alert",
+    "animation",
+    "arrow",
+    "calendar",
+    "canvas",
+    "check box",
+    "check menu item",
+    "color chooser",
+    "column header",
+    "combo box",
+    "date editor",
+    "desktop icon",
+    "desktop frame",
+    "dial",
+    "dialog",
+    "directory pane",
+    "drawing area",
+    "file chooser",
+    "filler",
+    "focus traversable",
+    "font chooser",
+    "frame",
+    "glass pane",
+    "html container",
+    "icon",
+    "image",
+    "internal frame",
+    "label",
+    "layered pane",
+    "list",
+    "list item",
+    "menu",
+    "menu bar",
+    "menu item",
+    "option pane",
+    "page tab",
+    "page tab list",
+    "panel",
+    "password text",
+    "popup menu",
+    "progress bar",
+    "push button",
+    "radio button",
+    "radio menu item",
+    "root pane",
+    "row header",
+    "scroll bar",
+    "scroll pane",
+    "separator",
+    "slider",
+    "spin button",
+    "split pane",
+    "status bar",
+    "table",
+    "table cell",
+    "table column header",
+    "table row header",
+    "tearoff menu item",
+    "terminal",
+    "text",
+    "toggle button",
+    "tool bar",
+    "tool tip",
+    "tree",
+    "tree table",
+    "unknown",
+    "viewport",
+    "window",
+    "extended",
+    "header",
+    "footer",
+    "paragraph",
+    "ruler",
+    "application",
+    "autocomplete",
+    "editbar",
+    "embedded",
+    "entry",
+    "chart",
+    "caption",
+    "document frame",
+    "heading",
+    "page",
+    "section",
+    "redundant object",
+    "form",
+    "link",
+    "input method window",
+    "table row",
+    "tree item",
+    "document spreadsheet",
+    "document presentation",
+    "document text",
+    "document web",
+    "document email",
+    "comment",
+    "list box",
+    "grouping",
+]
+
+
+def _atspi_role_name(number: int) -> str:
+    return _ATSPI_ROLES[number] if 0 <= number < len(_ATSPI_ROLES) else str(number)
+
+
 @dataclass
 class _Atspi:
     address: str
@@ -1360,6 +1470,14 @@ class _Atspi:
         role = _gv_strings(
             self.call(dest, path, "org.a11y.atspi.Accessible.GetRoleName")
         )
+        if not role or not role[0]:
+            # AccessKit's AT-SPI adapter (accesskit_unix 0.22) answers
+            # GetRoleName with an empty string; GetRole has the number.
+            number = re.search(
+                r"(?:uint32 )?(\d+),?\)",
+                self.call(dest, path, "org.a11y.atspi.Accessible.GetRole"),
+            )
+            role = [_atspi_role_name(int(number[1]))] if number else []
         extents = re.findall(
             r"-?\d+", self.call(dest, path, "org.a11y.atspi.Component.GetExtents", "1")
         )

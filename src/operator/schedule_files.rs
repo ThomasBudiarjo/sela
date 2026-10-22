@@ -397,6 +397,11 @@ impl Operator {
         if title != self.window_title {
             window.set_window_title(&title);
             self.window_title = title;
+            // GPUI names the accessibility tree's window node when a frame
+            // begins, and this runs inside the frame: without another frame,
+            // screen readers keep the old title until something else redraws
+            // (SC2-A11Y-02).
+            window.request_animation_frame();
         }
     }
 }

@@ -15,7 +15,11 @@ Files:
   external tools; no pip packages).
 - `scripts/<feature>-x11.py`: one script per feature. Ported so far:
   `live-output-x11.py`, `schedule-x11.py`, `song-editor-x11.py` (from the
-  `*-windows.py` scripts of the same name).
+  `*-windows.py` scripts of the same name). End-to-end scenarios (backlog
+  "Repeatable end-to-end scenarios"): `scenario-s01-x11.py` (fresh profile,
+  New Song, schedule, save, reopen, Go Live) and `scenario-s02-x11.py`
+  (present A, edit B, Next/Previous, masks, Go Live under Black), with
+  Windows counterparts `scenario-s0{1,2}-windows.py` (scrutiny-r2).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -150,7 +154,12 @@ Processes and profile:
   `app.control(id).center`: AccessKit ids (the same ids UIA exposes on
   Windows, e.g. `live-next`, `mask-black`, `song-0`) with window-relative
   rectangles, read over AT-SPI with `gdbus`. Positions hold only for the
-  layout at the time of the call.
+  layout at the time of the call. `Control.role` is the AT-SPI role name
+  ("dialog", "push button", "list item", ...): AccessKit's adapter answers
+  GetRoleName with an empty string, so the harness maps GetRole's number
+  (scrutiny-r2; before that every role read as ""). Controls are looked up
+  under the window's current title, which GPUI hands to AT-SPI when a frame
+  begins.
 - `app.file_dialog()`, `app.drive_file_dialog(path, cancel=False,
   owner=window)`: the portal Save/Open dialog; the path is typed into the
   location entry (Ctrl+L) in one burst because GTK's inline completion
@@ -243,6 +252,11 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `live-output-x11.py --kind dual --tolerate-audience-focus` | private dual, audience `secondary` 1920x1080 | PASS, four tolerated focus thefts |
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
+
+scrutiny-r2 (2026-10-22, `:111` = `serve --display :111`, HEAD of
+`wave/scrutiny-r2`): `scenario-s01-x11.py` and `scenario-s02-x11.py` PASS,
+and the three ported scripts above PASS again on the same binary (exact
+commands and timings in the work-log record "scrutiny-r2").
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live
