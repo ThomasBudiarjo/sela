@@ -1355,6 +1355,12 @@ Depends on: M1-13, M1-14, M4-06. Tests: U, I, N, L.
   public specifications, lawful access and available user-owned fixtures.
 - [ ] Create one child ticket per feasible format/version, with supported field
   mapping, duplicate policy, preservation guarantees and unsupported data report.
+  - [ ] OpenSong song files: parser core `import::opensong` is
+    implemented-unqualified (field mapping and line rules in docs/import.md);
+    framework hookup, staged preview and native VAL-IMPORT-005 remain.
+  - [ ] ChordPro files: parser core `import::chordpro` is
+    implemented-unqualified (directive table in docs/import.md); framework
+    hookup, staged preview and native VAL-IMPORT-006 remain.
 - [ ] Implement read-only source access, staged preview and transactional import;
   do not bypass encryption/DRM or mutate the original installation's database.
 - [ ] Test cross-version, malformed, partially missing assets and duplicate IDs;
