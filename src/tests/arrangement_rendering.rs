@@ -134,6 +134,19 @@ fn previewing_another_arrangement_keeps_live_faces_and_every_live_slide(cx: &mut
         assert!(!o.cue_failed, "every Live slide prepares");
         assert_eq!(o.live_slide, Some(2));
     });
+
+    let version = operator.read_with(&cx, |o, _| o.live.as_ref().unwrap().version);
+    cx.update(|_, cx| {
+        operator.update(cx, |o, cx| {
+            let one = vec![fonts::Resolved::bundled(&SlideFormat::default())];
+            o.fonts_resolved(version, one, cx);
+        })
+    });
+    assert_eq!(
+        operator.read_with(&cx, |o, _| live_faces(o)),
+        Some(full),
+        "a resolution that is not one face per Live slide is not attached"
+    );
 }
 
 /// Sixteen and twenty numbered lines, typed with blank lines around them,

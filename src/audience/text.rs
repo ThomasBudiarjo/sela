@@ -89,8 +89,6 @@ pub fn layers(cue: &PreparedCue) -> Result<Layers, TextError> {
     );
     let (rows, row) = (area_height as usize, area_width as usize);
     if let Some(text) = cue.text() {
-        // The lyrics keep clear of the strip's box, the same box
-        // `slides::cue_with_footer` fits them beside.
         let lyrics_height = area_height.saturating_sub(cue.footer().map_or(0, |strip| {
             slides::footer_height(strip.content().lines().count(), strip.font_size())
         }));
@@ -120,7 +118,7 @@ pub fn layers(cue: &PreparedCue) -> Result<Layers, TextError> {
     }
     if let Some(strip) = cue.footer() {
         // The strip shares the lyrics' fill mask, so it takes their colour and
-        // effects; it is laid out in the same inset box, bottom aligned.
+        // effects; it is laid out in the whole inset box, bottom aligned.
         let area = glyph_coverage(
             strip.font(),
             strip.face_index(),
@@ -707,6 +705,7 @@ mod tests {
             ),
         ];
         let width = extent.width as usize;
+        let mut overlaps = Vec::new();
         for (name, text, format) in cases {
             let with_lyrics = cue(&text, &format);
             assert!(with_lyrics.footer().is_some(), "{name}: the strip is drawn");
@@ -719,13 +718,15 @@ mod tests {
                 })
                 .collect();
             assert!(!strip_rows.is_empty() && !lyric_rows.is_empty(), "{name}");
-            assert!(
-                lyric_rows.last() < strip_rows.first(),
-                "{name}: lyrics end on row {:?}, the strip starts on row {:?}",
-                lyric_rows.last(),
-                strip_rows.first()
-            );
+            if lyric_rows.last() >= strip_rows.first() {
+                overlaps.push(format!(
+                    "{name}: lyrics end on row {:?}, the strip starts on row {:?}",
+                    lyric_rows.last(),
+                    strip_rows.first()
+                ));
+            }
         }
+        assert!(overlaps.is_empty(), "{overlaps:#?}");
     }
 
     #[test]

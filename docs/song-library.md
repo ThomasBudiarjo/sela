@@ -97,7 +97,19 @@ finish. Original GPUI code; no EasyWorship code or assets.
   flight; replaced images are dropped from the GPU atlas. An empty slide shows
   "Double click to edit song"; double-click focuses its lyrics. Text the
   audience would reject (overflow, missing glyph) shows a message instead of an
-  image. No copyright strip, theme or background yet (M1-05g/h).
+  image. The preview and the footer's split badge take the slide's pages from
+  `slides::section_pages`, which the audience projection also uses. Trailing
+  spaces, blank lines around the text and a final Enter therefore never add a
+  page. The preview shows page 1. No copyright strip or theme yet (M1-05g/h).
+- On the audience, a song with copyright text draws a two-line strip at the
+  bottom of every slide (EW8-OBS-063). The lyrics never share a row with it.
+  `slides::cue_with_footer` fits them in the area above the strip's box, and
+  `audience::text::layers` lays them out there with their own vertical
+  alignment. A Fixed size that fits only without the strip drops the strip on
+  that slide instead of failing the cue (Sela's rule, unobserved in EW).
+  Tests: `audience::text::tests::lyrics_and_the_copyright_strip_never_share_a_row`
+  (Bottom, Middle and a tall Fixed slide),
+  `slides::tests::a_fixed_size_keeps_the_strip_only_when_it_fits_above_it`.
 - Footer: disabled "Apply changes to items in schedule" (schedule items pin
   revisions; update-in-schedule is not implemented), **Apply** (enabled while
   dirty; saves and stays open), **OK**, **Cancel**.
