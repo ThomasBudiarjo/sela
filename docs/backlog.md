@@ -1014,6 +1014,14 @@ Acceptance: another Windows operator can install and rehearse M1 from instructio
 
 Depends on: M0-07, M1-15. Tests: I, H, P, L.
 
+Progress: the FFmpeg base slice (2026-10-22) records the subprocess LGPL 8.1
+build, its pin, the redistribution obligations and the patent caveat in
+[media](media.md). The locator (`SELA_FFMPEG_DIR`, install folder, debug dev
+folder, never PATH) and the `-buildconf` refusal of `--enable-gpl` and
+`--enable-nonfree` are unit-tested in `src/media/ffmpeg.rs` but not wired into
+the app: discovery off the UI thread, logging the accepted version and the
+missing-FFmpeg warning stay open. No checkbox below is satisfied yet.
+
 - [ ] Use the M0 interop findings to compare native/software decode options,
   codec/container coverage, GPU transfer paths and distribution obligations.
 - [ ] Pin a supported format matrix, hardware/software fallback and failure policy.
@@ -1027,6 +1035,12 @@ video playing once; no unsupported codec advertised.
 ### M2-02 — Bounded asynchronous video preparation and playback
 
 Depends on: M2-01, M0-06. Tests: U, I, R, H.
+
+Progress: `media::ffmpeg::input_args` (2026-10-22) builds the decoder input
+arguments with `-nostdin -hide_banner -protocol_whitelist file` before `-i`
+and accepts only absolute local file paths ([media](media.md)). The
+crafted-playlist runtime check (VAL-MEDIA-038), the Job Object supervisor and
+all decoding stay open.
 
 - [ ] Implement open/probe/preload/decode/frame delivery outside UI/render paths.
 - [ ] Bound packet/frame queues and decide drop/backpressure behavior by timestamps.
