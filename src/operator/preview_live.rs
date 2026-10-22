@@ -675,6 +675,7 @@ impl Operator {
         self.logo_requested = None;
         self.logo_sent = None;
         self.sync_show(Instant::now());
+        self.follow_live_output();
     }
 
     pub(crate) fn go_live(&mut self) {
@@ -1178,6 +1179,7 @@ impl Operator {
         if let Some((_, error)) = output.and_then(|o| o.logo_rejected()) {
             lines.push((t!(Msg::LogoNotShown, error = error), DARK_ERROR));
         }
+        lines.extend(self.stage_lines());
         if let Some(message) = &self.live_message {
             lines.push((message.clone(), DARK_ERROR));
         }

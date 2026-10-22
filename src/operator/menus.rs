@@ -559,6 +559,11 @@ pub(crate) enum BarItem {
     BlackOnLive,
     ClearOnLive,
     ShowLiveOutput,
+    /// Sela addition (UNOBSERVED in EW8-OBS-053): restarts or stops only the
+    /// stage output.
+    ShowStageOutput,
+    /// Sela addition (UNOBSERVED): the stage-only message line.
+    StageMessage,
     ProfileDefault,
     ProfilesManager,
     DemoData,
@@ -601,6 +606,8 @@ impl BarItem {
             BarItem::BlackOnLive => Msg::BarBlackOnLive,
             BarItem::ClearOnLive => Msg::BarClearOnLive,
             BarItem::ShowLiveOutput => Msg::BarShowLiveOutput,
+            BarItem::ShowStageOutput => Msg::BarShowStageOutput,
+            BarItem::StageMessage => Msg::BarStageMessage,
             BarItem::ProfileDefault => Msg::BarDefault,
             BarItem::ProfilesManager => Msg::BarProfilesManager,
             BarItem::DemoData => Msg::BarDemoData,
@@ -658,6 +665,8 @@ impl BarItem {
             BarItem::BlackOnLive => "bar-live-black",
             BarItem::ClearOnLive => "bar-live-clear",
             BarItem::ShowLiveOutput => "bar-live-show",
+            BarItem::ShowStageOutput => "bar-live-stage",
+            BarItem::StageMessage => "bar-live-stage-message",
             BarItem::ProfileDefault => "bar-profiles-default",
             BarItem::ProfilesManager => "bar-profiles-manager",
             BarItem::DemoData => "bar-profiles-demo-data",
@@ -694,6 +703,13 @@ impl BarItem {
             // Mirrors the toolbar Logo button: usable only when a logo is
             // chosen or already showing.
             BarItem::LogoOnLive => !(operator.logo.is_none() && !operator.masks.is_on(Mask::Logo)),
+            // Foldback must be enabled in Options (EW8-OBS-056) and a stage
+            // child must exist; the message can be prepared before Live.
+            BarItem::ShowStageOutput => {
+                operator.stage_enabled() && operator.stage_available()
+                    || operator.stage.output.is_some()
+            }
+            BarItem::StageMessage => operator.stage_enabled() || operator.stage.output.is_some(),
             BarItem::OpenRecent => !operator.recent_schedules().is_empty(),
             BarItem::Recent(index) => (index as usize) < operator.recent_schedules().len(),
             _ => false,
@@ -703,6 +719,7 @@ impl BarItem {
     fn checked(self, operator: &Operator) -> bool {
         match self {
             BarItem::ShowLiveOutput => operator.output.is_some(),
+            BarItem::ShowStageOutput => operator.stage.output.is_some(),
             BarItem::ProfileDefault | BarItem::ViewPreviewLive => true,
             _ => false,
         }
@@ -714,6 +731,7 @@ impl BarItem {
         matches!(
             self,
             BarItem::ShowLiveOutput
+                | BarItem::ShowStageOutput
                 | BarItem::ProfileDefault
                 | BarItem::ViewPreviewLive
                 | BarItem::ViewCombined
@@ -768,6 +786,8 @@ const LIVE_MENU: &[BarEntry] = &[
     BarEntry::Item(BarItem::ClearOnLive),
     BarEntry::Separator,
     BarEntry::Item(BarItem::ShowLiveOutput),
+    BarEntry::Item(BarItem::ShowStageOutput),
+    BarEntry::Item(BarItem::StageMessage),
 ];
 const PROFILES_MENU: &[BarEntry] = &[
     BarEntry::Item(BarItem::ProfileDefault),
@@ -976,6 +996,8 @@ impl Operator {
             BarItem::BlackOnLive => self.toggle_mask(Mask::Black),
             BarItem::ClearOnLive => self.toggle_mask(Mask::Clear),
             BarItem::ShowLiveOutput => self.toggle_output(),
+            BarItem::ShowStageOutput => self.toggle_stage_output(),
+            BarItem::StageMessage => self.open_stage_message(window, cx),
             _ => unreachable!("enabled() gates unbuilt items"),
         }
         cx.notify();

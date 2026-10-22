@@ -268,3 +268,34 @@ no temporary folder left).
   Windows; no IME.
 - No EasyWorship reference can run here; nothing in these runs is parity
   evidence.
+
+## Stage output (stage-display, 2026-10-22)
+
+`scripts/stage-display-x11.py` drives the operator with Foldback enabled and
+checks both renderer children (`sela --audience`, `sela --stage`); see its
+docstring and [stage-display.md](stage-display.md). Harness additions:
+`STAGE_TITLE`, `App.stage(timeout)`, an Openbox rule placing the `window`
+stage (`SELA_STAGE_MONITOR=window`, 624x351) below the audience on the `xvfb`
+kind, and a `triple` display kind (Xorg dummy, DUMMY0 primary plus DUMMY1 and
+DUMMY2 at 1920x1080) for the production placement of both outputs.
+
+What works for two or more outputs on Linux (checked on `:118`):
+
+- One Xvfb screen: one winit monitor, so both outputs use `window`.
+- `Xvfb :118 -screen 0 1920x1080x24 -screen 1 1920x1080x24`: two X
+  screens; `sela --list-monitors` prints one `screen` monitor on `:118` and
+  on `:118.1`, so it does not give winit a second monitor either.
+- Xorg with the dummy driver and three RandR outputs (the `triple` kind, or
+  started by hand on `:118` with the same `dummy.conf` at `Virtual 5760 1080`
+  and the `xrandr --addmode/--output` commands of `Display.start`): winit sees
+  DUMMY0/1/2; the audience covers DUMMY1 and Options › Foldback "Automatic"
+  puts the stage on DUMMY2. Openbox focuses each output window on map (the
+  M1-10 Linux finding also holds for the stage); `--tolerate-output-focus`
+  records it.
+- Full-screen captures of a 5760x1080 root need ImageMagick temporary space;
+  with `/` full, set `MAGICK_TEMPORARY_PATH` and `TMPDIR` to a tmpfs folder.
+
+| Script | Display | Result |
+| --- | --- | --- |
+| `stage-display-x11.py --display :118` | Xvfb 1920x1080 + harness Openbox rules; both outputs `window` 624x351 | PASS |
+| `stage-display-x11.py --display :118 --tolerate-output-focus` | Xorg dummy, three monitors; audience DUMMY1, stage DUMMY2 (Automatic) | PASS, two tolerated focus thefts by the stage window |

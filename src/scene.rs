@@ -192,7 +192,33 @@ pub struct PreparedCue {
     background: PreparedBackground,
     text: Option<PreparedText>,
     footer: Option<PreparedText>,
+    /// Stage-only content (M3-02); only a stage renderer accepts such a cue.
+    stage: Option<PreparedStage>,
     bytes: usize,
+}
+
+/// A stage panel with the face it is drawn in. The renderer fits and places
+/// every field itself (`stage::layout`, `stage::fit`).
+pub struct PreparedStage {
+    panel: crate::stage::StagePanel,
+    font_version: ContentVersion,
+    font: Arc<[u8]>,
+    face_index: u32,
+}
+
+impl PreparedStage {
+    pub fn panel(&self) -> &crate::stage::StagePanel {
+        &self.panel
+    }
+    pub fn font(&self) -> &[u8] {
+        &self.font
+    }
+    pub fn font_version(&self) -> ContentVersion {
+        self.font_version
+    }
+    pub fn face_index(&self) -> u32 {
+        self.face_index
+    }
 }
 
 fn prepare_text(text: OwnedText, bytes: &mut usize) -> Result<PreparedText, PrepareError> {
@@ -257,6 +283,59 @@ impl PreparedCue {
             background,
             text,
             footer: None,
+            stage: None,
+            bytes,
+        })
+    }
+
+    /// A stage-output cue: an opaque color background plus a stage panel in
+    /// one explicit face. No audience text; the audience renderer refuses
+    /// it. Validates sizes, the face and the stage surface minimum.
+    pub fn for_stage(
+        version: ContentVersion,
+        extent: Extent,
+        background: [u8; 3],
+        panel: crate::stage::StagePanel,
+        font: (ContentVersion, Arc<[u8]>, u32),
+        caps: RendererCapabilities,
+    ) -> Result<Self, PrepareError> {
+        check_extent(extent, caps)?;
+        if extent.width < crate::stage::MIN_EXTENT.width
+            || extent.height < crate::stage::MIN_EXTENT.height
+        {
+            return Err(PrepareError::InvalidScene);
+        }
+        if !panel.is_valid() {
+            return Err(PrepareError::TooLarge);
+        }
+        let (font_version, font, face_index) = font;
+        if font.len() > MAX_SOURCE_BYTES {
+            return Err(PrepareError::TooLarge);
+        }
+        ttf_parser::Face::parse(&font, face_index).map_err(|_| PrepareError::InvalidFont)?;
+        let bytes = font.len()
+            + panel.current_label.len()
+            + panel.current.len()
+            + panel.next_label.len()
+            + panel.next.len()
+            + panel.message.len();
+        Ok(Self {
+            version,
+            extent,
+            background: PreparedBackground::Color([
+                background[0],
+                background[1],
+                background[2],
+                255,
+            ]),
+            text: None,
+            footer: None,
+            stage: Some(PreparedStage {
+                panel,
+                font_version,
+                font,
+                face_index,
+            }),
             bytes,
         })
     }
@@ -291,6 +370,7 @@ impl PreparedCue {
             background: PreparedBackground::Color(color),
             text: None,
             footer: None,
+            stage: None,
             bytes: 0,
         })
     }
@@ -310,6 +390,10 @@ impl PreparedCue {
     /// The copyright strip, if the slide shows one.
     pub fn footer(&self) -> Option<&PreparedText> {
         self.footer.as_ref()
+    }
+    /// Stage-only content; `Some` only for a stage-output cue.
+    pub fn stage(&self) -> Option<&PreparedStage> {
+        self.stage.as_ref()
     }
     pub fn resource_bytes(&self) -> usize {
         self.bytes

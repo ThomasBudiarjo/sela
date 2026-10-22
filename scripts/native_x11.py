@@ -47,6 +47,7 @@ from typing import Self, TypeVar
 ROOT = Path(__file__).resolve().parents[1]
 OPERATOR_TITLE = "Sela — Technical preview"
 AUDIENCE_TITLE = "Sela audience output"
+STAGE_TITLE = "Sela stage output"
 EDITOR_TITLE_PREFIX = "Song Editor - "
 # GPUI (zed a846890) renders through wgpu's Vulkan backend on Linux, so the
 # operator needs a Vulkan driver: pin Mesa's software rasterizer (lavapipe).
@@ -60,6 +61,10 @@ EXIT_PASS, EXIT_FAIL, EXIT_ENVIRONMENT = 0, 1, 2
 # 624x351 (16:9) plus its 1 px Openbox border fits right of the 1280 px
 # operator (also bordered) on a 1920 px screen without overlapping it.
 XVFB_AUDIENCE_SIZE = (624, 351)
+# xvfb kind: the stage (Foldback) output in its `window` placement
+# (`SELA_STAGE_MONITOR=window`) goes below the audience, same size, unfocused.
+XVFB_STAGE_SIZE = (624, 351)
+XVFB_STAGE_Y = 420
 REQUIRED_TOOLS = ("xdotool", "xwininfo", "xprop", "import", "dbus-daemon", "gdbus")
 
 T = TypeVar("T")
@@ -292,6 +297,11 @@ def _openbox_rc(kind: str, screen: tuple[int, int]) -> str:
     <size><width>{width}</width><height>{height}</height></size>
     <focus>no</focus>
   </application>
+  <application title="{STAGE_TITLE}">
+    <position force="yes"><x>{screen[0] - XVFB_STAGE_SIZE[0] - 2}</x><y>{XVFB_STAGE_Y}</y></position>
+    <size><width>{XVFB_STAGE_SIZE[0]}</width><height>{XVFB_STAGE_SIZE[1]}</height></size>
+    <focus>no</focus>
+  </application>
 """
     return text.replace("<applications>", "<applications>" + rules, 1)
 
@@ -333,6 +343,8 @@ class Display:
     `dual` — Xorg with the dummy driver and two 1920x1080 CRTCs (DUMMY0
     primary, DUMMY1 to its right): the audience opens on the real
     `secondary` placement, borderless and covering DUMMY1.
+    `triple` — as `dual` plus DUMMY2 to the right of DUMMY1, so the stage
+    (Foldback) output can take its production placement on a third monitor.
     """
 
     def __init__(
@@ -404,7 +416,7 @@ class Display:
         needed = ["openbox"] + (["Xvfb"] if kind == "xvfb" else ["Xorg", "xrandr"])
         absent = missing_tools(needed)
         if (
-            kind == "dual"
+            kind in ("dual", "triple")
             and not Path("/usr/lib/xorg/modules/drivers/dummy_drv.so").exists()
         ):
             absent.append("xserver-xorg-video-dummy")
@@ -426,9 +438,13 @@ class Display:
                 "tcp",
                 "-noreset",
             ]
-        elif kind == "dual":
+        elif kind in ("dual", "triple"):
             conf = scratch / "dummy.conf"
-            conf.write_text(_DUMMY_CONF)
+            conf.write_text(
+                _DUMMY_CONF.replace("Virtual 3840 1080", "Virtual 5760 1080")
+                if kind == "triple"
+                else _DUMMY_CONF
+            )
             command = [
                 "Xorg",
                 "-displayfd",
@@ -469,7 +485,18 @@ class Display:
         os.close(read)
         display = cls(f":{number.decode().strip()}", kind, True, tag, scratch)
         try:
-            if kind == "dual":
+            if kind == "triple":
+                tool("xrandr", "--addmode", "DUMMY2", "1920x1080")
+                tool(
+                    "xrandr",
+                    "--output",
+                    "DUMMY2",
+                    "--mode",
+                    "1920x1080",
+                    "--pos",
+                    "3840x0",
+                )
+            if kind in ("dual", "triple"):
                 tool("xrandr", "--addmode", "DUMMY1", "1920x1080")
                 tool(
                     "xrandr",
@@ -1599,6 +1626,19 @@ class App:
                 return None
             time.sleep(0.05)
 
+    def stage(self, timeout: float) -> tuple[int, int] | None:
+        """(pid, window) of the stage (`sela --stage`) child, or None after
+        `timeout`."""
+        deadline = time.monotonic() + timeout
+        while True:
+            for pid in children(self.pid):
+                for wid in visible_windows(pid):
+                    if window_name(wid) == STAGE_TITLE:
+                        return pid, wid
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+
     # -- AT-SPI controls
 
     def _a11y(self) -> _Atspi:
@@ -1834,7 +1874,7 @@ def arguments(
     )
     parser.add_argument(
         "--kind",
-        choices=("xvfb", "dual"),
+        choices=("xvfb", "dual", "triple"),
         default="xvfb",
         help="private display kind (ignored with --display)",
     )
@@ -1995,11 +2035,11 @@ def _cli(argv: list[str]) -> int:
     serve = sub.add_parser(
         "serve", help="start a display + Openbox and keep it until interrupted"
     )
-    serve.add_argument("--kind", choices=("xvfb", "dual"), default="xvfb")
+    serve.add_argument("--kind", choices=("xvfb", "dual", "triple"), default="xvfb")
     serve.add_argument("--display", help="display number to use (xvfb only), e.g. :100")
     config = sub.add_parser("openbox-config", help="write the harness Openbox rc.xml")
     config.add_argument("path", type=Path)
-    config.add_argument("--kind", choices=("xvfb", "dual"), default="xvfb")
+    config.add_argument("--kind", choices=("xvfb", "dual", "triple"), default="xvfb")
     config.add_argument("--screen", default="1920x1080")
     args = parser.parse_args(argv)
     if args.command == "doctor":

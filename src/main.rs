@@ -150,9 +150,11 @@ mod text_input;
 mod ui;
 use operator::Operator;
 
-/// Internal child mode: `sela --audience EPOCH_HEX MONITOR [BACKEND]`, where
-/// MONITOR is a winit index, `secondary` or `window`. Spawned by the operator.
-fn audience_main(args: &[std::ffi::OsString]) -> ! {
+/// Internal child modes: `sela --audience EPOCH_HEX MONITOR [BACKEND]` and
+/// `sela --stage EPOCH_HEX MONITOR [BACKEND]` (the stage/confidence output,
+/// M3-01/M3-02), where MONITOR is a winit index, `secondary`, `window` or
+/// `name:DEVICE`. Spawned by the operator, one process per output.
+fn audience_main(args: &[std::ffi::OsString], stage: bool) -> ! {
     let parsed = (|| {
         let (epoch, monitor, backend) = match args {
             [epoch, monitor] => (epoch, monitor, audience::default_backend()),
@@ -175,7 +177,7 @@ fn audience_main(args: &[std::ffi::OsString]) -> ! {
     })();
     let Some((epoch, placement, backend)) = parsed else {
         eprintln!(
-            "usage: sela --audience EPOCH_HEX <INDEX|secondary|window|name:DEVICE> [dx12|vulkan|metal|gl]"
+            "usage: sela <--audience|--stage> EPOCH_HEX <INDEX|secondary|window|name:DEVICE> [dx12|vulkan|metal|gl]"
         );
         std::process::exit(2);
     };
@@ -183,19 +185,46 @@ fn audience_main(args: &[std::ffi::OsString]) -> ! {
     let result = audience::run(audience::Config {
         epoch: sela::delivery::Epoch(epoch),
         backend,
-        title: "Sela audience output",
+        title: if stage {
+            "Sela stage output"
+        } else {
+            "Sela audience output"
+        },
         placement,
         lifetime: None,
         report_surface: true,
         retain_on_disconnect: true,
+        stage,
     });
     match result {
         Ok(()) => std::process::exit(0),
         Err(error) => {
-            eprintln!("audience: {error}");
+            eprintln!("{}: {error}", if stage { "stage" } else { "audience" });
             std::process::exit(1);
         }
     }
+}
+
+/// Child command for one stage session on the monitor Options › Foldback
+/// resolves to (`monitor`). `SELA_STAGE_MONITOR` (a monitor index,
+/// `secondary`, `window` or `name:DEVICE`) overrides it for development and
+/// the X11 harness; `SELA_AUDIENCE_BACKEND` also picks the stage backend.
+fn stage_launcher() -> operator::StageLauncher {
+    std::sync::Arc::new(move |epoch, monitor| {
+        let program = std::env::current_exe().unwrap_or_default();
+        let mut command = std::process::Command::new(program);
+        command
+            .arg("--stage")
+            .arg(format!("{:x}", epoch.0))
+            .arg(std::env::var_os("SELA_STAGE_MONITOR").unwrap_or_else(|| monitor.into()));
+        if let Some(backend) = std::env::var_os("SELA_AUDIENCE_BACKEND") {
+            command.arg(backend);
+        }
+        sela::output::Launch {
+            command,
+            frames: sela::output::Stream::Stdout,
+        }
+    })
 }
 
 /// Child command for one audience session. The monitor comes from the saved
@@ -303,7 +332,10 @@ fn main() {
         return;
     }
     if args.first().is_some_and(|a| a == "--audience") {
-        audience_main(&args[1..]);
+        audience_main(&args[1..], false);
+    }
+    if args.first().is_some_and(|a| a == "--stage") {
+        audience_main(&args[1..], true);
     }
     if args.len() == 1 && args[0] == "--list-monitors" {
         match audience::list_monitors() {
@@ -396,8 +428,15 @@ fn main() {
                 schedule_writer: sela::schedule_file::default_writer(),
                 initial_layout: layout,
             };
-            let operator =
-                cx.new(|cx| Operator::with_settings(library, audience_launcher(slot), config, cx));
+            let operator = cx.new(|cx| {
+                let mut operator =
+                    Operator::with_settings(library, audience_launcher(slot), config, cx);
+                operator.set_stage_launcher(
+                    stage_launcher(),
+                    std::env::var_os("SELA_STAGE_MONITOR").is_some(),
+                );
+                operator
+            });
             let weak = operator.downgrade();
             window.on_window_should_close(cx, move |window, cx| {
                 weak.update(cx, |operator, cx| operator.may_close(window, cx))

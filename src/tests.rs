@@ -23,6 +23,7 @@ mod focus_modality;
 mod layout_startup;
 mod navigation;
 mod resource_browser;
+mod stage_display;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,
@@ -3074,6 +3075,8 @@ mod menu_bar {
                     "bar-live-black",
                     "bar-live-clear",
                     "bar-live-show",
+                    "bar-live-stage",
+                    "bar-live-stage-message",
                 ],
             ),
             (

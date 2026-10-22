@@ -50,6 +50,7 @@ mod preview_live;
 mod resources;
 mod schedule;
 mod schedule_files;
+mod stage;
 mod update_items;
 
 use assets::{Assets, PREFLIGHT_DIALOG_W};
@@ -76,6 +77,7 @@ use resources::{
     ExtendPreviousSongRow, FirstSongRow, LastSongRow, NextSongRow, PageDownSongRow, PageUpSongRow,
     PreviousSongRow, SelectAllSongRows, SongSearch, SongSelection, TAB_IDS, TABS,
 };
+pub(super) use stage::StageLauncher;
 
 const POLL: Duration = Duration::from_millis(16);
 const LABELS: usize = 8;
@@ -370,6 +372,8 @@ pub(super) struct Operator {
     pub(super) _search_waker: Option<Task<()>>,
     _poller: Option<Task<()>>,
     _receipt_waker: Option<Task<()>>,
+    /// Stage (Foldback) output session, message and Options draft (M3-01/02).
+    pub(super) stage: stage::StageState,
 }
 
 impl Operator {
@@ -609,6 +613,7 @@ impl Operator {
             _search_waker: None,
             _poller: Some(poller),
             _receipt_waker: Some(receipt_waker),
+            stage: Default::default(),
         }
     }
 }

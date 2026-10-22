@@ -35,6 +35,8 @@ pub(crate) enum Dialog {
     GoLiveMissing,
     /// Songs menu → Update items in Schedule: the reviewable diff.
     UpdateItems,
+    /// Live › Stage Message…; drawn by `stage_message_overlay`.
+    StageMessage,
 }
 
 impl Operator {
@@ -62,6 +64,8 @@ impl Operator {
         self.dialog_message = None;
         self.settings.draft = None;
         self.settings.language_draft = None;
+        self.stage.draft = None;
+        self.stage.message_input = None;
         match self.dialog_return.take() {
             Some(handle) => handle.focus(window, cx),
             None => self.focus.focus(window, cx),
@@ -172,7 +176,7 @@ impl Operator {
                 Some(entry) => t!(Msg::DialogRemoveTitled, title = entry.title),
                 None => t!(Msg::DialogRemoveGeneric).into(),
             },
-            Dialog::Options => return None,
+            Dialog::Options | Dialog::StageMessage => return None,
             Dialog::Preflight => t!(Msg::PreflightHeading).into(),
             Dialog::GoLiveMissing => t!(Msg::GoLiveMissingHeading).into(),
             Dialog::UpdateItems => t!(Msg::MenuUpdateSchedule).into(),
@@ -185,7 +189,7 @@ impl Operator {
             Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDontSave)),
             Dialog::Remove(_) => Some(t!(Msg::ConfirmRemove)),
             Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmYes)),
-            Dialog::Options | Dialog::Preflight | Dialog::FileError => None,
+            Dialog::Options | Dialog::StageMessage | Dialog::Preflight | Dialog::FileError => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
             Dialog::UpdateItems => Some(t!(Msg::UpdateItemsConfirm)),
         };

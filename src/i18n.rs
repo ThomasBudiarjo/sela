@@ -548,6 +548,39 @@ pub enum Msg {
     StyleTab,
     SwatchesTab,
     ValuesTab,
+    StageOutputOff,
+    StageStarting,
+    StageConnected,
+    StageNothingConfirmed,
+    StageLost,
+    StageLossSpawn,
+    StageLossStartup,
+    StageLossExited,
+    StageLossProtocol,
+    StageNotShown,
+    StageMessageLine,
+    StageNoMonitor,
+    StageUnavailable,
+    StageNothingLive,
+    StageNextSlide,
+    StageNextItem,
+    StageEnd,
+    BarShowStageOutput,
+    BarStageMessage,
+    StageMessageHeading,
+    StageMessageHint,
+    StageMessageLabel,
+    StageMessageShow,
+    StageMessageClear,
+    FoldbackEnable,
+    FoldbackHint,
+    FoldbackMonitorHeading,
+    FoldbackAutoMonitor,
+    FoldbackContentHeading,
+    FoldbackShowClock,
+    FoldbackShowNext,
+    OptionsTabAlertsClocks,
+    StageMonitorMissing,
 }
 
 impl Msg {
@@ -1020,6 +1053,39 @@ impl Msg {
         Msg::StyleTab,
         Msg::SwatchesTab,
         Msg::ValuesTab,
+        Msg::StageOutputOff,
+        Msg::StageStarting,
+        Msg::StageConnected,
+        Msg::StageNothingConfirmed,
+        Msg::StageLost,
+        Msg::StageLossSpawn,
+        Msg::StageLossStartup,
+        Msg::StageLossExited,
+        Msg::StageLossProtocol,
+        Msg::StageNotShown,
+        Msg::StageMessageLine,
+        Msg::StageNoMonitor,
+        Msg::StageUnavailable,
+        Msg::StageNothingLive,
+        Msg::StageNextSlide,
+        Msg::StageNextItem,
+        Msg::StageEnd,
+        Msg::BarShowStageOutput,
+        Msg::BarStageMessage,
+        Msg::StageMessageHeading,
+        Msg::StageMessageHint,
+        Msg::StageMessageLabel,
+        Msg::StageMessageShow,
+        Msg::StageMessageClear,
+        Msg::FoldbackEnable,
+        Msg::FoldbackHint,
+        Msg::FoldbackMonitorHeading,
+        Msg::FoldbackAutoMonitor,
+        Msg::FoldbackContentHeading,
+        Msg::FoldbackShowClock,
+        Msg::FoldbackShowNext,
+        Msg::OptionsTabAlertsClocks,
+        Msg::StageMonitorMissing,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1560,6 +1626,47 @@ impl Msg {
             Self::StyleTab => "Style",
             Self::SwatchesTab => "Swatches",
             Self::ValuesTab => "Values",
+            Self::StageOutputOff => "Stage output off",
+            Self::StageStarting => "Stage output starting…",
+            Self::StageConnected => "Stage {width}×{height} · showing {slide}",
+            Self::StageNothingConfirmed => "nothing confirmed yet",
+            Self::StageLost => "Stage output lost: {reason} · Live › Show Stage Output restarts it",
+            Self::StageLossSpawn => "it could not be started",
+            Self::StageLossStartup => "it did not become ready in time",
+            Self::StageLossExited => "its process ended",
+            Self::StageLossProtocol => "it sent an invalid message",
+            Self::StageNotShown => "Stage did not show the latest panel: {error}",
+            Self::StageMessageLine => "Stage message: {message}",
+            Self::StageNoMonitor => {
+                "No free monitor for the stage output; choose one in Options › Foldback"
+            }
+            Self::StageUnavailable => "Stage output is not available here",
+            Self::StageNothingLive => "Nothing live",
+            Self::StageNextSlide => "Next · {name}",
+            Self::StageNextItem => "Next item · {title}",
+            Self::StageEnd => "End of schedule",
+            Self::BarShowStageOutput => "Show Stage Output",
+            Self::BarStageMessage => "Stage Message…",
+            Self::StageMessageHeading => "Stage message",
+            Self::StageMessageHint => {
+                "Shown only on the stage output, never on the audience. One line, up to 160 characters."
+            }
+            Self::StageMessageLabel => "Stage message text",
+            Self::StageMessageShow => "Show on Stage",
+            Self::StageMessageClear => "Clear Message",
+            Self::FoldbackEnable => "Enable support for Foldback Output",
+            Self::FoldbackHint => {
+                "The stage (confidence) output shows performers the current and next slide, the clock and stage messages. It starts and stops with Live output."
+            }
+            Self::FoldbackMonitorHeading => "Foldback monitor",
+            Self::FoldbackAutoMonitor => "Automatic (a monitor the audience does not use)",
+            Self::FoldbackContentHeading => "Stage content",
+            Self::FoldbackShowClock => "Show clock",
+            Self::FoldbackShowNext => "Show next slide",
+            Self::OptionsTabAlertsClocks => "Alerts and Clocks",
+            Self::StageMonitorMissing => {
+                "The chosen foldback monitor ({name}) is not connected; the stage uses a free monitor instead."
+            }
         }
     }
 
@@ -2121,6 +2228,49 @@ impl Msg {
             Self::StyleTab => "Gaya",
             Self::SwatchesTab => "Palet Warna",
             Self::ValuesTab => "Nilai",
+            Self::StageOutputOff => "Output panggung mati",
+            Self::StageStarting => "Output panggung sedang dimulai…",
+            Self::StageConnected => "Panggung {width}×{height} · menampilkan {slide}",
+            Self::StageNothingConfirmed => "belum ada yang dikonfirmasi",
+            Self::StageLost => {
+                "Output panggung terputus: {reason} · Langsung › Tampilkan Output Panggung untuk memulai ulang"
+            }
+            Self::StageLossSpawn => "tidak dapat dimulai",
+            Self::StageLossStartup => "tidak siap tepat waktu",
+            Self::StageLossExited => "prosesnya berhenti",
+            Self::StageLossProtocol => "mengirim pesan yang tidak valid",
+            Self::StageNotShown => "Panggung tidak menampilkan panel terbaru: {error}",
+            Self::StageMessageLine => "Pesan panggung: {message}",
+            Self::StageNoMonitor => {
+                "Tidak ada monitor bebas untuk output panggung; pilih di Opsi › Foldback"
+            }
+            Self::StageUnavailable => "Output panggung tidak tersedia di sini",
+            Self::StageNothingLive => "Tidak ada yang tayang",
+            Self::StageNextSlide => "Berikutnya · {name}",
+            Self::StageNextItem => "Item berikutnya · {title}",
+            Self::StageEnd => "Akhir jadwal",
+            Self::BarShowStageOutput => "Tampilkan Output Panggung",
+            Self::BarStageMessage => "Pesan Panggung…",
+            Self::StageMessageHeading => "Pesan panggung",
+            Self::StageMessageHint => {
+                "Hanya tampil di output panggung, tidak pernah di layar jemaat. Satu baris, paling banyak 160 karakter."
+            }
+            Self::StageMessageLabel => "Teks pesan panggung",
+            Self::StageMessageShow => "Tampilkan di Panggung",
+            Self::StageMessageClear => "Hapus Pesan",
+            Self::FoldbackEnable => "Aktifkan dukungan Output Foldback",
+            Self::FoldbackHint => {
+                "Output panggung menampilkan slide saat ini dan berikutnya, jam, dan pesan panggung kepada pemusik. Output ini mulai dan berhenti bersama Output Langsung."
+            }
+            Self::FoldbackMonitorHeading => "Monitor foldback",
+            Self::FoldbackAutoMonitor => "Otomatis (monitor yang tidak dipakai jemaat)",
+            Self::FoldbackContentHeading => "Isi panggung",
+            Self::FoldbackShowClock => "Tampilkan jam",
+            Self::FoldbackShowNext => "Tampilkan slide berikutnya",
+            Self::OptionsTabAlertsClocks => "Peringatan dan Jam",
+            Self::StageMonitorMissing => {
+                "Monitor foldback yang dipilih ({name}) tidak terhubung; panggung memakai monitor bebas."
+            }
         }
     }
 }
@@ -2190,7 +2340,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 468);
+        assert_eq!(Msg::ALL.len(), 501);
     }
 
     #[test]

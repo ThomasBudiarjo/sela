@@ -21,6 +21,7 @@ impl Operator {
         }
         self.prefetch_backgrounds();
         changed |= self.sync_show(Instant::now());
+        changed |= self.poll_stage();
         if changed {
             cx.notify();
         }

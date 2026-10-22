@@ -1162,6 +1162,17 @@ measured configuration, not inferred from 1080p success.
 
 Depends on: M2-08. Tests: U, I, R, N, H.
 
+Progress (stage-display, 2026-10-22, **implemented-unqualified**; see
+`docs/stage-display.md`): a second renderer process `sela --stage` with its
+own supervisor, epoch and receipts; explicit routing by cue kind (wire kind 7
+STAGE; each renderer refuses the other kind; masks and logo audience-only);
+Options › Foldback (enable, monitor, clock, next) whose Automatic monitor is
+never the audience's and which refuses to start without a free monitor;
+failure isolation both ways tested (GPUI + X11 kill). Audience and stage only:
+alternate/stream/house outputs (M3-03), per-output themes, mixed DPI/refresh,
+hotplug/topology reorder and Windows/physical routes remain open, so no box
+below is ticked yet (the isolation/bounds box is done for audience+stage only).
+
 - [ ] Model audience, stage, alternate/stream and house outputs with stable identity,
   independent geometry/themes and explicit routing.
 - [ ] Define which cue/control state is shared versus output-specific from observations.
@@ -1177,11 +1188,21 @@ stage information; each physical route is qualified explicitly.
 
 Depends on: M3-01, M1-06. Tests: U, R, N, H.
 
+Progress (stage-display, 2026-10-22, **implemented-unqualified**; see
+`docs/stage-display.md`): stage composition with current slide, deterministic
+next slide/next item/end, header label, renderer-drawn clock and a private
+stage message line; Options switches for clock and next area. EW content and
+layout are UNOBSERVED best guesses (EW8-OBS-STG-1..7, PP-STG-01..09). Open:
+EW audit, safe-area/font/size settings (only Sela's fixed layout exists),
+chords/notes (later scope, not started), physical viewing-distance check.
+
 - [ ] Audit observed current/next content, labels, notes, clock and stage layout controls.
 - [ ] Implement stage-specific composition and safe-area/font/readability settings.
 - [ ] Add tracked Sela requirements for chords/notes as explicit extensions where
   not established in the pinned reference, with stable arrangement association.
-- [ ] Test last slide, repeated chorus, empty next item and rapid arrangement change.
+- [x] Test last slide, repeated chorus, empty next item and rapid arrangement change.
+  (`stage::tests`, GPUI `the_last_slide_points_at_the_next_schedule_item` and
+  `arrangement_changes_and_repeated_choruses_keep_next_deterministic`, 2026-10-22.)
 - [ ] Verify stage-only information never enters audience/stream renders or bundles
   intended to exclude private notes; inspect at actual stage viewing distance.
 
@@ -1218,6 +1239,13 @@ Acceptance: only intended recipients see an applied alert; stale alerts do not r
 ### M3-05 — Clocks, countdowns and service timers
 
 Depends on: M3-02, M3-04. Tests: U, R, N, H.
+
+Owner scope (Mission 2026-10): only the stage clock. Progress (stage-display,
+2026-10-22): the stage process draws local time of day ("HH:MM", chrono
+`Local`) on its own clock worker, redrawn on the minute and independent of the
+operator UI (it keeps running when the operator stalls or exits). Countdowns,
+service timers, audience clocks, fake-clock/suspension tests and the EW clock
+audit (PP-STG-04) are not started; no box below is ticked.
 
 - [ ] Audit timer modes/start/pause/reset/expiry and output visibility against reference.
 - [ ] Use monotonic elapsed time and explicit wall-clock/timezone conversion where needed.

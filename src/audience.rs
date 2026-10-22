@@ -4,20 +4,22 @@
 #[allow(dead_code)]
 #[path = "audience/compositor.rs"]
 pub mod compositor;
+#[path = "audience/stage.rs"]
+pub mod stage;
 #[allow(dead_code)]
 #[path = "audience/text.rs"]
 pub mod text;
 use sela::{
     delivery::{Command, DeliveryError, Epoch, Lane, Outcome, Payload, RendererSession, Stamp},
     masks::Layer,
-    scene::{Extent, PreparedBackground, RendererCapabilities},
+    scene::{Extent, PreparedBackground, PreparedCue, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
 use std::{
     collections::VecDeque,
     io,
     sync::{
-        Arc,
+        Arc, Mutex,
         mpsc::{self, Receiver, SyncSender},
     },
     time::{Duration, Instant},
@@ -58,6 +60,10 @@ pub struct Config {
     /// Keep presenting the applied scene after the controller's pipes fail.
     /// New commands are never admitted or presented once detached.
     pub retain_on_disconnect: bool,
+    /// Stage (confidence) renderer: accepts only stage cues and draws its own
+    /// clock. An audience renderer (false) refuses every stage cue, so stage
+    /// content can never reach the audience (M3-02).
+    pub stage: bool,
 }
 
 pub fn parse_backend(name: &str) -> Option<wgpu::Backends> {
@@ -141,6 +147,12 @@ struct Audience {
     /// Accepted commands in session order; masks carry no composition.
     ready: VecDeque<(Stamp, Option<compositor::ReadyComposition>)>,
     applied_ready: Option<(Extent, compositor::ReadyComposition)>,
+    /// Stage only: accepted stage frames by stamp, the applied one, and the
+    /// clock worker's slot and results.
+    stage_ready: VecDeque<(Stamp, Arc<StageFrame>)>,
+    stage_applied: Option<Arc<StageFrame>>,
+    clock_slot: Arc<Mutex<Option<Arc<StageFrame>>>>,
+    clock_results: Option<Receiver<ClockFrame>>,
     logo_ready: Option<(Extent, compositor::ReadyComposition)>,
     detached: bool,
     reported: Option<Extent>,
@@ -153,8 +165,26 @@ const IDLE_REFRESH: Duration = Duration::from_secs(1);
 struct Completion {
     stamp: Stamp,
     lane: Lane,
-    result: Result<(Command, compositor::ReadyComposition), PreparationFailure>,
+    result: Result<Prepared, PreparationFailure>,
 }
+type Prepared = (
+    Command,
+    compositor::ReadyComposition,
+    Option<Arc<StageFrame>>,
+);
+/// A stage cue's static coverage, kept so the clock worker can redraw only
+/// the clock on top of it.
+struct StageFrame {
+    cue: Arc<PreparedCue>,
+    base: stage::Base,
+}
+/// The applied stage frame with a newer clock, prepared on the clock worker.
+struct ClockFrame {
+    frame: Arc<StageFrame>,
+    ready: compositor::ReadyComposition,
+}
+/// How often the clock worker checks the time; the text changes per minute.
+const CLOCK_TICK: Duration = Duration::from_millis(250);
 enum PreparationFailure {
     Resource,
     Upload,
@@ -243,11 +273,20 @@ fn prepare_frame(
     frame: Frame,
     caps: RendererCapabilities,
     compositor: &compositor::Compositor,
-) -> Result<(Command, compositor::ReadyComposition), PreparationFailure> {
+    stage_role: bool,
+) -> Result<Prepared, PreparationFailure> {
     let command = frame
         .into_command(Instant::now(), caps)
         .map_err(|_| PreparationFailure::Resource)?;
     let cue = command.cue().ok_or(PreparationFailure::Resource)?;
+    if !admits(cue, stage_role) {
+        return Err(PreparationFailure::Resource);
+    }
+    if stage_role {
+        let cue = cue.clone();
+        let (ready, frame) = prepare_stage(cue, compositor, &stage::local_clock())?;
+        return Ok((command, ready, Some(frame)));
+    }
     let size = cue.extent();
     let coverage = text::layers(cue)
         .map_err(|_| PreparationFailure::Resource)?
@@ -279,7 +318,88 @@ fn prepare_frame(
             },
         )
         .map_err(|_| PreparationFailure::Upload)?;
-    Ok((command, ready))
+    Ok((command, ready, None))
+}
+/// Routing guard (M3-02): stage content never reaches an audience renderer,
+/// and a stage renderer never shows an audience slide or logo in place of
+/// the stage view. A refused cue is RenderFailed and the scene stays.
+fn admits(cue: &PreparedCue, stage_role: bool) -> bool {
+    cue.stage().is_some() == stage_role
+}
+/// Stage composition: static fields once, then the clock over them.
+fn prepare_stage(
+    cue: Arc<PreparedCue>,
+    compositor: &compositor::Compositor,
+    clock: &str,
+) -> Result<(compositor::ReadyComposition, Arc<StageFrame>), PreparationFailure> {
+    let panel = cue.stage().ok_or(PreparationFailure::Resource)?;
+    let base = stage::base(panel, cue.extent()).map_err(|_| PreparationFailure::Resource)?;
+    let frame = Arc::new(StageFrame { cue, base });
+    let ready = upload_stage(&frame, compositor, clock)?;
+    Ok((ready, frame))
+}
+fn upload_stage(
+    frame: &StageFrame,
+    compositor: &compositor::Compositor,
+    clock: &str,
+) -> Result<compositor::ReadyComposition, PreparationFailure> {
+    let panel = frame.cue.stage().ok_or(PreparationFailure::Resource)?;
+    let coverage =
+        stage::with_clock(&frame.base, panel, clock).map_err(|_| PreparationFailure::Resource)?;
+    let PreparedBackground::Color(rgba) = frame.cue.background() else {
+        return Err(PreparationFailure::Resource);
+    };
+    compositor
+        .prepare_native(
+            frame.cue.extent(),
+            compositor::Image {
+                width: 1,
+                height: 1,
+                rgba,
+            },
+            &coverage,
+            &stage::blend(),
+            compositor::Fit::Cover,
+        )
+        .map_err(|_| PreparationFailure::Upload)
+}
+/// Stage only: redraws the applied stage frame when the minute changes, off
+/// the event loop. Holds one frame and sends at most one result ahead; a full
+/// result slot just retries on the next tick. Ends with the event loop.
+fn clock_worker(
+    slot: Arc<Mutex<Option<Arc<StageFrame>>>>,
+    compositor: Arc<compositor::Compositor>,
+    results: SyncSender<ClockFrame>,
+    wake: EventLoopProxy<()>,
+) {
+    let mut drawn: Option<(usize, String)> = None;
+    loop {
+        std::thread::sleep(CLOCK_TICK);
+        let Some(frame) = slot.lock().ok().and_then(|slot| slot.clone()) else {
+            continue;
+        };
+        if !frame.cue.stage().is_some_and(|s| s.panel().show_clock) {
+            continue;
+        }
+        let clock = stage::local_clock();
+        let key = (Arc::as_ptr(&frame) as usize, clock.clone());
+        if drawn.as_ref() == Some(&key) {
+            continue;
+        }
+        let Ok(ready) = upload_stage(&frame, &compositor, &clock) else {
+            // Upload uncertainty: stop redrawing the clock; the applied
+            // frame stays on screen with its last time.
+            return;
+        };
+        match results.try_send(ClockFrame { frame, ready }) {
+            Ok(()) => {
+                drawn = Some(key);
+                let _ = wake.send_event(());
+            }
+            Err(mpsc::TrySendError::Full(_)) => {}
+            Err(mpsc::TrySendError::Disconnected(_)) => return,
+        }
+    }
 }
 impl Audience {
     fn fail(&mut self, el: &ActiveEventLoop, message: String) {
@@ -458,6 +578,23 @@ impl ApplicationHandler for Audience {
         let (results, completions) = mpsc::sync_channel(1);
         let worker = compositor.clone();
         let wake = self.wake.clone();
+        let stage_role = self.config.stage;
+        if stage_role {
+            let (clock_tx, clock_rx) = mpsc::sync_channel(1);
+            let (slot, painter, wake) = (
+                self.clock_slot.clone(),
+                compositor.clone(),
+                self.wake.clone(),
+            );
+            if std::thread::Builder::new()
+                .name("stage-clock".into())
+                .spawn(move || clock_worker(slot, painter, clock_tx, wake))
+                .is_err()
+            {
+                return self.fail(el, "cannot start stage clock worker".into());
+            }
+            self.clock_results = Some(clock_rx);
+        }
         let spawned = std::thread::Builder::new()
             .name("audience-prepare".into())
             .spawn(move || {
@@ -472,6 +609,7 @@ impl ApplicationHandler for Audience {
                             max_texture_dimension: max,
                         },
                         &worker,
+                        stage_role,
                     );
                     let fatal = matches!(result, Err(PreparationFailure::Upload));
                     if results
@@ -618,6 +756,7 @@ impl ApplicationHandler for Audience {
                                 self.logo_ready = Some((extent, ready));
                             } else {
                                 self.applied_ready = Some((extent, ready));
+                                self.apply_stage(ack.stamp);
                             }
                         }
                         let reconfigure_after = reconfigure;
@@ -669,6 +808,8 @@ impl ApplicationHandler for Audience {
         if !self.detached && self.poll_session(el).is_err() {
             return;
         }
+        // The stage clock keeps running even after the operator is gone.
+        self.poll_clock();
         self.report_surface(el);
         let now = Instant::now();
         let settling =
@@ -700,6 +841,40 @@ impl ApplicationHandler for Audience {
     }
 }
 impl Audience {
+    /// Stage only: the scene applied with `stamp` becomes the clock's base.
+    fn apply_stage(&mut self, stamp: Stamp) {
+        let Some(at) = self.stage_ready.iter().position(|(s, _)| *s == stamp) else {
+            return;
+        };
+        let frame = self.stage_ready.remove(at).map(|(_, frame)| frame);
+        self.stage_ready
+            .retain(|(s, _)| s.sequence > stamp.sequence);
+        self.stage_applied = frame.clone();
+        if let Ok(mut slot) = self.clock_slot.lock() {
+            *slot = frame;
+        }
+    }
+    /// Stage only: swaps in a clock redraw of the frame still applied. A
+    /// redraw of an older frame (a newer cue applied meanwhile) is dropped.
+    fn poll_clock(&mut self) {
+        let Some(results) = &self.clock_results else {
+            return;
+        };
+        let Ok(clock) = results.try_recv() else {
+            return;
+        };
+        let current = self
+            .stage_applied
+            .as_ref()
+            .is_some_and(|frame| Arc::ptr_eq(frame, &clock.frame));
+        if let Some((extent, ready)) = &mut self.applied_ready
+            && current
+            && *extent == clock.frame.cue.extent()
+        {
+            *ready = clock.ready;
+            self.redraw_wanted = true;
+        }
+    }
     fn accept_mask(&mut self, frame: Frame) -> sela::delivery::Acknowledgment {
         // forward_preparation already validated the stamp.
         let stamp = frame.command_stamp().unwrap();
@@ -727,12 +902,19 @@ impl Audience {
             match self.completions.as_ref().unwrap().try_recv() {
                 Ok(completion) => {
                     let ack = match completion.result {
-                        Ok((command, ready)) => {
+                        Ok((command, ready, frame)) => {
                             let ack = self.session.accept(command, Instant::now());
                             if ack.outcome == Outcome::Accepted
                                 && !self.ready.iter().any(|(s, _)| *s == ack.stamp)
                             {
                                 self.ready.push_back((ack.stamp, Some(ready)));
+                                if let Some(frame) = frame {
+                                    // Bounded like `ready`: one per accepted command.
+                                    let ready = &self.ready;
+                                    self.stage_ready
+                                        .retain(|(s, _)| ready.iter().any(|(r, _)| r == s));
+                                    self.stage_ready.push_back((ack.stamp, frame));
+                                }
                             }
                             ack
                         }
@@ -856,6 +1038,10 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         },
         ready: VecDeque::with_capacity(2),
         applied_ready: None,
+        stage_ready: VecDeque::with_capacity(2),
+        stage_applied: None,
+        clock_slot: Arc::default(),
+        clock_results: None,
         logo_ready: None,
         detached: false,
         reported: None,
@@ -1119,6 +1305,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn each_renderer_admits_only_its_own_cue_kind() {
+        let caps = RendererCapabilities {
+            max_texture_dimension: 4096,
+        };
+        let extent = Extent {
+            width: 640,
+            height: 360,
+        };
+        let slide = PreparedCue::diagnostic_color(
+            ContentVersion { id: 1, revision: 1 },
+            extent,
+            [0, 0, 0, 255],
+            caps,
+        )
+        .unwrap();
+        let stage = PreparedCue::for_stage(
+            ContentVersion { id: 2, revision: 1 },
+            extent,
+            sela::stage::BACKGROUND,
+            sela::stage::StagePanel {
+                message: "Private note".into(),
+                ..Default::default()
+            },
+            (
+                ContentVersion { id: 3, revision: 1 },
+                Arc::from(sela::fonts::BUNDLED),
+                0,
+            ),
+            caps,
+        )
+        .unwrap();
+        assert!(admits(&slide, false) && !admits(&slide, true));
+        assert!(admits(&stage, true) && !admits(&stage, false));
     }
 
     #[test]

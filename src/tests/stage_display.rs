@@ -1,0 +1,871 @@
+//! Stage (Foldback) output E2E with fake renderer children (M3-01/M3-02):
+//! the real Operator, its two supervisors and the real wire, with children
+//! that mirror the renderers' routing rules and log every scene they get.
+use super::*;
+use crate::operator::{Dialog, StageLauncher};
+use sela::{output::Loss, settings};
+
+/// `tests::settle` with a longer bound: every rig starts two renderer
+/// children (each a fresh test-binary process), which takes several seconds
+/// when the whole suite runs on a loaded machine. Shadows the parent's.
+fn settle(
+    cx: &mut VisualTestContext,
+    operator: &Entity<Operator>,
+    what: &str,
+    done: impl Fn(&Operator) -> bool,
+) {
+    let end = Instant::now() + Duration::from_secs(30);
+    loop {
+        operator.update(cx, |o, cx| o.poll(cx));
+        cx.run_until_parked();
+        if operator.read_with(cx, |o, _| done(o)) {
+            return;
+        }
+        assert!(Instant::now() < end, "bounded wait for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Renderer stand-in for either output. `SELA_FAKE_ROLE` is `audience` or
+/// `stage`; like the real renderers, an audience refuses stage cues and a
+/// stage refuses anything else. Every scene is appended to `SELA_FAKE_LOG`
+/// as one line: role, kind (`stage`/`scene`) and the stage fields with
+/// newlines shown as `|`. `SELA_FAKE_MODE`: `apply`, `exit-after:<n>` (exit
+/// after the nth applied scene), `reject-at:<n>` (fail the nth scene), or
+/// `exit` (exit right after reporting the surface).
+#[test]
+#[ignore = "subprocess fixture for stage output tests"]
+fn fake_output_child() {
+    use std::io::Write;
+    let role = std::env::var("SELA_FAKE_ROLE").unwrap();
+    let mode = std::env::var("SELA_FAKE_MODE").unwrap();
+    let log = std::env::var("SELA_FAKE_LOG").unwrap();
+    let epoch =
+        Epoch(u128::from_str_radix(&std::env::var("SELA_FAKE_EPOCH").unwrap(), 16).unwrap());
+    let number = |prefix: &str| mode.strip_prefix(prefix).map(|n| n.parse::<u64>().unwrap());
+    let (exit_after, reject_at) = (number("exit-after:"), number("reject-at:"));
+    let caps = RendererCapabilities {
+        max_texture_dimension: 2048,
+    };
+    let out = || std::io::stderr();
+    Frame::ready(epoch, 2048).write(out()).unwrap();
+    Frame::surface(epoch, FAKE_EXTENT).write(out()).unwrap();
+    if mode == "exit" {
+        std::process::exit(0);
+    }
+    let stage_role = role == "stage";
+    let mut session = RendererSession::new(epoch);
+    let mut scenes = 0u64;
+    while let Ok(frame) = Frame::read(std::io::stdin()) {
+        let now = Instant::now();
+        let stamp = frame.command_stamp().unwrap();
+        let lane = frame.command_lane().unwrap();
+        let ack = match frame.into_command(now, caps) {
+            Ok(command) => {
+                if let Payload::Scene(cue) = command.payload() {
+                    let line = match cue.stage() {
+                        Some(stage) => {
+                            let p = stage.panel();
+                            format!(
+                                "{role}\tstage\t{}\t{}\t{}\t{}\t{}\t{}{}",
+                                p.current_label,
+                                p.current,
+                                p.next_label,
+                                p.next,
+                                p.message,
+                                u8::from(p.show_clock),
+                                u8::from(p.show_next)
+                            )
+                        }
+                        None => format!(
+                            "{role}\tscene\t{}",
+                            cue.text().map(|t| t.content()).unwrap_or_default()
+                        ),
+                    };
+                    let mut file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&log)
+                        .unwrap();
+                    writeln!(file, "{}", line.replace('\n', "|")).unwrap();
+                }
+                session.accept(command, now)
+            }
+            Err(_) => session.reject_preparation(stamp, lane),
+        };
+        Frame::acknowledgment(ack).write(out()).unwrap();
+        if ack.outcome == Outcome::Accepted {
+            let mut applied_scene = false;
+            let ack = session
+                .present(Instant::now(), |payload| match payload {
+                    Payload::Mask(_) | Payload::Logo(_) if stage_role => {
+                        Err(DeliveryError::RenderFailed)
+                    }
+                    Payload::Mask(Layer::Logo) if session_has_no_logo() => {
+                        Err(DeliveryError::RenderFailed)
+                    }
+                    Payload::Mask(_) | Payload::Logo(_) => Ok(()),
+                    Payload::Scene(cue) => {
+                        if cue.stage().is_some() != stage_role {
+                            return Err(DeliveryError::RenderFailed);
+                        }
+                        scenes += 1;
+                        if reject_at == Some(scenes) {
+                            return Err(DeliveryError::RenderFailed);
+                        }
+                        applied_scene = true;
+                        Ok(())
+                    }
+                })
+                .unwrap();
+            Frame::acknowledgment(ack).write(out()).unwrap();
+            if applied_scene && exit_after == Some(scenes) {
+                std::process::exit(0);
+            }
+        }
+    }
+    std::process::exit(0);
+}
+
+/// The audience tests here never send a logo, so a Logo mask always fails
+/// like the renderer without one.
+fn session_has_no_logo() -> bool {
+    true
+}
+
+fn output_command(role: &'static str, mode: &'static str, log: &std::path::Path) -> Launch {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "tests::stage_display::fake_output_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("SELA_FAKE_ROLE", role)
+        .env("SELA_FAKE_MODE", mode)
+        .env("SELA_FAKE_LOG", log);
+    Launch {
+        command,
+        frames: Stream::Stderr,
+    }
+}
+
+fn audience_launcher(mode: &'static str, log: std::path::PathBuf) -> Launcher {
+    Arc::new(move |epoch| {
+        let mut launch = output_command("audience", mode, &log);
+        launch
+            .command
+            .env("SELA_FAKE_EPOCH", format!("{:x}", epoch.0));
+        launch
+    })
+}
+
+/// Records each stage spawn's monitor argument.
+fn stage_launcher(
+    modes: Vec<&'static str>,
+    log: std::path::PathBuf,
+    monitors: Arc<std::sync::Mutex<Vec<String>>>,
+) -> StageLauncher {
+    let spawned = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    Arc::new(move |epoch, monitor| {
+        monitors.lock().unwrap().push(monitor);
+        let n = spawned.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mode = modes[n.min(modes.len() - 1)];
+        let mut launch = output_command("stage", mode, &log);
+        launch
+            .command
+            .env("SELA_FAKE_EPOCH", format!("{:x}", epoch.0));
+        launch
+    })
+}
+
+struct Rig {
+    cx: VisualTestContext,
+    operator: Entity<Operator>,
+    log: std::path::PathBuf,
+    monitors: Arc<std::sync::Mutex<Vec<String>>>,
+    _dir: tempfile::TempDir,
+}
+
+/// Operator over `library` with Foldback enabled in the stored settings and
+/// fake children for both outputs. `override_placement` mirrors
+/// `SELA_STAGE_MONITOR` (no monitor list needed).
+fn rig(
+    cx: &mut TestAppContext,
+    songs: fn(&tempfile::TempDir) -> std::path::PathBuf,
+    audience: &'static str,
+    stage: Vec<&'static str>,
+    stored: &str,
+    override_placement: bool,
+    monitors: Vec<settings::MonitorInfo>,
+) -> Rig {
+    let dir = tempfile::tempdir().unwrap();
+    let library = songs(&dir);
+    std::fs::write(
+        settings::path_in(dir.path()),
+        format!("sela-settings 1\n{stored}"),
+    )
+    .unwrap();
+    let log = dir.path().join("outputs.log");
+    let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let launcher = stage_launcher(stage, log.clone(), spawned.clone());
+    let config = crate::operator::SettingsConfig {
+        list_monitors: Arc::new(move || monitors.clone()),
+        ..Default::default()
+    };
+    let audience = audience_launcher(audience, log.clone());
+    let window = cx.update(|cx| {
+        bind_operator_keys(cx);
+        cx.open_window(Default::default(), |window, cx| {
+            let operator = cx.new(|cx| {
+                let mut operator = Operator::with_settings(Some(library), audience, config, cx);
+                operator.set_stage_launcher(launcher, override_placement);
+                operator
+            });
+            operator.read(cx).focus.clone().focus(window, cx);
+            cx.new(|_| DispatchProbe {
+                operator,
+                seen: Rc::new(Cell::new(0)),
+            })
+        })
+        .unwrap()
+    });
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let operator = window
+        .root(&mut visual)
+        .unwrap()
+        .read_with(&visual, |p, _| p.operator.clone());
+    visual.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut visual, &operator, "settings and catalog", |o| {
+        o.settings_loaded_for_options() && !o.catalog.is_empty()
+    });
+    Rig {
+        cx: visual,
+        operator,
+        log,
+        monitors: spawned,
+        _dir: dir,
+    }
+}
+
+const ENABLED: &str = "stage_enabled=1\n";
+
+fn lines(log: &std::path::Path, role: &str) -> Vec<Vec<String>> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.starts_with(&format!("{role}\t")))
+        .map(|line| line.split('\t').skip(1).map(str::to_owned).collect())
+        .collect()
+}
+
+/// The newest panel the stage child received: label, current, next label,
+/// next, message, flags.
+fn last_panel(log: &std::path::Path) -> Option<Vec<String>> {
+    lines(log, "stage").pop().map(|mut fields| {
+        assert_eq!(
+            fields.remove(0),
+            "stage",
+            "stage child got a non-stage scene"
+        );
+        fields
+    })
+}
+
+fn stage_connected(o: &Operator) -> bool {
+    matches!(
+        o.stage.output.as_ref().map(|s| s.status()),
+        Some(Status::Connected { .. })
+    )
+}
+
+fn stage_shows(o: &Operator, label: &str) -> bool {
+    o.stage_lines()
+        .iter()
+        .any(|(line, _)| line.ends_with(&format!("showing {label}")))
+}
+
+fn wait_for_panel(rig: &mut Rig, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
+    let log = rig.log.clone();
+    settle(&mut rig.cx, &rig.operator, what, |_| {
+        last_panel(&log).is_some_and(|panel| done(&panel))
+    });
+    last_panel(&log).unwrap()
+}
+
+/// No audience scene ever carried stage content.
+fn assert_audience_private(log: &std::path::Path) {
+    for fields in lines(log, "audience") {
+        assert_eq!(fields[0], "scene", "audience child received {fields:?}");
+        for private in ["Two minutes", "Next ·", "End of schedule"] {
+            assert!(
+                !fields.iter().any(|field| field.contains(private)),
+                "{private} reached the audience: {fields:?}"
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn stage_follows_go_live_and_next_with_its_own_receipts(cx: &mut TestAppContext) {
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "apply",
+        vec!["apply"],
+        ENABLED,
+        true,
+        Vec::new(),
+    );
+    let operator = rig.operator.clone();
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "both outputs", |o| {
+        connected(o) && stage_connected(o)
+    });
+    // Before anything is live the stage shows its idle panel with the clock.
+    let idle = wait_for_panel(&mut rig, "idle panel", |p| p[0] == "Nothing live");
+    assert_eq!(idle[5], "11", "clock and next area on by default");
+    settle(&mut rig.cx, &operator, "idle panel acknowledged", |o| {
+        stage_shows(o, "Nothing live")
+    });
+
+    click(&mut rig.cx, "song-0");
+    settle(&mut rig.cx, &operator, "preview", |o| {
+        o.preview.as_ref().is_some_and(|p| p.slides.len() == 3)
+    });
+    let before = rig
+        .operator
+        .read_with(&rig.cx, |o, _| o.stage.output.as_ref().unwrap().counters());
+    click(&mut rig.cx, "go-live");
+    let panel = wait_for_panel(&mut rig, "verse on stage", |p| {
+        p[0] == "Signal Hymn · Verse 1"
+    });
+    assert_eq!(
+        panel[1..4],
+        [
+            "First original line|Second original line",
+            "Next · Chorus",
+            "Original refrain"
+        ]
+    );
+    settle(&mut rig.cx, &operator, "both receipts", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1") && stage_shows(o, "Signal Hymn · Verse 1")
+    });
+    // Independent sessions: different epochs and their own counters.
+    operator.read_with(&rig.cx, |o, _| {
+        let stage = o.stage.output.as_ref().unwrap();
+        assert_ne!(stage.epoch(), o.output.as_ref().unwrap().epoch());
+        assert!(stage.counters().applied > before.applied);
+    });
+
+    click(&mut rig.cx, "live-next");
+    let panel = wait_for_panel(&mut rig, "chorus on stage", |p| {
+        p[0] == "Signal Hymn · Chorus"
+    });
+    assert_eq!(
+        panel[1..4],
+        ["Original refrain", "Next · Bridge", "Original bridge"]
+    );
+    click(&mut rig.cx, "live-next");
+    // Last slide of a library song (not in the schedule): nothing follows.
+    let panel = wait_for_panel(&mut rig, "bridge on stage", |p| {
+        p[0] == "Signal Hymn · Bridge"
+    });
+    assert_eq!(panel[2..4], ["End of schedule", ""]);
+    settle(&mut rig.cx, &operator, "bridge both", |o| {
+        o.on_screen() == Some("Signal Hymn · Bridge") && stage_shows(o, "Signal Hymn · Bridge")
+    });
+    let audience = lines(&rig.log, "audience");
+    assert_eq!(
+        audience.len(),
+        3,
+        "one audience cue per slide: {audience:?}"
+    );
+    assert_eq!(audience[2][1], "Original bridge");
+    assert_audience_private(&rig.log);
+
+    // Live output off stops both; the stage never outlives it.
+    click(&mut rig.cx, "live-output");
+    rig.cx.run_until_parked();
+    operator.read_with(&rig.cx, |o, _| {
+        assert!(o.output.is_none() && o.stage.output.is_none());
+    });
+}
+
+#[gpui::test]
+fn a_lost_stage_never_touches_the_audience_and_restarts_alone(cx: &mut TestAppContext) {
+    // The first stage child exits after its second applied panel.
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "apply",
+        vec!["exit-after:2", "apply"],
+        ENABLED,
+        true,
+        Vec::new(),
+    );
+    let operator = rig.operator.clone();
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "both outputs", |o| {
+        connected(o) && stage_connected(o)
+    });
+    click(&mut rig.cx, "song-0");
+    settle(&mut rig.cx, &operator, "preview", |o| o.preview.is_some());
+    click(&mut rig.cx, "go-live");
+    settle(&mut rig.cx, &operator, "stage lost after the verse", |o| {
+        matches!(
+            o.stage.output.as_ref().map(|s| s.status()),
+            Some(Status::Lost(Loss::Exited))
+        )
+    });
+    let audience_epoch = operator.read_with(&rig.cx, |o, _| o.output.as_ref().unwrap().epoch());
+    settle(&mut rig.cx, &operator, "verse on the audience", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    assert!(operator.read_with(&rig.cx, |o, _| {
+        o.live_lines()
+            .iter()
+            .any(|(line, _)| line.starts_with("Stage output lost: its process ended"))
+    }));
+    // The audience keeps working: Next is applied and acknowledged.
+    click(&mut rig.cx, "live-next");
+    settle(&mut rig.cx, &operator, "chorus on the audience", |o| {
+        o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+    let sent = operator.read_with(&rig.cx, |o, _| {
+        assert!(connected(o));
+        assert_eq!(o.output.as_ref().unwrap().epoch(), audience_epoch);
+        submitted(o)
+    });
+
+    // Live › Show Stage Output twice: off, then a fresh stage session that
+    // gets the current slide without anything being re-sent to the audience.
+    for _ in 0..2 {
+        click(&mut rig.cx, "bar-live");
+        click(&mut rig.cx, "bar-live-stage");
+    }
+    let panel = wait_for_panel(&mut rig, "restarted stage", |p| {
+        p[0] == "Signal Hymn · Chorus"
+    });
+    assert_eq!(panel[2], "Next · Bridge");
+    settle(
+        &mut rig.cx,
+        &operator,
+        "restarted stage acknowledged",
+        |o| stage_connected(o) && stage_shows(o, "Signal Hymn · Chorus"),
+    );
+    operator.read_with(&rig.cx, |o, _| {
+        assert_eq!(
+            submitted(o),
+            sent,
+            "the stage restart sent nothing to the audience"
+        );
+        assert_eq!(o.output.as_ref().unwrap().epoch(), audience_epoch);
+    });
+    assert_eq!(rig.monitors.lock().unwrap().len(), 2);
+    assert_audience_private(&rig.log);
+}
+
+#[gpui::test]
+fn a_lost_audience_leaves_the_stage_running(cx: &mut TestAppContext) {
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "exit",
+        vec!["apply"],
+        ENABLED,
+        true,
+        Vec::new(),
+    );
+    let operator = rig.operator.clone();
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "audience lost, stage up", |o| {
+        matches!(o.output.as_ref().map(|s| s.status()), Some(Status::Lost(_))) && stage_connected(o)
+    });
+    wait_for_panel(&mut rig, "idle stage panel", |p| p[0] == "Nothing live");
+    settle(&mut rig.cx, &operator, "stage acknowledged", |o| {
+        stage_shows(o, "Nothing live")
+    });
+    for _ in 0..20 {
+        operator.update(&mut rig.cx, |o, cx| o.poll(cx));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(operator.read_with(&rig.cx, |o, _| stage_connected(o)));
+}
+
+#[gpui::test]
+fn the_stage_message_is_private_until_ok_and_never_reaches_the_audience(cx: &mut TestAppContext) {
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "apply",
+        vec!["apply"],
+        ENABLED,
+        true,
+        Vec::new(),
+    );
+    let operator = rig.operator.clone();
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "both outputs", |o| {
+        connected(o) && stage_connected(o)
+    });
+    click(&mut rig.cx, "song-0");
+    settle(&mut rig.cx, &operator, "preview", |o| o.preview.is_some());
+    click(&mut rig.cx, "go-live");
+    wait_for_panel(&mut rig, "verse on stage", |p| {
+        p[0] == "Signal Hymn · Verse 1"
+    });
+
+    click(&mut rig.cx, "bar-live");
+    click(&mut rig.cx, "bar-live-stage-message");
+    assert_eq!(
+        operator.read_with(&rig.cx, |o, _| o.dialog.clone()),
+        Some(Dialog::StageMessage)
+    );
+    // Typing goes to the text field: no show shortcut fires, nothing is sent.
+    rig.cx.simulate_input("Two minutes b");
+    for _ in 0..10 {
+        operator.update(&mut rig.cx, |o, cx| o.poll(cx));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(last_panel(&rig.log).unwrap()[4], "");
+    assert!(!operator.read_with(&rig.cx, |o, _| o.masks.any()));
+    rig.cx.simulate_keystrokes("backspace backspace");
+    click(&mut rig.cx, "dialog-confirm");
+    let panel = wait_for_panel(&mut rig, "message on stage", |p| p[4] == "Two minutes");
+    assert_eq!(panel[0], "Signal Hymn · Verse 1");
+    assert!(operator.read_with(&rig.cx, |o, _| {
+        o.dialog.is_none()
+            && o.live_lines()
+                .iter()
+                .any(|(line, _)| line == "Stage message: Two minutes")
+    }));
+    // A slide change keeps the message; the audience never sees it.
+    click(&mut rig.cx, "live-next");
+    wait_for_panel(&mut rig, "chorus keeps the message", |p| {
+        p[0] == "Signal Hymn · Chorus" && p[4] == "Two minutes"
+    });
+    // Cancel discards a new draft; Clear removes the message.
+    click(&mut rig.cx, "bar-live");
+    click(&mut rig.cx, "bar-live-stage-message");
+    rig.cx.simulate_input(" now");
+    click(&mut rig.cx, "dialog-cancel");
+    assert_eq!(
+        operator.read_with(&rig.cx, |o, _| o.stage.message.clone()),
+        "Two minutes"
+    );
+    click(&mut rig.cx, "bar-live");
+    click(&mut rig.cx, "bar-live-stage-message");
+    click(&mut rig.cx, "stage-message-clear");
+    wait_for_panel(&mut rig, "message cleared", |p| {
+        p[0] == "Signal Hymn · Chorus" && p[4].is_empty()
+    });
+    assert_audience_private(&rig.log);
+}
+
+#[gpui::test]
+fn the_last_slide_points_at_the_next_schedule_item(cx: &mut TestAppContext) {
+    let mut rig = rig(
+        cx,
+        library_with_songs,
+        "apply",
+        vec!["apply"],
+        "stage_enabled=1\nstage_clock=0\n",
+        true,
+        Vec::new(),
+    );
+    let operator = rig.operator.clone();
+    settle(&mut rig.cx, &operator, "two songs", |o| {
+        o.catalog.len() == 2
+    });
+    add_song(&mut rig.cx, &operator, "Signal Hymn");
+    add_song(&mut rig.cx, &operator, SECOND_SONG);
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "both outputs", |o| {
+        connected(o) && stage_connected(o)
+    });
+    rig.cx.simulate_keystrokes("down");
+    settle(&mut rig.cx, &operator, "first item previewed", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.entry.is_some() && p.title == "Signal Hymn")
+    });
+    click(&mut rig.cx, "preview-slide-2");
+    click(&mut rig.cx, "go-live");
+    let panel = wait_for_panel(&mut rig, "bridge on stage", |p| {
+        p[0] == "Signal Hymn · Bridge"
+    });
+    assert_eq!(
+        panel[2..4],
+        [format!("Next item · {SECOND_SONG}"), String::new()]
+    );
+    assert_eq!(panel[5], "01", "clock off, next area on");
+    // The live entry leaves the schedule: nothing is "next" any more.
+    operator.update(&mut rig.cx, |o, _| {
+        let id = o.schedule.entries()[0].id;
+        o.schedule.remove(id);
+    });
+    let panel = wait_for_panel(&mut rig, "end after removal", |p| p[2] == "End of schedule");
+    assert_eq!(panel[0], "Signal Hymn · Bridge");
+    assert_audience_private(&rig.log);
+}
+
+/// "Arranged": Verse, Chorus, Bridge, arranged as Full (V C B) and Short
+/// (C C, a repeated chorus).
+fn library_with_arrangements(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    use sela::arrangement::{Occurrence, OccurrenceId, Variant, VariantId};
+    let path = dir.path().join("library.sqlite");
+    let section = |label: &str, lyrics: &str| Section {
+        id: SectionId::allocate(),
+        label: label.into(),
+        lyrics: lyrics.into(),
+        format: Default::default(),
+        background: None,
+    };
+    let sections = vec![
+        section("Verse", "verse words"),
+        section("Chorus", "chorus words"),
+        section("Bridge", "bridge words"),
+    ];
+    let variant = |name: &str, order: &[usize]| Variant {
+        id: VariantId(SectionId::allocate().0),
+        name: name.into(),
+        occurrences: order
+            .iter()
+            .map(|n| Occurrence {
+                id: OccurrenceId(SectionId::allocate().0),
+                section: sections[*n].id,
+            })
+            .collect(),
+    };
+    let variants = vec![variant("Full", &[0, 1, 2]), variant("Short", &[1, 1])];
+    Repository::open(&path)
+        .unwrap()
+        .save_song(
+            None,
+            Song {
+                title: "Arranged".into(),
+                authors: String::new(),
+                copyright: String::new(),
+                license: String::new(),
+                administrator: String::new(),
+                song_number: String::new(),
+                variants,
+                sections,
+                master: None,
+            },
+        )
+        .unwrap();
+    path
+}
+
+#[gpui::test]
+fn arrangement_changes_and_repeated_choruses_keep_next_deterministic(cx: &mut TestAppContext) {
+    let mut rig = rig(
+        cx,
+        library_with_arrangements,
+        "apply",
+        vec!["apply"],
+        ENABLED,
+        true,
+        Vec::new(),
+    );
+    let operator = rig.operator.clone();
+    add_song(&mut rig.cx, &operator, "Arranged");
+    click(&mut rig.cx, "schedule-item-0");
+    settle(&mut rig.cx, &operator, "Full preview", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.entry.is_some() && p.slides.len() == 3)
+    });
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "both outputs", |o| {
+        connected(o) && stage_connected(o)
+    });
+    click(&mut rig.cx, "go-live");
+    let panel = wait_for_panel(&mut rig, "verse on stage", |p| p[0] == "Arranged · Verse");
+    assert_eq!(panel[2..4], ["Next · Chorus", "chorus words"]);
+    let sent = lines(&rig.log, "stage").len();
+
+    // A rapid arrangement change on the live entry (Preview's arrangement
+    // button) changes Preview only: the stage keeps the live snapshot's next.
+    click(&mut rig.cx, "preview-arrangement");
+    settle(&mut rig.cx, &operator, "Short preview", |o| {
+        o.preview.as_ref().is_some_and(|p| p.slides.len() == 2)
+    });
+    for _ in 0..10 {
+        operator.update(&mut rig.cx, |o, cx| o.poll(cx));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        lines(&rig.log, "stage").len(),
+        sent,
+        "no new panel was sent"
+    );
+    click(&mut rig.cx, "live-next");
+    let panel = wait_for_panel(&mut rig, "chorus of Full", |p| p[0] == "Arranged · Chorus");
+    assert_eq!(panel[2..4], ["Next · Bridge", "bridge words"]);
+
+    // Short goes live: its first chorus names the repeated chorus as next,
+    // then the last slide names the end.
+    click(&mut rig.cx, "preview-slide-0");
+    click(&mut rig.cx, "go-live");
+    let panel = wait_for_panel(&mut rig, "short first chorus", |p| {
+        p[0] == "Arranged · Chorus" && p[2] == "Next · Chorus"
+    });
+    assert_eq!(
+        panel[1..4],
+        ["chorus words", "Next · Chorus", "chorus words"]
+    );
+    click(&mut rig.cx, "live-next");
+    let panel = wait_for_panel(&mut rig, "short last chorus", |p| {
+        p[0] == "Arranged · Chorus" && p[2] == "End of schedule"
+    });
+    assert_eq!(panel[3], "");
+    assert_audience_private(&rig.log);
+}
+
+#[gpui::test]
+fn a_rejected_panel_keeps_the_previous_one_and_reports(cx: &mut TestAppContext) {
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "apply",
+        vec!["reject-at:3"],
+        ENABLED,
+        true,
+        Vec::new(),
+    );
+    let operator = rig.operator.clone();
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "both outputs", |o| {
+        connected(o) && stage_connected(o)
+    });
+    click(&mut rig.cx, "song-0");
+    settle(&mut rig.cx, &operator, "preview", |o| o.preview.is_some());
+    click(&mut rig.cx, "go-live");
+    settle(&mut rig.cx, &operator, "verse on both", |o| {
+        stage_shows(o, "Signal Hymn · Verse 1")
+    });
+    click(&mut rig.cx, "live-next");
+    settle(&mut rig.cx, &operator, "stage rejection reported", |o| {
+        o.stage_lines()
+            .iter()
+            .any(|(line, _)| line.starts_with("Stage did not show the latest panel"))
+    });
+    operator.read_with(&rig.cx, |o, _| {
+        // The stage still names the verse: the rejected chorus never counts.
+        assert!(stage_shows(o, "Signal Hymn · Verse 1"));
+        assert!(stage_connected(o));
+    });
+    settle(&mut rig.cx, &operator, "audience unaffected", |o| {
+        o.on_screen() == Some("Signal Hymn · Chorus")
+    });
+}
+
+#[gpui::test]
+fn options_foldback_enables_routes_and_persists_the_stage(cx: &mut TestAppContext) {
+    let monitor = |name: &str, primary| settings::MonitorInfo {
+        name: name.into(),
+        width: 1920,
+        height: 1080,
+        x: 0,
+        y: 0,
+        primary,
+    };
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "apply",
+        vec!["apply"],
+        "",
+        false,
+        vec![
+            monitor("P", true),
+            monitor("AUD", false),
+            monitor("STG", false),
+        ],
+    );
+    let operator = rig.operator.clone();
+    settle(&mut rig.cx, &operator, "monitors listed", |o| {
+        o.settings.monitors.is_some()
+    });
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "audience", connected);
+    assert!(operator.read_with(&rig.cx, |o, _| o.stage.output.is_none()));
+    // Foldback disabled: the Live menu's stage rows are inert.
+    click(&mut rig.cx, "bar-live");
+    click(&mut rig.cx, "bar-live-stage");
+    assert!(operator.read_with(&rig.cx, |o, _| o.stage.output.is_none()));
+    rig.cx.simulate_keystrokes("escape");
+
+    rig.cx.simulate_keystrokes("alt-e enter");
+    click(&mut rig.cx, "options-section-foldback");
+    assert!(rig.cx.debug_bounds("options-foldback-page").is_some());
+    assert!(rig.cx.debug_bounds("options-monitor-0").is_none());
+    click(&mut rig.cx, "options-stage-enabled");
+    // Rows below follow the checkbox: Automatic plus three monitors.
+    click(&mut rig.cx, "options-stage-monitor-0");
+    click(&mut rig.cx, "dialog-confirm");
+    settle(&mut rig.cx, &operator, "stage started with Live on", |o| {
+        stage_connected(o)
+    });
+    // Automatic never lands on the audience monitor (first non-primary).
+    assert_eq!(*rig.monitors.lock().unwrap(), ["name:STG".to_string()]);
+    let file = settings::path_in(rig.log.parent().unwrap());
+    settle(&mut rig.cx, &operator, "settings written", |_| {
+        std::fs::read_to_string(&file).is_ok_and(|text| text.contains("stage_enabled=1"))
+    });
+
+    // Disabling it in Options stops only the stage.
+    let audience_epoch = operator.read_with(&rig.cx, |o, _| o.output.as_ref().unwrap().epoch());
+    rig.cx.simulate_keystrokes("alt-e enter");
+    click(&mut rig.cx, "options-section-foldback");
+    click(&mut rig.cx, "options-stage-enabled");
+    click(&mut rig.cx, "dialog-confirm");
+    operator.read_with(&rig.cx, |o, _| {
+        assert!(o.stage.output.is_none());
+        assert!(connected(o));
+        assert_eq!(o.output.as_ref().unwrap().epoch(), audience_epoch);
+    });
+    settle(&mut rig.cx, &operator, "disabled written", |_| {
+        std::fs::read_to_string(&file).is_ok_and(|text| !text.contains("stage_enabled"))
+    });
+}
+
+#[gpui::test]
+fn no_free_monitor_keeps_the_stage_off_instead_of_covering_the_audience(cx: &mut TestAppContext) {
+    let monitor = |name: &str, primary| settings::MonitorInfo {
+        name: name.into(),
+        width: 1920,
+        height: 1080,
+        x: 0,
+        y: 0,
+        primary,
+    };
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "apply",
+        vec!["apply"],
+        ENABLED,
+        false,
+        vec![monitor("P", true), monitor("AUD", false)],
+    );
+    let operator = rig.operator.clone();
+    settle(&mut rig.cx, &operator, "monitors listed", |o| {
+        o.settings.monitors.is_some()
+    });
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "audience", connected);
+    operator.read_with(&rig.cx, |o, _| {
+        assert!(o.stage.output.is_none());
+        assert!(
+            o.live_lines()
+                .iter()
+                .any(|(line, _)| line.starts_with("No free monitor for the stage output"))
+        );
+    });
+    assert!(rig.monitors.lock().unwrap().is_empty());
+}

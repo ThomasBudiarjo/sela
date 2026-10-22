@@ -696,3 +696,24 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 - CCLI maps to the Song Number field.
 - Metadata search covers authors, copyright, license, administrator and song number.
 - Close prompt: Yes saves and closes, No discards, Cancel or Esc keeps editing; it is modal.
+
+### Stage output (Foldback) — UNOBSERVED best guesses (2026-10-22, stage-display)
+
+EasyWorship 8.0.49 was not run for the stage-display stream (no Windows host).
+The only observed facts are EW8-OBS-054/056: Options has a **Foldback**
+section with tabs General, Song, Scripture and "Alerts and Clocks"; General
+shows "Enable support for Foldback Output" (off) and its own monitor, margins
+and Default Font controls; the preview thumbnail shows a clock ("02:35") and a
+"next line" strip. Everything below is a reversible Sela best guess; IDs are
+stream-scoped so parallel streams do not collide (the integrator may renumber).
+Steps and re-runs are the PP-STG items in [parity-pending.md](parity-pending.md#stream-stage-display).
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-STG-1 | UNOBSERVED | Foldback content and layout. Sela: header with "title · slide name" (left) and the clock (right), optional message band, current slide large, divider, "Next · <slide name>" and the next slide smaller; dark background (16,17,20), white current text and clock, sky-blue next, amber labels and message; bundled DejaVu Sans fitted per region. |
+| EW8-OBS-STG-2 | UNOBSERVED | What "next" is at the last slide. Sela: "Next item · <title>" of the following schedule entry (its text is not loaded), "End of schedule" after the last entry or for a library song outside the schedule; next is computed from the live item's own slide snapshot (repeated chorus = next where the arrangement repeats it). |
+| EW8-OBS-STG-3 | UNOBSERVED (format seen) | Clock: the preview showed "02:35". Sela: local time of day, 24-hour "HH:MM", no seconds, drawn by the stage process itself and updated on the minute; on by default with an Options switch. Countdowns/timers are out of scope (owner, Mission 2026-10). |
+| EW8-OBS-STG-4 | UNOBSERVED | Black/Clear/Logo and the foldback. Sela: masks target the Main Output only; the stage keeps showing the current and next slide so performers keep their place. |
+| EW8-OBS-STG-5 | UNOBSERVED | Foldback lifecycle and menu. Sela: with Foldback enabled the stage starts and stops with Live › Show Live Output; Sela adds Live › Show Stage Output (restart/stop only the stage) and Live › Stage Message… (EW8-OBS-053 lists neither). |
+| EW8-OBS-STG-6 | UNOBSERVED | Stage-only message. Sela: one line (≤ 160 characters) typed privately in a dialog and sent only on Show on Stage; never drawn on the audience. EW's Alerts (EW8-OBS-056 Main Output › Alerts) are M3-04 and may own this. |
+| EW8-OBS-STG-7 | UNOBSERVED | Foldback monitor default with no free monitor. Sela: "Automatic" picks a monitor that is neither primary nor the audience's; with none, the stage is not started and the Live pane says so; an explicit choice (even the audience or primary monitor) is honoured. Only Foldback › General is built; Song, Scripture and Alerts and Clocks tabs show "not available". |

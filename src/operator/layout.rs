@@ -741,6 +741,7 @@ impl Render for Operator {
             .children(self.bar_menu_overlay(cx))
             .children(self.dialog_overlay(cx))
             .children(self.options_overlay(cx))
+            .children(self.stage_message_overlay(cx))
             .when(editor_prompt_open(cx), |d| {
                 d.child(div().occlude().absolute().size_full())
             })

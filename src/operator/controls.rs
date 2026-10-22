@@ -358,6 +358,12 @@ impl Operator {
                 self.controls[Control::NewMenu].focus(window, cx);
                 self.guard(Then::New, window, cx);
             }
+            Control::DialogSave if self.dialog == Some(Dialog::StageMessage) => {
+                self.clear_stage_message(window, cx);
+            }
+            Control::DialogConfirm if self.dialog == Some(Dialog::StageMessage) => {
+                self.confirm_stage_message(window, cx);
+            }
             Control::DialogSave => {
                 let Some(Dialog::Unsaved(then)) = self.dialog.clone() else {
                     return;
@@ -393,7 +399,7 @@ impl Operator {
                     self.close_dialog(window, cx);
                     self.apply_update_review();
                 }
-                Some(Dialog::Preflight | Dialog::FileError) | None => return,
+                Some(Dialog::Preflight | Dialog::FileError | Dialog::StageMessage) | None => return,
             },
             Control::DialogCancel if self.dialog.is_some() => {
                 if self.dialog == Some(Dialog::UpdateItems) {
