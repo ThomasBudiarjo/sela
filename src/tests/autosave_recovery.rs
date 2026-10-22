@@ -24,7 +24,21 @@ const NOW_MS: u64 = 1_700_000_000_000;
 struct TestFs {
     disk_full: AtomicBool,
     read_only: AtomicBool,
+    /// `session.json` writes fail with a full disk.
+    session_full: AtomicBool,
     hold: Mutex<Option<Arc<AtomicBool>>>,
+    /// Holds the start-up scan (the folder listing) until released.
+    hold_scan: Mutex<Option<Arc<AtomicBool>>>,
+}
+
+fn wait_for(gate: Option<Arc<AtomicBool>>) {
+    if let Some(gate) = gate {
+        let end = Instant::now() + Duration::from_secs(30);
+        while !gate.load(Ordering::SeqCst) {
+            assert!(Instant::now() < end, "the test never opened the gate");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
 }
 
 fn is_revision(path: &Path) -> bool {
@@ -40,21 +54,21 @@ impl save::Fs for TestFs {
         save::RealFs.create_dir_all(dir)
     }
     fn list(&self, dir: &Path) -> io::Result<Vec<(String, u64)>> {
+        wait_for(self.hold_scan.lock().unwrap().clone());
         save::RealFs.list(dir)
     }
     fn read(&self, path: &Path, max: u64) -> io::Result<Vec<u8>> {
         save::RealFs.read(path, max)
     }
     fn write_new(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let session = path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with(SESSION_FILE));
+        if session && self.session_full.load(Ordering::SeqCst) {
+            return Err(io::ErrorKind::StorageFull.into());
+        }
         if is_revision(path) {
-            let gate = self.hold.lock().unwrap().clone();
-            if let Some(gate) = gate {
-                let end = Instant::now() + Duration::from_secs(30);
-                while !gate.load(Ordering::SeqCst) {
-                    assert!(Instant::now() < end, "the test never opened the gate");
-                    std::thread::sleep(Duration::from_millis(2));
-                }
-            }
+            wait_for(self.hold.lock().unwrap().clone());
             if self.disk_full.load(Ordering::SeqCst) {
                 return Err(io::ErrorKind::StorageFull.into());
             }
@@ -88,11 +102,35 @@ fn start(
     fs: Arc<TestFs>,
     mode: &'static str,
 ) -> (VisualTestContext, Entity<Operator>) {
+    start_with(cx, library, fs, mode, 2)
+}
+
+fn start_with(
+    cx: &mut TestAppContext,
+    library: PathBuf,
+    fs: Arc<TestFs>,
+    mode: &'static str,
+    songs: usize,
+) -> (VisualTestContext, Entity<Operator>) {
     cx.update(|cx| cx.set_global(AutosaveSetup(config(fs))));
     let (mut vcx, operator, _) = with_library(cx, Some(library), mode);
     vcx.simulate_resize(size(px(1280.), px(800.)));
-    settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == 2);
+    settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == songs);
     (vcx, operator)
+}
+
+/// Asks the window to close (the real guard) and waits, bounded, until the
+/// close flush lets it go.
+fn close_window(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+    let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+    assert!(!closed, "the close waits for the autosave worker");
+    let end = Instant::now() + Duration::from_secs(10);
+    while cx.read(|cx| cx.windows().len()) > 0 {
+        assert!(Instant::now() < end, "the window closes after the flush");
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn ready(o: &Operator) -> bool {
@@ -289,8 +327,9 @@ fn after_a_crash_restore_brings_back_the_last_commit_and_discloses_lost_work(
     });
     // Committed again at once as this run's revision; the old run is
     // acknowledged so it is never offered twice.
+    // The revision lands first, then the session that acknowledges it.
     settle_disk(&mut cx, &operator, "the restore commit", || {
-        revision_files(dir.path()).len() == 2
+        revision_files(dir.path()).len() == 2 && session(dir.path())["acknowledged"] == 1
     });
     assert_eq!(session(dir.path())["acknowledged"], 1);
     assert!(session(dir.path())["uncommitted"].is_null());
@@ -382,15 +421,173 @@ fn closing_with_the_prompt_unanswered_offers_it_again(cx: &mut TestAppContext) {
     settle(&mut cx, &operator, "the recovery prompt", |o| {
         o.dialog == Some(Dialog::Recovery)
     });
-    let closes =
-        cx.update(|window, cx| operator.update(cx, |o, cx| o.autosave_allow_close(window, cx)));
-    assert!(closes, "nothing of this run to flush");
-    advance(&mut cx, &operator, Duration::from_secs(1));
-    assert_eq!(session(dir.path())["state"], "running", "not marked clean");
+    close_window(&mut cx, &operator);
+    assert_eq!(session(dir.path())["state"], "offered", "not marked clean");
+    assert_eq!(session(dir.path())["acknowledged"], 0);
     let (_, startup) = Store::open(dir.path(), &config(Arc::default())).unwrap();
+    assert!(!startup.unclean, "the operator closed it");
     let offer = startup.offer.expect("offered again on the next start");
+    assert!(offer.unanswered);
     assert_eq!(offer.revision.unwrap().snapshot, committed);
     assert!(offer.lost.is_some());
+}
+
+#[gpui::test]
+fn closing_while_the_start_up_scan_runs_keeps_the_previous_offer(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_songs(&dir);
+    let songs = versions(&library);
+    let committed = Snapshot {
+        path: None,
+        entries: vec![entry_of(songs[0].0, &songs[0].1)],
+        baseline: Vec::new(),
+    };
+    crashed_profile(&library, &committed, 2);
+    let fs = Arc::new(TestFs::default());
+    let scan = Arc::new(AtomicBool::new(false));
+    *fs.hold_scan.lock().unwrap() = Some(scan.clone());
+    let (mut cx, operator) = start(cx, library, fs, "apply");
+    settle(&mut cx, &operator, "settings loaded", |o| {
+        o.settings.loaded_for_test()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert!(!o.autosave_ready(), "the scan is still running");
+        assert!(o.autosave.offer.is_none(), "no offer has arrived yet");
+    });
+    // Ctrl+Q / the close box in the gap between the first frame and the
+    // scan's reply: the close must not acknowledge the unseen offer.
+    let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+    assert!(!closed);
+    scan.store(true, Ordering::SeqCst);
+    let end = Instant::now() + Duration::from_secs(10);
+    while cx.read(|cx| cx.windows().len()) > 0 {
+        assert!(Instant::now() < end, "the window closes");
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(session(dir.path())["state"], "offered");
+    assert_eq!(session(dir.path())["acknowledged"], 0);
+    assert!(!session(dir.path())["uncommitted"].is_null());
+    assert_eq!(revision_files(dir.path()).len(), 1, "nothing committed");
+    let (_, startup) = Store::open(dir.path(), &config(Arc::default())).unwrap();
+    let offer = startup.offer.expect("still offered on the next start");
+    assert!(offer.unanswered);
+    assert_eq!(offer.revision.unwrap().snapshot, committed);
+}
+
+#[gpui::test]
+fn a_prompt_closed_unanswered_says_so_the_next_time(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_songs(&dir);
+    let songs = versions(&library);
+    let committed = Snapshot {
+        path: None,
+        entries: vec![entry_of(songs[0].0, &songs[0].1)],
+        baseline: Vec::new(),
+    };
+    crashed_profile(&library, &committed, 2);
+    {
+        // The run after the crash closed with the prompt unanswered.
+        let (mut store, startup) = Store::open(dir.path(), &config(Arc::default())).unwrap();
+        assert!(startup.offer.is_some());
+        store.close(None).unwrap();
+    }
+    let (mut cx, operator) = start(cx, library, Arc::default(), "apply");
+    settle(&mut cx, &operator, "the recovery prompt", |o| {
+        o.dialog == Some(Dialog::Recovery)
+    });
+    let lines = operator.read_with(&cx, |o, _| o.recovery_lines());
+    assert_eq!(
+        lines[0],
+        "Sela was closed last time before this recovery question was answered."
+    );
+    assert_eq!(
+        lines[1],
+        "The last autosave (7 min ago) holds “Untitled schedule” with 1 item(s)."
+    );
+}
+
+#[gpui::test]
+fn an_unwritable_profile_after_a_crash_still_offers_a_read_only_restore(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_songs(&dir);
+    let songs = versions(&library);
+    let committed = Snapshot {
+        path: None,
+        entries: vec![
+            entry_of(songs[0].0, &songs[0].1),
+            entry_of(songs[1].0, &songs[1].1),
+        ],
+        baseline: Vec::new(),
+    };
+    crashed_profile(&library, &committed, 3);
+    let before = std::fs::read(recovery(dir.path()).join(SESSION_FILE)).unwrap();
+    let fs = Arc::new(TestFs::default());
+    fs.session_full.store(true, Ordering::SeqCst);
+    let (mut cx, operator) = start(cx, library, fs, "apply");
+    settle(&mut cx, &operator, "the recovery prompt", |o| {
+        o.dialog == Some(Dialog::Recovery)
+    });
+    cx.run_until_parked();
+    let lines = operator.read_with(&cx, |o, _| o.recovery_lines());
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some(
+            "Autosave is off (the disk is full), so this answer cannot be recorded: the question returns at the next start, and a restored schedule is not autosaved."
+        )
+    );
+    assert_eq!(
+        operator.read_with(&cx, |o, _| note(o)),
+        Some(("Autosave is off: the disk is full.".into(), true))
+    );
+    cx.simulate_keystrokes("enter");
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.dialog, None);
+        assert_eq!(entry_titles(o), [songs[0].1.clone(), songs[1].1.clone()]);
+        assert!(o.schedule.is_dirty());
+    });
+    advance(&mut cx, &operator, Duration::from_secs(3));
+    assert_eq!(
+        std::fs::read(recovery(dir.path()).join(SESSION_FILE)).unwrap(),
+        before,
+        "nothing could be recorded"
+    );
+    assert_eq!(revision_files(dir.path()).len(), 1);
+    let closes =
+        cx.update(|window, cx| operator.update(cx, |o, cx| o.autosave_allow_close(window, cx)));
+    assert!(closes, "autosave is off: nothing to flush");
+}
+
+#[gpui::test]
+fn a_restored_schedule_gets_the_open_time_missing_file_check(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    // One song whose Chorus uses `gone.png`, which is not in the profile.
+    let library = library_with_background_song(&dir);
+    let songs = versions(&library);
+    let committed = Snapshot {
+        path: None,
+        entries: vec![entry_of(songs[0].0, &songs[0].1)],
+        baseline: Vec::new(),
+    };
+    crashed_profile(&library, &committed, 1);
+    let (mut cx, operator) = start_with(cx, library, Arc::default(), "apply", 1);
+    settle(&mut cx, &operator, "the recovery prompt", |o| {
+        o.dialog == Some(Dialog::Recovery)
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    settle(&mut cx, &operator, "the missing-file report", |o| {
+        o.dialog == Some(Dialog::Preflight)
+            && o.assets
+                .report
+                .as_ref()
+                .is_some_and(|r| !r.items.is_empty())
+    });
+    assert_eq!(
+        operator.read_with(&cx, |o, _| entry_titles(o)),
+        [songs[0].1.clone()]
+    );
 }
 
 #[gpui::test]

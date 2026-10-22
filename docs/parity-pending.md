@@ -357,6 +357,28 @@ schedule; never on a service in use.
   asks about recovery again. Sela now: the normal unsaved guard; Don't Save
   marks the run clean and the next start asks nothing. Re-run:
   `autosave-windows.py`.
+- [ ] **PP-AUTO-09 EW closed with a recovery prompt unanswered**
+  (EW8-OBS-076). Steps: after a forced termination as in PP-AUTO-02, if EW
+  shows a recovery prompt, close EW (title-bar X, and once Alt+F4) without
+  answering it; relaunch and record whether the prompt returns, its wording
+  (does it still say EW closed abnormally?) and whether the schedule is
+  still offered. Also close EW as fast as possible after launch (before any
+  prompt appears) and record the same. Sela now (best guess): nothing is
+  committed or acknowledged, `session.json` says `offered`, and the next
+  prompt starts "Sela was closed last time before this recovery question
+  was answered." Re-run: `autosave-x11.py` / `autosave-windows.py` step 4,
+  `cargo test --bin sela autosave_recovery`.
+- [ ] **PP-AUTO-10 EW Profiles menu and Profiles Manager…** (EW8-OBS-077,
+  M1-12b). Steps: on a disposable install open Profiles; record every item
+  and its state; open Profiles Manager… and capture the dialog; create a
+  profile "Test B", switch to it, rename it, switch back and delete it,
+  recording each prompt (wording, buttons, default), whether a running
+  schedule/Live output is closed or kept on switch, and which data (songs,
+  media, schedules, settings, backups) is per profile (list
+  `%ProgramData%\Softouch\EasyWorship\` before and after). Sela now: one
+  implicit profile per library folder; Profiles items rendered inert; no
+  create/switch/rename (M1-12b planned). Re-run: none yet (M1-12b adds its
+  own scripts).
 - [ ] **PP-AUTO-06 Run `autosave-windows.py`** (M1-12, S03; NOT RUN: no
   Windows host on 2026-10-22). Checks LockFileEx as the profile lock and
   TerminateProcess as the kill, which the Linux run (`autosave-x11.py`,
@@ -366,8 +388,12 @@ schedule; never on a service in use.
   VHD and edit until autosave fails, then free space; (b) deny write on
   `Recovery\` with an ACL; (c) hold `Recovery\session.json` open with a
   sharing lock (e.g. PowerShell `[IO.File]::Open(..., 'Open', 'Read', 'None')`);
-  record the footer notes and that editing and Live continue. Sela now:
-  fault-adapter tests only (`autosave::tests`, `tests::autosave_recovery`).
+  record the footer notes and that editing and Live continue; (d) end Sela
+  with TerminateProcess after an unsaved edit has been autosaved, then
+  relaunch while (c)'s lock is held: the recovery prompt must still appear
+  with the "Autosave is off (…), so this answer cannot be recorded" line and
+  Restore must work read-only. Sela now: fault-adapter tests only
+  (`autosave::tests`, `tests::autosave_recovery`).
   Re-run: the same steps after any fix.
 - [ ] **PP-AUTO-08 Power loss and the autosave hitch** (M1-12 acceptance,
   P/H). Steps: (a) pull power (or hard-reset a VM) during repeated

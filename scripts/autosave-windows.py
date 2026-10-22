@@ -18,14 +18,17 @@ folder and drives the real operator, locating controls by UI Automation id
 3. The second song is added; as soon as `session.json` holds the uncommitted
    marker, the operator is ended with TerminateProcess (before the 2 s quiet
    period could commit it). The audience process survives and is then ended.
-4. Relaunch: the recovery prompt says Sela did not close normally, the last
-   autosave holds one item and the newer two-item edit cannot be recovered.
-   Enter (Restore is the default) restores exactly one item, unsaved
-   ("Untitled schedule* — Sela"); the restore is committed again and the
-   previous run acknowledged.
-5. Ctrl+Q asks to save; Don't Save quits with exit status 0 and
+4. Relaunch: the recovery prompt says Sela did not close normally. The
+   window is closed (WM_CLOSE) without answering: exit 0, nothing
+   committed, `session.json` records `offered` with nothing acknowledged.
+5. Relaunch: the prompt now says Sela was closed before the question was
+   answered, the last autosave holds one item and the newer two-item edit
+   cannot be recovered. Enter (Restore is the default) restores exactly one
+   item, unsaved ("Untitled schedule* — Sela"); the restore is committed
+   again and the previous run acknowledged.
+6. Ctrl+Q asks to save; Don't Save quits with exit status 0 and
    `session.json` says `clean`.
-6. A third launch shows no recovery prompt and quits at once with Ctrl+Q.
+7. A further launch shows no recovery prompt and quits at once with Ctrl+Q.
 
 Also checks the Windows-specific parts the Linux run cannot: LockFileEx as
 the profile lock and TerminateProcess as the kill. Takes over the real
@@ -47,6 +50,8 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import native_win as nw
+
+WM_CLOSE = 0x0010
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -260,7 +265,35 @@ def main() -> int:
             raise nw.Failure("the audience died with the operator")
         lo.kill(audience_pid)
 
-        # 4. Relaunch: honest recovery prompt; Enter restores.
+        # 4. Relaunch, then close with the prompt unanswered.
+        app = launch()
+        operator = app.window()
+        nw.activate(operator)
+        body = wait_for(
+            "the recovery prompt", 15, lambda: nodes(operator).get("recovery-body"), 0.5
+        )
+        summary["unanswered_text"] = body.get("name", "")
+        if not summary["unanswered_text"].startswith(
+            "Sela did not close normally last time."
+        ):
+            raise nw.Failure(f"unexpected first prompt {summary['unanswered_text']!r}")
+        save(operator, "recovery-prompt-first")
+        nw.user32.PostMessageW(operator, WM_CLOSE, 0, 0)
+        summary["unanswered_exit"] = app.wait_exit()
+        if summary["unanswered_exit"] != 0:
+            raise nw.Failure(f"unanswered close exit {summary['unanswered_exit']}")
+        recorded = session_file(profile) or {}
+        summary["unanswered_session"] = recorded
+        if (
+            recorded.get("state") != "offered"
+            or recorded.get("acknowledged") != 0
+            or not recorded.get("uncommitted")
+        ):
+            raise nw.Failure(f"the unanswered close was recorded as {recorded}")
+        if len(revisions(profile)) != 1:
+            raise nw.Failure("the unanswered close committed a revision")
+
+        # 5. Relaunch: honest recovery prompt; Enter restores.
         app = launch()
         operator = app.window()
         nw.activate(operator)
@@ -270,7 +303,7 @@ def main() -> int:
         text = body.get("name", "")
         summary["recovery_text"] = text
         for expected in (
-            "Sela did not close normally last time.",
+            "Sela was closed last time before this recovery question was answered.",
             "holds “Untitled schedule” with 1 item(s).",
             "Those changes were never saved to the schedule file.",
             "were not autosaved and cannot be recovered; the schedule then had 2 item(s).",
@@ -301,7 +334,7 @@ def main() -> int:
             raise nw.Failure("the previous run is not acknowledged")
         save(operator, "restored")
 
-        # 5. A clean quit is recorded.
+        # 6. A clean quit is recorded.
         keys(operator, "ctrl+q")
         time.sleep(1.0)
         if app.process.poll() is not None:
@@ -314,7 +347,7 @@ def main() -> int:
         if state != "clean":
             raise nw.Failure(f"session.json after a clean quit says {state!r}")
 
-        # 6. A clean start offers nothing.
+        # 7. A clean start offers nothing.
         app = launch()
         operator = app.window()
         nw.activate(operator)

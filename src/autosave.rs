@@ -10,9 +10,11 @@
 //!   (and the folder synced on Unix); a revision file that is not complete and
 //!   checksummed is never read back as a revision.
 //! - **Uncommitted**: the schedule differs from the newest committed revision.
-//!   The first edit after a commit writes a small marker into
-//!   `Recovery/session.json` (`uncommitted`), so a crash before the next commit
-//!   can disclose that newer work was lost instead of claiming zero loss.
+//!   The first unsaved edit after a commit (or during one) writes a small
+//!   marker into `Recovery/session.json` (`uncommitted`), so a crash before
+//!   the next commit can disclose that newer work was lost instead of
+//!   claiming zero loss. The marker is withdrawn when the schedule is back at
+//!   the commit or equals its saved file (see [`Policy::step`]).
 //!
 //! Revisions pin library song revisions (`storage::Version`) and do not embed
 //! song content: the library keeps every committed revision and never
@@ -30,7 +32,9 @@
 //! `max_bytes` is refused (`Error::Budget`) and the older revisions stay.
 //!
 //! Recovery: `session.json` says `running` while an operator owns the
-//! profile and `clean` after a clean close. Finding `running` at start (the
+//! profile, `clean` after a clean close and `offered` after a close that left
+//! the previous run's offer unanswered (offered again, not acknowledged).
+//! Finding `running` at start (the
 //! profile lock guarantees no other process is running) means the previous
 //! run ended uncleanly; [`Startup::offer`] then names the newest valid
 //! revision newer than the last acknowledged one, damaged newer revisions,
@@ -347,6 +351,9 @@ pub struct Uncommitted {
 enum State {
     Running,
     Clean,
+    /// Closed by the operator while this run's recovery prompt was still
+    /// unanswered: the previous run's offer stands for the next start.
+    Offered,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -370,6 +377,10 @@ pub struct Offer {
     pub damaged: usize,
     /// A commit was cut off; its partial file was removed.
     pub interrupted: bool,
+    /// The previous run closed normally, but with this same offer still
+    /// unanswered (it was already shown once and neither restored nor
+    /// declined).
+    pub unanswered: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -378,6 +389,16 @@ pub struct Startup {
     pub unclean: bool,
     /// `Some` only when there is something to restore or to disclose.
     pub offer: Option<Offer>,
+}
+
+/// [`Store::open`] could not make this run's session durable, so autosave is
+/// off. The previous run's offer was still read and is returned with it: the
+/// operator can restore it (read-only), and since nothing was acknowledged it
+/// is offered again on the next start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenFailure {
+    pub error: Error,
+    pub offer: Option<Box<Offer>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -536,6 +557,7 @@ fn encode_session(session: &Session) -> Vec<u8> {
     let state = match session.state {
         State::Running => "running",
         State::Clean => "clean",
+        State::Offered => "offered",
     };
     let mut text = json!({
         "format": SESSION_FORMAT,
@@ -569,6 +591,7 @@ fn decode_session(bytes: &[u8]) -> Option<Session> {
         state: match value.get("state")?.as_str()? {
             "running" => State::Running,
             "clean" => State::Clean,
+            "offered" => State::Offered,
             _ => return None,
         },
         started_at: value.get("started_at_ms")?.as_u64()?,
@@ -588,16 +611,28 @@ pub struct Store {
     newest: u64,
     /// Fingerprint of the newest commit of this run.
     last_fingerprint: Option<u64>,
+    /// `open` found an offer that has not been resolved yet.
+    offer_open: bool,
 }
 
 impl Store {
     /// Scans `<profile>/Recovery`, removes partial files of interrupted
     /// writes, assesses the previous run and marks this run `running`.
     pub fn open(profile: &Path, config: &Config) -> Result<(Self, Startup), Error> {
+        Self::open_keeping_offer(profile, config).map_err(|failure| failure.error)
+    }
+
+    /// [`Store::open`], but a failure to write this run's session (disk full,
+    /// read-only, locked) still returns the previous run's offer.
+    pub fn open_keeping_offer(
+        profile: &Path,
+        config: &Config,
+    ) -> Result<(Self, Startup), OpenFailure> {
+        let fail = |error| OpenFailure { error, offer: None };
         let dir = profile.join(RECOVERY_DIR);
         let fs = config.fs.clone();
-        fs.create_dir_all(&dir).map_err(io_error)?;
-        let listing = fs.list(&dir).map_err(io_error)?;
+        fs.create_dir_all(&dir).map_err(io_error).map_err(fail)?;
+        let listing = fs.list(&dir).map_err(io_error).map_err(fail)?;
         let mut interrupted = false;
         let mut sequences = Vec::new();
         for (name, _) in &listing {
@@ -615,17 +650,22 @@ impl Store {
             Ok(bytes) if bytes.len() as u64 <= MAX_SESSION_BYTES => Some(decode_session(&bytes)),
             Ok(_) => Some(None),
             Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-            Err(e) => return Err(io_error(e)),
+            Err(e) => return Err(fail(io_error(e))),
         };
         // A damaged session file counts as an unclean run with nothing
         // acknowledged, so a dirty revision is still offered.
-        let (unclean, acknowledged, marker) = match &previous {
-            None => (false, newest, None),
-            Some(None) => (true, 0, None),
-            Some(Some(s)) => (s.state == State::Running, s.acknowledged, s.uncommitted),
+        let (unclean, unanswered, acknowledged, marker) = match &previous {
+            None => (false, false, newest, None),
+            Some(None) => (true, false, 0, None),
+            Some(Some(s)) => (
+                s.state == State::Running,
+                s.state == State::Offered,
+                s.acknowledged,
+                s.uncommitted,
+            ),
         };
         let mut offer = None;
-        if unclean {
+        if unclean || unanswered {
             let mut damaged = 0;
             let mut revision = None;
             for &sequence in sequences.iter().rev().take(MAX_SCAN) {
@@ -653,6 +693,7 @@ impl Store {
                     lost,
                     damaged,
                     interrupted,
+                    unanswered,
                 });
             }
         }
@@ -676,8 +717,14 @@ impl Store {
             session,
             newest,
             last_fingerprint: None,
+            offer_open: offer.is_some(),
         };
-        store.write_session()?;
+        if let Err(error) = store.write_session() {
+            return Err(OpenFailure {
+                error,
+                offer: offer.map(Box::new),
+            });
+        }
         Ok((store, Startup { unclean, offer }))
     }
 
@@ -731,7 +778,7 @@ impl Store {
         self.newest = sequence;
         self.last_fingerprint = Some(fingerprint);
         let mut warning = None;
-        if self.session.state == State::Clean {
+        if self.session.state != State::Running {
             // A close was flushed but the operator kept working.
             self.session.state = State::Running;
             warning = self.write_session().err();
@@ -767,6 +814,21 @@ impl Store {
         Ok(())
     }
 
+    /// The schedule no longer has changes that a crash would lose (it went
+    /// back to the newest commit, or equals its saved file): the marker goes.
+    pub fn clear_uncommitted(&mut self) -> Result<(), Error> {
+        if self.offer_open || self.session.uncommitted.is_none() {
+            return Ok(());
+        }
+        self.session.uncommitted = None;
+        self.write_session()
+    }
+
+    /// `open` found an offer that is not resolved yet.
+    pub fn offer_open(&self) -> bool {
+        self.offer_open
+    }
+
     /// Records that the schedule (`fingerprint`, `items` entries) differs
     /// from the newest commit. A marker for exactly the committed schedule
     /// arrives late and is dropped.
@@ -792,11 +854,15 @@ impl Store {
         &mut self,
         restore: Option<(u64, &Snapshot)>,
     ) -> Result<Option<Committed>, Error> {
+        // Answered, whatever the writes below do: a close after this is a
+        // normal one.
+        self.offer_open = false;
         let previous = self.newest;
         let committed = match restore {
             Some((fingerprint, snapshot)) => Some(self.commit(fingerprint, snapshot)?.0),
             None => None,
         };
+        self.session.state = State::Running;
         self.session.acknowledged = previous;
         self.session.uncommitted = None;
         self.write_session()?;
@@ -806,7 +872,17 @@ impl Store {
     /// Clean close: commits `last` when given, then marks the run clean.
     /// A failed final commit is reported, but the run is still marked clean
     /// when that write succeeds: the operator chose to close.
+    ///
+    /// While the previous run's offer is unresolved (the prompt is open, or
+    /// its reply has not even reached the window yet), nothing is committed
+    /// or acknowledged: the run is recorded as `offered`, so the next start
+    /// offers the same revision again and says the prompt went unanswered.
     pub fn close(&mut self, last: Option<(u64, &Snapshot)>) -> Result<Option<Committed>, Error> {
+        if self.offer_open {
+            self.session.state = State::Offered;
+            self.write_session()?;
+            return Ok(None);
+        }
         let committed =
             last.map(|(fingerprint, snapshot)| self.commit(fingerprint, snapshot).map(|(c, _)| c));
         self.session.state = State::Clean;
@@ -821,6 +897,8 @@ pub enum Job {
     Commit(u64, Box<Snapshot>),
     /// Fingerprint and entry count of the uncommitted schedule.
     Mark(u64, usize),
+    /// Nothing would be lost by a crash now: drop the marker.
+    Unmark,
     /// The recovery prompt was answered; `Some` restores (and commits) the
     /// schedule with that fingerprint.
     Resolve(Option<(u64, Box<Snapshot>)>),
@@ -831,7 +909,9 @@ pub enum Job {
 
 #[derive(Debug)]
 pub enum Reply {
-    Opened(Result<Startup, Error>),
+    /// On failure autosave is off, but the previous run's offer may still
+    /// be restorable (see [`OpenFailure`]).
+    Opened(Result<Startup, OpenFailure>),
     /// The fingerprint the commit was for, and its outcome (plus a
     /// rotation/session warning that does not undo it).
     Committed(u64, Result<(Committed, Option<Error>), Error>),
@@ -857,13 +937,13 @@ impl Worker {
         let thread = std::thread::Builder::new()
             .name("sela-autosave".into())
             .spawn(move || {
-                let mut store = match Store::open(&profile, &config) {
+                let mut store = match Store::open_keeping_offer(&profile, &config) {
                     Ok((store, startup)) => {
                         let _ = reply_tx.send(Reply::Opened(Ok(startup)));
                         store
                     }
-                    Err(error) => {
-                        let _ = reply_tx.send(Reply::Opened(Err(error)));
+                    Err(failure) => {
+                        let _ = reply_tx.send(Reply::Opened(Err(failure)));
                         return;
                     }
                 };
@@ -875,12 +955,16 @@ impl Worker {
                         Job::Mark(fingerprint, items) => {
                             Reply::Marked(store.mark_uncommitted(fingerprint, items))
                         }
+                        Job::Unmark => Reply::Marked(store.clear_uncommitted()),
                         Job::Resolve(restore) => Reply::Resolved(
                             restore.as_ref().map(|(f, _)| *f),
                             store.resolve(restore.as_ref().map(|(f, s)| (*f, &**s))),
                         ),
                         Job::Close(last) => Reply::Closed(
-                            last.as_ref().map(|(f, _)| *f),
+                            // An open offer commits nothing at close.
+                            last.as_ref()
+                                .filter(|_| !store.offer_open())
+                                .map(|(f, _)| *f),
                             store.close(last.as_ref().map(|(f, s)| (*f, &**s))),
                         ),
                     };
@@ -914,8 +998,12 @@ impl Worker {
 pub enum Step {
     Idle,
     /// Record the uncommitted marker for the schedule with this
-    /// fingerprint (first change after a commit).
+    /// fingerprint (first unsaved change after a commit, or the first one
+    /// made while a commit runs).
     Mark(u64),
+    /// Drop the marker: the schedule is back at the newest commit, or equals
+    /// its saved file, so a crash would lose nothing.
+    Unmark,
     /// Commit the schedule whose fingerprint this is.
     Commit(u64),
 }
@@ -931,7 +1019,11 @@ pub struct Policy {
     last_change: Option<Instant>,
     in_flight: Option<u64>,
     retry_at: Option<Instant>,
+    /// A marker is (or is being) recorded for work after the newest commit.
     marked: bool,
+    /// A marker for an edit made while the in-flight commit runs is queued
+    /// behind it, so it lands with `after` = that commit.
+    flight_marked: bool,
 }
 
 impl Policy {
@@ -947,6 +1039,7 @@ impl Policy {
             in_flight: None,
             retry_at: None,
             marked: false,
+            flight_marked: false,
         }
     }
 
@@ -974,7 +1067,13 @@ impl Policy {
         self.seen
     }
 
-    pub fn step(&mut self, fingerprint: u64, now: Instant) -> Step {
+    /// One cadence step for the schedule with `fingerprint`; `unsaved` says
+    /// whether it has changes that are not in its file (`Schedule::is_dirty`).
+    /// Only unsaved work is marked: a crash loses nothing that is in a file.
+    /// A marker is withdrawn when it would no longer be true, but never while
+    /// a commit runs (the commit may still fail, and the marker is then the
+    /// only record).
+    pub fn step(&mut self, fingerprint: u64, unsaved: bool, now: Instant) -> Step {
         if fingerprint != self.seen {
             self.seen = fingerprint;
             self.last_change = Some(now);
@@ -982,12 +1081,30 @@ impl Policy {
                 self.first_change = Some(now);
             }
         }
+        let settled = self.in_flight.is_none();
         if self.seen == self.committed {
             self.first_change = None;
+            if self.marked && settled {
+                self.marked = false;
+                return Step::Unmark;
+            }
             return Step::Idle;
         }
-        if !self.marked {
+        if unsaved && !self.marked {
             self.marked = true;
+            // Queued behind a running commit, it lands after that commit.
+            self.flight_marked = !settled;
+            return Step::Mark(self.seen);
+        }
+        if !unsaved && self.marked && settled {
+            self.marked = false;
+            return Step::Unmark;
+        }
+        if unsaved && !self.flight_marked && self.in_flight.is_some_and(|f| f != self.seen) {
+            // The newer edit would be lost if the process died right after
+            // the running commit lands; the worker records this marker after
+            // that commit, so it reads `after` = the commit's sequence.
+            self.flight_marked = true;
             return Step::Mark(self.seen);
         }
         if self.in_flight.is_some() || self.retry_at.is_some_and(|at| now < at) {
@@ -1014,18 +1131,25 @@ impl Policy {
         if ok {
             self.committed = fingerprint;
             self.retry_at = None;
-            // Edits made while it ran need their own marker and commit.
-            self.marked = false;
+            // Edits made while it ran need their own commit; they already
+            // have a marker if one was queued behind the commit.
+            self.marked = self.flight_marked;
             self.first_change = (self.seen != self.committed).then_some(now);
         } else {
             self.retry_at = Some(now + self.cadence.retry);
         }
+        self.flight_marked = false;
     }
 
     /// A marker or commit could not be queued: try again on a later step.
     pub fn unqueued(&mut self, step: Step) {
         match step {
-            Step::Mark(_) => self.marked = false,
+            // Marking again is harmless; a missing marker is not.
+            Step::Mark(_) => {
+                self.marked = false;
+                self.flight_marked = false;
+            }
+            Step::Unmark => self.marked = true,
             Step::Commit(fingerprint) if self.in_flight == Some(fingerprint) => {
                 self.in_flight = None;
             }
@@ -1048,6 +1172,7 @@ impl Policy {
         self.committed = fingerprint;
         self.in_flight = None;
         self.marked = false;
+        self.flight_marked = false;
         self.first_change = None;
         self.retry_at = None;
     }

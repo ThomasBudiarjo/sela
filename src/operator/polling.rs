@@ -314,6 +314,12 @@ impl Operator {
                 (Some(Request::ImportSchedule(path, arrangements)), Ok(Reply::Imported(items))) => {
                     to_open = Some((path, items, arrangements));
                 }
+                (Some(Request::RecoveryCheck(document)), Ok(Reply::Songs(songs))) => {
+                    // A schedule replaced since the restore has its own check.
+                    if document == self.schedule.document() {
+                        opened_songs = Some(songs);
+                    }
+                }
                 (Some(Request::UpdateScan { pairs, versions }), Ok(Reply::Songs(songs))) => {
                     scanned = Some((pairs, versions, songs));
                 }
@@ -321,7 +327,8 @@ impl Operator {
                     Some(
                         Request::SaveSchedule(_)
                         | Request::ImportSchedule(..)
-                        | Request::UpdateScan { .. },
+                        | Request::UpdateScan { .. }
+                        | Request::RecoveryCheck(_),
                     ),
                     Err(error),
                 ) => {

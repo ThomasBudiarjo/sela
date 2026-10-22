@@ -245,7 +245,7 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `live-output-x11.py --kind dual --tolerate-audience-focus` | private dual, audience `secondary` 1920x1080 | PASS, four tolerated focus thefts |
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
-| `autosave-x11.py --display :113` (2026-10-22, autosave-recovery) | xvfb `serve --display :113` | PASS (19 s) |
+| `autosave-x11.py --display :113` (2026-10-22, autosave-recovery; review round 1 adds the unanswered-close step) | xvfb `serve --display :113` | PASS (19 s; round 1: 20.5 s) |
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live

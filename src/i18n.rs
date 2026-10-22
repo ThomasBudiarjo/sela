@@ -552,6 +552,7 @@ pub enum Msg {
     RecoveryHeading,
     RecoveryLostHeading,
     RecoveryUnclean,
+    RecoveryUnanswered,
     RecoveryRevision,
     RecoveryNotInFile,
     RecoveryLost,
@@ -559,6 +560,7 @@ pub enum Msg {
     RecoveryDamaged,
     RecoveryInterrupted,
     RecoveryKept,
+    RecoveryAutosaveOff,
     RecoveryRestore,
     RecoveryDiscard,
     RecoveryRestored,
@@ -1054,6 +1056,7 @@ impl Msg {
         Msg::RecoveryHeading,
         Msg::RecoveryLostHeading,
         Msg::RecoveryUnclean,
+        Msg::RecoveryUnanswered,
         Msg::RecoveryRevision,
         Msg::RecoveryNotInFile,
         Msg::RecoveryLost,
@@ -1061,6 +1064,7 @@ impl Msg {
         Msg::RecoveryDamaged,
         Msg::RecoveryInterrupted,
         Msg::RecoveryKept,
+        Msg::RecoveryAutosaveOff,
         Msg::RecoveryRestore,
         Msg::RecoveryDiscard,
         Msg::RecoveryRestored,
@@ -1624,6 +1628,9 @@ impl Msg {
             Self::RecoveryHeading => "Recover the unsaved schedule?",
             Self::RecoveryLostHeading => "Unsaved changes were lost",
             Self::RecoveryUnclean => "Sela did not close normally last time.",
+            Self::RecoveryUnanswered => {
+                "Sela was closed last time before this recovery question was answered."
+            }
             Self::RecoveryRevision => {
                 "The last autosave ({ago}) holds “{name}” with {count} item(s)."
             }
@@ -1638,6 +1645,9 @@ impl Msg {
             }
             Self::RecoveryKept => {
                 "If you don't restore, the copies stay in the profile's Recovery folder until newer autosaves replace them."
+            }
+            Self::RecoveryAutosaveOff => {
+                "Autosave is off ({reason}), so this answer cannot be recorded: the question returns at the next start, and a restored schedule is not autosaved."
             }
             Self::RecoveryRestore => "Restore",
             Self::RecoveryDiscard => "Don't Restore",
@@ -2227,6 +2237,9 @@ impl Msg {
             Self::RecoveryHeading => "Pulihkan jadwal yang belum disimpan?",
             Self::RecoveryLostHeading => "Perubahan yang belum disimpan hilang",
             Self::RecoveryUnclean => "Sela tidak ditutup dengan normal terakhir kali.",
+            Self::RecoveryUnanswered => {
+                "Terakhir kali Sela ditutup sebelum pertanyaan pemulihan ini dijawab."
+            }
             Self::RecoveryRevision => {
                 "Simpan otomatis terakhir ({ago}) berisi “{name}” dengan {count} item."
             }
@@ -2243,6 +2256,9 @@ impl Msg {
             }
             Self::RecoveryKept => {
                 "Jika tidak dipulihkan, salinannya tetap di folder Recovery profil sampai diganti simpan otomatis yang lebih baru."
+            }
+            Self::RecoveryAutosaveOff => {
+                "Simpan otomatis mati ({reason}), jadi jawaban ini tidak dapat dicatat: pertanyaan ini muncul lagi saat mulai berikutnya, dan jadwal yang dipulihkan tidak disimpan otomatis."
             }
             Self::RecoveryRestore => "Pulihkan",
             Self::RecoveryDiscard => "Jangan Pulihkan",
@@ -2337,7 +2353,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 498);
+        assert_eq!(Msg::ALL.len(), 500);
     }
 
     #[test]

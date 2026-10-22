@@ -23,15 +23,20 @@ id over AT-SPI) and keyboard:
    lets a second revision land) the operator process is killed with SIGKILL.
    The audience process survives the kill (it keeps its scene) and is then
    ended by the script.
-4. Relaunch: the recovery prompt appears (captured), its text says Sela did
-   not close normally, the last autosave holds one item, and changes from
-   the newer edit (two items) cannot be recovered. Enter (Restore is the
+4. Relaunch: the recovery prompt appears (captured) and says Sela did not
+   close normally. The window is closed (WM close) without answering: the
+   process exits 0, nothing is committed, and `session.json` records the
+   run as `offered` with nothing acknowledged and the marker kept.
+5. Relaunch: the prompt appears again (captured); it now says Sela was
+   closed before the question was answered, the last autosave holds one
+   item, and changes from the newer edit (two items) cannot be recovered.
+   Enter (Restore is the
    default) restores exactly the committed one-item schedule as unsaved
    ("Untitled schedule* — Sela"), and the restore is committed again with
    the previous run acknowledged.
-5. Ctrl+Q asks to save; Don't Save quits with exit status 0 and
+6. Ctrl+Q asks to save; Don't Save quits with exit status 0 and
    `session.json` says `clean`.
-6. A third launch shows no recovery prompt and quits at once with Ctrl+Q.
+7. A further launch shows no recovery prompt and quits at once with Ctrl+Q.
 
 X11 differences: none in the checked behaviour. The kill is SIGKILL (the
 Windows script uses TerminateProcess). On the default xvfb display the
@@ -196,7 +201,35 @@ def body(session: nx.Session) -> str:
         os.kill(audience_pid, signal.SIGKILL)
     session.close_app(app)
 
-    # 4. Relaunch: the recovery prompt, honest about the lost edit; Restore.
+    # 4. Relaunch, then close the window with the prompt unanswered.
+    app = session.app(["--operator-library", library], name="unanswered")
+    operator = app.window()
+    nx.activate(operator)
+    body_control = nx.wait_until(
+        lambda: app.controls(operator).get("recovery-body"), 15, "the recovery prompt"
+    )
+    summary["unanswered_text"] = body_control.name
+    if not body_control.name.startswith("Sela did not close normally last time."):
+        raise nx.Failure(f"unexpected first prompt {body_control.name!r}")
+    time.sleep(0.3)
+    session.save(nx.capture_stable(operator), "recovery-prompt-first")
+    nx.wm_close(operator)
+    summary["unanswered_exit"] = app.wait_exit()
+    if summary["unanswered_exit"] != 0:
+        raise nx.Failure(f"unanswered close exit status {summary['unanswered_exit']}")
+    recorded = session_file(profile) or {}
+    summary["unanswered_session"] = recorded
+    if (
+        recorded.get("state") != "offered"
+        or recorded.get("acknowledged") != 0
+        or not recorded.get("uncommitted")
+    ):
+        raise nx.Failure(f"the unanswered close was recorded as {recorded}")
+    if len(revisions(profile)) != 1:
+        raise nx.Failure("the unanswered close committed a revision")
+    session.close_app(app)
+
+    # 5. Relaunch: the recovery prompt, honest about the lost edit; Restore.
     app = session.app(["--operator-library", library], name="recovered")
     operator = app.window()
     nx.activate(operator)
@@ -206,7 +239,7 @@ def body(session: nx.Session) -> str:
     text = body_control.name
     summary["recovery_text"] = text
     for expected in (
-        "Sela did not close normally last time.",
+        "Sela was closed last time before this recovery question was answered.",
         "holds “Untitled schedule” with 1 item(s).",
         "Those changes were never saved to the schedule file.",
         "were not autosaved and cannot be recovered; the schedule then had 2 item(s).",
@@ -241,7 +274,7 @@ def body(session: nx.Session) -> str:
     time.sleep(0.3)
     session.save(operator, "restored")
 
-    # 5. Quit cleanly with Don't Save: the run is recorded clean.
+    # 6. Quit cleanly with Don't Save: the run is recorded clean.
     nx.press(operator, "ctrl+q")
     time.sleep(1.0)
     if not app.running():
@@ -256,7 +289,7 @@ def body(session: nx.Session) -> str:
         raise nx.Failure(f"session.json after a clean quit says {state!r}")
     session.close_app(app)
 
-    # 6. A clean start offers nothing.
+    # 7. A clean start offers nothing.
     app = session.app(["--operator-library", library], name="clean-start")
     operator = app.window()
     nx.activate(operator)
@@ -272,7 +305,8 @@ def body(session: nx.Session) -> str:
     return (
         "autosave committed while Live was on; a second instance refused without touching "
         "the profile; SIGKILL after a newer edit led to a recovery prompt that restored the "
-        "last committed one-item schedule and disclosed the lost two-item edit; a clean "
+        "last committed one-item schedule and disclosed the lost two-item edit (after a close "
+        "with the prompt unanswered had kept it and said so); a clean "
         "quit was recorded and the next start asked nothing"
     )
 

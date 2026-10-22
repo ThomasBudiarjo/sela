@@ -142,10 +142,14 @@ impl Operator {
             return changed;
         }
         let fingerprint = save::fingerprint(&self.schedule);
-        let step = self.autosave.policy.step(fingerprint, now);
+        let step = self
+            .autosave
+            .policy
+            .step(fingerprint, self.schedule.is_dirty(), now);
         let job = match step {
             Step::Idle => return changed,
             Step::Mark(f) => Job::Mark(f, self.schedule.entries().len()),
+            Step::Unmark => Job::Unmark,
             Step::Commit(f) => Job::Commit(f, Box::new(Snapshot::of(&self.schedule))),
         };
         let queued = self
@@ -173,10 +177,16 @@ impl Operator {
                     state.prompt_pending = true;
                 }
             }
-            Reply::Opened(Err(error)) => {
-                eprintln!("autosave unavailable: {error:?}");
-                state.health = Health::Off(error);
+            Reply::Opened(Err(failure)) => {
+                eprintln!("autosave unavailable: {:?}", failure.error);
+                state.health = Health::Off(failure.error);
                 state.worker = None;
+                // The previous run's copy was still readable: it can be
+                // restored, but the answer cannot be recorded.
+                if let Some(offer) = failure.offer {
+                    state.offer = Some(*offer);
+                    state.prompt_pending = true;
+                }
             }
             Reply::Committed(fingerprint, Ok((committed, warning))) => {
                 state.policy.finished(fingerprint, true, now);
@@ -219,7 +229,10 @@ impl Operator {
 
     /// The recovery prompt's Restore: the revision replaces the (empty)
     /// schedule with its own file and baseline, so unsaved edits stay
-    /// unsaved, and is committed again at once as this run's revision.
+    /// unsaved, and is committed again at once as this run's revision. Its
+    /// songs then get the same missing-file check as an opened schedule.
+    /// With autosave off (the profile could not be written) the schedule is
+    /// still restored, read-only: nothing is committed or acknowledged.
     pub(crate) fn restore_recovery(&mut self) {
         let Some(offer) = self.autosave.offer.take() else {
             return;
@@ -241,6 +254,12 @@ impl Operator {
             return self.decline_recovery_offer();
         }
         self.clear_entry_selection();
+        if !self.schedule.entries().is_empty() {
+            self.queue(
+                storage::Command::Songs(self.schedule.versions()),
+                Request::RecoveryCheck(self.schedule.document()),
+            );
+        }
         let fingerprint = save::fingerprint(&self.schedule);
         let queued = self.autosave.worker.as_ref().is_some_and(|worker| {
             worker.submit(Job::Resolve(Some((
@@ -277,7 +296,12 @@ impl Operator {
             return Vec::new();
         };
         let now = (self.autosave.clock)();
-        let mut lines = vec![t!(Msg::RecoveryUnclean).to_string()];
+        let first = if offer.unanswered {
+            Msg::RecoveryUnanswered
+        } else {
+            Msg::RecoveryUnclean
+        };
+        let mut lines = vec![t!(first).to_string()];
         match &offer.revision {
             Some(revision) => {
                 let snapshot = &revision.snapshot;
@@ -313,6 +337,9 @@ impl Operator {
         }
         if offer.revision.is_some() {
             lines.push(t!(Msg::RecoveryKept).into());
+        }
+        if let Health::Off(error) = &self.autosave.health {
+            lines.push(t!(Msg::RecoveryAutosaveOff, reason = reason(error)));
         }
         lines
     }
@@ -403,14 +430,17 @@ impl Operator {
         cx: &mut Context<Self>,
     ) -> bool {
         let state = &self.autosave;
-        let flushed = state.closed && save::fingerprint(&self.schedule) == state.policy.committed();
+        // With the previous run's offer unanswered the close commits nothing
+        // (the store records the run as `offered` instead of clean, so the
+        // offer is not acknowledged unseen). That also holds while the worker
+        // is still Starting: its Opened reply, and any offer, comes first.
+        let flushed = state.closed
+            && (state.offer.is_some()
+                || save::fingerprint(&self.schedule) == state.policy.committed());
         if state.worker.is_none()
             || matches!(state.health, Health::Absent | Health::Off(_))
             || state.forced
             || flushed
-            // An unanswered recovery prompt: closing must not mark the run
-            // clean, or the previous run's work would never be offered again.
-            || state.offer.is_some()
         {
             return true;
         }

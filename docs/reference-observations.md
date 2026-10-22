@@ -703,7 +703,7 @@ EasyWorship 8.0.49 was not run for M1-12 (no Windows host). No earlier
 observation in this ledger covers autosave, crash recovery, backups or a
 second instance (searched: autosave, recover, crash, backup, instance,
 profile). Each row is a reversible best guess; the steps to observe them are
-PP-AUTO-01..05 in [parity-pending.md](parity-pending.md#stream-autosave-recovery).
+PP-AUTO-01..05, -09 and -10 in [parity-pending.md](parity-pending.md#stream-autosave-recovery).
 IDs may be renumbered when parallel streams merge.
 
 | ID | State | Record |
@@ -713,3 +713,5 @@ IDs may be renumbered when parallel streams merge.
 | EW8-OBS-073 | UNOBSERVED | What a restored schedule looks like in EW (title bar, unsaved marker, file association). Sela restores the entries with their original file and baseline, so only unsaved changes show as unsaved; Live is untouched. |
 | EW8-OBS-074 | UNOBSERVED | EW's behaviour on a second launch while running (focus the running window, a message, or a second window). Sela shows "Sela is already running" naming the profile and exits without touching it. |
 | EW8-OBS-075 | UNOBSERVED | EW schedule/profile backups and their retention (Profiles menu, backup folders). Sela keeps the newest 20 autosave revisions within 4 MiB, across sessions; declined copies stay. |
+| EW8-OBS-076 | UNOBSERVED | EW closed while its recovery prompt (if any) is unanswered, or before it appears: whether the next launch asks again and with what wording. Sela commits and acknowledges nothing, records the run as `offered`, and the next prompt starts "Sela was closed last time before this recovery question was answered." (PP-AUTO-09). |
+| EW8-OBS-077 | UNOBSERVED | EW Profiles menu and Profiles Manager… (create, switch, rename, delete; per-profile data; behaviour on switch). Sela has one implicit profile per library folder and renders the Profiles items inert; profile management is ticket M1-12b (PP-AUTO-10). |

@@ -900,8 +900,12 @@ Progress (autosave-recovery, 2026-10-22): **implemented-unqualified**; see
 thread, close flush, OS profile lock with a second-instance notice, recovery
 prompt with honest loss disclosure, 20-revision / 4 MiB retention. Linux U/I,
 GPUI and `scripts/autosave-x11.py` pass; `autosave-windows.py`, EW
-observations (EW8-OBS-071..075 UNOBSERVED), real disk/ACL faults, power loss
-and the older-hardware hitch measurement are open (PP-AUTO-01..08).
+observations (EW8-OBS-071..077 UNOBSERVED), real disk/ACL faults, power loss
+and the older-hardware hitch measurement are open (PP-AUTO-01..10).
+**Local profile management is not delivered here**: one implicit profile per
+library folder; the Profiles menu (Default, Profiles Manager…) stays inert.
+Create/switch/rename moved to M1-12b below (planned), so the title's "local
+profiles" is only partly covered by this ticket.
 
 - [x] Define committed/dirty state, bounded autosave cadence, flush/close behavior,
   profile location and single-instance/concurrent-open policy.
@@ -917,8 +921,30 @@ and the older-hardware hitch measurement are open (PP-AUTO-01..08).
 - [x] Test disk full, locked/read-only profile, corrupt latest revision, exhausted
   backup budget and autosave while output is active.
   (Injected faults and GPUI receipts; real volumes/ACLs on Windows: PP-AUTO-07.)
+- [ ] Local profile management (create, switch, rename profiles): not done;
+  owned by M1-12b.
 
 Acceptance: S03 passes and live rendering shows no autosave-induced sustained hitch.
+
+### M1-12b — Local profile management (Profiles menu)
+
+Depends on: M1-12. Tests: U, I, N. State: **planned** (split from M1-12 in
+its 2026-10-22 review; nothing built).
+
+- [ ] Observe EW 8.0.49's Profiles menu and Profiles Manager… (create,
+  rename, delete, switch, what is per profile: songs, media, schedules,
+  settings, backups) on a disposable install (EW8-OBS-077, PP-AUTO-10).
+- [ ] Profile list and chooser behind Profiles > Default / Profiles Manager…
+  (currently rendered inert, docs/operator-shell.md), with the existing
+  per-folder lock, `Recovery/` and settings reused per profile.
+- [ ] Switching profiles closes the current one like a quit (unsaved guard,
+  autosave close flush, lock release) before opening the other; a locked
+  profile shows the M1-12 already-running notice.
+- [ ] Rename/delete never touch a profile another operator holds; failure
+  paths (read-only, locked, name collision) tested.
+
+Acceptance: an operator can create, switch to and rename a local profile
+without losing the current schedule or another profile's data.
 
 ### M1-13 — Portable bundle, backup and restore
 

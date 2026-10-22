@@ -214,6 +214,9 @@ pub(crate) enum Request {
         pairs: Vec<(EntryId, Version, Version)>,
         versions: Vec<Version>,
     },
+    /// Loading a restored schedule's songs for the open-time file check
+    /// (M1-11b); the schedule document it was for.
+    RecoveryCheck(u64),
 }
 
 pub(super) struct Operator {

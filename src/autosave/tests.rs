@@ -580,6 +580,132 @@ fn io_errors_map_to_operator_reasons() {
     assert_eq!(map(io::ErrorKind::Other), Error::Io("Other".into()));
 }
 
+/// A previous run that committed an unsaved schedule, made a newer edit and
+/// was killed.
+fn crashed(dir: &Path, cfg: &Config) {
+    let (mut store, _) = Store::open(dir, cfg).unwrap();
+    store.commit(1, &untitled()).unwrap();
+    store.mark_uncommitted(2, 3).unwrap();
+}
+
+#[test]
+fn closing_before_the_offer_is_answered_keeps_it_for_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    crashed(dir.path(), &config());
+    // The next run closes with its offer unresolved: unshown (the window
+    // closed before the scan's reply arrived) or shown and unanswered.
+    let (mut store, startup) = Store::open(dir.path(), &config()).unwrap();
+    assert!(startup.offer.is_some() && store.offer_open());
+    assert_eq!(
+        store.close(Some((9, &saved()))),
+        Ok(None),
+        "nothing committed"
+    );
+    assert_eq!(revisions(dir.path()), [revision_name(1)]);
+    let (store, startup) = Store::open(dir.path(), &config()).unwrap();
+    assert!(!startup.unclean, "the operator closed that run");
+    let offer = startup
+        .offer
+        .expect("offered again, not acknowledged unseen");
+    assert!(offer.unanswered);
+    assert_eq!(offer.revision.unwrap().snapshot, untitled());
+    assert_eq!(offer.lost.map(|l| (l.after, l.items)), Some((1, 3)));
+    // A crash of this run (still unanswered) is an unclean one again.
+    drop(store);
+    let (mut store, startup) = Store::open(dir.path(), &config()).unwrap();
+    let offer = startup.offer.unwrap();
+    assert!(startup.unclean && !offer.unanswered);
+    // Once answered, a close is a normal clean one.
+    store.resolve(None).unwrap();
+    assert!(!store.offer_open());
+    store.close(None).unwrap();
+    let (_, startup) = Store::open(dir.path(), &config()).unwrap();
+    assert_eq!((startup.unclean, startup.offer), (false, None));
+}
+
+#[test]
+fn an_unwritable_session_after_a_crash_still_returns_the_offer() {
+    let dir = tempfile::tempdir().unwrap();
+    let fs = Arc::new(FaultFs::default());
+    let cfg = config_with(fs.clone(), clock().0);
+    crashed(dir.path(), &cfg);
+    for kind in [
+        io::ErrorKind::StorageFull,
+        io::ErrorKind::ReadOnlyFilesystem,
+    ] {
+        fs.fail(Op::Write, SESSION_FILE, kind);
+        let failure = Store::open_keeping_offer(dir.path(), &cfg).err().unwrap();
+        assert_eq!(failure.error, Error::from_io(&io::Error::from(kind)));
+        let offer = failure.offer.expect("the readable copy is still offered");
+        assert_eq!(offer.revision.unwrap().snapshot, untitled());
+        assert_eq!(offer.lost.map(|l| l.items), Some(3));
+        fs.heal();
+    }
+    // Nothing was acknowledged, so a later start offers it again.
+    let (_, startup) = Store::open(dir.path(), &cfg).unwrap();
+    assert!(startup.unclean && startup.offer.is_some());
+}
+
+#[test]
+fn a_withdrawn_marker_discloses_no_loss() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut store, _) = Store::open(dir.path(), &config()).unwrap();
+    store.commit(1, &untitled()).unwrap();
+    store.mark_uncommitted(2, 3).unwrap();
+    store.clear_uncommitted().unwrap();
+    drop(store);
+    let offer = Store::open(dir.path(), &config()).unwrap().1.offer.unwrap();
+    assert_eq!(offer.lost, None, "the edit was undone or saved to its file");
+}
+
+#[test]
+fn an_edit_made_while_a_commit_runs_is_marked_without_waiting_for_it() {
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    let mut policy = Policy::new(cadence(), 0);
+    assert_eq!(policy.step(1, true, at(0)), Step::Mark(1));
+    assert_eq!(policy.step(1, true, at(2_000)), Step::Commit(1));
+    // Commit 1 is running; the schedule moves on.
+    assert_eq!(policy.step(2, true, at(2_100)), Step::Mark(2));
+    assert_eq!(policy.step(3, true, at(2_200)), Step::Idle, "marked once");
+    policy.finished(1, true, at(2_300));
+    assert_eq!(policy.step(3, true, at(2_400)), Step::Idle);
+    assert_eq!(policy.step(3, true, at(4_200)), Step::Commit(3));
+    // An unqueued in-flight marker is tried again.
+    assert_eq!(policy.step(4, true, at(4_300)), Step::Mark(4));
+    policy.unqueued(Step::Mark(4));
+    assert_eq!(policy.step(4, true, at(4_400)), Step::Mark(4));
+}
+
+#[test]
+fn only_unsaved_work_is_marked_and_a_marker_is_withdrawn_when_untrue() {
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    let mut policy = Policy::new(cadence(), 0);
+    // An opened (saved) schedule is committed without a marker.
+    assert_eq!(policy.step(5, false, at(0)), Step::Idle);
+    assert_eq!(policy.step(5, false, at(2_000)), Step::Commit(5));
+    policy.finished(5, true, at(2_000));
+    // An edit marks; undoing it back to the commit withdraws the marker.
+    assert_eq!(policy.step(6, true, at(3_000)), Step::Mark(6));
+    assert_eq!(policy.step(5, false, at(3_100)), Step::Unmark);
+    assert_eq!(policy.step(5, false, at(9_000)), Step::Idle);
+    // Saving the edit to its file withdraws it too, and commits later.
+    assert_eq!(policy.step(6, true, at(10_000)), Step::Mark(6));
+    assert_eq!(policy.step(7, false, at(10_100)), Step::Unmark);
+    let unmark = policy.step(8, true, at(10_200));
+    assert_eq!(unmark, Step::Mark(8), "unsaved again: marked again");
+    assert_eq!(policy.step(7, false, at(10_300)), Step::Unmark);
+    policy.unqueued(Step::Unmark);
+    assert_eq!(policy.step(7, false, at(10_400)), Step::Unmark, "retried");
+    assert_eq!(policy.step(7, false, at(12_400)), Step::Commit(7));
+    // Never withdrawn while a commit runs: it may still fail.
+    assert_eq!(policy.step(8, true, at(12_500)), Step::Mark(8));
+    assert_eq!(policy.step(7, false, at(12_600)), Step::Idle);
+    policy.finished(7, false, at(12_700));
+    assert_eq!(policy.step(7, false, at(12_800)), Step::Unmark);
+}
+
 fn cadence() -> Cadence {
     Cadence {
         quiet: Duration::from_secs(2),
@@ -593,32 +719,41 @@ fn the_policy_marks_at_once_and_commits_after_a_quiet_period() {
     let t0 = Instant::now();
     let at = |s: u64| t0 + Duration::from_millis(s);
     let mut policy = Policy::new(cadence(), 0);
-    assert_eq!(policy.step(0, at(0)), Step::Idle);
-    assert_eq!(policy.step(1, at(0)), Step::Mark(1), "first change marks");
-    assert_eq!(policy.step(1, at(1_999)), Step::Idle);
+    assert_eq!(policy.step(0, true, at(0)), Step::Idle);
     assert_eq!(
-        policy.step(2, at(1_999)),
+        policy.step(1, true, at(0)),
+        Step::Mark(1),
+        "first change marks"
+    );
+    assert_eq!(policy.step(1, true, at(1_999)), Step::Idle);
+    assert_eq!(
+        policy.step(2, true, at(1_999)),
         Step::Idle,
         "a change restarts quiet"
     );
-    assert_eq!(policy.step(2, at(3_998)), Step::Idle);
-    assert_eq!(policy.step(2, at(3_999)), Step::Commit(2));
+    assert_eq!(policy.step(2, true, at(3_998)), Step::Idle);
+    assert_eq!(policy.step(2, true, at(3_999)), Step::Commit(2));
     assert!(policy.in_flight());
     assert_eq!(
-        policy.step(3, at(4_000)),
+        policy.step(3, true, at(4_000)),
+        Step::Mark(3),
+        "an edit during the commit is marked at once, behind the commit"
+    );
+    assert_eq!(
+        policy.step(3, true, at(4_050)),
         Step::Idle,
         "one commit at a time"
     );
     policy.finished(2, true, at(4_100));
     assert_eq!(
-        policy.step(3, at(4_100)),
-        Step::Mark(3),
-        "newer edit, new marker"
+        policy.step(3, true, at(4_100)),
+        Step::Idle,
+        "its marker is already queued"
     );
-    assert_eq!(policy.step(3, at(6_000)), Step::Commit(3));
+    assert_eq!(policy.step(3, true, at(6_000)), Step::Commit(3));
     policy.finished(3, true, at(6_050));
     assert!(!policy.uncommitted());
-    assert_eq!(policy.step(3, at(60_000)), Step::Idle);
+    assert_eq!(policy.step(3, true, at(60_000)), Step::Idle);
 }
 
 #[test]
@@ -629,7 +764,7 @@ fn continuous_editing_still_commits_within_the_maximum_delay() {
     // An edit every second for 25 seconds: never quiet for 2 s.
     for second in 0..25u64 {
         let now = t0 + Duration::from_secs(second);
-        if let Step::Commit(f) = policy.step(second + 1, now) {
+        if let Step::Commit(f) = policy.step(second + 1, true, now) {
             commits.push(second);
             policy.finished(f, true, now);
         }
@@ -643,17 +778,17 @@ fn a_failed_commit_retries_after_the_retry_interval() {
     let t0 = Instant::now();
     let at = |s: u64| t0 + Duration::from_secs(s);
     let mut policy = Policy::new(cadence(), 0);
-    assert_eq!(policy.step(1, at(0)), Step::Mark(1));
-    assert_eq!(policy.step(1, at(2)), Step::Commit(1));
+    assert_eq!(policy.step(1, true, at(0)), Step::Mark(1));
+    assert_eq!(policy.step(1, true, at(2)), Step::Commit(1));
     policy.finished(1, false, at(2));
     assert!(policy.failing() && policy.uncommitted());
-    assert_eq!(policy.step(1, at(31)), Step::Idle);
+    assert_eq!(policy.step(1, true, at(31)), Step::Idle);
     assert_eq!(
-        policy.step(2, at(31)),
+        policy.step(2, true, at(31)),
         Step::Idle,
         "no new marker: it still holds"
     );
-    assert_eq!(policy.step(2, at(32)), Step::Commit(2));
+    assert_eq!(policy.step(2, true, at(32)), Step::Commit(2));
     policy.finished(2, true, at(32));
     assert!(!policy.failing() && !policy.uncommitted());
 }
@@ -662,23 +797,34 @@ fn a_failed_commit_retries_after_the_retry_interval() {
 fn reverting_to_the_committed_schedule_needs_no_commit() {
     let t0 = Instant::now();
     let mut policy = Policy::new(cadence(), 5);
-    assert_eq!(policy.step(6, t0), Step::Mark(6));
-    assert_eq!(policy.step(5, t0 + Duration::from_secs(9)), Step::Idle);
-    assert_eq!(policy.step(5, t0 + Duration::from_secs(60)), Step::Idle);
+    assert_eq!(policy.step(6, true, t0), Step::Mark(6));
+    assert_eq!(
+        policy.step(5, false, t0 + Duration::from_secs(9)),
+        Step::Unmark,
+        "the marker is withdrawn, and no commit follows"
+    );
+    assert_eq!(
+        policy.step(5, false, t0 + Duration::from_secs(9)),
+        Step::Idle
+    );
+    assert_eq!(
+        policy.step(5, false, t0 + Duration::from_secs(60)),
+        Step::Idle
+    );
 }
 
 #[test]
 fn an_unqueued_step_is_tried_again() {
     let t0 = Instant::now();
     let mut policy = Policy::new(cadence(), 0);
-    let mark = policy.step(1, t0);
+    let mark = policy.step(1, true, t0);
     policy.unqueued(mark);
-    assert_eq!(policy.step(1, t0), Step::Mark(1));
+    assert_eq!(policy.step(1, true, t0), Step::Mark(1));
     let later = t0 + Duration::from_secs(3);
-    let commit = policy.step(1, later);
+    let commit = policy.step(1, true, later);
     assert_eq!(commit, Step::Commit(1));
     policy.unqueued(commit);
-    assert_eq!(policy.step(1, later), Step::Commit(1));
+    assert_eq!(policy.step(1, true, later), Step::Commit(1));
 }
 
 #[test]
@@ -687,13 +833,13 @@ fn a_restore_commits_without_a_marker_and_a_flush_settles_everything() {
     let mut policy = Policy::new(cadence(), 0);
     policy.restoring(7);
     assert_eq!(
-        policy.step(7, t0),
+        policy.step(7, true, t0),
         Step::Idle,
         "the restore commit is running"
     );
     policy.finished(7, true, t0);
     assert!(!policy.uncommitted());
-    assert_eq!(policy.step(8, t0), Step::Mark(8));
+    assert_eq!(policy.step(8, true, t0), Step::Mark(8));
     policy.flushed(8);
     assert!(!policy.uncommitted() && !policy.in_flight());
 }
