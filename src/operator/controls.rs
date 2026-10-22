@@ -393,6 +393,8 @@ impl Operator {
                     self.close_dialog(window, cx);
                     self.apply_update_review();
                 }
+                // Stays open until the commit lands (`song_import`).
+                Some(Dialog::ImportSongs) => self.confirm_song_import(),
                 Some(Dialog::Preflight | Dialog::FileError) | None => return,
             },
             Control::DialogCancel if self.dialog.is_some() => {
@@ -404,6 +406,9 @@ impl Operator {
                 }
                 if self.dialog == Some(Dialog::GoLiveMissing) {
                     self.hold_go_live_back();
+                }
+                if self.dialog == Some(Dialog::ImportSongs) {
+                    self.cancel_song_import();
                 }
                 self.close_dialog(window, cx);
             }

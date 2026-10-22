@@ -35,6 +35,8 @@ pub(crate) enum Dialog {
     GoLiveMissing,
     /// Songs menu → Update items in Schedule: the reviewable diff.
     UpdateItems,
+    /// File › Import › Songs: the staged preview; drawn by `import_overlay`.
+    ImportSongs,
 }
 
 impl Operator {
@@ -172,7 +174,7 @@ impl Operator {
                 Some(entry) => t!(Msg::DialogRemoveTitled, title = entry.title),
                 None => t!(Msg::DialogRemoveGeneric).into(),
             },
-            Dialog::Options => return None,
+            Dialog::Options | Dialog::ImportSongs => return None,
             Dialog::Preflight => t!(Msg::PreflightHeading).into(),
             Dialog::GoLiveMissing => t!(Msg::GoLiveMissingHeading).into(),
             Dialog::UpdateItems => t!(Msg::MenuUpdateSchedule).into(),
@@ -185,7 +187,7 @@ impl Operator {
             Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDontSave)),
             Dialog::Remove(_) => Some(t!(Msg::ConfirmRemove)),
             Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmYes)),
-            Dialog::Options | Dialog::Preflight | Dialog::FileError => None,
+            Dialog::Options | Dialog::Preflight | Dialog::FileError | Dialog::ImportSongs => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
             Dialog::UpdateItems => Some(t!(Msg::UpdateItemsConfirm)),
         };

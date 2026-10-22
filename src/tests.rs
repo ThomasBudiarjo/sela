@@ -23,6 +23,7 @@ mod focus_modality;
 mod layout_startup;
 mod navigation;
 mod resource_browser;
+mod song_import;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,
@@ -3036,7 +3037,8 @@ mod menu_bar {
         let (mut cx, _operator, _) = fixture(cx);
         cx.simulate_resize(size(px(1280.), px(800.)));
         // EW8-OBS-053 plus the menu-p/v/h.png captures; the New ▸ submenu is
-        // flattened into a header row followed by Song.../Schedule.
+        // flattened into a header row followed by Song.../Schedule. Import ▸
+        // Songs… / Song Folder… is Sela's UNOBSERVED placement (M1-14).
         let menus: [(&str, &[&str]); 6] = [
             (
                 "alt-f",
@@ -3050,6 +3052,9 @@ mod menu_bar {
                     "bar-file-save-as",
                     "bar-file-export",
                     "bar-file-close",
+                    "bar-file-import",
+                    "bar-file-import-songs",
+                    "bar-file-import-folder",
                     "bar-file-reports",
                     "bar-file-exit",
                 ],

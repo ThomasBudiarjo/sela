@@ -29,8 +29,8 @@
     <verse name="v2">
       <lines>   </lines>
     </verse>
-    <verse name="c">
-      <lines>Carry me, carry me down</lines>
+    <verse name="c" translit="en">
+      <lines repeat="2">Carry me, carry me down</lines>
     </verse>
     <verse name="bridge">
       <lines>Down to the sea</lines>

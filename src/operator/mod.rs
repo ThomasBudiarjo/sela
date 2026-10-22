@@ -50,6 +50,7 @@ mod preview_live;
 mod resources;
 mod schedule;
 mod schedule_files;
+pub(super) mod song_import;
 mod update_items;
 
 use assets::{Assets, PREFLIGHT_DIALOG_W};
@@ -212,6 +213,8 @@ pub(crate) enum Request {
         pairs: Vec<(EntryId, Version, Version)>,
         versions: Vec<Version>,
     },
+    /// A song import's duplicate check or commit (`song_import`).
+    SongImport,
 }
 
 pub(super) struct Operator {
@@ -284,6 +287,8 @@ pub(super) struct Operator {
     image_worker: Option<images::Worker>,
     /// Preflight worker and report, Go Live hold, import notes (M1-11b).
     pub(super) assets: Assets,
+    /// File › Import › Songs: worker, staged preview and commit (M1-14).
+    pub(super) song_import: song_import::SongImport,
     pub(super) images: Vec<String>,
     image_rows: Vec<FocusHandle>,
     pub(super) selected_image: Option<String>,
@@ -448,6 +453,7 @@ impl Operator {
             KeyBinding::new("escape", MenuDismiss, Some("SelaSongMenu")),
             KeyBinding::new("escape", ClearSongSearch, Some("SelaSongSearch")),
         ]);
+        song_import::bind_keys(cx);
         // Main menu bar (M1-02/M1-03): Alt+mnemonics open the six menus
         // (EW8-OBS-010; only Alt+L observed, the rest are first-letter best
         // guesses). `!SelaTextInput` keeps plain typing from opening menus.
@@ -558,6 +564,7 @@ impl Operator {
             settings,
             image_worker,
             assets,
+            song_import: Default::default(),
             images: Vec::new(),
             image_rows: Vec::new(),
             selected_image: None,

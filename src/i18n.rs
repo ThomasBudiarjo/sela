@@ -548,6 +548,60 @@ pub enum Msg {
     StyleTab,
     SwatchesTab,
     ValuesTab,
+    // Song import (M1-14, M4-07).
+    BarImport,
+    BarImportSongs,
+    BarImportFolder,
+    ImportHeading,
+    ImportListA11y,
+    ImportFinding,
+    ImportReading,
+    ImportChecking,
+    ImportCommitting,
+    ImportSummary,
+    ImportIgnored,
+    ImportOverLimit,
+    ImportNothing,
+    ImportRowDetail,
+    ImportBulkLabel,
+    ImportReplaceNote,
+    ImportChoiceImport,
+    ImportChoiceSkip,
+    ImportChoiceCopy,
+    ImportChoiceReplace,
+    ImportChoiceA11y,
+    ImportConfirm,
+    ImportDuplicateSame,
+    ImportDuplicateTitle,
+    ImportDuplicateBatch,
+    ImportDuplicateCheckFailed,
+    ImportReplaceTwice,
+    ImportCommitFailed,
+    ImportCancelled,
+    ImportDone,
+    ImportDoneLate,
+    ImportFailedStart,
+    ImportBusy,
+    ImportWarnElement,
+    ImportWarnDirective,
+    ImportWarnOrder,
+    ImportWarnTitle,
+    ImportWarnEmpty,
+    ImportWarnChords,
+    ImportWarnTruncated,
+    ImportWarnInvalid,
+    ImportWarnLimit,
+    ImportWarnAttribute,
+    ImportErrUnsupported,
+    ImportErrUnreadable,
+    ImportErrLibraryLimit,
+    ImportErrBatchFull,
+    ImportErrTooLarge,
+    ImportErrEncoding,
+    ImportErrMalformed,
+    ImportErrEntities,
+    ImportErrTooDeep,
+    ImportErrNoLyrics,
 }
 
 impl Msg {
@@ -1020,6 +1074,59 @@ impl Msg {
         Msg::StyleTab,
         Msg::SwatchesTab,
         Msg::ValuesTab,
+        Msg::BarImport,
+        Msg::BarImportSongs,
+        Msg::BarImportFolder,
+        Msg::ImportHeading,
+        Msg::ImportListA11y,
+        Msg::ImportFinding,
+        Msg::ImportReading,
+        Msg::ImportChecking,
+        Msg::ImportCommitting,
+        Msg::ImportSummary,
+        Msg::ImportIgnored,
+        Msg::ImportOverLimit,
+        Msg::ImportNothing,
+        Msg::ImportRowDetail,
+        Msg::ImportBulkLabel,
+        Msg::ImportReplaceNote,
+        Msg::ImportChoiceImport,
+        Msg::ImportChoiceSkip,
+        Msg::ImportChoiceCopy,
+        Msg::ImportChoiceReplace,
+        Msg::ImportChoiceA11y,
+        Msg::ImportConfirm,
+        Msg::ImportDuplicateSame,
+        Msg::ImportDuplicateTitle,
+        Msg::ImportDuplicateBatch,
+        Msg::ImportDuplicateCheckFailed,
+        Msg::ImportReplaceTwice,
+        Msg::ImportCommitFailed,
+        Msg::ImportCancelled,
+        Msg::ImportDone,
+        Msg::ImportDoneLate,
+        Msg::ImportFailedStart,
+        Msg::ImportBusy,
+        Msg::ImportWarnElement,
+        Msg::ImportWarnDirective,
+        Msg::ImportWarnOrder,
+        Msg::ImportWarnTitle,
+        Msg::ImportWarnEmpty,
+        Msg::ImportWarnChords,
+        Msg::ImportWarnTruncated,
+        Msg::ImportWarnInvalid,
+        Msg::ImportWarnLimit,
+        Msg::ImportWarnAttribute,
+        Msg::ImportErrUnsupported,
+        Msg::ImportErrUnreadable,
+        Msg::ImportErrLibraryLimit,
+        Msg::ImportErrBatchFull,
+        Msg::ImportErrTooLarge,
+        Msg::ImportErrEncoding,
+        Msg::ImportErrMalformed,
+        Msg::ImportErrEntities,
+        Msg::ImportErrTooDeep,
+        Msg::ImportErrNoLyrics,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1560,6 +1667,73 @@ impl Msg {
             Self::StyleTab => "Style",
             Self::SwatchesTab => "Swatches",
             Self::ValuesTab => "Values",
+            Self::BarImport => "Import",
+            Self::BarImportSongs => "Songs…",
+            Self::BarImportFolder => "Song Folder…",
+            Self::ImportHeading => "Import Songs",
+            Self::ImportListA11y => "Songs to import",
+            Self::ImportFinding => "Finding song files…",
+            Self::ImportReading => "Reading files… {done} of {total}",
+            Self::ImportChecking => "Checking the library for duplicates…",
+            Self::ImportCommitting => "Importing…",
+            Self::ImportSummary => {
+                "{songs} songs ready · {failed} not importable · {duplicates} duplicates"
+            }
+            Self::ImportIgnored => {
+                "{count} other files in the folder are not song files and were skipped"
+            }
+            Self::ImportOverLimit => "{count} more files were not read (at most {max} per import)",
+            Self::ImportNothing => "No song files were found.",
+            Self::ImportRowDetail => "{name} · {count} slides",
+            Self::ImportBulkLabel => "All duplicates",
+            Self::ImportReplaceNote => {
+                "Replace saves the file's words as a new revision of the library song; schedules keep their copy."
+            }
+            Self::ImportChoiceImport => "Import",
+            Self::ImportChoiceSkip => "Skip",
+            Self::ImportChoiceCopy => "Import as copy",
+            Self::ImportChoiceReplace => "Replace",
+            Self::ImportChoiceA11y => "What to do with {title}",
+            Self::ImportConfirm => "Import ({count})",
+            Self::ImportDuplicateSame => "Already in the library as “{title}” with the same words",
+            Self::ImportDuplicateTitle => "Same title as “{title}” in the library, different words",
+            Self::ImportDuplicateBatch => "Same song as {name} in this import",
+            Self::ImportDuplicateCheckFailed => {
+                "Duplicates could not be checked ({error}); every song is offered as new."
+            }
+            Self::ImportReplaceTwice => {
+                "Two files would replace “{title}”. Choose another action for one of them."
+            }
+            Self::ImportCommitFailed => "Nothing was imported: {error}",
+            Self::ImportCancelled => "Import cancelled. Nothing was imported.",
+            Self::ImportDone => {
+                "Imported {count} songs · {skipped} skipped · {failed} not importable"
+            }
+            Self::ImportDoneLate => {
+                "The import finished before it could be cancelled: {count} songs imported"
+            }
+            Self::ImportFailedStart => "Import could not start: {error}",
+            Self::ImportBusy => "Another import is still finishing. Try again in a moment.",
+            Self::ImportWarnElement => "Not imported: <{name}>",
+            Self::ImportWarnDirective => "Directive not imported: {name}",
+            Self::ImportWarnOrder => "The order names a missing section: {name}",
+            Self::ImportWarnTitle => "No title in the file; the file name is used",
+            Self::ImportWarnEmpty => "Empty section skipped: {label}",
+            Self::ImportWarnChords => "Chords removed",
+            Self::ImportWarnTruncated => "Shortened to fit: {field}",
+            Self::ImportWarnInvalid => "Invalid value dropped: {field}",
+            Self::ImportWarnLimit => "Too many sections or slides; the rest was dropped",
+            Self::ImportWarnAttribute => "Attribute ignored: {name}",
+            Self::ImportErrUnsupported => "Not an OpenLyrics, OpenSong or ChordPro song file",
+            Self::ImportErrUnreadable => "Could not be read: {error}",
+            Self::ImportErrLibraryLimit => "The song is larger than the library allows",
+            Self::ImportErrBatchFull => "Not read: one import holds at most {max} files",
+            Self::ImportErrTooLarge => "The file is too large (over 1 MiB)",
+            Self::ImportErrEncoding => "Not UTF-8 text",
+            Self::ImportErrMalformed => "Malformed file: {error}",
+            Self::ImportErrEntities => "Refused: the file declares a DOCTYPE or entities",
+            Self::ImportErrTooDeep => "Refused: elements are nested too deeply",
+            Self::ImportErrNoLyrics => "No lyrics found",
         }
     }
 
@@ -2121,6 +2295,75 @@ impl Msg {
             Self::StyleTab => "Gaya",
             Self::SwatchesTab => "Palet Warna",
             Self::ValuesTab => "Nilai",
+            Self::BarImport => "Impor",
+            Self::BarImportSongs => "Lagu…",
+            Self::BarImportFolder => "Folder Lagu…",
+            Self::ImportHeading => "Impor Lagu",
+            Self::ImportListA11y => "Lagu yang akan diimpor",
+            Self::ImportFinding => "Mencari berkas lagu…",
+            Self::ImportReading => "Membaca berkas… {done} dari {total}",
+            Self::ImportChecking => "Memeriksa duplikat di pustaka…",
+            Self::ImportCommitting => "Mengimpor…",
+            Self::ImportSummary => {
+                "{songs} lagu siap · {failed} tidak dapat diimpor · {duplicates} duplikat"
+            }
+            Self::ImportIgnored => "{count} berkas lain di folder bukan berkas lagu dan dilewati",
+            Self::ImportOverLimit => {
+                "{count} berkas lagi tidak dibaca (paling banyak {max} per impor)"
+            }
+            Self::ImportNothing => "Tidak ada berkas lagu yang ditemukan.",
+            Self::ImportRowDetail => "{name} · {count} slide",
+            Self::ImportBulkLabel => "Semua duplikat",
+            Self::ImportReplaceNote => {
+                "Ganti menyimpan kata-kata berkas sebagai revisi baru lagu di pustaka; jadwal tetap memakai salinannya."
+            }
+            Self::ImportChoiceImport => "Impor",
+            Self::ImportChoiceSkip => "Lewati",
+            Self::ImportChoiceCopy => "Impor sebagai salinan",
+            Self::ImportChoiceReplace => "Ganti",
+            Self::ImportChoiceA11y => "Tindakan untuk {title}",
+            Self::ImportConfirm => "Impor ({count})",
+            Self::ImportDuplicateSame => {
+                "Sudah ada di pustaka sebagai “{title}” dengan kata-kata yang sama"
+            }
+            Self::ImportDuplicateTitle => {
+                "Judul sama dengan “{title}” di pustaka, kata-katanya berbeda"
+            }
+            Self::ImportDuplicateBatch => "Lagu yang sama dengan {name} dalam impor ini",
+            Self::ImportDuplicateCheckFailed => {
+                "Duplikat tidak dapat diperiksa ({error}); setiap lagu ditawarkan sebagai lagu baru."
+            }
+            Self::ImportReplaceTwice => {
+                "Dua berkas akan mengganti “{title}”. Pilih tindakan lain untuk salah satunya."
+            }
+            Self::ImportCommitFailed => "Tidak ada yang diimpor: {error}",
+            Self::ImportCancelled => "Impor dibatalkan. Tidak ada yang diimpor.",
+            Self::ImportDone => {
+                "{count} lagu diimpor · {skipped} dilewati · {failed} tidak dapat diimpor"
+            }
+            Self::ImportDoneLate => "Impor selesai sebelum dapat dibatalkan: {count} lagu diimpor",
+            Self::ImportFailedStart => "Impor tidak dapat dimulai: {error}",
+            Self::ImportBusy => "Impor lain masih berjalan. Coba lagi sebentar lagi.",
+            Self::ImportWarnElement => "Tidak diimpor: <{name}>",
+            Self::ImportWarnDirective => "Direktif tidak diimpor: {name}",
+            Self::ImportWarnOrder => "Urutan menyebut bagian yang tidak ada: {name}",
+            Self::ImportWarnTitle => "Berkas tidak berjudul; nama berkas dipakai",
+            Self::ImportWarnEmpty => "Bagian kosong dilewati: {label}",
+            Self::ImportWarnChords => "Akor dihapus",
+            Self::ImportWarnTruncated => "Dipendekkan agar muat: {field}",
+            Self::ImportWarnInvalid => "Nilai tidak sah dibuang: {field}",
+            Self::ImportWarnLimit => "Terlalu banyak bagian atau slide; sisanya dibuang",
+            Self::ImportWarnAttribute => "Atribut diabaikan: {name}",
+            Self::ImportErrUnsupported => "Bukan berkas lagu OpenLyrics, OpenSong, atau ChordPro",
+            Self::ImportErrUnreadable => "Tidak dapat dibaca: {error}",
+            Self::ImportErrLibraryLimit => "Lagu lebih besar daripada yang diizinkan pustaka",
+            Self::ImportErrBatchFull => "Tidak dibaca: satu impor paling banyak {max} berkas",
+            Self::ImportErrTooLarge => "Berkas terlalu besar (lebih dari 1 MiB)",
+            Self::ImportErrEncoding => "Bukan teks UTF-8",
+            Self::ImportErrMalformed => "Berkas rusak: {error}",
+            Self::ImportErrEntities => "Ditolak: berkas mendeklarasikan DOCTYPE atau entitas",
+            Self::ImportErrTooDeep => "Ditolak: elemen bersarang terlalu dalam",
+            Self::ImportErrNoLyrics => "Lirik tidak ditemukan",
         }
     }
 }
@@ -2190,7 +2433,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 468);
+        assert_eq!(Msg::ALL.len(), 521);
     }
 
     #[test]
