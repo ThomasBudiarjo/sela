@@ -81,7 +81,7 @@ impl Reference {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum Token {
     Number(u16),
     Separator,
@@ -124,13 +124,13 @@ pub fn parse(input: &str) -> Result<Reference, ParseError> {
     if locator.is_empty() {
         return Err(ParseError::MissingChapter(book));
     }
-    let span = match tokens(locator)?.as_slice() {
-        &[Token::Number(chapter)] => Span::Chapters {
+    let span = match tokens(locator)?[..] {
+        [Token::Number(chapter)] => Span::Chapters {
             first: chapter,
             last: chapter,
         },
-        &[Token::Number(first), Token::Dash, Token::Number(last)] => Span::Chapters { first, last },
-        &[
+        [Token::Number(first), Token::Dash, Token::Number(last)] => Span::Chapters { first, last },
+        [
             Token::Number(chapter),
             Token::Separator,
             Token::Number(verse),
@@ -141,7 +141,7 @@ pub fn parse(input: &str) -> Result<Reference, ParseError> {
                 end: verse,
             }
         }
-        &[
+        [
             Token::Number(chapter),
             Token::Separator,
             Token::Number(first),
@@ -157,7 +157,7 @@ pub fn parse(input: &str) -> Result<Reference, ParseError> {
                 verse: last,
             },
         },
-        &[
+        [
             Token::Number(start_chapter),
             Token::Separator,
             Token::Number(start_verse),
