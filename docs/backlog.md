@@ -1304,7 +1304,10 @@ Depends on: M4-03, M1-04, M1-08, M1-10. Tests: U, I, R, N.
 
 - [ ] Observe reference/keyword search, book aliases/autocomplete, continuous verse
   scrolling, consecutive/nonconsecutive selection and direct Go Live.
-- [ ] Implement reference parser with localized aliases and unambiguous range errors.
+- [x] Implement reference parser with localized aliases and unambiguous range errors.
+  Parser core only (`src/scripture/`, docs/scripture.md): EN/ID names and aliases,
+  ranges, cross-chapter ranges, chapter checks, completion; implemented-unqualified
+  until the Scriptures tab uses it and EW completion is observed (VAL-BIBLE-010).
 - [ ] Add translation selection, verse/reference labels, theme/pagination and
   schedule snapshots respecting content permissions.
 - [ ] Test cross-chapter ranges, nonconsecutive verses, translation switches,
