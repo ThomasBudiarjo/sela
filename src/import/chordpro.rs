@@ -88,6 +88,12 @@ impl Builder {
                 .find(|c: char| c == ':' || c.is_whitespace())
                 .unwrap_or(body.len());
             let (name, rest) = body.split_at(end);
+            if name.is_empty() {
+                if !body.is_empty() {
+                    warn(&mut self.song, Warning::UnknownDirective(line.to_string()));
+                }
+                return;
+            }
             let rest = rest.trim_start();
             let value = rest.strip_prefix(':').unwrap_or(rest).trim();
             self.directive(&name.to_ascii_lowercase(), value);
@@ -256,7 +262,9 @@ fn env_label(value: &str) -> Option<String> {
 
 /// Removes every `[chord]`. Brackets nest, so `x[A[B]]y` is `xy` and no
 /// pair is left behind to read as a new chord; an unmatched `[` and the text
-/// after it stay. When a chord was removed, the spaces it left are collapsed.
+/// after it stay. Chord names have no spaces, so brackets around spaced words
+/// stay as lyrics, except a `[*annotation]`. When a chord was removed, the
+/// spaces it left are collapsed.
 fn strip_chords(line: &str) -> (String, bool) {
     let mut out = String::with_capacity(line.len());
     let mut opens = Vec::new();
@@ -264,9 +272,16 @@ fn strip_chords(line: &str) -> (String, bool) {
     for c in line.chars() {
         match (c, opens.last()) {
             (']', Some(&start)) => {
-                out.truncate(start);
-                opens.pop();
-                removed = true;
+                let inner = &out[start + 1..];
+                if inner.contains(char::is_whitespace) && !inner.starts_with('*') {
+                    // Earlier opens span these words too, so they stay text.
+                    opens.clear();
+                    out.push(c);
+                } else {
+                    out.truncate(start);
+                    opens.pop();
+                    removed = true;
+                }
             }
             _ => {
                 if c == '[' {
@@ -421,6 +436,31 @@ mod tests {
     }
 
     #[test]
+    fn brackets_around_spaced_words_are_lyrics_unless_an_annotation() {
+        let song = parse_str(
+            "{t: T}\nOpen [G line [C] more] end\nWe [walk on] home\n[*To Coda]Go [*Rit.]slow",
+        );
+        assert_eq!(
+            song.sections,
+            [section(
+                "Verse 1",
+                &["Open [G line more] end\nWe [walk on] home\nGo slow"]
+            )]
+        );
+        assert_eq!(song.warnings, [Warning::ChordsRemoved]);
+    }
+
+    #[test]
+    fn an_empty_directive_is_ignored_and_a_nameless_one_is_reported_whole() {
+        let song = parse_str("{t: T}\n{}\n{ }\n{: stray}\nWords");
+        assert_eq!(song.sections, [section("Verse 1", &["Words"])]);
+        assert_eq!(
+            song.warnings,
+            [Warning::UnknownDirective("{: stray}".into())]
+        );
+    }
+
+    #[test]
     fn blank_lines_separate_verses_outside_and_slides_inside_environments() {
         let song = parse_str(
             "{t: T}\nOne a\nOne b\n\n\nTwo a\n{soc}\nC a\n\nC b\n{eoc}\n{sov}\nThree\n{eov}\n{sob: Turn}\nB a\n{eob}\n{sob}\nB b\n{eob}",
@@ -572,9 +612,12 @@ mod tests {
 
     fn has_chord(line: &str) -> bool {
         line.match_indices('[').any(|(i, _)| {
-            line[i + 1..]
-                .find(['[', ']'])
-                .is_some_and(|j| line.as_bytes()[i + 1 + j] == b']')
+            let rest = &line[i + 1..];
+            rest.find(['[', ']']).is_some_and(|j| {
+                let inner = &rest[..j];
+                rest.as_bytes()[j] == b']'
+                    && (!inner.contains(char::is_whitespace) || inner.starts_with('*'))
+            })
         })
     }
 
@@ -597,6 +640,7 @@ mod tests {
         "{",
         "}",
         "[G]",
+        "[*To Coda]",
         "[",
         "]",
         "word ",

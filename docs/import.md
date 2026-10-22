@@ -53,9 +53,13 @@ Metadata, from direct children of `<song>`:
   becomes two names; the staged preview shows them for correction. The
   Indonesian "dan" is not a separator.
 - `<presentation>` is a whitespace-separated list of section names, matched
-  without regard to case. An unknown name is `MissingOrderReference` and is
-  skipped. A name whose section is empty is skipped quietly, because the
-  section already has `EmptySection`. An empty presentation means file order.
+  without regard to case. A bare tag whose lines are all numbered, such as
+  `V` for `[V]` with lines `1 ...` and `2 ...`, plays its numbered verses in
+  order (V1, V2). A name no section answers to is `MissingOrderReference` and
+  is skipped; this includes `V` when the only `V` is the empty text before
+  the first tag. A name whose sections are all empty or cut by the limits is
+  skipped quietly, because `EmptySection` or `LimitReached` already reports
+  it. An empty presentation means file order.
 - Any other element with text, such as `<key>` or `<hymn_number>`, is
   `UnknownElement` with its name: Sela has no field for it. Empty elements
   are ignored.
@@ -64,7 +68,7 @@ Lyric lines are typed by their first character:
 
 | Line starts with | Meaning |
 | --- | --- |
-| `[` | A section tag up to `]`, such as `[V1]`. An empty tag counts as `[V]`. |
+| `[` | A section tag up to `]`, such as `[V1]`. An empty tag counts as `[V]`. Text after the `]` is the tag's first lyric line, so nothing on the line is lost. |
 | `.` | A chord line. It is removed. |
 | `;` | A comment. It is dropped without a warning. |
 | a digit | A numbered line, such as `1 text` under `[V]` (see below). |
@@ -77,8 +81,10 @@ Lyric lines are typed by their first character:
 - Numbered verses: under one tag, lines that start with the number N form a
   section named tag plus N, in order of first appearance. `[V]` with lines
   `1 ...` and `2 ...` gives "V1" (Verse 1) and "V2" (Verse 2). Unnumbered
-  lyric lines under that tag stay in the tag's own section. A tag whose lines
-  are all numbered gives no `EmptySection`.
+  lyric lines under that tag stay in the tag's own section, which comes
+  before the numbered verses wherever those lines sit, and the bare tag name
+  then plays only that section. A tag whose lines are all numbered gives no
+  `EmptySection`.
 - Text before the first tag forms a section named `V` ("Verse").
 - `||` in a lyric line ends the slide; the rest of the line starts the next
   one. A single `|` breaks the line in two. Empty pieces left by either are
@@ -99,6 +105,8 @@ The file is UTF-8 text, one line at a time. A line that starts with `#` is a
 comment and is ignored. A trimmed line that starts with `{` is a directive:
 the name runs to the first `:` or space, and the rest is its value. A missing
 closing `}` is tolerated. Directive names are matched without regard to case.
+An empty `{}` is ignored; a directive with a value but no name, such as
+`{: x}`, is `UnknownDirective` with the whole line.
 
 | Directive | Result |
 | --- | --- |
@@ -130,7 +138,10 @@ closing `}` is tolerated. Directive names are matched without regard to case.
 - Inline chords: brackets nest, and each matched pair is removed with what
   is inside it. `[G]Amazing [C]grace` is "Amazing grace", `grace[G]` is
   "grace" and `x[A[B]]y` is "xy". An unmatched `[` and the text after it are
-  kept, as is a stray `]`. On a line that had a chord, runs of spaces become
+  kept, as is a stray `]`. Chord names have no spaces, so brackets around
+  spaced words are lyrics: `Open [G line [C] more] end` is "Open [G line
+  more] end", not "Open end". An annotation such as `[*To Coda]` is removed
+  like a chord. On a line that had a chord, runs of spaces become
   one space. A line that held only chords is dropped, so it never separates
   two verses.
 - Lyric lines are trimmed at both ends.
@@ -145,7 +156,9 @@ Unit tests in each module use the original fixtures in
 `tests/fixtures/import/opensong/` and `tests/fixtures/import/chordpro/`. Each
 module also runs bounded proptest cases (256 per property) on arbitrary bytes
 and on token soups of format syntax, and checks the limits and that no
-chord survives. Failures found by these runs are stored as seeds in
+chord survives. OpenSong also runs a soup of XML markup (comments, CDATA,
+processing instructions, quoted `>` and self-closing tags) against
+roxmltree's own depth, and checks that `TooDeep` starts exactly at the cap. Failures found by these runs are stored as seeds in
 `proptest-regressions.txt` in the fixture folders and replay first on every
 `cargo test`.
 

@@ -62,15 +62,18 @@ pub fn parse(bytes: &[u8]) -> Parsed {
     if song.sections.is_empty() {
         return Err(Rejected::NoLyrics);
     }
-    for token in presentation.split_whitespace() {
+    'order: for token in presentation.split_whitespace() {
         match names.get(&token.to_ascii_uppercase()) {
-            Some(Some(_)) if song.order.len() >= MAX_ORDER => {
-                warn(&mut song, Warning::LimitReached);
-                break;
+            Some(Target::Sections(indices)) => {
+                for &index in indices {
+                    if song.order.len() >= MAX_ORDER {
+                        warn(&mut song, Warning::LimitReached);
+                        break 'order;
+                    }
+                    song.order.push(index);
+                }
             }
-            Some(Some(index)) => song.order.push(*index),
-            // Defined but empty: already reported as EmptySection.
-            Some(None) => {}
+            Some(Target::Reported) => {}
             None => warn(&mut song, Warning::MissingOrderReference(token.to_string())),
         }
     }
@@ -80,15 +83,26 @@ pub fn parse(bytes: &[u8]) -> Parsed {
     Ok(song)
 }
 
+/// What a presentation name plays.
+enum Target {
+    /// These sections, in order: one, or a bare tag's numbered verses.
+    Sections(Vec<usize>),
+    /// Nothing: the name's sections were already reported as `EmptySection`
+    /// or cut by `LimitReached`.
+    Reported,
+}
+
 /// One `[tag]` group, or one verse number under a tag, before limits apply.
 struct Block {
     /// The name a presentation order uses, such as "V1".
     name: String,
     /// Lines of each slide; `||` starts the next slide.
     slides: Vec<Vec<String>>,
-    /// The text before the first tag, or a tag whose lines are all numbered:
-    /// being empty is expected, not worth a warning.
-    quiet_if_empty: bool,
+    /// The text before the first tag, which has no name of its own when it
+    /// is empty.
+    lead: bool,
+    /// Indices into the block list of this tag's numbered verses.
+    numbered: Vec<usize>,
 }
 
 impl Block {
@@ -96,7 +110,8 @@ impl Block {
         Block {
             name,
             slides: vec![Vec::new()],
-            quiet_if_empty: false,
+            lead: false,
+            numbered: Vec::new(),
         }
     }
 
@@ -121,9 +136,9 @@ impl Block {
         }
     }
 
-    fn into_slides(self) -> Vec<String> {
+    fn slides(&self) -> Vec<String> {
         self.slides
-            .into_iter()
+            .iter()
             .map(|lines| {
                 let start = lines.iter().position(|l| !l.is_empty());
                 let end = lines.iter().rposition(|l| !l.is_empty());
@@ -137,11 +152,11 @@ impl Block {
     }
 }
 
-/// Splits the lyrics into `song.sections` and returns each source name
-/// (upper case) with its section index, `None` for a name that was empty.
-fn build_sections(lyrics: &str, song: &mut ParsedSong) -> HashMap<String, Option<usize>> {
+/// Splits the lyrics into `song.sections` and returns what each source name
+/// (upper case) plays.
+fn build_sections(lyrics: &str, song: &mut ParsedSong) -> HashMap<String, Target> {
     let mut lead = Block::new("V".into());
-    lead.quiet_if_empty = true;
+    lead.lead = true;
     let mut blocks = vec![lead];
     let mut tag = 0;
     let mut numbered: HashMap<u32, usize> = HashMap::new();
@@ -149,19 +164,24 @@ fn build_sections(lyrics: &str, song: &mut ParsedSong) -> HashMap<String, Option
         let digits = line.bytes().take_while(u8::is_ascii_digit).count();
         match (line.as_bytes().first(), line[..digits].parse::<u32>()) {
             (Some(b'['), _) => {
-                let name = line[1..].split(']').next().unwrap_or_default().trim();
+                let (name, rest) = line[1..].split_once(']').unwrap_or((&line[1..], ""));
+                let name = name.trim();
                 let name = if name.is_empty() { "V" } else { name };
                 blocks.push(Block::new(name.to_string()));
                 tag = blocks.len() - 1;
                 numbered.clear();
+                if !rest.trim().is_empty() {
+                    blocks[tag].push(rest);
+                }
             }
             (Some(b'.'), _) => warn(song, Warning::ChordsRemoved),
             (Some(b';'), _) => {}
             (_, Ok(number)) => {
                 let index = *numbered.entry(number).or_insert_with(|| {
-                    blocks[tag].quiet_if_empty = true;
                     blocks.push(Block::new(numbered_name(&blocks[tag].name, number)));
-                    blocks.len() - 1
+                    let index = blocks.len() - 1;
+                    blocks[tag].numbered.push(index);
+                    index
                 });
                 blocks[index].push(&line[digits..]);
             }
@@ -169,18 +189,17 @@ fn build_sections(lyrics: &str, song: &mut ParsedSong) -> HashMap<String, Option
         }
     }
 
-    let mut names = HashMap::new();
+    // `None` for a block that is empty or after the limit cut.
+    let mut section_of: Vec<Option<usize>> = Vec::new();
     let mut slide_count = 0;
-    for block in blocks {
-        let key = block.name.to_ascii_uppercase();
+    for block in &blocks {
         let label = label_for(&block.name);
-        let quiet = block.quiet_if_empty;
-        let mut slides = block.into_slides();
+        let mut slides = block.slides();
         if slides.is_empty() {
-            if !quiet {
+            if !block.lead && block.numbered.is_empty() {
                 warn(song, Warning::EmptySection(label));
             }
-            names.entry(key).or_insert(None);
+            section_of.push(None);
             continue;
         }
         let room = MAX_SLIDES - slide_count;
@@ -194,8 +213,32 @@ fn build_sections(lyrics: &str, song: &mut ParsedSong) -> HashMap<String, Option
         }
         slide_count += slides.len();
         song.sections.push(ParsedSection { label, slides });
-        let index = song.sections.len() - 1;
-        names.entry(key).or_insert(None).get_or_insert(index);
+        section_of.push(Some(song.sections.len() - 1));
+    }
+
+    let mut names = HashMap::new();
+    for (block, section) in blocks.iter().zip(&section_of) {
+        let sections: Vec<usize> = match section {
+            Some(index) => vec![*index],
+            None => block
+                .numbered
+                .iter()
+                .filter_map(|&i| section_of.get(i).copied().flatten())
+                .collect(),
+        };
+        let target = if !sections.is_empty() {
+            Target::Sections(sections)
+        } else if block.lead {
+            continue;
+        } else {
+            Target::Reported
+        };
+        let entry = names
+            .entry(block.name.to_ascii_uppercase())
+            .or_insert(Target::Reported);
+        if matches!(entry, Target::Reported) {
+            *entry = target;
+        }
     }
     names
 }
@@ -420,6 +463,59 @@ mod tests {
     }
 
     #[test]
+    fn an_order_name_with_no_section_is_reported_even_if_a_hidden_block_had_it() {
+        let xml = song_xml("<presentation>V C</presentation><lyrics>[V1]\n a\n[C]\n b</lyrics>");
+        let song = parse(&xml).unwrap();
+        assert_eq!(song.order, [1]);
+        assert_eq!(song.warnings, [Warning::MissingOrderReference("V".into())]);
+    }
+
+    #[test]
+    fn a_bare_tag_in_the_order_plays_its_numbered_verses() {
+        let xml = song_xml(
+            "<presentation>V C V2</presentation><lyrics>[V]\n1 a\n2 b\n[C]\n c</lyrics>",
+        );
+        let song = parse(&xml).unwrap();
+        assert_eq!(
+            song.sections,
+            [
+                section("Verse 1", &["a"]),
+                section("Verse 2", &["b"]),
+                section("Chorus", &["c"])
+            ]
+        );
+        assert_eq!(song.order, [0, 1, 2, 1]);
+        assert!(song.warnings.is_empty());
+    }
+
+    #[test]
+    fn unnumbered_lines_under_a_numbered_tag_come_first_and_own_the_bare_name() {
+        let xml = song_xml("<presentation>V2 V</presentation><lyrics>[V]\n1 a\n plain\n2 b</lyrics>");
+        let song = parse(&xml).unwrap();
+        assert_eq!(
+            song.sections,
+            [
+                section("Verse", &["plain"]),
+                section("Verse 1", &["a"]),
+                section("Verse 2", &["b"])
+            ]
+        );
+        assert_eq!(song.order, [2, 0]);
+    }
+
+    #[test]
+    fn text_after_a_tag_is_a_lyric_line() {
+        let song = lyrics("[V1] Sung first | then this\n a\n[C]x");
+        assert_eq!(
+            song.sections,
+            [
+                section("Verse 1", &["Sung first\nthen this\na"]),
+                section("Chorus", &["x"])
+            ]
+        );
+    }
+
+    #[test]
     fn an_empty_tag_is_reported_and_not_an_order_error() {
         let xml = song_xml(
             "<presentation>V1 C V1</presentation><lyrics>[V1]\n a\n[C]\n;only a note</lyrics>",
@@ -554,6 +650,46 @@ mod tests {
         " kata", " 光", "1 ", "2 ", "3", "|", "||", "\r\n", "x", "&amp;", "]]",
     ];
 
+    const XML_TOKENS: &[&str] = &[
+        "<a>",
+        "<a>",
+        "</a>",
+        "<a/>",
+        "<a x='>'>",
+        "<a y=\"/\">",
+        "<b />",
+        "<!--",
+        "-->",
+        "<![CDATA[",
+        "]]>",
+        "<?p",
+        "?>",
+        "'",
+        "\"",
+        "<",
+        ">",
+        "/",
+        "text",
+        "&amp;",
+        "<lyrics> a</lyrics>",
+    ];
+    const OPENS: &[&str] = &["<a>", "<a x='>'>", "<a y=\"a/\">", "<a\n>"];
+    const FILLERS: &[&str] = &[
+        "",
+        "<!--<a><a>-->",
+        "<![CDATA[<a></b>]]>",
+        "<?pi <a>?>",
+        "t &gt; u",
+    ];
+
+    fn element_depth(xml: &str) -> Option<usize> {
+        let doc = roxmltree::Document::parse(xml).ok()?;
+        doc.descendants()
+            .filter(|n| n.is_element())
+            .map(|n| n.ancestors().filter(|a| a.is_element()).count())
+            .max()
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig {
             cases: 256,
@@ -562,6 +698,48 @@ mod tests {
             ))),
             ..ProptestConfig::default()
         })]
+
+        #[test]
+        fn markup_soup_never_reaches_the_parser_too_deep(
+            tokens in proptest::collection::vec(proptest::sample::select(XML_TOKENS), 0..200),
+        ) {
+            let xml = format!("<song>{}</song>", tokens.concat());
+            let result = parse(xml.as_bytes());
+            if let Ok(song) = &result {
+                check_invariants(song);
+            }
+            // The scan counts elements that can hold children; an empty
+            // `<a/>` may sit one level below the deepest of them.
+            match element_depth(&xml) {
+                Some(depth) if depth > MAX_DEPTH + 1 => {
+                    prop_assert_eq!(result, Err(Rejected::TooDeep));
+                }
+                Some(depth) if depth <= MAX_DEPTH => {
+                    prop_assert_ne!(result, Err(Rejected::TooDeep));
+                }
+                _ => {}
+            }
+        }
+
+        #[test]
+        fn nesting_is_cut_exactly_at_the_cap(
+            levels in proptest::collection::vec(
+                (proptest::sample::select(OPENS), proptest::sample::select(FILLERS)),
+                0..2 * MAX_DEPTH,
+            ),
+        ) {
+            let opened: String = levels.iter().map(|(open, filler)| format!("{open}{filler}")).collect();
+            let xml = format!(
+                "<song><lyrics> a</lyrics>{opened}{}</song>",
+                "</a>".repeat(levels.len())
+            );
+            let result = parse(xml.as_bytes());
+            if levels.len() + 1 > MAX_DEPTH {
+                prop_assert_eq!(result, Err(Rejected::TooDeep));
+            } else {
+                prop_assert!(result.is_ok(), "{result:?}");
+            }
+        }
 
         #[test]
         fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
