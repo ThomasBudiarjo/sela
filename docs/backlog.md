@@ -1366,6 +1366,12 @@ Depends on: M1-13, M1-14, M4-06. Tests: U, I, N, L.
 - [ ] Test cross-version, malformed, partially missing assets and duplicate IDs;
   verify semantic content/arrangement/theme differences, not just item counts.
 - [ ] Document blocked formats and provide permitted interchange alternatives.
+- [ ] EasyWorship 6-8 library (mission feature `easyworship-library-import`,
+  VAL-IMPORT-008..011, 017). Song words RTF parser `import::ew_rtf`:
+  implemented-unqualified (2026-10-22, both dialects, docs/import.md). Open:
+  read-only `Songs.db`/`SongWords.db` copies with `UTF8_U_CI`, metadata
+  mapping, missing `word` row, `song_uid` duplicates, staged UI, source
+  hashes before/after (native), and EW8 non-ASCII words (unobserved).
 
 Acceptance: each claimed importer has a versioned corpus and fidelity report;
 the parent is not closed by one generic parser.
