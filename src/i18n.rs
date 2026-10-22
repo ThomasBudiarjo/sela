@@ -2221,7 +2221,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 468);
+        assert_eq!(Msg::ALL.len(), 472);
     }
 
     #[test]

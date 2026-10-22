@@ -15,7 +15,8 @@ Files:
   external tools; no pip packages).
 - `scripts/<feature>-x11.py`: one script per feature. Ported so far:
   `live-output-x11.py`, `schedule-x11.py`, `song-editor-x11.py` (from the
-  `*-windows.py` scripts of the same name).
+  `*-windows.py` scripts of the same name). New with their feature:
+  `media-backend-x11.py` (media-core; needs `scripts/fetch-ffmpeg`).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses

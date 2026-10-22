@@ -696,3 +696,15 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 - CCLI maps to the Song Number field.
 - Metadata search covers authors, copyright, license, administrator and song number.
 - Close prompt: Yes saves and closes, No discards, Cancel or Esc keeps editing; it is modal.
+
+## Media decoding best guesses (media-core, 2026-10-22)
+
+EasyWorship 8.0.49 was not run for media-core. Each item is a reversible
+best guess; the observations to make are PP-MC-01 and PP-MC-02 in
+[parity-pending.md](parity-pending.md).
+
+- UNOBSERVED best guess: a video file EasyWorship cannot decode (unknown codec, damaged or not media). Sela's decoder reports `UnsupportedCodec` or `Corrupt` before any frame and never replaces what is live; the operator-facing wording and where it shows belong to the video-playback stream.
+- UNOBSERVED best guess: variable frame rate clips. Sela keeps each frame's own timestamp (no resampling to a constant rate), so playback follows the source timing.
+- UNOBSERVED best guess: a local playlist or reference file that points at a network URL. Sela refuses it with a protocol error and makes no network request (offline-first; VAL-MEDIA-038).
+- Sela-only, not a parity item: the "Video and audio unavailable" status when Sela's bundled FFmpeg is missing or is a GPL/nonfree build. EasyWorship has no separate decoder to report.
+- Not decided here: how a video background is fitted. The decoder can letterbox to the cue extent (`Fit::Exact`); EW8-OBS-032 shows Aspect Ratio Auto/Stretch for slide media, which the video-playback stream maps.
