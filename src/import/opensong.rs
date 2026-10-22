@@ -472,9 +472,8 @@ mod tests {
 
     #[test]
     fn a_bare_tag_in_the_order_plays_its_numbered_verses() {
-        let xml = song_xml(
-            "<presentation>V C V2</presentation><lyrics>[V]\n1 a\n2 b\n[C]\n c</lyrics>",
-        );
+        let xml =
+            song_xml("<presentation>V C V2</presentation><lyrics>[V]\n1 a\n2 b\n[C]\n c</lyrics>");
         let song = parse(&xml).unwrap();
         assert_eq!(
             song.sections,
@@ -490,7 +489,8 @@ mod tests {
 
     #[test]
     fn unnumbered_lines_under_a_numbered_tag_come_first_and_own_the_bare_name() {
-        let xml = song_xml("<presentation>V2 V</presentation><lyrics>[V]\n1 a\n plain\n2 b</lyrics>");
+        let xml =
+            song_xml("<presentation>V2 V</presentation><lyrics>[V]\n1 a\n plain\n2 b</lyrics>");
         let song = parse(&xml).unwrap();
         assert_eq!(
             song.sections,
@@ -657,6 +657,7 @@ mod tests {
         "<a/>",
         "<a x='>'>",
         "<a y=\"/\">",
+        "<a z='/>'>",
         "<b />",
         "<!--",
         "-->",
@@ -673,7 +674,7 @@ mod tests {
         "&amp;",
         "<lyrics> a</lyrics>",
     ];
-    const OPENS: &[&str] = &["<a>", "<a x='>'>", "<a y=\"a/\">", "<a\n>"];
+    const OPENS: &[&str] = &["<a>", "<a x='>'>", "<a y=\"a/\">", "<a z='/>'>", "<a\n>"];
     const FILLERS: &[&str] = &[
         "",
         "<!--<a><a>-->",
