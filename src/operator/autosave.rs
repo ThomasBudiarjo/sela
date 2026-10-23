@@ -14,6 +14,13 @@ pub(crate) struct AutosaveSetup(pub(crate) save::Config);
 
 impl gpui::Global for AutosaveSetup {}
 
+/// Set instead of [`AutosaveSetup`] when the profile lock could not be
+/// taken: another operator may write the same Recovery folder, so autosave
+/// stays off and says why.
+pub(crate) struct AutosaveRefused(pub(crate) save::Error);
+
+impl gpui::Global for AutosaveRefused {}
+
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
 const CLOSE_POLL: Duration = Duration::from_millis(25);
 /// Replies handled per poll; the queue is bounded far below it.
@@ -56,8 +63,15 @@ pub(crate) struct AutosaveState {
 impl AutosaveState {
     pub(crate) fn start(profile: Option<&Path>, cx: &mut Context<Operator>) -> Self {
         let setup = cx.try_global::<AutosaveSetup>().map(|s| s.0.clone());
+        let refused = cx.try_global::<AutosaveRefused>().map(|r| r.0.clone());
         let initial = save::fingerprint(&Schedule::default());
         let (worker, health, clock, cadence) = match (profile, setup) {
+            (Some(_), _) if let Some(error) = refused => (
+                None,
+                Health::Off(error),
+                save::system_clock(),
+                save::Cadence::default(),
+            ),
             (Some(profile), Some(config)) => {
                 let clock = config.clock.clone();
                 let cadence = config.cadence;
@@ -105,6 +119,7 @@ fn reason(error: &save::Error) -> String {
         save::Error::ReadOnly => t!(Msg::ReasonReadOnly).into(),
         save::Error::Locked => t!(Msg::ReasonLocked).into(),
         save::Error::Budget => t!(Msg::ReasonBudget).into(),
+        save::Error::Unlocked => t!(Msg::ReasonUnlocked).into(),
         save::Error::Io(kind) => t!(Msg::ReasonIo, kind = kind),
     }
 }

@@ -2,7 +2,7 @@
 //! the injected GPUI clock, the recovery prompt after an unclean run, the
 //! close flush, failure reporting and autosave while Live output runs.
 use super::*;
-use crate::operator::{AutosaveSetup, Dialog, Then};
+use crate::operator::{AutosaveRefused, AutosaveSetup, Dialog, Then};
 use sela::autosave::{
     self as save, Budget, Cadence, Config, Entry, RECOVERY_DIR, SESSION_FILE, Snapshot, Store,
 };
@@ -921,6 +921,28 @@ fn a_marker_that_could_not_be_written_is_written_once_the_disk_allows(cx: &mut T
     });
     assert_eq!(session(dir.path())["uncommitted"]["items"], 1);
     assert!(revision_files(dir.path()).is_empty(), "commits still fail");
+}
+
+#[gpui::test]
+fn without_the_profile_lock_autosave_stays_off_and_writes_nothing(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_songs(&dir);
+    cx.update(|cx| cx.set_global(AutosaveRefused(save::Error::Unlocked)));
+    let (mut cx, operator) = start(cx, library, Arc::default(), "apply");
+    settle(&mut cx, &operator, "the off note", |o| note(o).is_some());
+    assert_eq!(
+        operator.read_with(&cx, |o, _| note(o)),
+        Some((
+            "Autosave is off: the profile folder cannot be locked for one Sela at a time.".into(),
+            true
+        ))
+    );
+    add_song(&mut cx, &operator, "Signal Hymn");
+    advance(&mut cx, &operator, Duration::from_secs(15));
+    assert!(
+        !recovery(dir.path()).exists(),
+        "another operator may own this Recovery folder"
+    );
 }
 
 #[gpui::test]

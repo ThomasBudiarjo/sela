@@ -55,7 +55,7 @@ pub(super) mod song_import;
 mod update_items;
 
 use assets::{Assets, PREFLIGHT_DIALOG_W};
-pub(super) use autosave::AutosaveSetup;
+pub(super) use autosave::{AutosaveRefused, AutosaveSetup};
 pub(super) use controls::Control;
 use controls::{
     ControlSet, DIALOG_TAB_INDEX, IMAGE_TAB_INDEX, SCHEDULE_TAB_INDEX, SLIDE_TAB_INDEX,

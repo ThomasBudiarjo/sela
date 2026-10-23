@@ -328,7 +328,9 @@ fn main() {
     let mode = match args.as_slice() {
         [] => Mode::Operator(song_library::default_path()),
         [flag, path] if flag == "--library" => Mode::Editor(path.into()),
-        [flag, path] if flag == "--operator-library" => Mode::Operator(Some(path.into())),
+        [flag, path] if flag == "--operator-library" => {
+            Mode::Operator(Some(sela::profile::qualified_library(path.into())))
+        }
         _ => {
             eprintln!(
                 "usage: sela [--version | --library DATABASE_PATH | --operator-library DATABASE_PATH]"
@@ -372,14 +374,21 @@ fn main() {
                     instance::open(profile, cx);
                     return;
                 }
-                // A read-only or lock-less folder: run, and let autosave
-                // report why it cannot write there.
-                Err(sela::profile::LockError::Unavailable(reason)) => {
-                    eprintln!("profile lock unavailable: {reason}");
+                // A read-only or lock-less folder: run, but without autosave,
+                // which says why (another operator may share the folder).
+                Err(sela::profile::LockError::Unavailable(error)) => {
+                    eprintln!("profile lock unavailable: {error}");
+                    let reason = match sela::autosave::Error::from_io(&error) {
+                        sela::autosave::Error::ReadOnly => sela::autosave::Error::ReadOnly,
+                        _ => sela::autosave::Error::Unlocked,
+                    };
+                    cx.set_global(operator::AutosaveRefused(reason));
                 }
             }
         }
-        cx.set_global(operator::AutosaveSetup(sela::autosave::Config::system()));
+        if !cx.has_global::<operator::AutosaveRefused>() {
+            cx.set_global(operator::AutosaveSetup(sela::autosave::Config::system()));
+        }
         let layout = library
             .as_deref()
             .and_then(std::path::Path::parent)

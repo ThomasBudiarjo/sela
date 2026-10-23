@@ -651,6 +651,7 @@ pub enum Msg {
     ReasonReadOnly,
     ReasonLocked,
     ReasonBudget,
+    ReasonUnlocked,
     ReasonIo,
     AlreadyRunningTitle,
     AlreadyRunningBody,
@@ -1227,6 +1228,7 @@ impl Msg {
         Msg::ReasonReadOnly,
         Msg::ReasonLocked,
         Msg::ReasonBudget,
+        Msg::ReasonUnlocked,
         Msg::ReasonIo,
         Msg::AlreadyRunningTitle,
         Msg::AlreadyRunningBody,
@@ -1905,6 +1907,7 @@ impl Msg {
             Self::ReasonReadOnly => "the profile folder is read-only",
             Self::ReasonLocked => "another program is holding a recovery file",
             Self::ReasonBudget => "the schedule is larger than the autosave budget",
+            Self::ReasonUnlocked => "the profile folder cannot be locked for one Sela at a time",
             Self::ReasonIo => "disk error ({kind})",
             Self::AlreadyRunningTitle => "Sela is already running",
             Self::AlreadyRunningBody => {
@@ -2612,6 +2615,7 @@ impl Msg {
             Self::ReasonReadOnly => "folder profil hanya-baca",
             Self::ReasonLocked => "program lain sedang memakai file pemulihan",
             Self::ReasonBudget => "jadwal lebih besar dari batas simpan otomatis",
+            Self::ReasonUnlocked => "folder profil tidak dapat dikunci untuk satu Sela saja",
             Self::ReasonIo => "galat disk ({kind})",
             Self::AlreadyRunningTitle => "Sela sudah berjalan",
             Self::AlreadyRunningBody => {

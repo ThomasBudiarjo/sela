@@ -19,7 +19,9 @@ and `Schedule::baseline` in `src/schedule.rs`.
 
 - The profile is the folder of the library database: `%LOCALAPPDATA%\sela`
   on Windows, `$XDG_DATA_HOME/sela` (else `~/.local/share/sela`) elsewhere,
-  or the folder of `--operator-library PATH`. It holds `library.sqlite`,
+  or the folder of `--operator-library PATH` (a bare file name such as
+  `library.sqlite` means the current folder, `./library.sqlite`, so it is
+  locked like any other profile). It holds `library.sqlite`,
   `settings.txt`, `Resources/`, `Schedules/`, `Recovery/` and `sela.lock`.
 - Before the operator window opens, `main` takes an OS lock on
   `<profile>/sela.lock` (`std::fs::File::try_lock`: `flock` on Unix,
@@ -30,8 +32,12 @@ and `Schedule::baseline` in `src/schedule.rs`.
   profile's saved language), quitting on OK, Enter, Esc or close. Bringing
   the first window to the front would need inter-process signalling; Sela
   has no listeners, so it does not.
-- A profile whose lock file cannot be created (read-only folder, no locks)
-  still opens; autosave then reports why it is off.
+- A profile whose lock cannot be taken (read-only folder, a filesystem
+  without locks, `sela.lock` not openable) still opens, but autosave never
+  starts there, because a second operator could then write the same
+  `Recovery/` folder: the footer says "Autosave is off: the profile folder
+  is read-only." or "... cannot be locked for one Sela at a time.", and the
+  previous run's copies are not scanned or offered.
 - The standalone editor mode (`--library PATH`) takes no lock; SQLite's own
   locking covers its database writes.
 
@@ -212,6 +218,7 @@ marker or commit.
 | Old copies not removable | "Old autosave copies could not be removed: …" | the commit stands |
 | Autosave while Live is on | nothing: work stays on the worker thread | Live receipts unaffected |
 | Second instance | "Sela is already running" notice | profile untouched |
+| Profile lock unavailable | "Autosave is off: the profile folder cannot be locked for one Sela at a time." (or read-only) | nothing written to `Recovery/` |
 
 ## Known gaps
 
@@ -241,7 +248,8 @@ marker or commit.
   locked, rotation failure, error mapping, cadence (quiet, max delay,
   retry, revert with unmark, unsaved-only marking, marking during a running
   commit, unqueued, failed marker and withdrawal retried, restore/flush), worker non-blocking and bounded
-  queue, profile lock (same process, child process killed, read-only), and
+  queue, profile lock (same process, child process killed, an unopenable
+  lock file, a bare library file name), and
   **S03** with real child processes killed by SIGKILL before, during and
   after a commit (`autosave::tests::s03`).
 - GPUI (`src/tests/autosave_recovery.rs`, `src/instance.rs`): see the work

@@ -188,6 +188,9 @@ pub enum Error {
     Locked,
     /// The revision is larger than the whole retention budget.
     Budget,
+    /// The profile lock could not be taken, so another operator may share
+    /// the folder: autosave never starts there (see `sela::profile`).
+    Unlocked,
     /// Any other OS error, by its kind.
     Io(String),
 }

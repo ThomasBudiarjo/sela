@@ -29,8 +29,19 @@ pub enum LockError {
     /// Another process holds the profile.
     Held,
     /// The lock file could not be created or locked (read-only folder, a
-    /// filesystem without locks, ...). The reason is the OS error text.
-    Unavailable(String),
+    /// filesystem without locks, ...). Autosave stays off then: without the
+    /// lock a second operator could write the same Recovery folder.
+    Unavailable(io::Error),
+}
+
+/// The library path with its folder spelled out: a bare file name such as
+/// `library.sqlite` names the current folder as its profile, so the
+/// profile lock, autosave and settings all apply to it.
+pub fn qualified_library(library: PathBuf) -> PathBuf {
+    match library.parent() {
+        Some(parent) if parent.as_os_str().is_empty() => Path::new(".").join(library),
+        _ => library,
+    }
 }
 
 /// Holds the profile until dropped (or until the process ends).
@@ -42,7 +53,7 @@ pub struct ProfileLock {
 
 impl ProfileLock {
     pub fn acquire(profile: &Path) -> Result<Self, LockError> {
-        let unavailable = |e: io::Error| LockError::Unavailable(e.to_string());
+        let unavailable = LockError::Unavailable;
         fs::create_dir_all(profile).map_err(unavailable)?;
         let path = profile.join(LOCK_FILE);
         let file = OpenOptions::new()
@@ -81,6 +92,15 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_library_file_name_lives_in_the_current_folder() {
+        let bare = qualified_library(PathBuf::from("library.sqlite"));
+        assert_eq!(bare.parent(), Some(Path::new(".")));
+        let nested = PathBuf::from("church/library.sqlite");
+        assert_eq!(qualified_library(nested.clone()), nested);
+        assert_eq!(qualified_library(PathBuf::from("/")), PathBuf::from("/"));
+    }
+
+    #[test]
     fn a_missing_profile_folder_is_created() {
         let dir = tempfile::tempdir().unwrap();
         let profile = dir.path().join("nested").join("sela");
@@ -88,30 +108,28 @@ mod tests {
         assert!(profile.join(LOCK_FILE).is_file());
     }
 
-    #[cfg(unix)]
+    /// A lock file that cannot be opened for writing is `Unavailable`, not
+    /// `Held`. A directory in its place fails for every user (root ignores
+    /// permission bits) and on every platform.
     #[test]
-    fn a_read_only_profile_is_unavailable_not_held() {
-        use std::os::unix::fs::PermissionsExt;
+    fn an_unopenable_lock_file_is_unavailable_not_held() {
         let dir = tempfile::tempdir().unwrap();
-        let profile = dir.path().join("ro");
-        fs::create_dir(&profile).unwrap();
-        fs::set_permissions(&profile, fs::Permissions::from_mode(0o500)).unwrap();
-        let result = ProfileLock::acquire(&profile);
-        fs::set_permissions(&profile, fs::Permissions::from_mode(0o700)).unwrap();
-        // Root ignores directory permissions; then the lock simply works.
-        if !is_root() {
-            assert!(
-                matches!(result, Err(LockError::Unavailable(_))),
-                "{result:?}"
-            );
-        }
+        fs::create_dir(dir.path().join(LOCK_FILE)).unwrap();
+        let result = ProfileLock::acquire(dir.path());
+        assert!(
+            matches!(result, Err(LockError::Unavailable(_))),
+            "{result:?}"
+        );
     }
 
-    #[cfg(unix)]
-    pub(crate) fn is_root() -> bool {
-        std::fs::metadata("/proc/self")
-            .map(|m| std::os::unix::fs::MetadataExt::uid(&m) == 0)
-            .unwrap_or(false)
+    /// Kills and reaps the child even when an assertion fails first.
+    struct Reaped(std::process::Child);
+
+    impl Drop for Reaped {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
 
     /// The lock dies with its process, however it ends: a child holds it,
@@ -128,7 +146,7 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "profile::tests::a_killed_holder_releases_the_profile",
@@ -138,6 +156,7 @@ mod tests {
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
+        let mut child = Reaped(child);
         let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !dir.path().join("held").exists() {
             assert!(
@@ -150,8 +169,8 @@ mod tests {
             ProfileLock::acquire(dir.path()),
             Err(LockError::Held)
         ));
-        child.kill().unwrap();
-        child.wait().unwrap();
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
         ProfileLock::acquire(dir.path()).unwrap();
     }
 }
