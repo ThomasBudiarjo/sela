@@ -8,14 +8,20 @@ use sela::schedule_file::{ReadError, ScheduleFile, WriteError};
 /// A save waiting for the songs it embeds.
 pub(crate) struct SaveJob {
     pub(crate) path: PathBuf,
+    /// The song entries' revisions and arrangements, in schedule order.
     pub(crate) versions: Vec<Version>,
+    pub(crate) arrangements: Vec<Option<VariantId>>,
+    /// Scripture entries with their positions (`.selaschedule` version 5).
+    pub(crate) scripture: Vec<schedule_file::ScriptureItem>,
+    /// Every entry's pin: the baseline once the file is written.
     pub(crate) pins: Vec<Pin>,
     /// Guarded command to continue with once the file is written.
     pub(crate) then: Option<Then>,
     /// `Schedule::document` when the save began.
     pub(crate) document: u64,
-    /// Each entry and its theme snapshot when the save began (M1-08); an
-    /// entry without one takes its song's library theme in the file.
+    /// Each song entry and its theme snapshot when the save began (M1-08),
+    /// in the order of `versions`; an entry without one takes its song's
+    /// library theme in the file.
     pub(crate) themes: Vec<(EntryId, Option<sela::schedule::ItemTheme>)>,
 }
 
@@ -130,19 +136,30 @@ impl Operator {
         if self.schedule_busy() {
             return self.report_busy();
         }
-        let versions = self.schedule.versions();
+        let entries = self.schedule.entries();
+        let songs = || entries.iter().filter(|e| e.scripture.is_none());
+        let versions: Vec<Version> = songs().map(|e| e.version).collect();
         let job = SaveJob {
             path,
             versions: versions.clone(),
+            arrangements: songs().map(|e| e.arrangement).collect(),
+            scripture: entries
+                .iter()
+                .enumerate()
+                .filter_map(|(position, e)| {
+                    e.scripture
+                        .as_ref()
+                        .map(|snapshot| schedule_file::ScriptureItem {
+                            position,
+                            title: e.title.clone(),
+                            snapshot: (**snapshot).clone(),
+                        })
+                })
+                .collect(),
             pins: self.schedule.pins().collect(),
             then,
             document: self.schedule.document(),
-            themes: self
-                .schedule
-                .entries()
-                .iter()
-                .map(|e| (e.id, e.theme.clone()))
-                .collect(),
+            themes: songs().map(|e| (e.id, e.theme.clone())).collect(),
         };
         if self.queue(
             storage::Command::ThemedSongs(versions),
@@ -220,11 +237,11 @@ impl Operator {
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_default();
         let mut items = Vec::with_capacity(songs.len());
-        for (((source, (song, song_theme)), pin), (entry, snapshot)) in job
+        for (((source, (song, song_theme)), arrangement), (entry, snapshot)) in job
             .versions
             .iter()
             .zip(songs)
-            .zip(&job.pins)
+            .zip(&job.arrangements)
             .zip(&job.themes)
         {
             // A saved item carries its theme snapshot (M1-08), so the file
@@ -249,14 +266,19 @@ impl Operator {
             items.push(schedule_file::Item {
                 source: *source,
                 song,
-                arrangement: pin.arrangement,
+                arrangement: *arrangement,
                 theme,
             });
         }
+        let document = ScheduleFile {
+            title,
+            items,
+            scripture: job.scripture.clone(),
+        };
         let queued = self
             .file_worker
             .as_ref()
-            .is_some_and(|worker| worker.write(job.path.clone(), ScheduleFile { title, items }));
+            .is_some_and(|worker| worker.write(job.path.clone(), document));
         if queued {
             self.file_job = Some(FileJob::Write(job));
         } else {
@@ -282,7 +304,7 @@ impl Operator {
             _ => vec![None; items.len()],
         }
         .into_iter();
-        let entries = items
+        let mut songs = items
             .iter()
             .zip(arrangements)
             .map(|((version, song), arrangement)| {
@@ -291,10 +313,43 @@ impl Operator {
                     arrangement,
                     theme: None,
                 };
-                (pin, song.title.clone(), themes.next().flatten())
+                (pin, song.title.clone(), themes.next().flatten(), None)
             })
-            .collect();
-        match self.schedule.open(path.clone(), entries) {
+            .peekable();
+        // Scripture items go back to their places between the songs.
+        let mut scripture = self
+            .scripture
+            .opening
+            .take()
+            .unwrap_or_default()
+            .into_iter()
+            .peekable();
+        let mut entries = Vec::new();
+        while songs.peek().is_some() || scripture.peek().is_some() {
+            match scripture.next_if(|item| item.position == entries.len()) {
+                Some(item) => {
+                    let pin = Pin {
+                        version: item.snapshot.version(),
+                        arrangement: None,
+                        theme: None,
+                    };
+                    entries.push((pin, item.title, None, Some(item.snapshot)));
+                }
+                None => match songs.next() {
+                    Some(song) => entries.push(song),
+                    // A position past the songs: keep the file order.
+                    None => entries.extend(scripture.next().map(|item| {
+                        let pin = Pin {
+                            version: item.snapshot.version(),
+                            arrangement: None,
+                            theme: None,
+                        };
+                        (pin, item.title, None, Some(item.snapshot))
+                    })),
+                },
+            }
+        }
+        match self.schedule.open_items(path.clone(), entries) {
             Ok(()) => {
                 self.clear_entry_selection();
                 self.remember_recent(path);
@@ -361,6 +416,9 @@ impl Operator {
         let name = schedule_file::display_name(&path);
         match result {
             Ok(file) => {
+                // Scripture items need no library; they rejoin the songs in
+                // `finish_open`.
+                self.scripture.opening = Some(file.scripture);
                 let arrangements = file.items.iter().map(|item| item.arrangement).collect();
                 // The snapshots wait beside the library import (M1-08).
                 self.themes.opening = Some((

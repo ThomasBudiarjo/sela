@@ -829,3 +829,30 @@ best guess; the observations to make are PP-MC-01 and PP-MC-02 in
 - UNOBSERVED best guess: a local playlist or reference file that points at a network URL. Sela refuses it with a protocol error and makes no network request (offline-first; VAL-MEDIA-038).
 - Sela-only, not a parity item: the "Video and audio unavailable" status when Sela's bundled FFmpeg is missing or is a GPL/nonfree build. EasyWorship has no separate decoder to report. When the narrow Resources header truncates it (or the Live output line), hovering shows the full text in a hint (review round 2); also Sela-only.
 - Not decided here: how a video background is fitted. The decoder can letterbox to the cue extent (`Fit::Exact`); EW8-OBS-032 shows Aspect Ratio Auto/Stretch for slide media, which the video-playback stream maps.
+
+## Scriptures — UNOBSERVED best guesses (2026-10-22, scripture)
+
+EasyWorship 8.0.49's Scriptures tab was not run for this change. Observed
+facts it builds on: the Resources tab row (EW8-OBS-010) and the Options ›
+Main Output › Scripture controls with their defaults (EW8-OBS-056: Show
+verse numbers on, Show Reference on, Reference Location "After Each Slide",
+Show Complete Passage off, Abbreviate Book Names off, Automatically Flow
+Scripture on Multiple Slides on, minimum font size 48). The historical 2020
+support article (SRC register) is not 8.0.49 evidence. Everything below is
+an UNOBSERVED best guess, each listed in docs/parity-pending.md (Stream:
+scripture) with the exact observation to make.
+
+| Topic | Sela now (best guess) |
+| --- | --- |
+| Tab layout | Translations listed in the left column (where Songs shows its tree); a Reference/Keyword switch and one box above the verse list; footer Import Bible…, Add to Schedule, status, selection count. |
+| Reference box | Parses as you type; on a malformed or missing reference the previous list, selection and Preview stay and a red note explains (VAL-BIBLE-009). `John 3 16` and `Jude 5` are malformed / chapter 5 (PP-BIB-01). |
+| Completion | Up to six books in canonical order (exact alias first) as buttons under the box; Tab or a click takes the first/that one and adds a space (VAL-BIBLE-010). |
+| Verse list | The whole chapters around the reference; referenced verses selected and scrolled near the top; Shift = consecutive range, Ctrl = toggle (nonconsecutive), double-click = Go Live. |
+| Keyword search | Separate Keyword mode, all words must match (last as prefix), canonical order, 200 hits; starts at two characters (owner decision, not EW behavior). |
+| Slides | 44-character lines, 6 lines per slide, breaks between verses (EW8-OBS-056 flow/minimum size semantics unobserved); verse numbers on. |
+| Reference on output | Every slide carries its own reference over the translation name as the footer strip ("After Each Slide", Show Complete Passage off); book names in the translation's language, not abbreviated. |
+| Translation switch | Keeps the selected verses; names those the new translation lacks; refuses the switch when the book or chapter is missing. With nothing selected it selects the referenced verses there; after a Reference/Keyword switch, or while a typed reference is still loading, it looks the box's text up in the new translation (PP-BIB-07). |
+| Bible import | Import Bible… adds the translation row and changes nothing else: the verse list, selection, Preview and schedule selection stay; only when no translation was usable before does the box's text fill the list (Preview still stays). One file dialog at a time (PP-BIB-10). |
+| Translation rows | "ID · Name", with "(damaged)" (also red) or "(restricted)" in words, visible and spoken, EN/ID; EW's marking is unobserved (PP-BIB-10). |
+| Schedule item | Add to Schedule pins the selected verse text (like a song revision); title "John 3:16-18 (KJV)". EW's own scripture schedule item and its update behavior are unobserved. |
+| Typing | Never triggers live shortcuts (same `SelaShow && !SelaTextInput` rule as the Songs search, EW8-OBS-047 best guess). |

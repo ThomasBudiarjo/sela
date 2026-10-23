@@ -5202,6 +5202,7 @@ dependencies = [
  "gpui_platform",
  "image",
  "libc",
+ "miniz_oxide 0.8.9",
  "pollster 0.4.0",
  "proptest 1.11.0",
  "roxmltree 0.21.1",

@@ -389,6 +389,7 @@ impl Operator {
             theme_missing: missing,
             theme_unloaded: unloaded,
             song_theme,
+            footers: None,
         }
     }
 

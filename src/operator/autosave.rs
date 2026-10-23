@@ -284,7 +284,7 @@ impl Operator {
         let items = snapshot
             .entries
             .iter()
-            .map(|e| (e.pin, e.title.clone(), e.theme.clone()))
+            .map(|e| (e.pin, e.title.clone(), e.theme.clone(), e.scripture.clone()))
             .collect();
         if self
             .schedule
@@ -294,9 +294,17 @@ impl Operator {
             return self.decline_recovery_offer();
         }
         self.clear_entry_selection();
-        if !self.schedule.entries().is_empty() {
+        // Scripture items carry their own verses: only songs are checked.
+        let songs: Vec<Version> = self
+            .schedule
+            .entries()
+            .iter()
+            .filter(|e| e.scripture.is_none())
+            .map(|e| e.version)
+            .collect();
+        if !songs.is_empty() {
             self.queue(
-                storage::Command::Songs(self.schedule.versions()),
+                storage::Command::Songs(songs),
                 Request::RecoveryCheck(self.schedule.document()),
             );
         }

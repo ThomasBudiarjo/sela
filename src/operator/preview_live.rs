@@ -857,8 +857,14 @@ impl Operator {
             caps,
             sizing: self.sizing,
             background,
-            footer: copyright_footer(&item, &self.settings.current.copyright),
-            footer_shown: self.settings.current.copyright.shown_on(index),
+            // A scripture slide's own reference (EW8-OBS-056) shows on every
+            // slide; a song's copyright strip follows the copyright options.
+            footer: item
+                .footers
+                .as_ref()
+                .and_then(|footers| footers.get(index).cloned())
+                .or_else(|| copyright_footer(&item, &self.settings.current.copyright)),
+            footer_shown: item.footers.is_some() || self.settings.current.copyright.shown_on(index),
         };
         let sizing = job.sizing;
         if self.cue_preparer.is_none() {

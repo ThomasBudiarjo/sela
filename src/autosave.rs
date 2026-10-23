@@ -19,7 +19,9 @@
 //! Revisions pin library song revisions (`storage::Version`) and do not embed
 //! song content: the library keeps every committed revision and never
 //! garbage-collects (docs/storage.md), and a schedule only pins committed
-//! revisions. An autosave therefore never needs the storage worker.
+//! revisions. An autosave therefore never needs the storage worker. Scripture
+//! items (M4-04) have no library revision, so a revision embeds their pinned
+//! verses, as a `.selaschedule` does.
 //!
 //! Cadence ([`Policy`]): a commit starts once the schedule has been unchanged
 //! for `quiet` (2 s) or `max_delay` (10 s) after the first uncommitted change,
@@ -71,11 +73,15 @@ const SESSION_FORMAT: &str = "sela-recovery-session";
 /// item's theme snapshot (`theme`, hex of `Theme::encode`, and
 /// `theme_explicit`) and each pin's explicit theme stamp (`theme_stamp`);
 /// version 1 revisions still read, without snapshots. The session file
-/// keeps version 1.
-const VERSION: u64 = 2;
+/// keeps version 1. Version 3 (scripture integration, M4-04) adds a
+/// scripture item's pinned verses (`scripture`, the `.selaschedule` snapshot
+/// fields); versions 1 and 2 still read, with song items only.
+const VERSION: u64 = 3;
 const SESSION_VERSION: u64 = 1;
 /// Larger files are damaged, not read: 32 items with 1 KiB titles stay far
-/// below it.
+/// below it. Scripture items embed their verses (a chapter is tens of KiB);
+/// a schedule whose revision would exceed it is refused (`Error::Budget`),
+/// the older revisions stay and the autosave status reports the failure.
 pub const MAX_REVISION_BYTES: u64 = 512 * 1024;
 const MAX_SESSION_BYTES: u64 = 64 * 1024;
 const MAX_PATH_BYTES: usize = 4096;
@@ -278,6 +284,8 @@ pub struct Entry {
     pub title: String,
     /// The entry's theme snapshot (M1-08), explicit or captured.
     pub theme: Option<ItemTheme>,
+    /// A scripture item's pinned verses (version 3); `None` for a song.
+    pub scripture: Option<Arc<crate::scripture::Snapshot>>,
 }
 
 /// The schedule as committed: entries, its file and the file's baseline.
@@ -303,6 +311,7 @@ impl Snapshot {
                     pin,
                     title: e.title.clone(),
                     theme: e.theme.clone(),
+                    scripture: e.scripture.clone(),
                 })
                 .collect(),
             baseline: schedule.baseline().to_vec(),
@@ -553,6 +562,12 @@ pub fn encode_revision(revision: &Revision) -> Vec<u8> {
                 item.insert("theme".into(), hex(&theme.theme.encode()).into());
                 item.insert("theme_explicit".into(), theme.explicit.into());
             }
+            if let Some(snapshot) = &e.scripture {
+                item.insert(
+                    "scripture".into(),
+                    Value::Object(crate::schedule_file::snapshot_json(snapshot)),
+                );
+            }
             Value::Object(item)
         })
         .collect();
@@ -618,10 +633,22 @@ pub fn decode_revision(bytes: &[u8]) -> Option<Revision> {
                     None,
                 )
             };
+            // Version 3: a scripture item's verses, which must match the pin
+            // (their content identity); a damaged one makes the revision
+            // damaged.
+            let scripture = match item.get("scripture").filter(|_| version >= 3) {
+                Some(value) => {
+                    let snapshot = crate::schedule_file::snapshot_from_json(value)?;
+                    (snapshot.version() == pin.version).then_some(())?;
+                    Some(Arc::new(snapshot))
+                }
+                None => None,
+            };
             Some(Entry {
                 pin,
                 title: title.to_owned(),
                 theme,
+                scripture,
             })
         })
         .collect::<Option<Vec<_>>>()?;

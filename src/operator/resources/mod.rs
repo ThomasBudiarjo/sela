@@ -10,6 +10,9 @@ mod song_select;
 mod songs;
 mod themes;
 
+#[cfg(test)]
+pub(crate) use scriptures::translation_label;
+pub(crate) use scriptures::{ScriptureTab, bind_scripture_keys};
 pub(super) use song_search::SongSearch;
 pub(super) use song_select::{SONG_ROW_H, SongSelection};
 pub(super) use songs::{
@@ -59,7 +62,7 @@ impl Operator {
     ) -> gpui::AnyElement {
         match self.tab {
             0 => self.song_list(cx),
-            1 => scriptures::detail(),
+            1 => self.scripture_detail(cx),
             2 => self.image_list(cx),
             3 => presentations::detail(),
             _ => self.theme_list(window, cx),

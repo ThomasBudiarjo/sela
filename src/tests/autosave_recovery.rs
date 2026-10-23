@@ -216,6 +216,7 @@ fn entry_of(version: sela::storage::Version, title: &str) -> Entry {
         },
         title: title.into(),
         theme: None,
+        scripture: None,
     }
 }
 

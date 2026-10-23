@@ -30,7 +30,8 @@ Files:
   time out, so the script locates operator controls once and reuses their
   centers.
   Also new with their feature: `media-backend-x11.py` (media-core; needs
-  `scripts/fetch-ffmpeg`).
+  `scripts/fetch-ffmpeg`). `scripture-x11.py` (M4-03/M4-04,
+  docs/scripture.md; Windows counterpart `scripture-windows.py`).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses

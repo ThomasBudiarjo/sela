@@ -25,6 +25,7 @@ fn entry(n: u8, title: &str) -> Entry {
         pin: pin(n),
         title: title.into(),
         theme: None,
+        scripture: None,
     }
 }
 
@@ -182,6 +183,7 @@ fn a_revision_round_trips_and_any_damage_is_rejected() {
                     },
                     title: "Line\nbreak \"quoted\"".into(),
                     theme: None,
+                    scripture: None,
                 },
                 entry(3, "Same song twice"),
             ],
@@ -235,7 +237,7 @@ fn snapshot_and_fingerprint_follow_the_schedule() {
             saved
                 .entries
                 .iter()
-                .map(|e| (e.pin, e.title.clone(), e.theme.clone()))
+                .map(|e| (e.pin, e.title.clone(), e.theme.clone(), e.scripture.clone()))
                 .collect(),
             saved.baseline.clone(),
         )
@@ -243,7 +245,7 @@ fn snapshot_and_fingerprint_follow_the_schedule() {
     assert_eq!(Snapshot::of(&restored), saved);
     assert!(!restored.is_dirty());
     restored
-        .restore(None, vec![(pin(2), "B".into(), None)], Vec::new())
+        .restore(None, vec![(pin(2), "B".into(), None, None)], Vec::new())
         .unwrap();
     assert!(restored.is_dirty(), "an untitled restore is unsaved");
 }
@@ -290,7 +292,7 @@ fn a_revision_keeps_item_themes_and_version_1_still_reads() {
                 .snapshot
                 .entries
                 .iter()
-                .map(|e| (e.pin, e.title.clone(), e.theme.clone()))
+                .map(|e| (e.pin, e.title.clone(), e.theme.clone(), e.scripture.clone()))
                 .collect(),
             decoded.snapshot.baseline.clone(),
         )
@@ -308,7 +310,7 @@ fn a_revision_keeps_item_themes_and_version_1_still_reads() {
     let broken = format!("{broken}\nsha256 {digest}\n");
     assert_eq!(decode_revision(broken.as_bytes()), None);
     // Version 1: theme fields are not part of that format and are ignored.
-    let v1 = body.replacen("\"version\":2", "\"version\":1", 1);
+    let v1 = body.replacen("\"version\":3", "\"version\":1", 1);
     assert_ne!(v1, body);
     let digest = hex(&Sha256::digest(v1.as_bytes()));
     let old = decode_revision(format!("{v1}\nsha256 {digest}\n").as_bytes()).unwrap();
@@ -1213,4 +1215,79 @@ mod s03 {
         assert_eq!(offer.lost, None);
         assert!(!offer.interrupted);
     }
+}
+
+/// Scripture integration (M4-04 with M1-12): a scripture item has no
+/// library revision, so a version 3 revision embeds its pinned verses and a
+/// restore brings them back; verses that do not match the pin, and a
+/// scripture field in an older revision, are not taken.
+#[test]
+fn a_revision_keeps_scripture_items() {
+    use crate::scripture::{Book, TranslationInfo, VerseId};
+    let info = TranslationInfo {
+        id: "SYN".into(),
+        name: "Synthetic".into(),
+        language: "en".into(),
+        rights: String::new(),
+        source: String::new(),
+        redistributable: true,
+        bundled: false,
+    };
+    let verse = VerseId::new(Book::from_number(43).unwrap(), 3, 16).unwrap();
+    let passage = crate::scripture::Snapshot::new(&info, &[(verse, "For God so loved".into())]);
+    let mut schedule = Schedule::default();
+    schedule.push(v(1, 1), "Morning Light".into()).unwrap();
+    schedule
+        .insert_scripture(0, passage.clone(), "John 3:16 (SYN)".into())
+        .unwrap();
+    let snapshot = Snapshot::of(&schedule);
+    assert_eq!(snapshot.entries[0].scripture.as_deref(), Some(&passage));
+    let revision = Revision {
+        sequence: 4,
+        saved_at: 11,
+        snapshot: snapshot.clone(),
+    };
+    let bytes = encode_revision(&revision);
+    let decoded = decode_revision(&bytes).unwrap();
+    assert_eq!(decoded, revision);
+    let mut restored = Schedule::default();
+    restored
+        .restore(
+            None,
+            decoded
+                .snapshot
+                .entries
+                .iter()
+                .map(|e| (e.pin, e.title.clone(), e.theme.clone(), e.scripture.clone()))
+                .collect(),
+            Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(restored.entries()[0].scripture.as_deref(), Some(&passage));
+    assert!(restored.entries()[1].scripture.is_none());
+    assert_eq!(fingerprint(&restored), fingerprint(&schedule));
+
+    // Rewrite the body (and its checksum) to tamper with one field.
+    let resign = |edit: &dyn Fn(&mut Value)| {
+        let text = std::str::from_utf8(&bytes).unwrap();
+        let mut value: Value = serde_json::from_str(text.split_once('\n').unwrap().0).unwrap();
+        edit(&mut value);
+        let body = value.to_string();
+        let digest = hex(&Sha256::digest(body.as_bytes()));
+        format!("{body}\nsha256 {digest}\n").into_bytes()
+    };
+    let tampered = resign(&|value| {
+        value["items"][0]["scripture"]["verses"][0][1] = "Other words".into();
+    });
+    assert_eq!(
+        decode_revision(&tampered),
+        None,
+        "verses must match the pin"
+    );
+    let older = resign(&|value| value["version"] = 2.into());
+    let older = decode_revision(&older).unwrap();
+    assert!(
+        older.snapshot.entries[0].scripture.is_none(),
+        "version 2 has no scripture field"
+    );
 }

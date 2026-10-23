@@ -542,6 +542,11 @@ by song id, so applying a theme creates no song revision) and `theme_default`
 returns to the built-in theme; a song naming a deleted theme falls back to the
 default with a visible note. Schedule files are version 4: each item carries
 its theme snapshot. Design and inheritance rules: [themes](themes.md).
+Version 5 (scripture integration, 2026-10-23) adds scripture items
+(`"kind":"scripture"` with the pinned verses; developed as version 4 on the
+scripture stream and renumbered because version 4 is the theme snapshot);
+a schedule without scripture items is still written as version 4. See
+[scripture](scripture.md).
 
 Integration note (2026-10-23): the themes stream developed this as schema 7;
 the integration branch already used schema 7 for the songs-browser search

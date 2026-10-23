@@ -79,7 +79,9 @@ preparation, preflight-style substitution and cues use the existing paths.
   of `Theme::encode`, and `theme_explicit`), so a file reopens with the same
   theme on another library; versions 1-3 open without snapshots. An item
   that has no trustworthy snapshot (see above) is saved without one and
-  takes its library theme when the file is reopened. Image backgrounds in a
+  takes its library theme when the file is reopened. Version 5 (scripture
+  integration) adds scripture items, which keep the built-in look and carry
+  no theme snapshot. Image backgrounds in a
   snapshot are references (file name and SHA-256), not embedded images: on a
   machine without that image the item renders black with the usual missing
   image warning, so "same look" holds only where the images are present.

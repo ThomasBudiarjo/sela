@@ -76,7 +76,8 @@ new storage layout.
   memory, so the retry really writes `session.json` again.
 
 A revision records the entries (pinned song revision, arrangement, title
-and, since format version 2, the entry's theme snapshot), the schedule file
+and, since format version 2, the entry's theme snapshot; since version 3 a
+scripture item's pinned verses, which have no library revision), the schedule file
 path (UTF-8 only; a non-UTF-8 path is recorded as
 untitled) and the file's baseline, so a restored schedule keeps its file
 and only the unsaved part shows as unsaved. Revisions pin library song
@@ -88,9 +89,9 @@ database access.
 ## Files and commit protocol
 
 - `Recovery/autosave-NNNNNNNNNNNN.selarecovery`: one JSON line
-  (`format "sela-recovery"`, `version 2`, `sequence`, `saved_at_ms`, `path`,
+  (`format "sela-recovery"`, `version 3`, `sequence`, `saved_at_ms`, `path`,
   `items[{song_id, revision, arrangement, theme_stamp?, theme?,
-  theme_explicit?, title}]`, `baseline[{..., theme_stamp?}]`) and a second
+  theme_explicit?, scripture?, title}]`, `baseline[{..., theme_stamp?}]`) and a second
   line `sha256 <hex of the first line>`. Version 2 (themes integration,
   2026-10-23) adds each item's M1-08 theme snapshot (`theme`, hex of
   `Theme::encode`, and `theme_explicit`) and each pin's explicit theme stamp
@@ -98,7 +99,14 @@ database access.
   captured item themes and compares with its `.selaschedule` baseline
   exactly; version 1 revisions still restore, without theme snapshots (their
   items capture the library theme when first shown). A damaged theme blob
-  makes the revision damaged. `session.json` stays version 1. A file whose checksum,
+  makes the revision damaged. Version 3 (scripture integration, 2026-10-23)
+  adds a scripture item's `scripture` object (the `.selaschedule` version 5
+  snapshot fields: `translation`, `name`, `language`, `redistributable`,
+  `verses`); its verses must match the item's pin (content identity) or the
+  revision is damaged; versions 1 and 2 still restore. A Restore checks only
+  the song items against the library. Scripture verses count towards the
+  512 KiB revision limit: a larger schedule is refused (`Error::Budget`) and
+  reported, the older revisions stay. `session.json` stays version 1. A file whose checksum,
   structure or sequence (name versus body) does not match is **damaged** and
   never restored. At most 512 KiB, 32 items, 1 KiB titles, 4 KiB path.
 - `Recovery/session.json`: `state` (`running` while an operator owns the

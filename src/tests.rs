@@ -25,6 +25,7 @@ mod layout_startup;
 mod media_backend;
 mod navigation;
 mod resource_browser;
+mod scripture;
 mod scrutiny_r2;
 mod song_import;
 mod songs_browser;
@@ -4816,6 +4817,7 @@ mod preflight_ui {
         let song = repository.song(version).unwrap();
         let file = sela::schedule_file::ScheduleFile {
             title: "Sunday".into(),
+            scripture: Vec::new(),
             items: vec![sela::schedule_file::Item {
                 source: version,
                 song,
@@ -5414,6 +5416,7 @@ mod schedule_files_ui {
         let file = dir.path().join("Sunday.selaschedule");
         let document = ScheduleFile {
             title: "Sunday".into(),
+            scripture: Vec::new(),
             items: vec![Item {
                 source: version,
                 song,
