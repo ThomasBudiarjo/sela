@@ -20,6 +20,7 @@ use std::{
 
 mod arrangement_rendering;
 mod autosave_recovery;
+mod ew_library_import;
 mod focus_modality;
 mod layout_startup;
 mod media_backend;
@@ -3129,8 +3130,9 @@ mod menu_bar {
                 "bar-file-import",
                 "bar-file-import-songs",
                 "bar-file-import-folder",
+                "bar-file-import-easyworship",
             ],
-            "PP-IMPF-01 (UNOBSERVED, M1-14)",
+            "PP-IMPF-01, PP-EWL-01 (UNOBSERVED, M1-14, M4-07)",
         )];
         let mut file: Vec<&str> = Vec::new();
         for row in EW_FILE {

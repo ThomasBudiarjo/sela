@@ -715,6 +715,28 @@ import into the reference profile unless it is a disposable one). IDs use an
 | EW8-OBS-IMP-6 | UNOBSERVED | Cancel during an import and partial failures. Sela commits all accepted songs in one transaction; cancel or any failure saves none of them. |
 | EW8-OBS-IMP-7 | UNOBSERVED | Quit (Ctrl+Q, File › Exit, window close) while EW's import dialog or progress is open. Sela refuses to close while its import preview is reading, checking, in review or committing, and says "Finish or cancel the import before quitting." in the dialog (its own line; an import error stays shown); any other dialog that would replace the preview cancels the import first. A quit resumed after Don't Save (settings write pending) or after Save is refused the same way when the preview opened meanwhile. |
 
+## EasyWorship library import — UNOBSERVED best guesses (2026-10-23, ew-library-import)
+
+EasyWorship 8.0.49 was not run for the EasyWorship library importer (M4-07,
+no Windows host). Nothing below is an observation except the `SongWords.db`
+words shape already recorded in docs/import.md ("Observed format",
+2026-10-22). Each row is a reversible best guess from public sources (the
+open-source OpenLP EasyWorship importer's description of the two
+databases). Check them only against a **copy** of the owner's real EW 8.0.49
+library (never the original; hash it before and after) in the next EW
+session; the steps are PP-EWL-01..08 in parity-pending.md.
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-EWL-1 | UNOBSERVED | Where an operator imports an EasyWorship library into another program, and whether EW offers its own export. Sela adds File › Import ▸ EasyWorship Library… after Song Folder…, opening a folder chooser. |
+| EW8-OBS-EWL-2 | UNOBSERVED | Where EW 8.0.49 keeps `Songs.db` and `SongWords.db` (EW 6/7 per public sources: `...\EasyWorship\Default\v6.1\Databases\Data`), and whether EW keeps them in WAL or rollback-journal mode. Sela accepts the profile folder or any folder down to `Data` and copies a `-wal`/`-journal` beside a database. |
+| EW8-OBS-EWL-3 | UNOBSERVED | The `UTF8_U_CI` collation's exact rules (case folding, accents, Indonesian/Unicode text). Sela: Unicode lower case, then code point order; it only sorts the preview. |
+| EW8-OBS-EWL-4 | UNOBSERVED | `song` table columns and meanings: `title`, `author`, `copyright`, `administrator`, `vendor_id` (CCLI number), `description`, `tags`, `song_uid`; `word` table `song_id` (the song's rowid) and `words`. Which EW editor field each column is, and whether several authors share one field. |
+| EW8-OBS-EWL-5 | UNOBSERVED | Whether one song can have several `word` rows (revisions) and which one EW shows; whether a song can have none. Sela uses the highest rowid and reports older rows; a song without words is a failed row. |
+| EW8-OBS-EWL-6 | UNOBSERVED | Whether two song rows can share a `song_uid` (copied or duplicated songs) and what EW does on a repeated import. Sela treats a repeated `song_uid` as the same song inside one import (Skip) and matches the library by title and words. |
+| EW8-OBS-EWL-7 | UNOBSERVED | How EW 8.0.49 stores non-ASCII lyrics and metadata (Indonesian text, `\uN` or code pages in words; UTF-8 in metadata columns). Sela decodes the words per docs/import.md and reports invalid UTF-8 in metadata. |
+| EW8-OBS-EWL-8 | UNOBSERVED | How many songs a real library holds and in which order EW lists them, and whether EW's `SongWords.db` has an index on `word.song_id`. Sela stages at most 500 songs per import: songs whose titles are not yet in Sela's library first, then songs it already has, listed by title, so importing a larger library again continues with the rest; word rows are read in one pass, needing no index. |
+
 ## Scrutiny round 2 — UNOBSERVED best guesses (2026-10-22, scrutiny-r2)
 
 EasyWorship 8.0.49 was not run for scrutiny round 2 (no Windows host). The

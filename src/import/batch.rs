@@ -43,6 +43,8 @@ pub enum Format {
     OpenLyrics,
     OpenSong,
     ChordPro,
+    /// A song row of an EasyWorship 6-8 library (`import::ew_library`).
+    EasyWorship,
 }
 
 /// Why one file of a batch produced no song. The other files still import.
@@ -62,6 +64,10 @@ pub enum FileError {
     BatchFull,
     /// The batch already holds `MAX_STAGED_BYTES` of song text.
     BatchTooLarge,
+    /// An EasyWorship song row without words in `SongWords.db`.
+    MissingWords,
+    /// The EasyWorship library as a whole could not be read.
+    Library(super::ew_library::LibraryError),
 }
 
 /// Normalized identity of a song for duplicate detection: the title and a
@@ -84,6 +90,9 @@ pub struct Staged {
     pub key: DuplicateKey,
     /// Bytes of song text held, counted against `MAX_STAGED_BYTES`.
     pub bytes: usize,
+    /// The source's own song id, when it has one (EasyWorship `song_uid`):
+    /// a later row with the same id is a duplicate inside the import.
+    pub source_id: Option<String>,
 }
 
 /// What a choice of files and folders covers.
@@ -265,7 +274,7 @@ pub fn read(path: &Path) -> Result<Vec<u8>, FileError> {
 /// open does not wait (`O_NONBLOCK`), so a named pipe swapped in after the
 /// type check above returns at once and is refused here instead of
 /// blocking the thread; reads from a regular file ignore the flag.
-fn open_regular(path: &Path) -> Result<(std::fs::File, std::fs::Metadata), FileError> {
+pub(super) fn open_regular(path: &Path) -> Result<(std::fs::File, std::fs::Metadata), FileError> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -358,7 +367,15 @@ pub fn stage(path: &Path, bytes: &[u8]) -> Result<Staged, FileError> {
         warnings: parsed.warnings,
         key,
         bytes,
+        source_id: None,
     })
+}
+
+/// A path's last component, as the preview names a file.
+pub fn display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 /// Text bytes a staged song holds (fields, labels and lyrics, plus a small

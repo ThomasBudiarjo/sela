@@ -286,7 +286,8 @@ Common Windows prerequisites are listed once in
   per-slide formatting and with a legacy "Verse 1" first line; inspect how
   EasyWorship stores them. Sela now: the RTF words parser follows the
   documented format only; these cases are unobserved (docs/import.md).
-  Re-run: none yet (stream `ew-library-import`).
+  Re-run: `cargo test --lib import::ew_rtf import::ew_library`, then the
+  PP-EWL items below (stream `ew-library-import`, 2026-10-23).
 - [ ] **PP-BIB-01 Scripture reference entry** (VAL-BIBLE-010). Steps: type
   references in the Scriptures tab: completion order and accept key, "Jude 5",
   "John 3 16", "John 3:16-4:2". Sela now: the Scriptures tab parses as you
@@ -473,6 +474,91 @@ framework", reference-observations "Song import — UNOBSERVED best guesses").
   preview) and `scripts/song-import-windows.py` (Ctrl+Q and WM_CLOSE).
 
 ## Stream: ew-library-import
+
+Added 2026-10-23 (M4-07 EasyWorship 6-8 child; docs/import.md "EasyWorship
+library", reference-observations "EasyWorship library import — UNOBSERVED
+best guesses"). Work only on a **copy** of the owner's EW 8.0.49 library:
+record SHA-256, size and mtime of every file in its data folder before and
+after (PowerShell `Get-FileHash`), close EasyWorship first, never import
+into the reference profile. Never paste lyric text into notes; record
+structure and counts only.
+
+- [ ] **PP-EWL-01 Entry point** (EW8-OBS-EWL-1). Steps: in EW 8.0.49 look
+  for any library export or "import from EasyWorship" entry (File, Songs
+  context menu, Profiles › Utilities); record names and dialogs. Sela now:
+  File › Import ▸ EasyWorship Library… after Song Folder…, a folder chooser.
+  Re-run: `ew-import-windows.py`; GPUI
+  `menu_contents_match_the_captures_plus_tracked_deviations` (the
+  `bar-file-import-easyworship` deviation row).
+- [ ] **PP-EWL-02 Library location and journal mode** (EW8-OBS-EWL-2).
+  Steps: find `Songs.db` and `SongWords.db` of the default profile; record
+  the full path, whether `-wal`/`-shm`/`-journal` files exist while EW runs
+  and after it closes, and `PRAGMA journal_mode` of the copy (`python -I`,
+  `sqlite3`, `?mode=ro`). Then run Sela's import on a copy of the profile
+  folder while EW is closed, and once with EW open on the copy. Sela now:
+  looks in the chosen folder and `Data`, `Databases/Data`,
+  `v6.1/Databases/Data`, `Default/v6.1/Databases/Data`; copies `-wal` and
+  `-journal`; refuses the import when either source changes before both
+  copies are done. Re-run:
+  `cargo test --lib import::ew_library`, `ew-import-windows.py`.
+- [ ] **PP-EWL-03 `UTF8_U_CI` collation** (EW8-OBS-EWL-3). Steps: on the
+  copy, `SELECT sql FROM sqlite_master` (record which columns and indexes
+  name `UTF8_U_CI` or other collations); in EW, sort the Songs list by
+  title with titles differing only in case and accents (disposable
+  profile); record the order. Sela now: lower case, then code point order;
+  only the preview order uses it. Re-run:
+  `cargo test --lib import::ew_library::tests::titles_sort_with_the_registered_case_insensitive_collation`.
+- [ ] **PP-EWL-04 `song` and `word` columns** (EW8-OBS-EWL-4). Steps: on the
+  copy, record `PRAGMA table_info(song)` and `PRAGMA table_info(word)`
+  (names and types only); in a disposable profile create one song with
+  every Song Properties field filled (title, author(s), copyright,
+  administrator, CCLI number, description, tags/keywords) and find which
+  column holds each; check whether `word.song_id` is the song's rowid.
+  Also record the indexes (`SELECT name, tbl_name, sql FROM sqlite_master
+  WHERE type = 'index'`), in particular whether one covers `word.song_id`.
+  Sela now: the mapping table in docs/import.md; description and tags are
+  reported as not imported; word rows are found in one pass over `word`,
+  so no index is assumed (EW8-OBS-EWL-8). Re-run: `cargo test --lib import::ew_library`,
+  `ew-import-windows.py`; update `src/import/ew_fixture.rs` and
+  `scripts/ew_library_fixture.py` to the observed schema.
+- [ ] **PP-EWL-05 Missing and repeated `word` rows** (EW8-OBS-EWL-5). Steps:
+  on the copy, count songs without a `word` row and songs with more than
+  one (`SELECT song_id, count(*) FROM word GROUP BY song_id HAVING
+  count(*) > 1`); edit one song's words twice in a disposable profile and
+  see whether rows are added or replaced. Sela now: newest rowid wins with
+  an "older rows" warning; no row is a failed row. Re-run:
+  `cargo test --lib import::ew_library`.
+- [ ] **PP-EWL-06 `song_uid` duplicates and re-import** (EW8-OBS-EWL-6).
+  Steps: on the copy, `SELECT song_uid, count(*) FROM song GROUP BY
+  song_uid HAVING count(*) > 1`; in a disposable profile duplicate a song
+  (copy/paste in Songs) and check whether the copy gets a new `song_uid`.
+  Then import the owner's library copy into Sela twice. Sela now: a repeated
+  uid inside one import defaults to Skip; a re-import finds every song as a
+  library duplicate with Skip. Re-run: GPUI
+  `an_easyworship_library_is_previewed_committed_and_reimported_as_duplicates`,
+  `ew-import-windows.py`.
+- [ ] **PP-EWL-07 Windows run of `ew-import-windows.py`** (NOT RUN: no
+  Windows host on 2026-10-23). Steps: run it (see the run order table) and
+  inspect `01-ew-preview.png` and `03-ew-duplicates.png`; check that the
+  common folder dialog accepts the typed profile path. Then point Sela's
+  File › Import ▸ EasyWorship Library… by hand at a copy of the owner's real
+  library and record counts only: songs staged, failed rows by reason,
+  warnings by kind, duplicates, time to the preview, and the source hashes
+  before and after. Sela now: the Linux counterpart `ew-import-x11.py`
+  passes. Re-run: the script itself.
+- [ ] **PP-EWL-08 Non-ASCII songs and large libraries** (EW8-OBS-EWL-7,
+  EW8-OBS-EWL-8, PP-IMP-01). Steps: in a disposable profile save a song
+  with Indonesian and accented title, author and lyrics; import a copy and
+  compare in Sela's preview and editor. Record the owner's library song
+  count; if it is over 500, import the copy into an empty Sela library
+  repeatedly (Import each time) and record, per run, songs staged, new
+  songs, duplicates and the time from choosing the folder to the preview,
+  until a run stages no new song; then compare Sela's song count with
+  EW's. Sela now: words per docs/import.md, metadata as UTF-8 with
+  invalid bytes reported; 500 songs per import, songs whose titles are not
+  in Sela's library first, so each import continues with the rest. Re-run:
+  `ew-import-windows.py`, `cargo test --lib import::ew_rtf`,
+  `cargo test --lib import::worker::tests::importing_a_large_library_again_continues_with_the_songs_not_imported`.
 
 ## Stream: autosave-recovery
 
@@ -1034,6 +1120,7 @@ timing):
 | 28 | `media-backend-windows.py` | `scripts\fetch-ffmpeg.ps1` first; optional `--gpl-dir` (a GPL FFmpeg bin folder); runs `cargo test --test media_decode` unless `--skip-cargo` (PP-MC-03) |
 | 29 | `scripture-windows.py` | seed only (the script seeds); secondary monitor; first run installs the bundled KJV/WEB |
 | 30 | `stage-display-windows.py` | seed; three monitors (primary plus two non-primary); optional `--stage \\.\DISPLAYn` |
+| 31 | `ew-import-windows.py` | seed; native folder dialog; writes its own synthetic EasyWorship library to a temporary folder (never point it at a real one; PP-EWL-07) |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

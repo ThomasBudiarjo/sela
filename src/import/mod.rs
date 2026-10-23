@@ -4,6 +4,7 @@
 //! `storage::Song` and owns staging, duplicates and the commit transaction.
 pub mod batch;
 pub mod chordpro;
+pub mod ew_library;
 pub mod ew_rtf;
 pub mod openlyrics;
 pub mod opensong;
