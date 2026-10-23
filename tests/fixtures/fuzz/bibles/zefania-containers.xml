@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XMLBIBLE biblename="Synthetic Zefania">
+<INFORMATION><title>Ignored title</title><identifier>SZEF</identifier>
+<language>IND</language><rights>Synthetic rights</rights></INFORMATION>
+<BIBLEBOOK bnumber="1" bname="Kejadian"><CHAPTER cnumber="1">
+<CAPTION>Heading</CAPTION>
+<VERS vnumber="1">Pada mulanya<NOTE>catatan</NOTE> <STYLE css="x">Allah</STYLE><BR/>menciptakan.</VERS>
+<VERS vnumber="2">Kedua — “kutipan” ünïcode</VERS>
+<VERS vnumber="x">bad</VERS>
+</CHAPTER></BIBLEBOOK>
+<BIBLEBOOK bnumber="67" bname="Tobit"><CHAPTER cnumber="1"><VERS vnumber="1">skip</VERS></CHAPTER></BIBLEBOOK>
+</XMLBIBLE>

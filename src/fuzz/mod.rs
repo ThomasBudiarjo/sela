@@ -17,10 +17,12 @@ use proptest::test_runner::{FileFailurePersistence, RngSeed};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod bibles;
 mod codecs;
 mod fonts;
 mod images;
 mod media;
+mod recovery;
 mod schedule;
 mod scripture;
 mod settings;

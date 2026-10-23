@@ -974,7 +974,11 @@ notices only), so there is nothing to observe in EW 8.0.49. Windows runs:
   database; on Windows the script builds cargo-deny 0.20.2 with
   `cargo install`). Sela now: all pass on Linux; the Windows-only branches of
   `media::ffmpeg::check_input` (UNC shares, `\\?\` and `\\.\` device paths)
-  are exercised only on Windows. Re-run: the same commands.
+  are exercised only on Windows, and the Windows-only unsafe Job Object code
+  (docs/security.md U-01, U-04) compiles in the mingw cross check but has no
+  test run: confirm a decode started by `scripts/media-backend-windows.py`
+  leaves no `ffmpeg.exe` behind after Sela is killed from Task Manager.
+  Re-run: the same commands.
 - [ ] **PP-FUZZ-02 Notices in the installed program** (M5-07). Steps: when
   the Inno Setup installer exists, install it and confirm `LICENSE`,
   `THIRD-PARTY-NOTICES` and FFmpeg's own license files are in the install

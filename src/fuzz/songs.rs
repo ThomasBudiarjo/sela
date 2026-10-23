@@ -311,6 +311,58 @@ proptest! {
         run(Format::EwRtf, &bytes);
     }
 
+    // SEC-09: a title near the limit made of few, long graphemes (a letter
+    // with many combining marks) can be cut to nothing.
+    #[test]
+    fn grapheme_heavy_titles_keep_the_import_invariants(
+        lead in "[ a\u{3000}]{0,3}",
+        marks in proptest::collection::vec(0usize..700, 1..4),
+    ) {
+        let title: String = std::iter::once(lead)
+            .chain(marks.iter().map(|n| format!("e{}", "\u{301}".repeat(*n))))
+            .collect();
+        let files = [
+            (Format::ChordPro, format!("{{title: {title}}}\nA line\n")),
+            (
+                Format::OpenSong,
+                format!("<song><title>{title}</title><lyrics>[V1]\n a\n</lyrics></song>"),
+            ),
+            (
+                Format::OpenLyrics,
+                format!(
+                    "<song xmlns=\"http://openlyrics.info/namespace/2009/song\"><properties><titles>\
+                     <title>{title}</title></titles></properties><lyrics><verse name=\"v1\">\
+                     <lines>a</lines></verse></lyrics></song>"
+                ),
+            ),
+        ];
+        for (format, file) in files {
+            run(format, file.as_bytes());
+        }
+    }
+
+    // File › Import (`import::batch::stage`): format detection by extension
+    // and root element, then the file-name title. What stages is storable.
+    #[test]
+    fn staged_files_are_storable_songs(
+        bytes in mutated(
+            [Format::OpenLyrics, Format::OpenSong, Format::ChordPro]
+                .iter()
+                .flat_map(|f| f.seeds())
+                .collect(),
+            XML_TOKENS,
+        ),
+        name in proptest::sample::select(&["song.xml", "song.cho", "song.chordpro", "song", "song.txt", " .xml"][..]),
+    ) {
+        let path = std::path::Path::new("/import").join(name);
+        let staged = within(Duration::from_secs(5), "stage", || import::batch::stage(&path, &bytes));
+        if let Ok(staged) = staged {
+            prop_assert_eq!(staged.song.validate(), Ok(()));
+            prop_assert!(!staged.song.title.trim().is_empty());
+            prop_assert!(staged.warnings.len() <= MAX_WARNINGS);
+        }
+    }
+
     #[test]
     fn arbitrary_bytes_keep_the_import_invariants(
         bytes in proptest::collection::vec(any::<u8>(), 0..1024),

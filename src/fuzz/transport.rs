@@ -1,7 +1,7 @@
-//! The operator-to-audience pipe (`transport::Frame`). Both ends are Sela,
-//! but a crashed, stalled or mismatched peer can send anything, and the
-//! audience renderer must turn every byte sequence into a typed error, never
-//! a panic or an unbounded allocation.
+//! The operator-to-renderer pipes (`transport::Frame`, audience and stage
+//! processes). Both ends are Sela, but a crashed, stalled or mismatched peer
+//! can send anything, and a renderer must turn every byte sequence into a
+//! typed error, never a panic or an unbounded allocation.
 use super::{config, mutated};
 use crate::delivery::{Acknowledgment, Command, Epoch, Lane, Outcome, Payload, Stamp};
 use crate::masks::Layer;
@@ -69,6 +69,44 @@ fn seeds() -> Vec<Vec<u8>> {
         )
         .unwrap(),
     ));
+    // A stage panel (kind 7, stage-display) carries its text and font.
+    let panel = crate::stage::StagePanel {
+        current_label: "Song - Verse 1".into(),
+        current: "Line one\nLine two".into(),
+        next_label: "Next: Chorus".into(),
+        next: "Chorus line".into(),
+        message: "Two minutes".into(),
+        show_clock: true,
+        show_next: true,
+    };
+    let stage = PreparedCue::for_stage(
+        version,
+        Extent {
+            width: 640,
+            height: 360,
+        },
+        crate::stage::BACKGROUND,
+        panel,
+        (
+            ContentVersion { id: 8, revision: 1 },
+            Arc::from(crate::fonts::BUNDLED),
+            0,
+        ),
+        CAPS,
+    )
+    .unwrap();
+    seeds.push(encoded(
+        &Frame::command(
+            &Command::from_wire(
+                stamp(),
+                Lane::Cue,
+                Payload::Scene(Arc::new(stage)),
+                deadline,
+            ),
+            now,
+        )
+        .unwrap(),
+    ));
     seeds
 }
 
@@ -106,6 +144,9 @@ fn check(bytes: &[u8]) {
             if let Payload::Scene(cue) | Payload::Logo(cue) = command.payload() {
                 assert!(cue.extent().width <= CAPS.max_texture_dimension);
                 assert!(cue.extent().height <= CAPS.max_texture_dimension);
+                if let Some(stage) = cue.stage() {
+                    assert!(stage.panel().is_valid(), "a stage panel within its bounds");
+                }
             }
             // What was accepted is sent on unchanged by the same encoder.
             let _ = Frame::command(&command, Instant::now());
@@ -135,9 +176,42 @@ proptest! {
 
 #[test]
 fn a_declared_resource_body_past_the_limit_is_refused_before_allocation() {
+    use std::io::{ErrorKind, Read};
+    // The stream holds enough bytes after the header that reading the body
+    // would succeed, so only the size check can refuse it: the refusal must
+    // be `InvalidData` from the bound, not `UnexpectedEof` from a body read
+    // after allocating (review finding: `is_err()` alone could not tell).
+    for size in [MAX_RESOURCE_BODY as u32 + 1, u32::MAX] {
+        let mut bytes = b"SCUE\x02\x01\x00\x00".to_vec();
+        bytes.extend_from_slice(&size.to_le_bytes());
+        let stream =
+            Cursor::new(bytes).chain(std::io::repeat(0).take(MAX_RESOURCE_BODY as u64 + 2));
+        let started = Instant::now();
+        let error = Frame::read(stream).err().expect("refused");
+        assert_eq!(error.kind(), ErrorKind::InvalidData, "size {size}");
+        assert!(started.elapsed() < Duration::from_millis(100));
+    }
+    // At the limit the same stream is read as a frame (it is then refused
+    // later as a resource payload, not here).
     let mut bytes = b"SCUE\x02\x01\x00\x00".to_vec();
-    bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-    let started = Instant::now();
-    assert!(Frame::read(Cursor::new(&bytes)).is_err());
-    assert!(started.elapsed() < Duration::from_millis(100));
+    bytes.extend_from_slice(&(MAX_RESOURCE_BODY as u32).to_le_bytes());
+    let stream = Cursor::new(bytes).chain(std::io::repeat(0).take(MAX_RESOURCE_BODY as u64));
+    assert!(Frame::read(stream).is_ok());
+}
+
+#[test]
+fn every_seed_is_a_frame_the_renderer_accepts() {
+    let mut stages = 0;
+    for seed in seeds() {
+        let frame = Frame::read(Cursor::new(&seed)).expect("a seed is a frame");
+        if frame.command_stamp().is_ok() {
+            let command = frame
+                .into_command(Instant::now(), CAPS)
+                .expect("a seed command is accepted");
+            if let Payload::Scene(cue) = command.payload() {
+                stages += usize::from(cue.stage().is_some());
+            }
+        }
+    }
+    assert_eq!(stages, 1, "the stage panel seed reaches the stage decoder");
 }

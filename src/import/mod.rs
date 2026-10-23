@@ -129,6 +129,19 @@ impl ParsedSong {
         }
     }
 
+    /// Call after cutting a title the file did have. A title cut to nothing
+    /// or to spaces (a single grapheme longer than `MAX_TITLE`, such as one
+    /// letter with hundreds of combining marks) is a missing title: it is
+    /// cleared and `MissingTitle` reported, so the caller substitutes the
+    /// file name instead of accepting a song `Song::validate` refuses
+    /// (SEC-09).
+    pub fn keep_title_usable(&mut self) {
+        if self.title.trim().is_empty() {
+            self.title.clear();
+            self.warn_missing_title();
+        }
+    }
+
     /// Records a warning once per song.
     fn warn_once(&mut self, warning: Warning) {
         if !self.warnings.contains(&warning) {
@@ -151,8 +164,12 @@ impl ParsedSong {
             }
         };
         let mut title = std::mem::take(&mut self.title);
+        let named = !title.is_empty();
         fit(&mut title, MAX_TITLE, "title", self);
         self.title = title;
+        if named {
+            self.keep_title_usable();
+        }
         let mut copyright = std::mem::take(&mut self.copyright);
         fit(&mut copyright, MAX_TEXT_FIELD, "copyright", self);
         self.copyright = copyright;
@@ -395,6 +412,38 @@ mod tests {
                 .contains(&Warning::Truncated("section label".into()))
         );
         assert!(storable(&parsed));
+    }
+
+    // SEC-09 (fuzz-audit review): a title of one grapheme over the title
+    // limit was cut to "" with no MissingTitle, so the file name was never
+    // substituted and the accepted song could not be stored.
+    #[test]
+    fn a_title_cut_to_nothing_is_reported_missing() {
+        let grapheme = format!("a{}", "\u{301}".repeat(600));
+        assert!(grapheme.len() > MAX_TITLE && cut(&grapheme, MAX_TITLE).is_empty());
+        for title in [grapheme.clone(), format!("  {grapheme}")] {
+            for parsed in [
+                chordpro::parse(format!("{{title: {title}}}\nA line\n").as_bytes()),
+                opensong::parse(
+                    format!("<song><title>{title}</title><lyrics>[V1]\n a\n</lyrics></song>")
+                        .as_bytes(),
+                ),
+                openlyrics::parse(
+                    format!(
+                        "<song xmlns=\"http://openlyrics.info/namespace/2009/song\" version=\"0.9\">\
+                         <properties><titles><title>{title}</title></titles></properties>\
+                         <lyrics><verse name=\"v1\"><lines>a</lines></verse></lyrics></song>"
+                    )
+                    .as_bytes(),
+                ),
+            ] {
+                let parsed = parsed.unwrap();
+                assert_eq!(parsed.title, "");
+                assert_eq!(parsed.warnings[0], Warning::MissingTitle, "{:?}", parsed.warnings);
+                assert!(parsed.warnings.contains(&Warning::Truncated("title".into())));
+                assert!(storable(&parsed));
+            }
+        }
     }
 
     // M5-02 fuzz finding: an OpenSong or ChordPro order could expand into

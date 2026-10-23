@@ -1,7 +1,7 @@
 //! Process-wide timer resolution for the safety lane.
 //!
-//! The only unsafe code in Sela (docs/security.md, "Unsafe code"): one
-//! Windows API call without memory arguments.
+//! Unsafe code U-01 of docs/security.md ("Unsafe code", which lists every
+//! unsafe site in Sela): one Windows API call without memory arguments.
 
 #[cfg(windows)]
 #[allow(unsafe_code)]

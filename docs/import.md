@@ -29,8 +29,12 @@ Shared rules (`src/import/mod.rs`):
   text budget (240 KiB of labels and slide text, 24 bytes per slide on top)
   are dropped from the end with one `LimitReached`; order entries past 512
   expanded slides are dropped with `LimitReached`; a song whose first slide
-  alone is over the budget is `TooLarge`. `MissingTitle` is always the first
-  warning, so it survives a full warning list (`warn_missing_title`).
+  alone is over the budget is `TooLarge`. A title that the cut leaves empty
+  or blank (one grapheme longer than 1,024 bytes, such as a letter with
+  hundreds of combining marks) is cleared and reported as `MissingTitle`
+  next to `Truncated("title")`, so the file name is used (SEC-09). Whenever
+  the title is empty, `MissingTitle` is the first warning, so it survives a
+  full warning list (`warn_missing_title`).
 - Seeded property and fuzz suites in `src/fuzz/` check these rules for every
   parser on mutated fixtures, token soups and worst-case 1 MiB inputs
   ([security.md](security.md#fuzzing)).
@@ -458,8 +462,11 @@ UI never waits on it). Both items are disabled while an import runs.
   reading), 32 MiB of staged song text (later files get "Not read: one
   import holds at most 32 MiB of song text", distinct from the 500-file
   message), and the library's own song limits
-  (`Song::validate`, `storage::MAX_SONG_BYTES`), which give "larger than the
-  library allows".
+  (`Song::validate`, `storage::MAX_SONG_BYTES`). The parsers already cut a
+  song to those limits with `Truncated`/`LimitReached` warnings (see
+  above), so a long file is staged shorter, with the warning in the
+  preview; "larger than the library allows" remains as the fallback for a
+  song `to_song` still refuses.
 - A missing title becomes the file name (without extension); the
   `MissingTitle` warning stays and the preview says so.
 

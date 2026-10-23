@@ -88,11 +88,9 @@ pub(crate) fn open(profile: &Path, cx: &mut App) {
 }
 
 fn open_with(profile: &Path, dismiss: Rc<dyn Fn(&mut App)>, cx: &mut App) {
-    if let Some(language) = std::fs::read_to_string(settings::path_in(profile))
-        .ok()
-        .and_then(|text| settings::parse(&text).ok())
-        .map(|s| s.language)
-    {
+    // Bounded like every settings read (SEC-06): an oversized file gives the
+    // default language instead of being read whole.
+    if let Some(language) = settings::peek(&settings::path_in(profile)).map(|s| s.language) {
         i18n::set_language(language);
     }
     cx.bind_keys([
@@ -135,6 +133,29 @@ fn open_with(profile: &Path, dismiss: Rc<dyn Fn(&mut App)>, cx: &mut App) {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    // fuzz-audit review: the notice read settings.txt whole, bypassing the
+    // 1 MiB settings bound (SEC-06) on the second instance's start.
+    #[gpui::test]
+    fn the_notice_reads_the_language_within_the_settings_bound(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings::path_in(dir.path());
+        let small = "sela-settings 1\nlanguage=id\n";
+        let mut large = String::from(small);
+        large.push_str(&"\n".repeat(settings::MAX_FILE_BYTES as usize));
+        std::fs::write(&path, &large).unwrap();
+        i18n::set_language(i18n::Language::English);
+        cx.update(|cx| open_with(dir.path(), Rc::new(|_| {}), cx));
+        assert_eq!(
+            i18n::language(),
+            i18n::Language::English,
+            "oversized file not read"
+        );
+        std::fs::write(&path, small).unwrap();
+        cx.update(|cx| open_with(dir.path(), Rc::new(|_| {}), cx));
+        assert_eq!(i18n::language(), i18n::Language::Indonesian);
+        i18n::set_language(i18n::Language::English);
+    }
 
     #[gpui::test]
     fn the_notice_names_the_profile_and_quits_on_enter_esc_or_ok(cx: &mut TestAppContext) {

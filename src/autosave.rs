@@ -401,7 +401,7 @@ enum State {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Session {
+pub(crate) struct Session {
     state: State,
     started_at: u64,
     /// Revisions up to here were seen by the operator (closed cleanly,
@@ -700,7 +700,7 @@ fn encode_session(session: &Session) -> Vec<u8> {
     text.into_bytes()
 }
 
-fn decode_session(bytes: &[u8]) -> Option<Session> {
+pub(crate) fn decode_session(bytes: &[u8]) -> Option<Session> {
     let value: Value = serde_json::from_slice(bytes).ok()?;
     if value.get("format")?.as_str()? != SESSION_FORMAT
         || value.get("version")?.as_u64()? != SESSION_VERSION

@@ -124,27 +124,44 @@ def license_files(package: dict) -> list[tuple[str, str]]:
     return found
 
 
-def spdx_ids(expression: str) -> list[str]:
-    tokens = re.split(r"[\s()/]+", expression.replace(" OR ", " ").replace(" AND ", " "))
-    ids = []
-    for token in tokens:
-        if token and token not in ("OR", "AND", "WITH") and token not in ids:
-            ids.append(token)
-    return ids
+def spdx_ids(expression: str) -> tuple[list[str], list[str]]:
+    """License ids and `WITH` exception ids of an SPDX expression, in order."""
+    tokens = [t for t in re.split(r"[\s()/]+", expression) if t]
+    licenses: list[str] = []
+    exceptions: list[str] = []
+    for index, token in enumerate(tokens):
+        if token in ("OR", "AND", "WITH"):
+            continue
+        found = exceptions if index > 0 and tokens[index - 1] == "WITH" else licenses
+        if token not in found:
+            found.append(token)
+    return licenses, exceptions
 
 
 def standard_texts(package: dict) -> list[tuple[str, str]]:
     expression = package.get("license") or ""
+    licenses, exceptions = spdx_ids(expression)
+    label = f"{package['name']} {package['version']}"
     texts = []
-    for spdx in spdx_ids(expression):
+    for spdx in licenses:
         path = SPDX_DIR / f"{spdx}.txt"
         if path.is_file():
             texts.append((f"{spdx} (standard text)", normalized(path.read_text(encoding="utf-8"))))
     if not texts:
         raise SystemExit(
-            f"{package['name']} {package['version']} ships no license file and no standard "
-            f"text exists for {expression!r}; add one to {SPDX_DIR.relative_to(ROOT)}"
+            f"{label} ships no license file and no standard text exists for "
+            f"{expression!r}; add one to {SPDX_DIR.relative_to(ROOT)}"
         )
+    # An exception (`Apache-2.0 WITH LLVM-exception`) is part of the terms:
+    # its text is required, never silently left out.
+    for spdx in exceptions:
+        path = SPDX_DIR / f"{spdx}.txt"
+        if not path.is_file():
+            raise SystemExit(
+                f"{label} ships no license file and no standard text exists for the "
+                f"{spdx} exception in {expression!r}; add one to {SPDX_DIR.relative_to(ROOT)}"
+            )
+        texts.append((f"{spdx} (standard text)", normalized(path.read_text(encoding="utf-8"))))
     return texts
 
 

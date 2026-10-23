@@ -4,7 +4,8 @@
 use super::{config, corpus, mutated, within};
 use crate::i18n::Language;
 use crate::pane_layout::{Layout, Placement};
-use crate::settings::{self, MAX_RECENT, ParseError, Settings};
+use crate::settings::{self, MAX_RECENT, ParseError, Settings, StageSettings};
+use crate::slides::CopyrightOptions;
 use crate::song_order::{SongOrder, SongSort};
 use proptest::prelude::*;
 use std::path::PathBuf;
@@ -44,6 +45,16 @@ const TOKENS: &[&str] = &[
     "song_sort=",
     "modified",
     "song_sort_descending=1\n",
+    "song_number",
+    "copyright_display=0\n",
+    "copyright_first_slide=1\n",
+    "license_info=",
+    "CCLI License # 1",
+    "stage_enabled=1\n",
+    "stage_monitor=",
+    "\\\\.\\DISPLAY2",
+    "stage_clock=0\n",
+    "stage_next=0\n",
     "recent=",
     "C:/s/a.selaschedule",
     "pane_ratios=",
@@ -102,18 +113,49 @@ fn operator_settings() -> impl Strategy<Value = Settings> {
         prop_oneof![Just(Language::English), Just(Language::Indonesian)],
         proptest::collection::vec("[^\\x00-\\x1f\\x7f-\\x9f]{1,60}", 0..12),
         (
-            prop_oneof![Just(SongSort::Title), Just(SongSort::Modified)],
+            proptest::sample::select(
+                &[
+                    SongSort::Title,
+                    SongSort::Author,
+                    SongSort::Copyright,
+                    SongSort::Administrator,
+                    SongSort::SongNumber,
+                    SongSort::Modified,
+                ][..],
+            ),
             any::<bool>(),
         ),
         proptest::option::of(layouts()),
+        (any::<bool>(), any::<bool>(), any::<String>()).prop_map(
+            |(display, first_slide_only, license)| CopyrightOptions {
+                display,
+                first_slide_only,
+                // The Options field stores the cleaned line.
+                license_info: CopyrightOptions::clean_license(&license),
+            },
+        ),
+        (
+            any::<bool>(),
+            proptest::option::of("[^\\x00-\\x1f\\x7f-\\x9f]{1,40}"),
+            any::<bool>(),
+            any::<bool>(),
+        )
+            .prop_map(|(enabled, monitor, clock, next)| StageSettings {
+                enabled,
+                monitor,
+                clock,
+                next,
+            }),
     )
         .prop_map(
-            |(output_monitor, language, recent, (sort, descending), layout)| {
+            |(output_monitor, language, recent, (sort, descending), layout, copyright, stage)| {
                 let mut settings = Settings {
                     output_monitor,
                     language,
                     song_order: SongOrder { sort, descending },
                     layout,
+                    copyright,
+                    stage,
                     ..Settings::default()
                 };
                 for path in recent.into_iter().rev() {
@@ -163,10 +205,12 @@ proptest! {
         let odd = PathBuf::from(format!("{name}{control}{name}"));
         with.remember_recent(odd.clone());
         with.output_monitor = Some(format!("{name}{control}"));
+        with.stage.monitor = Some(format!("{control}{name}"));
         let rendered = settings::render(&with);
         let loaded = settings::parse(&rendered).unwrap();
         prop_assert_eq!(&loaded.recent_schedules, &settings.recent_schedules[..settings.recent_schedules.len().min(MAX_RECENT - 1)].to_vec());
         prop_assert_eq!(loaded.output_monitor, None);
+        prop_assert_eq!(loaded.stage.monitor, None);
         check(&rendered);
     }
 }

@@ -5,10 +5,11 @@
 use super::{config, corpus};
 use crate::background::{Aspect, Background, Fill, ImageRef};
 use crate::format::{
-    Align, MAX_FIXED_SIZE, MAX_OPACITY, MAX_OUTLINE_SIZE, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET,
-    Outline, Shadow, Size, SlideFormat, VAlign,
+    Align, MAX_FIXED_SIZE, MAX_MARGIN, MAX_OPACITY, MAX_OUTLINE_SIZE, MAX_SHADOW_BLUR,
+    MAX_SHADOW_OFFSET, Margins, Outline, Shadow, Size, SlideFormat, VAlign,
 };
 use crate::storage::{MAX_SONG_BYTES, Song};
+use crate::theme::{self, Theme, ThemeId};
 use proptest::prelude::*;
 
 /// Strict codecs: whatever decodes is valid and encodes to the same bytes.
@@ -23,6 +24,14 @@ fn check_background(bytes: &[u8]) {
     if let Some(background) = Background::decode(bytes) {
         assert!(background.is_valid(), "{background:?}");
         assert_eq!(background.encode(), bytes, "canonical encoding");
+    }
+}
+
+fn check_theme(bytes: &[u8]) {
+    if let Some(theme) = Theme::decode(bytes) {
+        assert!(bytes.len() <= theme::MAX_ENCODED);
+        assert!(theme.is_valid(), "{theme:?}");
+        assert_eq!(theme.encode(), bytes, "canonical encoding");
     }
 }
 
@@ -85,9 +94,33 @@ pub(crate) fn slide_formats() -> impl Strategy<Value = SlideFormat> {
                     opacity,
                 }),
         ),
+        proptest::option::of(
+            (
+                0..=MAX_MARGIN,
+                0..=MAX_MARGIN,
+                0..=MAX_MARGIN,
+                0..=MAX_MARGIN,
+            )
+                .prop_map(|(left, right, top, bottom)| Margins {
+                    left,
+                    right,
+                    top,
+                    bottom,
+                }),
+        ),
     )
         .prop_map(
-            |(font, (bold, italic, underline), size, color, align, valign, outline, shadow)| {
+            |(
+                font,
+                (bold, italic, underline),
+                size,
+                color,
+                align,
+                valign,
+                outline,
+                shadow,
+                margins,
+            )| {
                 SlideFormat {
                     font: font.map(|f| f.trim_end().to_string()),
                     bold,
@@ -99,7 +132,7 @@ pub(crate) fn slide_formats() -> impl Strategy<Value = SlideFormat> {
                     valign,
                     outline,
                     shadow,
-                    margins: None,
+                    margins,
                 }
             },
         )
@@ -130,6 +163,25 @@ pub(crate) fn backgrounds() -> impl Strategy<Value = Background> {
         .prop_filter("a usable image name", Background::is_valid)
 }
 
+/// Themes (M1-08) as the library and schedule files store them.
+pub(crate) fn themes() -> impl Strategy<Value = Theme> {
+    (
+        any::<[u8; 16]>(),
+        "[A-Za-z0-9][A-Za-z0-9 \u{e9}\u{8056}]{0,40}",
+        slide_formats(),
+        proptest::option::of(backgrounds()),
+        any::<bool>(),
+    )
+        .prop_map(|(id, name, format, background, show_copyright)| Theme {
+            id: ThemeId(id),
+            name: name.trim_end().to_string(),
+            format,
+            background,
+            show_copyright,
+        })
+        .prop_filter("a valid theme", Theme::is_valid)
+}
+
 proptest! {
     #![proptest_config(config(0x5e1a_0301, 512, "tests/fixtures/fuzz/codecs.proptest-regressions"))]
 
@@ -137,6 +189,7 @@ proptest! {
     fn arbitrary_bytes_decode_strictly(bytes in proptest::collection::vec(any::<u8>(), 0..400)) {
         check_format(&bytes);
         check_background(&bytes);
+        check_theme(&bytes);
         check_song_payload(&bytes);
     }
 
@@ -144,14 +197,21 @@ proptest! {
     fn mutated_encodings_decode_strictly(
         format in slide_formats(),
         background in backgrounds(),
+        theme in themes(),
         edits in super::edits(&["\u{0}", "\u{1}", "\u{ff}", "\u{80}"]),
     ) {
         check_format(&super::apply(format.encode(), &edits));
         check_background(&super::apply(background.encode(), &edits));
+        check_theme(&super::apply(theme.encode(), &edits));
     }
 
     #[test]
-    fn valid_values_round_trip(format in slide_formats(), background in backgrounds()) {
+    fn valid_values_round_trip(
+        format in slide_formats(),
+        background in backgrounds(),
+        theme in themes(),
+    ) {
+        prop_assert_eq!(Theme::decode(&theme.encode()), Some(theme));
         if format.is_default() {
             // The default is never stored, so it never decodes.
             prop_assert_eq!(SlideFormat::decode(&format.encode()), None);
@@ -181,6 +241,7 @@ fn retained_corpus_replays_cleanly() {
     for (_, bytes) in corpus("codecs") {
         check_format(&bytes);
         check_background(&bytes);
+        check_theme(&bytes);
         check_song_payload(&bytes);
     }
 }

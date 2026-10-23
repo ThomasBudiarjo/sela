@@ -1,12 +1,14 @@
 //! `.selaschedule` documents (`schedule_file::decode`). A schedule file is
 //! the one document Sela opens from anywhere (USB sticks, mail, another
 //! church's machine), so it is fully untrusted.
-use super::codecs::{backgrounds, slide_formats};
+use super::codecs::{backgrounds, slide_formats, themes};
 use super::{config, corpus, mutated, within};
 use crate::arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId};
+use crate::schedule::ItemTheme;
 use crate::schedule_file::{
-    self, Item, MAX_FILE_BYTES, MAX_TITLE_BYTES, ReadError, ScheduleFile, encode,
+    self, Item, MAX_FILE_BYTES, MAX_TITLE_BYTES, ReadError, ScheduleFile, ScriptureItem, encode,
 };
+use crate::scripture::{Book, Snapshot, VerseId};
 use crate::storage::{Id, MAX_ITEMS, Section, Song, Version};
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -26,12 +28,25 @@ fn check(bytes: &[u8]) {
             assert!(bytes.len() <= MAX_FILE_BYTES);
             assert!(file.items.len() <= MAX_ITEMS);
             assert!(file.title.len() <= MAX_TITLE_BYTES);
+            assert!(file.items.len() + file.scripture.len() <= MAX_ITEMS);
             for item in &file.items {
                 assert_eq!(item.song.validate(), Ok(()), "every opened song is valid");
                 assert!(item.source.revision > 0);
                 if let Some(id) = item.arrangement {
                     assert!(item.song.variants.iter().any(|v| v.id == id));
                 }
+                if let Some(theme) = &item.theme {
+                    assert!(theme.theme.is_valid(), "every opened theme is valid");
+                }
+            }
+            // Scripture items (version 5): valid snapshots at ascending
+            // positions inside the schedule.
+            let total = file.items.len() + file.scripture.len();
+            for (n, item) in file.scripture.iter().enumerate() {
+                assert!(item.snapshot.valid(), "every opened snapshot is valid");
+                assert!(item.title.len() <= MAX_TITLE_BYTES);
+                assert!(item.position < total);
+                assert!(n == 0 || file.scripture[n - 1].position < item.position);
             }
             // What opened can be saved again, and reopens identically.
             let again = encode(&file).expect("an opened schedule can be saved");
@@ -135,33 +150,86 @@ pub(crate) fn songs() -> impl Strategy<Value = Song> {
         .prop_filter("a valid song", |song| song.validate().is_ok())
 }
 
+/// Pinned verses as a scripture item stores them (sorted, unique, text).
+pub(crate) fn snapshots() -> impl Strategy<Value = Snapshot> {
+    let verse = (1u8..=66, 1u16..=150, 1u16..=176, "[^\\x00]{1,60}");
+    (
+        "[A-Z0-9][A-Z0-9_-]{0,15}",
+        any::<String>(),
+        "[a-z]{0,3}",
+        any::<bool>(),
+        proptest::collection::vec(verse, 1..6),
+    )
+        .prop_map(|(translation, name, language, redistributable, verses)| {
+            let mut verses: Vec<(VerseId, String)> = verses
+                .into_iter()
+                .filter_map(|(book, chapter, verse, text)| {
+                    Some((
+                        VerseId::new(Book::from_number(book)?, chapter, verse)?,
+                        text,
+                    ))
+                })
+                .collect();
+            verses.sort_by_key(|(id, _)| *id);
+            verses.dedup_by_key(|(id, _)| *id);
+            Snapshot {
+                translation,
+                name,
+                language,
+                redistributable,
+                verses,
+            }
+        })
+        .prop_filter("a valid snapshot", Snapshot::valid)
+}
+
+#[derive(Clone, Debug)]
+enum Entry {
+    Song(Box<Item>),
+    Scripture(String, Snapshot),
+}
+
 fn schedules() -> impl Strategy<Value = ScheduleFile> {
     let item = (
         songs(),
         any::<[u8; 16]>(),
         1..=i64::MAX,
         proptest::option::of(any::<prop::sample::Index>()),
+        proptest::option::of((themes(), any::<bool>())),
     )
-        .prop_map(|(song, id, revision, pick)| {
+        .prop_map(|(song, id, revision, pick, theme)| {
             let arrangement = pick
                 .filter(|_| !song.variants.is_empty())
                 .map(|pick| pick.get(&song.variants).id);
-            Item {
+            Entry::Song(Box::new(Item {
                 source: Version {
                     id: Id(id),
                     revision,
                 },
                 song,
                 arrangement,
-                theme: None,
-            }
+                theme: theme.map(|(theme, explicit)| ItemTheme { theme, explicit }),
+            }))
         });
-    ("[^\\x00]{0,40}", proptest::collection::vec(item, 0..4)).prop_map(|(title, items)| {
-        ScheduleFile {
+    let scripture = ("[^\\x00]{0,40}", snapshots())
+        .prop_map(|(title, snapshot)| Entry::Scripture(title, snapshot));
+    let entry = prop_oneof![3 => item, 1 => scripture];
+    ("[^\\x00]{0,40}", proptest::collection::vec(entry, 0..5)).prop_map(|(title, entries)| {
+        let mut file = ScheduleFile {
             title,
-            items,
-            scripture: Vec::new(),
+            ..Default::default()
+        };
+        for (position, entry) in entries.into_iter().enumerate() {
+            match entry {
+                Entry::Song(item) => file.items.push(*item),
+                Entry::Scripture(title, snapshot) => file.scripture.push(ScriptureItem {
+                    position,
+                    title,
+                    snapshot,
+                }),
+            }
         }
+        file
     })
 }
 
@@ -187,6 +255,11 @@ const JSON_TOKENS: &[&str] = &[
     "\"items\"",
     "\"version\":3",
     "\"version\":4",
+    "\"version\":5",
+    "\"kind\":\"scripture\"",
+    "\"verses\":[[43003016,\"x\"]]",
+    "\"theme\":\"01\"",
+    "\"theme_explicit\":true",
     "\"arrangement\":\"00\"",
     "\"format\":\"zz\"",
     "\"background\":\"0101\"",

@@ -378,6 +378,7 @@ impl Reader {
         }
         if let Some(title) = titles.into_iter().next() {
             self.song.title = self.fit(title, MAX_TITLE, "title");
+            self.song.keep_title_usable();
         }
         let mut joined = 0;
         for author in std::mem::take(&mut self.authors) {

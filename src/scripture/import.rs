@@ -249,6 +249,8 @@ fn meta(text: &str) -> String {
     text
 }
 
+/// Cuts `text` to at most `max` bytes at a character boundary. A cut that
+/// lands after a space drops it, so text stays trimmed (SEC-11).
 fn cut(text: &mut String, max: usize) -> bool {
     if text.len() <= max {
         return false;
@@ -258,6 +260,8 @@ fn cut(text: &mut String, max: usize) -> bool {
         end -= 1;
     }
     text.truncate(end);
+    let trimmed = text.trim_end().len();
+    text.truncate(trimmed);
     true
 }
 
@@ -830,6 +834,22 @@ mod tests {
         let parsed = parse(one.as_bytes()).unwrap();
         assert!(parsed.verses[0].1.len() <= MAX_VERSE_BYTES);
         assert_eq!(parsed.warnings, [Warning::Truncated(id(1, 1, 1))]);
+    }
+
+    // SEC-11 (fuzz-audit): a verse cut at `MAX_VERSE_BYTES` right after a
+    // space kept it, so the stored text was not trimmed as documented.
+    #[test]
+    fn a_verse_cut_at_the_limit_ends_without_a_space() {
+        for words in ["a ".repeat(MAX_VERSE_BYTES), "ab ".repeat(MAX_VERSE_BYTES)] {
+            let one = format!(
+                "<usfx><book id=\"GEN\"><c id=\"1\"/><v id=\"1\"/>{words}<ve/>\
+                 <v id=\"1\"/>{words}<ve/></book></usfx>"
+            );
+            let parsed = parse(one.as_bytes()).unwrap();
+            let text = &parsed.verses[0].1;
+            assert!(text.len() <= MAX_VERSE_BYTES);
+            assert_eq!(text.trim_end(), text);
+        }
     }
 
     #[test]

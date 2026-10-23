@@ -370,11 +370,34 @@ const MAX_BACKUP_BYTES: i64 = 256 * 1024 * 1024;
 /// backup can come from anywhere): defensive mode refuses schema and
 /// page-level corruption tricks, and an untrusted schema may not run
 /// functions with side effects from views, triggers or defaults.
-fn harden(db: &Connection) -> Result<()> {
+pub(crate) fn harden(db: &Connection) -> rusqlite::Result<()> {
     use rusqlite::config::DbConfig;
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
     Ok(())
+}
+
+/// A hardened read-only connection to a database Sela did not just write:
+/// a restore input, or the library read again for its pre-migration backup.
+fn open_untrusted_read_only(path: &std::path::Path) -> Result<Connection> {
+    let db = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    harden(&db)?;
+    db.busy_timeout(Duration::from_millis(100))?;
+    Ok(db)
+}
+
+/// The private copy a backup or restore writes the source's pages into.
+/// The pages may be hostile until `copy_new` has verified them, so the
+/// connection is hardened like every other (review finding, fuzz-audit).
+fn open_private_copy(path: &std::path::Path) -> Result<Connection> {
+    let target = Connection::open(path)?;
+    harden(&target)?;
+    target.execute_batch("PRAGMA synchronous=FULL; PRAGMA cache_size=-2048;")?;
+    target.busy_timeout(Duration::from_millis(100))?;
+    Ok(target)
 }
 
 /// Sela never creates triggers or views. A library that has one was not
@@ -437,9 +460,7 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
         options.mode(0o600);
     }
     options.open(&path).map_err(|_| Error::Io)?;
-    let mut target = Connection::open(&path)?;
-    target.execute_batch("PRAGMA synchronous=FULL; PRAGMA cache_size=-2048;")?;
-    target.busy_timeout(Duration::from_millis(100))?;
+    let mut target = open_private_copy(&path)?;
     let start = std::time::Instant::now();
     {
         let backup = Backup::new(source, &mut target)?;
@@ -508,12 +529,7 @@ impl Repository {
         if source.as_os_str().len() > 4096 {
             return Err(Error::Invalid);
         }
-        let db = Connection::open_with_flags(
-            source,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        harden(&db)?;
-        db.busy_timeout(Duration::from_millis(100))?;
+        let db = open_untrusted_read_only(source)?;
         db.execute_batch("PRAGMA cache_size=-2048;")?;
         copy_new(&db, destination, cancel)
     }
@@ -740,11 +756,7 @@ impl Repository {
             // Hold the writer reservation across backup and migration. The separate
             // read connection copies the same committed state, without attempting
             // an online backup from a connection with an active write transaction.
-            let source = Connection::open_with_flags(
-                path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )?;
-            source.busy_timeout(Duration::from_millis(100))?;
+            let source = open_untrusted_read_only(path)?;
             let mut backup = path.as_os_str().to_owned();
             backup.push(format!(".schema{version}-backup"));
             copy_new(
@@ -2554,6 +2566,31 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    // Review finding (fuzz-audit): the private copy a backup or restore
+    // writes, and the library read again for its pre-migration backup, were
+    // plain connections, though docs/storage.md says every connection is
+    // hardened.
+    #[test]
+    fn connections_to_untrusted_files_are_hardened() {
+        use rusqlite::config::DbConfig;
+        let (d, p, repo) = fixture();
+        drop(repo);
+        let hardened = |db: &Connection| {
+            (
+                db.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap(),
+                db.db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
+                    .unwrap(),
+            )
+        };
+        assert_eq!(
+            hardened(&open_untrusted_read_only(&p).unwrap()),
+            (true, false)
+        );
+        let copy = d.path().join("copy.sqlite");
+        assert_eq!(hardened(&open_private_copy(&copy).unwrap()), (true, false));
+        assert_eq!(hardened(&Repository::open(&p).unwrap().db), (true, false));
     }
 
     #[test]

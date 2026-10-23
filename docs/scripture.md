@@ -88,8 +88,10 @@ Notes:
 A file is written to `<ID>.selabible.partial`, synced and renamed, so a
 reader never sees half a translation. `store::open` refuses a file before
 reading anything from it unless all of these hold: application id and
-format version, `PRAGMA quick_check`, the metadata, verse count and content
-hash. A damaged FTS index alone (quick_check failing only because of it, or
+format version, no trigger or view (Sela writes none), `PRAGMA quick_check`,
+the metadata, verse count and content hash. Every connection to a
+translation file is hardened like the library's (SQLite defensive mode,
+untrusted schema; M5-02, [security.md](security.md) SEC-12). A damaged FTS index alone (quick_check failing only because of it, or
 FTS5 `integrity-check` failing) is dropped and rebuilt in place.
 
 The worker (`scripture::worker::Worker`, its own thread, bounded command

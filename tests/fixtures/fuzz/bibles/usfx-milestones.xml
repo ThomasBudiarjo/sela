@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<usfx><languageCode>eng</languageCode>
+<book id="FRT"><p>Preface text</p></book>
+<book id="PSA"><h>Psalms</h><c id="23"/><d>A synthetic title.</d>
+<q><v id="1"/>First line,</q><q level="2">second line.<ve/></q>
+<p><v id="2"/>Has a note<f caller="+"><fr>23:2 </fr><ft>note text</ft></f> and a <x>cross ref</x>end.<ve/></p>
+</book>
+<book id="TOB"><c id="1"/><p><v id="1"/>skipped<ve/></p></book>
+<book id="JHN"><c id="1"/><p><v id="1-2"/>Joined verse.<ve/><v id="0"/>bad<ve/></p></book>
+</usfx>

@@ -1045,7 +1045,6 @@ mod tests {
 
     #[test]
     fn largest_font_tables_decode_in_linear_time() {
-        let started = std::time::Instant::now();
         let mut fonts = String::from("{\\rtf1{\\fonttbl");
         let mut last = 0;
         while fonts.len() < MAX_FILE_BYTES / 2 {
@@ -1053,10 +1052,22 @@ mod tests {
             fonts += &format!("\\f{last}\\fcharset204 ");
         }
         fonts += &format!("}}\\f{last} ");
-        // Each escape decodes to two bytes; the slide stays inside the text
-        // budget, so the song is accepted (`fit_to_model`).
+        // The whole file: one run of escapes up to the size limit, decoded
+        // in full before the text budget refuses the single slide (each
+        // escape decodes to two bytes, so the slide is over the budget).
+        let started = std::time::Instant::now();
+        let mut full = fonts.clone();
+        while full.len() < MAX_FILE_BYTES - 8 {
+            full += "\\'e9";
+        }
+        full += "}";
+        assert!(full.len() > MAX_FILE_BYTES - 16);
+        assert_eq!(parse(full.as_bytes()), Err(Rejected::TooLarge));
+        assert_fast(started);
+        // A run that fits the budget is accepted and decoded exactly.
+        let started = std::time::Instant::now();
         let mut escapes = 0;
-        while fonts.len() < MAX_FILE_BYTES - 8 && escapes < (SLIDE_BYTES - 64) / 2 {
+        while escapes < (SLIDE_BYTES - 64) / 2 {
             fonts += "\\'e9";
             escapes += 1;
         }

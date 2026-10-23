@@ -115,6 +115,10 @@ sys.exit(1 if bad else 0)
     echo "audit: dependency pin check FAILED" >&2
     status=1
 fi
+if ! python3 -I scripts/test_third_party_notices.py 2>/dev/null; then
+    echo "audit: notices generator unit checks FAILED" >&2
+    status=1
+fi
 if ! python3 scripts/third_party_notices.py --check; then
     echo "audit: THIRD-PARTY-NOTICES check FAILED" >&2
     status=1

@@ -82,8 +82,14 @@ impl Default for StageSettings {
 /// The saved layout of `path`, read without side effects. Unreadable or
 /// corrupt files give `None` here; `load` handles the backup and note.
 pub fn peek_layout(path: &Path) -> Option<Layout> {
+    peek(path)?.layout
+}
+
+/// The saved settings of `path`, read without side effects and within
+/// `MAX_FILE_BYTES`; `None` when unreadable or corrupt.
+pub fn peek(path: &Path) -> Option<Settings> {
     let text = String::from_utf8(read_bounded(path).ok()?).ok()?;
-    parse(&text).ok()?.layout
+    parse(&text).ok()
 }
 
 /// Largest settings file read. A real one is a few hundred bytes; ten recent
@@ -995,6 +1001,20 @@ mod tests {
             parse("sela-settings 1\noutput_monitor=X\u{7f}\nrecent=a\u{85}b\n").unwrap(),
             Settings::default()
         );
+        // The stage monitor (stage-display, merged after SEC-05) follows the
+        // same rule instead of being saved with its controls stripped.
+        let stage = Settings {
+            stage: StageSettings {
+                monitor: Some("\\\\.\\DISPLAY\u{1}2".into()),
+                ..StageSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(!render(&stage).contains("stage_monitor"));
+        assert_eq!(
+            parse("sela-settings 1\nstage_monitor=D\u{1}2\n").unwrap(),
+            Settings::default()
+        );
     }
 
     // M5-02 audit finding: the whole file was read into memory, so a damaged
@@ -1007,6 +1027,7 @@ mod tests {
         text.push_str(&"\n".repeat(MAX_FILE_BYTES as usize));
         std::fs::write(&path, &text).unwrap();
         assert_eq!(peek_layout(&path), None);
+        assert_eq!(peek(&path), None);
         let loaded = load(&path);
         assert_eq!(loaded.settings, Settings::default());
         assert!(loaded.note.is_some());
@@ -1014,6 +1035,7 @@ mod tests {
         // Exactly at the bound still loads.
         std::fs::write(&path, &text[..MAX_FILE_BYTES as usize]).unwrap();
         assert!(peek_layout(&path).is_some());
+        assert_eq!(peek(&path).unwrap().language, Language::Indonesian);
         assert_eq!(load(&path).settings.language, Language::Indonesian);
     }
 }

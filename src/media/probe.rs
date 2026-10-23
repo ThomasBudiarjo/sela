@@ -109,11 +109,12 @@ pub fn parse(json: &str) -> Result<MediaInfo, MediaError> {
         let v = value.get(key)?;
         v.as_u64().or_else(|| v.as_str()?.parse().ok())
     };
+    // A duration past `Duration::MAX` (a crafted time base) is unknown;
+    // `Duration::from_secs_f64` would panic on it (SEC-10).
     let seconds = |value: &serde_json::Value, key: &str| {
         text(value, key)
             .and_then(|s| s.parse::<f64>().ok())
-            .filter(|s| s.is_finite() && *s >= 0.)
-            .map(Duration::from_secs_f64)
+            .and_then(|s| Duration::try_from_secs_f64(s).ok())
     };
     let mut video = None;
     let mut audio = None;
@@ -406,6 +407,21 @@ mod tests {
         let sizeless = r#"{"streams": [{"index": 0, "codec_name": "h264",
             "codec_type": "video"}], "format": {}}"#;
         assert!(matches!(parse(sizeless), Err(MediaError::Corrupt(_))));
+    }
+
+    // SEC-10 (fuzz-audit): a duration too large for `Duration` (a crafted
+    // time base gives ffprobe one) panicked the probing thread.
+    #[test]
+    fn a_duration_past_the_duration_range_is_unknown_not_a_panic() {
+        for huge in ["1e300", "1.8446744073709552e19", "inf", "-1", "NaN"] {
+            let json = CLIP.replace("1.500000", huge);
+            assert_eq!(parse(&json).unwrap().duration, None, "{huge}");
+            let stream = format!(
+                r#"{{"streams": [{{"index": 0, "codec_name": "opus",
+                "codec_type": "audio", "duration": "{huge}"}}]}}"#
+            );
+            assert_eq!(parse(&stream).unwrap().duration, None, "{huge}");
+        }
     }
 
     #[test]
