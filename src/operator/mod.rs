@@ -39,6 +39,7 @@ use std::{
 
 mod assets;
 mod autosave;
+mod bundles;
 mod controls;
 mod dialogs;
 mod frame_log;
@@ -372,6 +373,8 @@ pub(super) struct Operator {
     pub(super) assets: Assets,
     /// File › Import › Songs: worker, staged preview and commit (M1-14).
     pub(super) song_import: song_import::SongImport,
+    /// Standalone schedules and profile backups (M1-13).
+    pub(super) bundles: bundles::Bundles,
     pub(super) images: Vec<String>,
     pub(super) image_rows: Vec<FocusHandle>,
     pub(super) selected_image: Option<String>,
@@ -498,6 +501,7 @@ impl Operator {
             .filter(|p| !p.as_os_str().is_empty())
             .map(Path::to_path_buf);
         let assets = Assets::start(profile.as_deref());
+        let bundles = bundles::Bundles::start(profile.as_deref());
         let autosave = autosave::AutosaveState::start(profile.as_deref(), cx);
         let mut media_message = None;
         let image_worker = profile.clone().and_then(|profile| {
@@ -681,6 +685,7 @@ impl Operator {
             image_worker,
             assets,
             song_import: Default::default(),
+            bundles,
             images: Vec::new(),
             image_rows: Vec::new(),
             selected_image: None,

@@ -37,7 +37,11 @@ Files:
   library, docs/import.md "EasyWorship library"; Windows counterpart
   `ew-import-windows.py`; both build a synthetic library with
   `scripts/ew_library_fixture.py` and reuse song-import's folder chooser
-  driver).
+  driver). `bundle-x11.py` (M1-13, S04, docs/bundle.md;
+  Windows counterpart `bundle-windows.py`): two private profiles, the
+  package and backup checked with Python's `zipfile`; result lines are read
+  through their AccessKit ids `bundle-result-<n>` and `preflight-package-<n>`
+  (list items: an AccessKit Label exposes no name over AT-SPI here).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -283,6 +287,7 @@ stream's tree (commits in the work log record of the same name).
 | `themes-x11.py --display :117` (themes stream, 2026-10-22, binary sha256 `f37bf47ba9dd1ca2…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (40 s) |
 | `themes-x11.py --display :117` (themes review round 1, 2026-10-23, binary sha256 `0e1855b2e1137d1a…`; step 6 now edits the live theme) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (42 s) |
 | `themes-x11.py --display :117` (themes review round 2, 2026-10-23, binary sha256 `9b60e612488b600a…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (42 s) |
+| `bundle-x11.py --display :122` (bundle-backup-restore, 2026-10-23; `serve --display :122`) | xvfb, no audience output | PASS (about 45 s) |
 | all eight `*-x11.py` scripts `--display :131` (pr1-review, 2026-10-23, after the native_x11 timeout and AT-SPI probe fixes) | xvfb (`serve --display :131`), audience `window` 624x351 | PASS: schedule 35 s, song-import 31 s, autosave 24 s, songs-browser 47 s, live-output 60 s (underline run 514 px of a 514 px line; non-underlined slides at most 31 px), scenario-s01 47 s (chorus black samples 23684), scenario-s02 52 s, song-editor 66 s |
 
 GTK portal folder chooser notes (song-import-x11.py): it opens on Recent,

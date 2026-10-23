@@ -41,6 +41,9 @@ pub(crate) enum Dialog {
     Recovery,
     /// Live › Stage Message…; drawn by `stage_message_overlay`.
     StageMessage,
+    /// A standalone schedule or profile backup job: progress with Cancel,
+    /// then its result (M1-13).
+    Bundle,
 }
 
 impl Operator {
@@ -69,6 +72,9 @@ impl Operator {
     }
 
     pub(crate) fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog == Some(Dialog::Bundle) {
+            self.bundles.view = None;
+        }
         self.dialog = None;
         self.dialog_message = None;
         self.settings.draft = None;
@@ -193,6 +199,12 @@ impl Operator {
             },
             Dialog::Options | Dialog::ImportSongs | Dialog::StageMessage => return None,
             Dialog::Preflight => t!(Msg::PreflightHeading).into(),
+            Dialog::Bundle => self
+                .bundles
+                .view
+                .as_ref()
+                .map(|view| view.heading.clone())
+                .unwrap_or_default(),
             Dialog::GoLiveMissing => t!(Msg::GoLiveMissingHeading).into(),
             Dialog::UpdateItems => t!(Msg::MenuUpdateSchedule).into(),
             Dialog::Recovery if self.recovery_restorable() => t!(Msg::RecoveryHeading).into(),
@@ -210,6 +222,7 @@ impl Operator {
             | Dialog::StageMessage
             | Dialog::Preflight
             | Dialog::FileError
+            | Dialog::Bundle
             | Dialog::ImportSongs => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
             Dialog::UpdateItems => Some(t!(Msg::UpdateItemsConfirm)),
@@ -229,6 +242,7 @@ impl Operator {
                     .into_any_element()
             }),
             Dialog::Preflight => Some(self.preflight_body(cx)),
+            Dialog::Bundle => Some(self.bundle_body()),
             Dialog::GoLiveMissing => Some(self.go_live_missing_body()),
             Dialog::UpdateItems => Some(self.update_items_body()),
             Dialog::Recovery => Some(self.recovery_body()),
@@ -259,7 +273,7 @@ impl Operator {
             .w(px(
                 if matches!(
                     dialog,
-                    Dialog::Preflight | Dialog::UpdateItems | Dialog::Recovery
+                    Dialog::Preflight | Dialog::UpdateItems | Dialog::Recovery | Dialog::Bundle
                 ) {
                     PREFLIGHT_DIALOG_W
                 } else {
@@ -312,6 +326,12 @@ impl Operator {
                             t!(Msg::ButtonKeep)
                         } else if dialog == Dialog::Preflight {
                             t!(Msg::PreflightClose)
+                        } else if dialog == Dialog::Bundle {
+                            if self.bundles.view.as_ref().is_some_and(|v| v.working) {
+                                t!(Msg::ButtonCancel)
+                            } else {
+                                t!(Msg::ButtonOk)
+                            }
                         } else if dialog == Dialog::FileError
                             || (dialog == Dialog::Recovery && !self.recovery_restorable())
                         {

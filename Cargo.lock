@@ -5199,6 +5199,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "cosmic-text",
+ "crc32fast",
  "gpui",
  "gpui_platform",
  "image",

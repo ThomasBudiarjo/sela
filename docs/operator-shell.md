@@ -611,8 +611,9 @@ equivalent; Options is Edit › Options).
   plus its two items, a documented deviation), Open Schedule (Ctrl+O), Open
   Recent (enabled once a schedule file was saved or opened; its up to 10 paths
   follow as indented rows, `bar-file-recent-0..9`), Save Schedule (Ctrl+S), Save
-  Schedule As…, Close Schedule, Export Standalone Schedule… (disabled; not yet
-  built), Reports and Printing ▸ (disabled), Exit.
+  Schedule As…, Close Schedule, Export Standalone Schedule… (M1-13, enabled
+  with schedule items; [bundle.md](bundle.md)), Reports and Printing ▸
+  (disabled), Exit.
 - **Edit**: Cut, Copy, Paste, Delete, Select All (all disabled until
   text-editing targets exist) and **Options…**, which opens the existing
   Options dialog.
@@ -623,7 +624,9 @@ equivalent; Options is Edit › Options).
 - **Profiles/View/Help** render their captured items disabled (Default ✓,
   Profiles Manager…, Add/Remove Demo Data…, Utilities ▸; the captured view
   items; Help topics, Sela Help and About Sela…); unbuilt features stay inert
-  instead of being hidden.
+  instead of being hidden. M1-13 adds two enabled Sela rows after Profiles
+  Manager…: **Back Up Profile…** and **Restore Profile…** (UNOBSERVED
+  placement, EW8-OBS-BUN-5; [bundle.md](bundle.md)).
 
 Interaction: Alt+F/E/L/P/V/H opens a menu with its first enabled item
 highlighted (only Alt+L is observed, EW8-OBS-053 tooling note; the rest are
@@ -784,5 +787,6 @@ UNOBSERVED (EasyWorship 8.0.49 was not run for this change; see
 Sela" with `*` is a best guess), the default Save folder (beside the current or
 newest recent file, else `<profile>\Schedules`), and Open Recent labelling (file
 name only). Unsaved-changes wording is taken from the recorded EW exit prompt.
-Not built: Export Standalone Schedule, themes/assets inside the file (version
-bump), Indonesian visual pass of the new dialog.
+Not built: themes/assets inside the file (version bump; images travel in
+standalone schedules instead, M1-13), Indonesian visual pass of the new
+dialog.

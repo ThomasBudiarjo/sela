@@ -385,6 +385,9 @@ impl Operator {
             }
         } else if self.saving_file() {
             self.schedule_message = Some(t!(Msg::SavingWaitDone).into());
+        } else if self.bundles.running() {
+            // Cancel is on the working dialog; nothing half-written stays.
+            self.schedule_message = Some(t!(Msg::BundleBusy).into());
         } else if self.schedule.is_dirty() {
             self.open_dialog(Dialog::Unsaved(Then::Quit), window, cx);
         } else {

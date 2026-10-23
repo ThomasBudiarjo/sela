@@ -147,8 +147,27 @@ impl Operator {
 
     /// Called from `render`, where the window is available.
     pub(crate) fn focus_pending_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A dialog closed from `poll` (no window), such as the bundle
+        // working dialog replaced by the opened schedule, leaves focus on
+        // its vanished buttons: hand it back like a closed dialog does, and
+        // never treat those buttons as the place to return to (M1-13).
+        let stale = [
+            Control::DialogCancel,
+            Control::DialogConfirm,
+            Control::DialogSave,
+        ]
+        .iter()
+        .any(|c| self.controls[*c].is_focused(window));
+        if stale && self.dialog.is_none() {
+            match self.dialog_return.take() {
+                Some(handle) => handle.focus(window, cx),
+                None => self.focus.focus(window, cx),
+            }
+        }
         if std::mem::take(&mut self.assets.focus_dialog) && self.dialog.is_some() {
-            self.dialog_return = self.focus_to_return(window, cx);
+            if !stale {
+                self.dialog_return = self.focus_to_return(window, cx);
+            }
             // The non-destructive choice, so Enter never confirms by accident.
             // For the recovery prompt that is Restore: declining hides the
             // autosaved work (best guess, EW unobserved; M1-12).
@@ -232,6 +251,8 @@ impl Operator {
                                 Some(t!(Msg::PreflightAttention, count = items));
                         }
                         self.show_dialog_later(Dialog::Preflight);
+                    } else {
+                        self.show_package_notes_if_clean();
                     }
                 }
                 Ok(preflight::Reply::Checked(..)) => {}
@@ -436,10 +457,23 @@ impl Operator {
             }
             list = list.child(group);
         }
+        let package = self.package_notes().map(|lines| {
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(t!(Msg::BundlePackageNotes)),
+                )
+                .child(super::bundles::bundle_lines("preflight-package", lines))
+        });
         div()
             .flex()
             .flex_col()
             .gap_2()
+            .children(package)
             .child(caption(t!(Msg::PreflightIntro).into(), MUTED))
             .child(if report.items.is_empty() && report.logo.is_none() {
                 caption(t!(Msg::PreflightAllClear).into(), MUTED).into_any_element()

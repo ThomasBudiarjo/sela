@@ -833,6 +833,84 @@ pub enum Msg {
     FoldbackShowNext,
     OptionsTabAlertsClocks,
     StageMonitorMissing,
+    // Bundles: standalone schedules, profile backup and restore (M1-13).
+    BarBackupProfile,
+    BarRestoreProfile,
+    BundlePickBackup,
+    BundleExportHeading,
+    BundleOpenHeading,
+    BundleBackupHeading,
+    BundleRestoreHeading,
+    BundleWorkingExport,
+    BundleWorkingOpen,
+    BundleWorkingBackup,
+    BundleWorkingRestore,
+    BundleWorkingNote,
+    BundleCancelling,
+    BundleCancelled,
+    BundleBusy,
+    BundleNoProfile,
+    BundleExported,
+    BundleEmbedded,
+    BundleNotEmbedded,
+    BundleFontsNeeded,
+    BundleFontsMissingHere,
+    BundleOmitted,
+    BundleOpened,
+    BundleAdded,
+    BundleReused,
+    BundleRenamed,
+    BundleNotIncluded,
+    BundleOmittedBySender,
+    BundleBackedUp,
+    BundleBackupExcluded,
+    BundleSkipped,
+    BundleRecentDropped,
+    BundleUnsavedNotInBackup,
+    BundleRestored,
+    BundleRestoreOpen,
+    BundleSettingsSkipped,
+    BundleUnchanged,
+    BundleMore,
+    BundleErrNotBundle,
+    BundleErrIsBackup,
+    BundleErrIsSchedule,
+    BundleErrNewer,
+    BundleErrNewerLibrary,
+    BundleErrNewerSchedule,
+    BundleErrUnsafe,
+    BundleErrDamaged,
+    BundleErrTooLarge,
+    BundleErrExists,
+    BundleErrLibrary,
+    BundleLibBusy,
+    BundleLibDamaged,
+    BundleLibUnsupported,
+    BundleLibUnreadable,
+    BundleLibMissing,
+    BundleLibTooLarge,
+    BundleLibExists,
+    BundleLibChanged,
+    BundleLibClosed,
+    BundleErrInternal,
+    BundleOpenedTooLate,
+    BundleErrImage,
+    BundleErrEmpty,
+    BundleErrDiskFull,
+    BundleErrDenied,
+    BundleErrIo,
+    BundleIoNotFound,
+    BundleIoExists,
+    BundleIoInUse,
+    BundleIoConnection,
+    BundleIoName,
+    BundleIoTooBig,
+    BundleIoOther,
+    BundlePackageNotes,
+    BundleSkipLink,
+    BundleSkipTooLarge,
+    BundleSkipUnusable,
+    BundleSkipUnreadable,
 }
 
 impl Msg {
@@ -1586,6 +1664,83 @@ impl Msg {
         Msg::FoldbackShowNext,
         Msg::OptionsTabAlertsClocks,
         Msg::StageMonitorMissing,
+        Msg::BarBackupProfile,
+        Msg::BarRestoreProfile,
+        Msg::BundlePickBackup,
+        Msg::BundleExportHeading,
+        Msg::BundleOpenHeading,
+        Msg::BundleBackupHeading,
+        Msg::BundleRestoreHeading,
+        Msg::BundleWorkingExport,
+        Msg::BundleWorkingOpen,
+        Msg::BundleWorkingBackup,
+        Msg::BundleWorkingRestore,
+        Msg::BundleWorkingNote,
+        Msg::BundleCancelling,
+        Msg::BundleCancelled,
+        Msg::BundleBusy,
+        Msg::BundleNoProfile,
+        Msg::BundleExported,
+        Msg::BundleEmbedded,
+        Msg::BundleNotEmbedded,
+        Msg::BundleFontsNeeded,
+        Msg::BundleFontsMissingHere,
+        Msg::BundleOmitted,
+        Msg::BundleOpened,
+        Msg::BundleAdded,
+        Msg::BundleReused,
+        Msg::BundleRenamed,
+        Msg::BundleNotIncluded,
+        Msg::BundleOmittedBySender,
+        Msg::BundleBackedUp,
+        Msg::BundleBackupExcluded,
+        Msg::BundleSkipped,
+        Msg::BundleRecentDropped,
+        Msg::BundleUnsavedNotInBackup,
+        Msg::BundleRestored,
+        Msg::BundleRestoreOpen,
+        Msg::BundleSettingsSkipped,
+        Msg::BundleUnchanged,
+        Msg::BundleMore,
+        Msg::BundleErrNotBundle,
+        Msg::BundleErrIsBackup,
+        Msg::BundleErrIsSchedule,
+        Msg::BundleErrNewer,
+        Msg::BundleErrNewerLibrary,
+        Msg::BundleErrNewerSchedule,
+        Msg::BundleErrUnsafe,
+        Msg::BundleErrDamaged,
+        Msg::BundleErrTooLarge,
+        Msg::BundleErrExists,
+        Msg::BundleErrLibrary,
+        Msg::BundleLibBusy,
+        Msg::BundleLibDamaged,
+        Msg::BundleLibUnsupported,
+        Msg::BundleLibUnreadable,
+        Msg::BundleLibMissing,
+        Msg::BundleLibTooLarge,
+        Msg::BundleLibExists,
+        Msg::BundleLibChanged,
+        Msg::BundleLibClosed,
+        Msg::BundleErrInternal,
+        Msg::BundleOpenedTooLate,
+        Msg::BundleErrImage,
+        Msg::BundleErrEmpty,
+        Msg::BundleErrDiskFull,
+        Msg::BundleErrDenied,
+        Msg::BundleErrIo,
+        Msg::BundleIoNotFound,
+        Msg::BundleIoExists,
+        Msg::BundleIoInUse,
+        Msg::BundleIoConnection,
+        Msg::BundleIoName,
+        Msg::BundleIoTooBig,
+        Msg::BundleIoOther,
+        Msg::BundlePackageNotes,
+        Msg::BundleSkipLink,
+        Msg::BundleSkipTooLarge,
+        Msg::BundleSkipUnusable,
+        Msg::BundleSkipUnreadable,
     ];
 
     pub fn english(self) -> &'static str {
@@ -2487,6 +2642,133 @@ impl Msg {
             Self::FoldbackShowClock => "Show clock",
             Self::FoldbackShowNext => "Show next slide",
             Self::OptionsTabAlertsClocks => "Alerts and Clocks",
+            Self::BarBackupProfile => "Back Up Profile...",
+            Self::BarRestoreProfile => "Restore Profile...",
+            Self::BundlePickBackup => "Choose a Sela profile backup",
+            Self::BundleExportHeading => "Export Standalone Schedule",
+            Self::BundleOpenHeading => "Open Standalone Schedule",
+            Self::BundleBackupHeading => "Back Up Profile",
+            Self::BundleRestoreHeading => "Restore Profile",
+            Self::BundleWorkingExport => "Writing “{name}”…",
+            Self::BundleWorkingOpen => "Checking and opening “{name}”…",
+            Self::BundleWorkingBackup => "Backing up this profile to “{name}”…",
+            Self::BundleWorkingRestore => "Restoring “{name}”…",
+            Self::BundleWorkingNote => {
+                "Nothing changes until every file has been checked. Cancel stops without changing anything."
+            }
+            Self::BundleCancelling => "Cancelling…",
+            Self::BundleCancelled => "Cancelled; nothing was changed",
+            Self::BundleBusy => {
+                "An export, backup or restore is still running; wait for it to finish"
+            }
+            Self::BundleNoProfile => "No profile folder is open",
+            Self::BundleExported => "Saved “{name}”: {items} item(s), {size}",
+            Self::BundleEmbedded => "Images included: {names}",
+            Self::BundleNotEmbedded => {
+                "Not included because they are missing or changed in this profile: {names}. The other computer needs its own copies."
+            }
+            Self::BundleFontsNeeded => {
+                "Fonts the other computer needs installed (Sela never copies font files): {names}"
+            }
+            Self::BundleFontsMissingHere => "Not installed on this computer either: {names}",
+            Self::BundleOmitted => "Left out because their translation may not be shared: {names}",
+            Self::BundleOpened => {
+                "Opened “{title}” from “{name}” ({items} item(s)), saved as “{file}” in Schedules"
+            }
+            Self::BundleAdded => "Images added to this profile: {names}",
+            Self::BundleReused => "Images this profile already had: {names}",
+            Self::BundleRenamed => {
+                "Saved under another name because a different image already uses the name: {names}"
+            }
+            Self::BundleNotIncluded => {
+                "Images the package does not carry (use Locate… if you have them): {names}"
+            }
+            Self::BundleOmittedBySender => {
+                "Left out by the sender because their translation may not be shared: {names}"
+            }
+            Self::BundleBackedUp => "Backed up to “{name}”: {files} files, {size}",
+            Self::BundleBackupExcluded => {
+                "Autosave recovery copies and the bundled KJV and WEB translations are not included; Sela recreates them"
+            }
+            Self::BundleSkipped => "Not backed up: {names}",
+            Self::BundleRecentDropped => {
+                "{count} recent schedules outside this profile are not in the backup"
+            }
+            Self::BundleUnsavedNotInBackup => {
+                "The open schedule has unsaved changes; they are not in the backup"
+            }
+            Self::BundleRestored => "Restored as the new profile folder “{folder}”: {files} files",
+            Self::BundleRestoreOpen => {
+                "This profile is unchanged. To use the restored one, start Sela with --operator-library “{library}”"
+            }
+            Self::BundleSettingsSkipped => {
+                "Its settings could not be read; the restored profile starts with default settings"
+            }
+            Self::BundleUnchanged => "Nothing was changed.",
+            Self::BundleMore => "{names} and {count} more",
+            Self::BundleErrNotBundle => {
+                "“{name}” is not a Sela standalone schedule or profile backup"
+            }
+            Self::BundleErrIsBackup => {
+                "“{name}” is a profile backup; use Profiles › Restore Profile..."
+            }
+            Self::BundleErrIsSchedule => {
+                "“{name}” is a standalone schedule; open it with File › Open Schedule"
+            }
+            Self::BundleErrNewer => {
+                "“{name}” was made by a newer Sela (bundle version {version}); update Sela to open it"
+            }
+            Self::BundleErrNewerLibrary => {
+                "“{name}” holds a song library from a newer Sela (schema {version}); update Sela to restore it"
+            }
+            Self::BundleErrNewerSchedule => {
+                "The schedule in “{name}” was made by a newer Sela (version {version}); update Sela to open it"
+            }
+            Self::BundleErrUnsafe => {
+                "“{name}” was refused because it could write outside its place or overwrite other files ({detail})"
+            }
+            Self::BundleErrDamaged => {
+                "“{name}” is damaged or incomplete ({detail}); export or back it up again"
+            }
+            Self::BundleErrTooLarge => "“{name}” is larger than Sela accepts ({detail})",
+            Self::BundleErrExists => {
+                "“{name}” already exists; a restore never writes into an existing folder or file. Choose a new name"
+            }
+            Self::BundleErrLibrary => "The song library could not be copied or used ({detail})",
+            Self::BundleLibBusy => "it is busy; wait a moment, then try again",
+            Self::BundleLibDamaged => "it is damaged",
+            Self::BundleLibUnsupported => "it is not a Sela library, or a newer Sela made it",
+            Self::BundleLibUnreadable => "it could not be read or written",
+            Self::BundleLibMissing => "it is not in the profile",
+            Self::BundleLibTooLarge => "it is larger than 256 MB, or copying it took too long",
+            Self::BundleLibExists => "a file is already where its copy goes; try again",
+            Self::BundleLibChanged => "it changed while it was copied; try again",
+            Self::BundleLibClosed => {
+                "Sela's connection to it was closed; restart Sela, then try again"
+            }
+            Self::BundleErrInternal => {
+                "“{name}” stopped because of an internal error in Sela; its unfinished files were removed"
+            }
+            Self::BundleOpenedTooLate => {
+                "Cancel came too late: “{name}” was already saved as “{file}” in Schedules. It was not opened; open it with File › Open Schedule."
+            }
+            Self::BundleErrImage => "The image “{image}” cannot be used: {detail}",
+            Self::BundleErrEmpty => "The schedule has nothing that can be exported",
+            Self::BundleErrDiskFull => "The disk is full; free some space, then try again",
+            Self::BundleErrDenied => "Sela is not allowed to write there; choose another folder",
+            Self::BundleErrIo => "The file could not be read or written ({detail})",
+            Self::BundleIoNotFound => "the file or folder was not found",
+            Self::BundleIoExists => "a file or folder with that name already exists",
+            Self::BundleIoInUse => "another program is using it",
+            Self::BundleIoConnection => "the connection to the drive or network share was lost",
+            Self::BundleIoName => "that name is not allowed there",
+            Self::BundleIoTooBig => "the drive cannot hold a file this large",
+            Self::BundleIoOther => "the system reported an unexpected file error",
+            Self::BundlePackageNotes => "From the standalone schedule",
+            Self::BundleSkipLink => "a link",
+            Self::BundleSkipTooLarge => "too large",
+            Self::BundleSkipUnusable => "not a profile file",
+            Self::BundleSkipUnreadable => "cannot be read",
             Self::StageMonitorMissing => {
                 "The chosen foldback monitor ({name}) is not connected; the stage uses a free monitor instead, or stays off when none is free."
             }
@@ -3432,6 +3714,139 @@ impl Msg {
             Self::FoldbackShowClock => "Tampilkan jam",
             Self::FoldbackShowNext => "Tampilkan slide berikutnya",
             Self::OptionsTabAlertsClocks => "Peringatan dan Jam",
+            Self::BarBackupProfile => "Cadangkan Profil...",
+            Self::BarRestoreProfile => "Pulihkan Profil...",
+            Self::BundlePickBackup => "Pilih cadangan profil Sela",
+            Self::BundleExportHeading => "Ekspor Jadwal Mandiri",
+            Self::BundleOpenHeading => "Buka Jadwal Mandiri",
+            Self::BundleBackupHeading => "Cadangkan Profil",
+            Self::BundleRestoreHeading => "Pulihkan Profil",
+            Self::BundleWorkingExport => "Menulis “{name}”…",
+            Self::BundleWorkingOpen => "Memeriksa dan membuka “{name}”…",
+            Self::BundleWorkingBackup => "Mencadangkan profil ini ke “{name}”…",
+            Self::BundleWorkingRestore => "Memulihkan “{name}”…",
+            Self::BundleWorkingNote => {
+                "Tidak ada yang berubah sampai semua berkas diperiksa. Batal menghentikan tanpa mengubah apa pun."
+            }
+            Self::BundleCancelling => "Membatalkan…",
+            Self::BundleCancelled => "Dibatalkan; tidak ada yang diubah",
+            Self::BundleBusy => {
+                "Ekspor, pencadangan, atau pemulihan masih berjalan; tunggu sampai selesai"
+            }
+            Self::BundleNoProfile => "Tidak ada folder profil yang terbuka",
+            Self::BundleExported => "“{name}” disimpan: {items} item, {size}",
+            Self::BundleEmbedded => "Gambar yang disertakan: {names}",
+            Self::BundleNotEmbedded => {
+                "Tidak disertakan karena hilang atau berubah di profil ini: {names}. Komputer lain memerlukan salinannya sendiri."
+            }
+            Self::BundleFontsNeeded => {
+                "Font yang harus terpasang di komputer lain (Sela tidak pernah menyalin berkas font): {names}"
+            }
+            Self::BundleFontsMissingHere => "Juga tidak terpasang di komputer ini: {names}",
+            Self::BundleOmitted => {
+                "Tidak disertakan karena terjemahannya tidak boleh dibagikan: {names}"
+            }
+            Self::BundleOpened => {
+                "“{title}” dibuka dari “{name}” ({items} item), disimpan sebagai “{file}” di Schedules"
+            }
+            Self::BundleAdded => "Gambar yang ditambahkan ke profil ini: {names}",
+            Self::BundleReused => "Gambar yang sudah ada di profil ini: {names}",
+            Self::BundleRenamed => {
+                "Disimpan dengan nama lain karena gambar lain sudah memakai nama itu: {names}"
+            }
+            Self::BundleNotIncluded => {
+                "Gambar yang tidak dibawa paket (pakai Cari… jika Anda memilikinya): {names}"
+            }
+            Self::BundleOmittedBySender => {
+                "Tidak disertakan oleh pengirim karena terjemahannya tidak boleh dibagikan: {names}"
+            }
+            Self::BundleBackedUp => "Dicadangkan ke “{name}”: {files} berkas, {size}",
+            Self::BundleBackupExcluded => {
+                "Salinan pemulihan autosave dan terjemahan KJV serta WEB bawaan tidak disertakan; Sela membuatnya kembali"
+            }
+            Self::BundleSkipped => "Tidak dicadangkan: {names}",
+            Self::BundleRecentDropped => {
+                "{count} jadwal terbaru di luar profil ini tidak ada di cadangan"
+            }
+            Self::BundleUnsavedNotInBackup => {
+                "Jadwal yang terbuka memiliki perubahan yang belum disimpan; perubahan itu tidak ada di cadangan"
+            }
+            Self::BundleRestored => {
+                "Dipulihkan sebagai folder profil baru “{folder}”: {files} berkas"
+            }
+            Self::BundleRestoreOpen => {
+                "Profil ini tidak berubah. Untuk memakai profil yang dipulihkan, jalankan Sela dengan --operator-library “{library}”"
+            }
+            Self::BundleSettingsSkipped => {
+                "Pengaturannya tidak dapat dibaca; profil yang dipulihkan memakai pengaturan bawaan"
+            }
+            Self::BundleUnchanged => "Tidak ada yang diubah.",
+            Self::BundleMore => "{names} dan {count} lainnya",
+            Self::BundleErrNotBundle => "“{name}” bukan jadwal mandiri atau cadangan profil Sela",
+            Self::BundleErrIsBackup => {
+                "“{name}” adalah cadangan profil; pakai Profil › Pulihkan Profil..."
+            }
+            Self::BundleErrIsSchedule => {
+                "“{name}” adalah jadwal mandiri; buka dengan Berkas › Buka Jadwal"
+            }
+            Self::BundleErrNewer => {
+                "“{name}” dibuat oleh Sela yang lebih baru (versi bundel {version}); perbarui Sela untuk membukanya"
+            }
+            Self::BundleErrNewerLibrary => {
+                "“{name}” berisi pustaka lagu dari Sela yang lebih baru (skema {version}); perbarui Sela untuk memulihkannya"
+            }
+            Self::BundleErrNewerSchedule => {
+                "Jadwal di “{name}” dibuat oleh Sela yang lebih baru (versi {version}); perbarui Sela untuk membukanya"
+            }
+            Self::BundleErrUnsafe => {
+                "“{name}” ditolak karena dapat menulis di luar tempatnya atau menimpa berkas lain ({detail})"
+            }
+            Self::BundleErrDamaged => {
+                "“{name}” rusak atau tidak lengkap ({detail}); ekspor atau cadangkan lagi"
+            }
+            Self::BundleErrTooLarge => "“{name}” lebih besar dari yang diterima Sela ({detail})",
+            Self::BundleErrExists => {
+                "“{name}” sudah ada; pemulihan tidak pernah menulis ke folder atau berkas yang sudah ada. Pilih nama baru"
+            }
+            Self::BundleErrLibrary => "Pustaka lagu tidak dapat disalin atau dipakai ({detail})",
+            Self::BundleLibBusy => "pustaka sedang dipakai; tunggu sebentar, lalu coba lagi",
+            Self::BundleLibDamaged => "pustaka rusak",
+            Self::BundleLibUnsupported => {
+                "bukan pustaka Sela, atau dibuat oleh Sela yang lebih baru"
+            }
+            Self::BundleLibUnreadable => "pustaka tidak dapat dibaca atau ditulis",
+            Self::BundleLibMissing => "pustaka tidak ada di profil",
+            Self::BundleLibTooLarge => {
+                "pustaka lebih besar dari 256 MB, atau penyalinannya terlalu lama"
+            }
+            Self::BundleLibExists => "sudah ada berkas di tempat salinannya; coba lagi",
+            Self::BundleLibChanged => "pustaka berubah saat disalin; coba lagi",
+            Self::BundleLibClosed => {
+                "sambungan Sela ke pustaka tertutup; mulai ulang Sela, lalu coba lagi"
+            }
+            Self::BundleErrInternal => {
+                "“{name}” berhenti karena galat internal di Sela; berkas yang belum selesai sudah dihapus"
+            }
+            Self::BundleOpenedTooLate => {
+                "Pembatalan terlambat: “{name}” sudah disimpan sebagai “{file}” di Schedules. Jadwal itu tidak dibuka; buka melalui Berkas › Buka Jadwal."
+            }
+            Self::BundleErrImage => "Gambar “{image}” tidak dapat dipakai: {detail}",
+            Self::BundleErrEmpty => "Jadwal tidak berisi apa pun yang dapat diekspor",
+            Self::BundleErrDiskFull => "Disk penuh; kosongkan sebagian ruang, lalu coba lagi",
+            Self::BundleErrDenied => "Sela tidak diizinkan menulis di sana; pilih folder lain",
+            Self::BundleErrIo => "Berkas tidak dapat dibaca atau ditulis ({detail})",
+            Self::BundleIoNotFound => "berkas atau folder tidak ditemukan",
+            Self::BundleIoExists => "sudah ada berkas atau folder dengan nama itu",
+            Self::BundleIoInUse => "sedang dipakai program lain",
+            Self::BundleIoConnection => "sambungan ke drive atau folder jaringan terputus",
+            Self::BundleIoName => "nama itu tidak diizinkan di sana",
+            Self::BundleIoTooBig => "drive tidak dapat menyimpan berkas sebesar ini",
+            Self::BundleIoOther => "sistem melaporkan galat berkas yang tidak terduga",
+            Self::BundlePackageNotes => "Dari jadwal mandiri",
+            Self::BundleSkipLink => "sebuah tautan",
+            Self::BundleSkipTooLarge => "terlalu besar",
+            Self::BundleSkipUnusable => "bukan berkas profil",
+            Self::BundleSkipUnreadable => "tidak dapat dibaca",
             Self::StageMonitorMissing => {
                 "Monitor foldback yang dipilih ({name}) tidak terhubung; panggung memakai monitor bebas, atau tetap mati bila tidak ada yang bebas."
             }
@@ -3504,7 +3919,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 749);
+        assert_eq!(Msg::ALL.len(), 826);
     }
 
     #[test]

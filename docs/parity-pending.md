@@ -665,6 +665,86 @@ schedule; never on a service in use.
 
 ## Stream: bundle-backup-restore
 
+Sela state after the stream (2026-10-23): File › Export Standalone Schedule…
+writes a `.selapackage`, File › Open Schedule opens one into the profile with
+the preflight report, Profiles › Back Up Profile… / Restore Profile… write and
+restore `.selabackup` files into a new folder ([bundle.md](bundle.md)). Linux
+evidence: `scripts/bundle-x11.py` PASS on Xvfb `:122`; nothing below is closed
+by it.
+
+- [ ] **PP-BUN-01 What Export Standalone Schedule writes** (EW8-OBS-BUN-1,
+  -4; EW8-OBS-053). Steps: in a disposable profile, schedule songs A and B
+  with an image background and a theme, a scripture passage and a video;
+  choose File › Export Standalone Schedule...; record any options dialog,
+  the default folder and extension, the file size; open the file with 7-Zip
+  (or a hex viewer) and list what it contains (media, themes, fonts,
+  scripture text); record whether the title bar or unsaved marker changed.
+  Sela now (best guess): `.selapackage` ZIP with schedule snapshots and
+  profile images, fonts listed only, restricted scripture left out, no
+  options dialog (images are always embedded from the menu; the library's
+  `embed_images: false` waits for the backlog M1-13 item "Operator export
+  options", which this record decides), schedule not saved. Re-run:
+  `bundle-windows.py`.
+- [ ] **PP-BUN-02 Opening a standalone schedule** (EW8-OBS-BUN-2; menu rows
+  `bar-profiles-backup`/`-restore` are a tracked deviation in
+  `menu_contents_match_the_captures_plus_tracked_deviations`). Steps: copy the
+  PP-BUN-01 file to a second disposable profile that already has a
+  different image with the same name as one in the package; open the file
+  (File › Open Schedule, double-click, any import entry); record where the
+  media went, what happened to the same-named image, the schedule's title
+  and saved state. Sela now: Open Schedule; images stored without replacing
+  ("name (2).png"); the schedule becomes `Schedules/<title>.selaschedule`,
+  opened as saved. Re-run: `bundle-windows.py`.
+- [ ] **PP-BUN-03 Missing fonts and media after a transfer** (EW8-OBS-BUN-3).
+  Steps: on the second profile, uninstall (or never install) a font the
+  package's songs use and delete one image before opening; record EW's
+  report, wording, and repair path. Sela now: preflight report with the
+  package notes on top, Locate… per image, "Font ‘…’ is not installed …;
+  DejaVu Sans is used instead". Re-run: `bundle-windows.py`,
+  `cargo test --test bundle_s04`.
+- [ ] **PP-BUN-04 EW profile backup and restore** (EW8-OBS-BUN-5, EW8-OBS-075,
+  PP-AUTO-04). Steps: look in the Profiles menu, Profiles Manager…,
+  Utilities ▸ and File for backup/restore; back up a disposable profile;
+  record the file type, what it includes, and whether restore replaces the
+  current profile, asks first, or creates another profile. Sela now:
+  Profiles › Back Up Profile… / Restore Profile… (UNOBSERVED placement),
+  restore into a new folder only. Re-run: `bundle-windows.py`.
+- [ ] **PP-BUN-05 Progress, cancel and quit during a job** (EW8-OBS-BUN-6).
+  Steps: export a large schedule package and back up a large profile;
+  record any progress indicator, Cancel, and what Exit does meanwhile.
+  Sela now: modal progress with Cancel (Esc), Quit held back with a footer
+  note; a standalone schedule whose import finished before it saw Cancel
+  is kept in Schedules but not opened ("Cancel came too late …"); a job
+  that fails internally reports it and frees the menu and Quit. Re-run:
+  `cargo test --bin sela a_running_job_can_be_cancelled`,
+  `cargo test --bin sela an_import_that_finishes_after_cancel`,
+  `cargo test --lib a_job_panicking_mid_write`.
+- [ ] **PP-BUN-06 Damaged, foreign and newer packages** (EW8-OBS-BUN-7).
+  Steps: truncate a copy of the PP-BUN-01 file; rename a plain ZIP to the
+  package extension; open both; record EW's messages and whether anything
+  was imported. Sela now: refused before any change, with the reason and
+  "Nothing was changed." Also export to a nearly full USB stick, to a
+  network share unplugged mid-export, and back up a song library over
+  256 MB; record EW's wording. Sela now (UNOBSERVED best guess): a
+  localized reason in EN and ID ("the disk is full", "the connection to
+  the drive or network share was lost", "it is larger than 256 MB, or
+  copying it took too long"), never the system's English error text, and
+  no unfinished file left. Re-run: `bundle-windows.py` (hostile package
+  step), `cargo test --bin sela operator::bundles`.
+- [ ] **PP-BUN-07 Restore onto an existing folder (Windows dialogs).** Steps:
+  run `bundle-windows.py`; its second restore types an existing folder name,
+  answers the Save dialog's replace prompt with Yes and expects Sela's
+  "already exists … Nothing was changed." Sela now: covered on Linux by the
+  GPUI test `backup_and_restore_from_the_profiles_menu_never_touch_the_open_profile`
+  only (the GTK chooser opens a typed folder instead of returning it).
+  Re-run: `bundle-windows.py`.
+- [ ] **PP-BUN-08 Windows run of `bundle-windows.py`** (NOT RUN: no Windows
+  host). Prerequisites: common list below; builds `sela.exe` and
+  `examples/seed_library.exe` with `--portable-song`; takes over keyboard
+  and mouse; also checks NTFS case-insensitive names (a different
+  `HARBOR.png` already in profile B makes the copy `harbor (2).png`).
+  Re-run: `python scripts/bundle-windows.py`.
+
 ## Stream: songs-browser
 
 Sela state after the stream (2026-10-22): Sort by Title/Author/Copyright/
@@ -1121,6 +1201,7 @@ timing):
 | 29 | `scripture-windows.py` | seed only (the script seeds); secondary monitor; first run installs the bundled KJV/WEB |
 | 30 | `stage-display-windows.py` | seed; three monitors (primary plus two non-primary); optional `--stage \\.\DISPLAYn` |
 | 31 | `ew-import-windows.py` | seed; native folder dialog; writes its own synthetic EasyWorship library to a temporary folder (never point it at a real one; PP-EWL-07) |
+| 32 | `bundle-windows.py` | seed (`--portable-song`, built with `cargo build --locked --examples`); native Save and Open dialogs; no audience output (bundle-backup-restore, PP-BUN-08) |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.
