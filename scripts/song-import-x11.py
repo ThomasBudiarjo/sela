@@ -128,11 +128,22 @@ def body(session: nx.Session) -> str:
     shutil.copytree(BATCH, folder)
     before = titles(library)
     summary["library_before"] = before
+    # Restore the keycode's own mapping afterwards: with --display the
+    # script may run on a real session.
+    original = next(
+        (
+            " ".join(line.split())
+            for line in nx.tool("xmodmap", "-pke").splitlines()
+            if line.split()[:2] == ["keycode", str(SPARE_KEYCODE)]
+        ),
+        f"keycode {SPARE_KEYCODE} =",
+    )
+    summary["spare_keycode_before"] = original
     nx.tool("xmodmap", "-e", f"keycode {SPARE_KEYCODE} = ntilde Ntilde")
     try:
         return run(session, library, folder, before)
     finally:
-        nx.tool("xmodmap", "-e", f"keycode {SPARE_KEYCODE} =", check=False)
+        nx.tool("xmodmap", "-e", original, check=False)
 
 
 def run(session: nx.Session, library: Path, folder: Path, before: list[str]) -> str:

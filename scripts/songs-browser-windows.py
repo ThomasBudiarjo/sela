@@ -206,7 +206,18 @@ def browser_run(args, summary: dict, check) -> None:
         nw.type_text(session.hwnd, "echo")
         session.wait("Echo Hymn listed", lambda d: rb.titles(d) == ["Echo Hymn"])
         session.press("escape")
-        session.click_aid("song-0")
+        # Esc restores the Song Number descending list, where Echo (two
+        # slides) is not the first row.
+        rows = session.wait(
+            "Esc restores the sorted list", lambda d: rb.titles(d) == NUMBER_DESC
+        )
+        listed = rb.titles(rows)
+        echo = (
+            listed.index("Echo Hymn")
+            if "Echo Hymn" in listed
+            else NUMBER_DESC.index("Echo Hymn")
+        )
+        session.click_aid(f"song-{echo}")
         time.sleep(0.8)  # the song loads into Preview off the UI thread
         session.click_aid("go-live")
         time.sleep(1.2)

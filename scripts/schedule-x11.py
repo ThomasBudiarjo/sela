@@ -32,6 +32,7 @@ development window beside the operator.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import time
 from pathlib import Path
@@ -39,7 +40,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import native_x11 as nx
 
-TABS_TO_FIRST_SONG = 25
+
+def _live_output():
+    """live-output-x11.py, which owns the Tab count to the first song."""
+    path = Path(__file__).resolve().parent / "live-output-x11.py"
+    spec = importlib.util.spec_from_file_location("live_output_x11", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+TABS_TO_FIRST_SONG = _live_output().TABS_TO_FIRST_SONG
 NAME = "sunday"
 
 
@@ -118,9 +129,12 @@ def body(session: nx.Session) -> str:
     )
     one = image.digest()
     keys("down")
-    time.sleep(0.5)
-    if nx.digest(screen) != one:
-        raise nx.Failure("Down changed the audience output; it only previews")
+    # Watched for a bounded second, so a late audience update still fails.
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if nx.digest(screen) != one:
+            raise nx.Failure("Down changed the audience output; it only previews")
+        time.sleep(0.1)
     keys("pagedown")
     image, summary["second_item_live_observed_ms"] = nx.wait_for_change(
         screen, one, 3.0, "second_item_live"

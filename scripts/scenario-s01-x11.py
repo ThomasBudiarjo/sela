@@ -411,6 +411,12 @@ def body(session: nx.Session) -> str:
     image = session.save(nx.capture_stable(screen), "12-audience-chorus")
     if image.count(ORANGE, tolerance=10, step=3) > 100:
         raise nx.Failure("the chorus kept slide 1's background")
+    black = image.count((0, 0, 0), tolerance=10, step=3)
+    summary["audience_black_samples_chorus"] = black
+    if black < 2000:
+        raise nx.Failure(f"the chorus is not shown on black ({black})")
+    if image.ink_box(threshold=235) is None:
+        raise nx.Failure("the chorus slide shows no text")
     summary["live_status_chorus"] = wait_status(
         app, operator, f"On screen: {TITLE} · Chorus", "the chorus in the Live status"
     )

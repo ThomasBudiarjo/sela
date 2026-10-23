@@ -143,16 +143,19 @@ def main() -> int:
     check = a11y.Check(summary)
     data = pathlib.Path(tempfile.mkdtemp(prefix="sela-import-"))
     library = data / "library.sqlite"
-    subprocess.run([str(args.seed), str(library)], check=True)
     folder = data / "Lagu Impor"
-    shutil.copytree(BATCH, folder)
-    before = titles(library)
-    summary["library_before"] = before
     os.environ["SELA_AUDIENCE_MONITOR"] = args.monitor
-    app = nw.App(args.binary, ["--operator-library", str(library)])
+    app: nw.App | None = None
     hwnd = 0
     audience_hwnd = 0
     try:
+        # Setup inside the cleanup scope: a failed seed or copy still
+        # removes the temporary folder.
+        subprocess.run([str(args.seed), str(library)], check=True)
+        shutil.copytree(BATCH, folder)
+        before = titles(library)
+        summary["library_before"] = before
+        app = nw.App(args.binary, ["--operator-library", str(library)])
         hwnd = app.window()
         nw.activate(hwnd)
         time.sleep(1.2)
@@ -251,8 +254,19 @@ def main() -> int:
         while "preview-slide-3" not in found and time.monotonic() < deadline:
             time.sleep(0.3)
             found = a11y.nodes_by_id(a11y.uia(hwnd))
-        check.expect("preview-slide-3" in found, "four preview slides")
+        tiles = sorted(aid for aid in found if aid.startswith("preview-slide-"))
+        check.expect(len(tiles) == 4, f"exactly four preview slides: {tiles}")
         a11y.click_node(hwnd, found["preview-slide-1"])
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            found = a11y.nodes_by_id(a11y.uia(hwnd))
+            if found.get("preview-slide-1", {}).get("selected") is True:
+                break
+            time.sleep(0.2)
+        check.expect(
+            found.get("preview-slide-1", {}).get("selected") is True,
+            "the click selects preview slide 2 (UIA selected)",
+        )
         save("04-preview-slide-2")
 
         a11y.show_live_output(hwnd)
@@ -328,10 +342,13 @@ def main() -> int:
         print(f"FAIL: {error}")
         return 1
     finally:
-        if audience_hwnd:
-            for pid in lo.children(app.process.pid):
-                lo.kill(pid)
-        app.close()
+        if app is not None:
+            if audience_hwnd:
+                for pid in lo.children(app.process.pid):
+                    lo.kill(pid)
+            app.close()
+            if app.owned:
+                shutil.rmtree(app.scratch, ignore_errors=True)
         (args.out / "summary.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False)
         )

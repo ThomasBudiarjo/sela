@@ -1262,7 +1262,11 @@ def build(examples: Iterable[str] = ("seed_library",)) -> None:
     for example in examples:
         command += ["--example", example]
     log(" ".join(command))
-    if subprocess.run(command, cwd=ROOT, timeout=3600, check=False).returncode != 0:
+    try:
+        done = subprocess.run(command, cwd=ROOT, timeout=3600, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise EnvironmentProblem(f"cargo build timed out after {error.timeout}s")
+    if done.returncode != 0:
         raise EnvironmentProblem("cargo build failed")
 
 
@@ -1274,13 +1278,16 @@ def seed_library(path: Path, *flags: str, seed: Path | None = None) -> Path:
             f"missing {seed} (cargo build --example seed_library, or pass --build)"
         )
     path.parent.mkdir(parents=True, exist_ok=True)
-    done = subprocess.run(
-        [str(seed), str(path), *flags],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    try:
+        done = subprocess.run(
+            [str(seed), str(path), *flags],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise EnvironmentProblem(f"seed_library timed out after {error.timeout}s")
     if done.returncode != 0:
         raise EnvironmentProblem(f"seed_library failed: {done.stderr.strip()}")
     return path
@@ -1750,7 +1757,9 @@ class App:
             self._atspi = _Atspi(_gv_strings(reply)[0])
         return self._atspi
 
-    def _app_root(self, atspi: _Atspi) -> tuple[str, str]:
+    def _app_root(self, atspi: _Atspi) -> tuple[str, str] | None:
+        """This app's AT-SPI bus and root, or None while it has not
+        registered yet (a polled probe keeps waiting)."""
         for bus, path in atspi.children(
             "org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root"
         ):
@@ -1765,7 +1774,7 @@ class App:
             )
             if pid and int(pid[-1]) == self.pid:
                 return bus, path
-        raise Failure(f"{self.name} is not registered with AT-SPI")
+        return None
 
     def controls(
         self, wid: int | None = None, timeout: float = 10.0
@@ -1778,7 +1787,10 @@ class App:
         atspi = self._a11y()
 
         def collect():
-            bus, root = self._app_root(atspi)
+            registered = self._app_root(atspi)
+            if registered is None:
+                return None
+            bus, root = registered
             frames = [p for _, p in atspi.children(bus, root)]
             with concurrent.futures.ThreadPoolExecutor(8) as pool:
                 for frame in frames:

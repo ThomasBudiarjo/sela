@@ -45,6 +45,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 TITLE = "S01 Hymn"
 NAME = "s01-service"
 ORANGE = (0xFF, 0xAA, 0x00)
+IDLE_TITLE = "Sela — Technical preview"
 UNSAVED_QUESTION = "The current Schedule is not saved. Would you like to save it now?"
 # Yes saves and closes, No discards (EW8-OBS-012), so the editor asks to save.
 CLOSE_QUESTION = "Save changes before closing?"
@@ -224,6 +225,9 @@ def main() -> int:
         nw.activate(operator)
         wait_for(10, "the operator to create its library", library.exists)
         time.sleep(1.0)
+        summary["fresh_title"] = nw.title(operator)
+        if summary["fresh_title"] != IDLE_TITLE:
+            raise nw.Failure(f"unexpected fresh window title {summary['fresh_title']!r}")
         if songs(library) or "song-0" in nodes(operator):
             raise nw.Failure("a fresh profile already has songs")
         shot(operator, "01-fresh")
@@ -255,7 +259,12 @@ def main() -> int:
             raise nw.Failure(f"the unsaved prompt is not announced: {summary['unsaved_dialog']}")
         shot(operator, "06-unsaved-dialog")
         nw.press(operator, "enter")  # Cancel
-        time.sleep(0.5)
+        wait_for(
+            5, "Cancel to close the unsaved prompt",
+            lambda: app.process.poll() is None and "schedule-dialog" not in nodes(operator),
+        )
+        if app.process.poll() is not None or not nw.user32.IsWindow(operator):
+            raise nw.Failure("Cancel did not keep the window")
 
         # 4. Save through the native dialog.
         nw.press(operator, "ctrl+s")

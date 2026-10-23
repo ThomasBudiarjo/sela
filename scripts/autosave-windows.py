@@ -43,6 +43,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -92,7 +93,10 @@ def revisions(profile: pathlib.Path) -> list[pathlib.Path]:
 
 def read_revision(path: pathlib.Path) -> dict:
     data = path.read_bytes()
-    body, trailer, rest = data.split(b"\n", 2)
+    parts = data.split(b"\n", 2)
+    if len(parts) != 3:
+        raise nw.Failure(f"{path.name} is not a complete checksummed revision")
+    body, trailer, rest = parts
     if rest != b"" or trailer != b"sha256 " + hashlib.sha256(body).hexdigest().encode():
         raise nw.Failure(f"{path.name} is not a complete checksummed revision")
     revision = json.loads(body)
@@ -106,6 +110,16 @@ def session_file(profile: pathlib.Path) -> dict | None:
         return json.loads((profile / "Recovery" / "session.json").read_text("utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def lock_state(path: pathlib.Path) -> tuple[int, int] | None:
+    """Size and modification time of the profile lock file. Its content
+    cannot be read while LockFileEx holds it, but its metadata can."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_size, stat.st_mtime_ns
 
 
 def digest(path: pathlib.Path) -> str | None:
@@ -165,8 +179,6 @@ def main() -> int:
     summary: dict = {"binary": str(args.binary.resolve()), "monitor": args.monitor}
     profile = pathlib.Path(tempfile.mkdtemp(prefix="sela-autosave-"))
     library = profile / "library.sqlite"
-    subprocess.run([str(args.seed), str(library), "--second-song"], check=True)
-    first_id, second_id = song_ids(library)
     os.environ["SELA_AUDIENCE_MONITOR"] = args.monitor
     spawned: set[int] = set()
     apps: list[nw.App] = []
@@ -181,6 +193,8 @@ def main() -> int:
         nw.write_png(args.out / f"{name}.png", width, height, pixels)
 
     try:
+        subprocess.run([str(args.seed), str(library), "--second-song"], check=True)
+        first_id, second_id = song_ids(library)
         # 1. A committed revision while Live output is on.
         app = launch()
         operator = app.window()
@@ -220,7 +234,11 @@ def main() -> int:
             revisions(profile)[0],
             library,
         ]
+        lock = profile / "sela.lock"
         before = {str(p): digest(p) for p in watched}
+        before["lock"] = lock_state(lock)
+        if before["lock"] is None:
+            raise nw.Failure("the first operator holds no sela.lock")
         second = launch()
         notice = second.window()
         if nw.title(notice) != ALREADY_RUNNING_TITLE:
@@ -238,6 +256,7 @@ def main() -> int:
                 f"second instance exit status {summary['second_instance_exit']}"
             )
         after = {str(p): digest(p) for p in watched}
+        after["lock"] = lock_state(lock)
         if after != before:
             raise nw.Failure("the second instance changed profile files")
 
@@ -378,6 +397,11 @@ def main() -> int:
         for pid in spawned:
             if lo.alive(pid):
                 lo.kill(pid)
+        # Only after every Sela process is gone: Windows keeps open files.
+        for app in apps:
+            if app.owned:
+                shutil.rmtree(app.scratch, ignore_errors=True)
+        shutil.rmtree(profile, ignore_errors=True)
         summary.setdefault("status", "FAIL")
         (args.out / "summary.json").write_text(json.dumps(summary, indent=2))
 

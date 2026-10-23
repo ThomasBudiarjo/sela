@@ -67,7 +67,10 @@ def revisions(profile: Path) -> list[Path]:
 def read_revision(path: Path) -> dict:
     """The revision's JSON line, after checking its SHA-256 trailer."""
     data = path.read_bytes()
-    body, trailer, rest = data.split(b"\n", 2)
+    parts = data.split(b"\n", 2)
+    if len(parts) != 3:
+        raise nx.Failure(f"{path.name} is not a complete checksummed revision")
+    body, trailer, rest = parts
     if rest != b"" or trailer != b"sha256 " + hashlib.sha256(body).hexdigest().encode():
         raise nx.Failure(f"{path.name} is not a complete checksummed revision")
     revision = json.loads(body)

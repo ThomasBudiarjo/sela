@@ -77,6 +77,26 @@ def revisions(library: pathlib.Path) -> dict[str, int]:
     return titles
 
 
+def payload_fields(library: pathlib.Path, title: str) -> list[str]:
+    """Head revision payload fields of the song titled `title` (title,
+    metadata, then label/lyrics per section), as `native_x11.song_payloads`."""
+    uri = library.resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(uri, uri=True) as db:
+        rows = db.execute(
+            "SELECT r.payload FROM songs s JOIN song_revisions r "
+            "ON r.id=s.id AND r.revision=s.head WHERE s.deleted=0"
+        ).fetchall()
+    for (data,) in rows:
+        fields = []
+        while data:
+            length = int.from_bytes(data[:4], "little")
+            fields.append(data[4 : 4 + length].decode("utf-8"))
+            data = data[4 + length :]
+        if fields and fields[0] == title:
+            return fields
+    raise nw.Failure(f"no stored song titled {title!r}")
+
+
 def wait_for(timeout: float, what: str, probe):
     deadline = time.monotonic() + timeout
     while True:
@@ -232,6 +252,9 @@ def main() -> int:
         summary["revisions"] = [before, after]
         if after[A] != before[A]:
             raise nw.Failure("editing B changed A's revision")
+        stored = payload_fields(library, B)
+        if not stored[5].endswith("\n" + ADDED):
+            raise nw.Failure(f"unexpected stored B lyrics {stored[5]!r}")
         time.sleep(1.0)  # the editor takes the save reply off its worker
         nw.press(editor, "alt+f4")
         wait_for(10, "the saved editor to close", lambda: not nw.user32.IsWindow(editor))

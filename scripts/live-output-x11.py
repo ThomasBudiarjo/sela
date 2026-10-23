@@ -21,7 +21,9 @@ logo, each with its operator button lit, and a second press restores the
 slide; a Logo mask survives Live off/on; Live off ends the child; Ctrl+Q exits
 cleanly and ends the child. Then a second operator on a formatted-song library
 (M1-05g2): Go Live shows the bold gold right/bottom-aligned slide, Next shows
-the italic underlined centered slide and the "Arial" slide, Next stops at the
+the italic underlined slide (checked: centered, and an underline as a bright
+run across most of the line; the synthetic italic slant is only unit-checked)
+and the "Arial" slide, Next stops at the
 last slide, and Ctrl+Q exits cleanly. Then a third operator on a
 background-song library (M1-05h): Zoom (the green center band covers the
 corners), Maintain (black bars, red and blue bands at the edges), black for
@@ -29,7 +31,7 @@ the missing image (warning captured from the operator) and the song master's
 color.
 
 X11 differences (see docs/e2e-linux.md): on the default `xvfb` display the
-audience runs in its development `window` placement (640x360 beside the
+audience runs in its development `window` placement (624x351 beside the
 operator; Xvfb has one RandR CRTC, so there is no secondary monitor) and the
 harness window manager does not focus it, so the focus assertion only proves
 the operator kept the focus through Live on. `--kind dual` (Xorg dummy, two
@@ -73,6 +75,21 @@ GOLD_SAMPLES = 400
 def seed_logo(profile: Path) -> None:
     nx.solid_png(profile / "Resources" / "Images" / "sela-logo.png", 64, 36, LOGO_RGB)
     (profile / "logo.txt").write_text("sela-logo.png\n", encoding="utf-8")
+
+
+def longest_bright_run(image: nx.Image, box, threshold: int = 200) -> int:
+    """Longest horizontal run of near-white pixels inside `box`."""
+    best = 0
+    for y in range(box[1], min(image.height, box[3] + 2)):
+        run = 0
+        for x in range(box[0], min(image.width, box[2] + 2)):
+            r, g, b = image.pixel(x, y)
+            if r > threshold and g > threshold and b > threshold:
+                run += 1
+                best = max(best, run)
+            else:
+                run = 0
+    return best
 
 
 class Run:
@@ -352,7 +369,9 @@ def body(session: nx.Session) -> str:
     summary["formatted_gold_box"] = box
     gold_frame = image.digest()
 
-    # Next: synth italic + underline, centered white fill.
+    # Next: synth italic + underline, centered white fill. Checked: centered,
+    # and underlined (a bright run across most of the line, which glyph
+    # strokes never make). The italic slant is unit-checked only.
     italic = run2.change(screen2, gold_frame, NEXT, "formatted-italic")
     box = summary["formatted-italic_ink_box"]
     midpoint = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
@@ -361,6 +380,12 @@ def body(session: nx.Session) -> str:
         and height * 0.25 < midpoint[1] < height * 0.75
     ):
         raise nx.Failure(f"formatted-italic: not centered: {box}")
+    run = longest_bright_run(nx.capture_stable(screen2), box)
+    summary["formatted_italic_underline_run"] = run
+    if run < (box[2] - box[0]) * 0.6:
+        raise nx.Failure(
+            f"formatted-italic: no underline (longest run {run} px in {box})"
+        )
     # Next: the "Arial" bold italic slide (fallback face when Arial is absent).
     arial = run2.change(screen2, italic, NEXT, "formatted-arial")
     run2.keys(NEXT)
