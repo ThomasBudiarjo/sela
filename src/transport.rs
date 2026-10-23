@@ -3,7 +3,7 @@
 use crate::{
     delivery::{Acknowledgment, Command, DeliveryError, Epoch, Lane, Outcome, Payload, Stamp},
     masks::Layer,
-    playback::{MediaAction, MediaStatus, PlayState},
+    playback::{AudioState, MediaAction, MediaStatus, PlayState},
     scene::{
         ContentVersion, Extent, MAX_VIDEO_PATH, PreparedBackground, PreparedCue,
         RendererCapabilities, VideoSource,
@@ -51,7 +51,7 @@ fn length(kind: u8) -> io::Result<usize> {
         READY => Ok(20),
         SURFACE => Ok(24),
         MASK | MEDIA => Ok(30),
-        STATUS => Ok(49),
+        STATUS => Ok(50),
         _ => Err(invalid()),
     }
 }
@@ -221,6 +221,12 @@ impl Frame {
         // 0 means unknown; a known duration is at least 1 ms on the wire.
         let duration = status.duration.map_or(0, |d| millis(d).max(1));
         b[45..49].copy_from_slice(&duration.to_le_bytes());
+        b[49] = match status.audio {
+            AudioState::None => 0,
+            AudioState::Playing => 1,
+            AudioState::NoDevice => 2,
+            AudioState::Failed => 3,
+        };
         f
     }
     pub fn into_status(self) -> io::Result<(Epoch, MediaStatus)> {
@@ -238,6 +244,13 @@ impl Frame {
         };
         let u32_at = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
         let duration = u32_at(45);
+        let audio = match b[49] {
+            0 => AudioState::None,
+            1 => AudioState::Playing,
+            2 => AudioState::NoDevice,
+            3 => AudioState::Failed,
+            _ => return Err(invalid()),
+        };
         Ok((
             Epoch(u128::from_le_bytes(b[..16].try_into().unwrap())),
             MediaStatus {
@@ -248,6 +261,7 @@ impl Frame {
                 state,
                 position: Duration::from_millis(u64::from(u32_at(41))),
                 duration: (duration > 0).then(|| Duration::from_millis(u64::from(duration))),
+                audio,
             },
         ))
     }
@@ -2069,6 +2083,7 @@ mod tests {
             state: PlayState::Playing,
             position: Duration::from_millis(61_250),
             duration: Some(Duration::from_secs(90)),
+            audio: AudioState::NoDevice,
         };
         let bytes = wire(&Frame::status(Epoch(5), status));
         let frame = Frame::read(&bytes[..]).unwrap();
@@ -2087,6 +2102,9 @@ mod tests {
         let mut bad = bytes.clone();
         bad[8 + 40] = 5;
         assert!(Frame::read(&bad[..]).unwrap().into_status().is_err());
+        let mut bad_audio = bytes.clone();
+        bad_audio[8 + 49] = 4;
+        assert!(Frame::read(&bad_audio[..]).unwrap().into_status().is_err());
         assert!(
             Frame::read(&wire(&Frame::ready(Epoch(5), 8))[..])
                 .unwrap()
@@ -2114,6 +2132,7 @@ mod tests {
             state: PlayState::Playing,
             position: Duration::from_millis(ms),
             duration: None,
+            audio: AudioState::None,
         };
         // Offered faster than the writer looks: only the latest is written.
         workers.offer_status(Frame::status(Epoch(1), status(1)));

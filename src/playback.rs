@@ -39,6 +39,21 @@ pub enum PlayState {
     Failed,
 }
 
+/// The audio of the applied video (M2-04).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum AudioState {
+    /// The video has no audio stream.
+    #[default]
+    None,
+    /// Playing to an audio device.
+    Playing,
+    /// No device could be opened (or none is built for this platform): the
+    /// audio is decoded and consumed in step with the video, but silent.
+    NoDevice,
+    /// The device or the audio decode failed; the video plays on silently.
+    Failed,
+}
+
 /// The renderer's report about the video of its applied scene. Position is
 /// the presented frame's time, not the requested one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +63,7 @@ pub struct MediaStatus {
     pub state: PlayState,
     pub position: Duration,
     pub duration: Option<Duration>,
+    pub audio: AudioState,
 }
 
 /// The media clock of one playing video: position advances with wall time
@@ -165,12 +181,14 @@ impl Timeline {
         scene: ContentVersion,
         position: Duration,
         duration: Option<Duration>,
+        audio: AudioState,
     ) -> MediaStatus {
         MediaStatus {
             scene,
             state: self.state,
             position,
             duration,
+            audio,
         }
     }
 }

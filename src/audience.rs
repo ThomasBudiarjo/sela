@@ -1,5 +1,7 @@
 //! Audience renderer process; stdin/stdout are binary protocol, never logs.
 //! Bounded worker preparation and native submission. No operator/mask policy.
+#[path = "audience/audio.rs"]
+pub mod audio;
 // Offscreen readback helpers are shared with the diagnostic examples.
 #[allow(dead_code)]
 #[path = "audience/compositor.rs"]
@@ -197,6 +199,8 @@ struct VideoContext {
     tools: Arc<video::ToolsCell>,
     registry: Arc<video::Registry>,
     wake: Arc<dyn Fn() + Send + Sync>,
+    /// Opens the audio output of a video with sound (M2-04).
+    audio: fn() -> audio::Output,
 }
 /// A stage cue's static coverage, kept so the clock worker can redraw only
 /// the clock on top of it.
@@ -356,6 +360,7 @@ fn prepare_frame(
             key,
             command.deadline(),
             videos.wake.clone(),
+            videos.audio,
         )
         .map_err(|failure| {
             // Startup-style diagnostic on stderr; stdout stays binary.
@@ -733,6 +738,7 @@ impl ApplicationHandler for Audience {
                     dirty.store(true, Ordering::Release);
                     let _ = proxy.send_event(());
                 }),
+                audio: audio::Output::open,
             }
         };
         if stage_role {

@@ -870,6 +870,16 @@ reference-observations "Video playback — UNOBSERVED best guesses".
 - [ ] **PP-VP-11 Video as logo** (SRC-10). Steps: right-click the clip ›
   Set as Logo Background; press Logo while a song is live. Sela now: not
   built (images only). Re-run: none yet (open, media.md "Open").
+- [ ] **PP-VP-13 Audio of a background video** (EW8-OBS-VP-13, EW8-OBS-006,
+  EW8-OBS-032 Volume; M2-04). Steps: use the clip with audible ticks; Go
+  Live; note whether the sound plays by default and at which Volume; Pause,
+  Play, Restart; Black, Clear, Logo on and off (does the sound stop, duck or
+  continue?); EW's Audio mute (if any); Repeating off to the end. Measure the
+  tick-to-flash offset on the audience with a capture (PP-REF-02). Sela now:
+  full volume, follows the transport, never muted by masks; null output
+  except on Windows (`cpal`, default device, unqualified). Re-run:
+  `scripts/video-windows.py` (listen; step 2 checks "Sound on") and
+  `cargo test --locked --bin sela audience::video::tests::a_videos_audio_follows_its_clock`.
 - [ ] **PP-VP-12 Windows run of `scripts/video-windows.py`**. Steps: as in
   [Windows script run order](#windows-script-run-order) row 32. Sela now:
   Linux only (`scripts/video-x11.py` PASS on `:123`, 2026-10-23). Re-run:

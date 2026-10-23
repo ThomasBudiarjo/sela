@@ -101,6 +101,7 @@ fn fake_audience() {
                     state: PlayState::Paused,
                     position: Duration::from_millis(1500),
                     duration: Some(Duration::from_secs(10)),
+                    audio: sela::playback::AudioState::None,
                 },
             )
             .write(out())

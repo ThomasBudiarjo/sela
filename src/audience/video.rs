@@ -15,10 +15,13 @@
 //! (UNOBSERVED best guess for EW8-OBS-006), under Clear it shows without
 //! text. Dropping the last handle stops the thread and kills FFmpeg without
 //! waiting.
-use super::compositor::Compositor;
+use super::{audio, compositor::Compositor};
 use sela::{
-    media::decode::{DecodeEvent, DecodeOptions, Decoder, Fit, Tools, VideoFrame},
-    playback::{MediaAction, MediaStatus, PlayState, Timeline},
+    media::{
+        audio::{AudioDecoder, DecodeState},
+        decode::{DecodeEvent, DecodeOptions, Decoder, Fit, Tools, VideoFrame},
+    },
+    playback::{AudioState, MediaAction, MediaStatus, PlayState, Timeline},
     scene::{ContentVersion, Extent, VideoSource},
 };
 use std::{
@@ -127,6 +130,7 @@ struct Inner {
     /// Time of the frame now in the texture.
     presented: Duration,
     duration: Option<Duration>,
+    audio: AudioState,
 }
 
 struct Shared {
@@ -179,7 +183,9 @@ impl Playback {
             }
             _ => inner.presented,
         };
-        inner.timeline.status(scene, position, inner.duration)
+        inner
+            .timeline
+            .status(scene, position, inner.duration, inner.audio)
     }
 
     pub fn state(&self) -> PlayState {
@@ -231,22 +237,37 @@ fn options(key: &Key) -> DecodeOptions {
     }
 }
 
+/// A started decoder with its first frame, the clip's length and whether it
+/// has an audio stream.
+struct Opened {
+    decoder: Decoder,
+    first: VideoFrame,
+    duration: Option<Duration>,
+    has_audio: bool,
+}
+
 /// Starts a decoder and waits for its first frame until `deadline`.
-fn open(
-    tools: &Tools,
-    key: &Key,
-    deadline: Instant,
-) -> Result<(Decoder, VideoFrame, Option<Duration>), Failure> {
+fn open(tools: &Tools, key: &Key, deadline: Instant) -> Result<Opened, Failure> {
     let decoder = Decoder::start(tools, &key.source.path, options(key));
-    let mut duration = None;
+    let (mut duration, mut has_audio) = (None, false);
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             return Err(Failure::TimedOut);
         }
         match decoder.next_timeout(left) {
-            Some(DecodeEvent::Opened(opened)) => duration = opened.info.duration,
-            Some(DecodeEvent::Frame(frame)) => return Ok((decoder, frame, duration)),
+            Some(DecodeEvent::Opened(opened)) => {
+                duration = opened.info.duration;
+                has_audio = opened.info.audio.is_some();
+            }
+            Some(DecodeEvent::Frame(first)) => {
+                return Ok(Opened {
+                    decoder,
+                    first,
+                    duration,
+                    has_audio,
+                });
+            }
             Some(DecodeEvent::End { .. }) => {
                 return Err(Failure::Decode(sela::media::MediaError::NoFrames));
             }
@@ -266,6 +287,7 @@ pub fn prime(
     key: Key,
     deadline: Instant,
     wake: Arc<dyn Fn() + Send + Sync>,
+    audio: fn() -> audio::Output,
 ) -> Result<Arc<Playback>, Failure> {
     if let Some(running) = registry.find(&key) {
         return Ok(running);
@@ -274,7 +296,12 @@ pub fn prime(
         .checked_sub(DEADLINE_MARGIN)
         .unwrap_or_else(Instant::now);
     let tools = tools.wait(deadline).ok_or(Failure::Unavailable)?;
-    let (decoder, first, duration) = open(&tools, &key, deadline)?;
+    let Opened {
+        decoder,
+        first,
+        duration,
+        has_audio,
+    } = open(&tools, &key, deadline)?;
     let texture = compositor.video_texture(key.extent);
     compositor
         .upload_frame(&texture, &first.rgba)
@@ -286,6 +313,7 @@ pub fn prime(
             stop: false,
             presented: first.pts,
             duration,
+            audio: AudioState::None,
         }),
         wake: Condvar::new(),
     });
@@ -301,6 +329,7 @@ pub fn prime(
         compositor: compositor.clone(),
         shared,
         wake,
+        audio: has_audio.then_some(audio),
     };
     std::thread::Builder::new()
         .name("audience-video".into())
@@ -317,6 +346,33 @@ struct Player {
     compositor: Arc<Compositor>,
     shared: Arc<Shared>,
     wake: Arc<dyn Fn() + Send + Sync>,
+    /// Opens the audio output when the video has an audio stream.
+    audio: Option<fn() -> audio::Output>,
+}
+
+/// A playing video's audio: its output and the decode feeding it.
+struct Sound {
+    output: audio::Output,
+    decoder: Option<AudioDecoder>,
+}
+
+impl Sound {
+    fn decode(tools: &Tools, key: &Key, output: &audio::Output) -> AudioDecoder {
+        AudioDecoder::start(
+            tools,
+            &key.source.path,
+            output.format(),
+            key.source.repeat,
+            output.shared().ring.clone(),
+        )
+    }
+
+    fn state(&self) -> AudioState {
+        match self.decoder.as_ref().map(AudioDecoder::state) {
+            Some(DecodeState::Failed) => AudioState::Failed,
+            _ => self.output.state(),
+        }
+    }
 }
 
 impl Player {
@@ -335,6 +391,16 @@ impl Player {
 
     fn run(self, decoder: Decoder) {
         let mut decoder = Some(decoder);
+        // The output opens here, off the preparation worker: a slow device
+        // never delays the first-frame gate.
+        let mut sound = self.audio.map(|open| {
+            let output = open();
+            let decoder = Sound::decode(&self.tools, &self.key, &output);
+            Sound {
+                output,
+                decoder: Some(decoder),
+            }
+        });
         // A decoded frame not yet due.
         let mut next: Option<VideoFrame> = None;
         // A terminal event read while looking for later frames.
@@ -345,6 +411,13 @@ impl Player {
                 return;
             }
             let now = Instant::now();
+            if let Some(sound) = &sound {
+                // Audio follows the video's clock and state (masks never
+                // mute it: best guess).
+                let playing = inner.timeline.state() == PlayState::Playing;
+                sound.output.follow(playing, inner.timeline.position(now));
+                inner.audio = sound.state();
+            }
             if let Some(action) = inner.command.take() {
                 if action == MediaAction::Restart {
                     drop(inner);
@@ -352,8 +425,21 @@ impl Player {
                     decoder = None;
                     next = None;
                     held = None;
+                    if let Some(sound) = &mut sound {
+                        // The old audio stops before the ring is emptied,
+                        // then the new decode starts from the beginning.
+                        if let Some(old) = sound.decoder.take() {
+                            old.stop(Duration::from_millis(500));
+                        }
+                        sound.output.flush();
+                        sound.decoder = Some(Sound::decode(&self.tools, &self.key, &sound.output));
+                    }
                     match open(&self.tools, &self.key, Instant::now() + RESTART_TIMEOUT) {
-                        Ok((fresh, first, _)) => {
+                        Ok(Opened {
+                            decoder: fresh,
+                            first,
+                            ..
+                        }) => {
                             decoder = Some(fresh);
                             let shown = self.present(&first);
                             let mut inner = self.shared.lock();
@@ -545,6 +631,10 @@ mod tests {
         Arc::new(|| {})
     }
 
+    fn null_audio() -> audio::Output {
+        audio::Output::null(sela::media::audio::AudioFormat::DEFAULT)
+    }
+
     #[test]
     fn a_primed_video_holds_its_first_frame_until_applied_then_plays_pauses_and_restarts() {
         let Some((compositor, tools)) = setup("a_primed_video_holds_its_first_frame") else {
@@ -565,6 +655,7 @@ mod tests {
             key(&path, true),
             Instant::now() + Duration::from_secs(5),
             wake,
+            null_audio,
         )
         .unwrap();
         let scene = ContentVersion { id: 7, revision: 1 };
@@ -628,6 +719,7 @@ mod tests {
             key(&path, true),
             deadline(),
             noop(),
+            null_audio,
         )
         .unwrap();
         let again = prime(
@@ -637,6 +729,7 @@ mod tests {
             key(&path, true),
             deadline(),
             noop(),
+            null_audio,
         )
         .unwrap();
         assert!(Arc::ptr_eq(&first, &again), "a later slide keeps the video");
@@ -647,6 +740,7 @@ mod tests {
             key(&path, false),
             deadline(),
             noop(),
+            null_audio,
         )
         .unwrap();
         assert!(
@@ -672,6 +766,7 @@ mod tests {
             key(&path, false),
             Instant::now() + Duration::from_secs(5),
             noop(),
+            null_audio,
         )
         .unwrap();
         playback.start();
@@ -702,7 +797,8 @@ mod tests {
                 &compositor,
                 key(&missing, true),
                 deadline,
-                noop()
+                noop(),
+                null_audio,
             ),
             Err(Failure::Decode(sela::media::MediaError::Missing))
         ));
@@ -715,7 +811,8 @@ mod tests {
                 &compositor,
                 key(&garbage, true),
                 deadline,
-                noop()
+                noop(),
+                null_audio,
             ),
             Err(Failure::Decode(_))
         ));
@@ -728,7 +825,8 @@ mod tests {
                 &compositor,
                 key(&path, true),
                 Instant::now(),
-                noop()
+                noop(),
+                null_audio,
             ),
             Err(Failure::TimedOut | Failure::Unavailable)
         ));
@@ -739,10 +837,111 @@ mod tests {
                 &compositor,
                 key(&path, true),
                 deadline,
-                noop()
+                noop(),
+                null_audio,
             ),
             Err(Failure::Unavailable)
         ));
         assert_eq!(registry.live(), 0);
+    }
+
+    /// The audio output the last audio test opened, to watch it consume.
+    static OPENED: Mutex<Option<Arc<audio::Shared>>> = Mutex::new(None);
+
+    fn watched_audio() -> audio::Output {
+        let output = null_audio();
+        *OPENED.lock().unwrap() = Some(output.shared().clone());
+        output
+    }
+
+    /// `clip` with a 440 Hz tone, PCM in Matroska.
+    fn clip_with_audio(tools: &Tools, dir: &Path, seconds: &str) -> PathBuf {
+        let out = dir.join("motion-tone.mkv");
+        let graph = format!(
+            "color=c=0x203060:size=160x90:rate=20:d={seconds}[bg];\
+             color=c=0x00ff00:size=20x20:rate=20[box];\
+             [bg][box]overlay=x='t*100':y=10:shortest=1[v];\
+             sine=frequency=440:sample_rate=48000:duration={seconds}[a]"
+        );
+        let status = Command::new(&tools.ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"])
+            .args(["-filter_complex", &graph, "-map", "[v]", "-map", "[a]"])
+            .args(["-c:v", "ffv1", "-c:a", "pcm_s16le"])
+            .arg(&out)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        out
+    }
+
+    #[test]
+    fn a_videos_audio_follows_its_clock_and_a_silent_one_has_none() {
+        let Some((compositor, tools)) = setup("a_videos_audio_follows") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let scene = ContentVersion { id: 3, revision: 1 };
+        let cell = ToolsCell::ready(Some(tools.clone()));
+        let deadline = || Instant::now() + Duration::from_secs(5);
+        // A silent clip never opens an output.
+        let silent = clip(&tools, dir.path(), "1");
+        let quiet = prime(
+            &cell,
+            &Registry::default(),
+            &compositor,
+            key(&silent, true),
+            deadline(),
+            noop(),
+            watched_audio,
+        )
+        .unwrap();
+        quiet.start();
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(quiet.status(scene).audio, AudioState::None);
+        assert!(OPENED.lock().unwrap().is_none(), "no output for no audio");
+        drop(quiet);
+        // With a tone: primed, the output (no device here) reads nothing.
+        let path = clip_with_audio(&tools, dir.path(), "3");
+        let playback = prime(
+            &cell,
+            &Registry::default(),
+            &compositor,
+            key(&path, true),
+            deadline(),
+            noop(),
+            watched_audio,
+        )
+        .unwrap();
+        wait("the output", || OPENED.lock().unwrap().is_some());
+        let shared = OPENED.lock().unwrap().clone().unwrap();
+        wait("the audio report", || {
+            playback.status(scene).audio == AudioState::NoDevice
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(shared.played(), 0, "primed: silent");
+        // Applied: it consumes in step with the video (48 kHz frames).
+        playback.start();
+        std::thread::sleep(Duration::from_millis(1000));
+        let played = shared.played();
+        let position = playback.status(scene).position.as_secs_f64();
+        let video = (position * 48_000.) as u64;
+        assert!(
+            played.abs_diff(video) < 48_000 / 5,
+            "audio {played} frames, video {position:.3} s"
+        );
+        // Paused: the audio stops too.
+        playback.command(MediaAction::Pause);
+        wait("paused", || playback.state() == PlayState::Paused);
+        std::thread::sleep(Duration::from_millis(100));
+        let held = shared.played();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(shared.played() <= held + 48_000 / 50, "paused audio ran on");
+        // Restart starts the audio over from the beginning.
+        playback.command(MediaAction::Restart);
+        wait("restarted", || {
+            playback.state() == PlayState::Playing && shared.played() < 48_000 / 2
+        });
+        assert_eq!(playback.status(scene).audio, AudioState::NoDevice);
+        drop(playback);
     }
 }

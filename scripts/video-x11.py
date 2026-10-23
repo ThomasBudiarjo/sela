@@ -8,7 +8,8 @@ Usage: python3 scripts/video-x11.py [--display :123 | --kind xvfb|dual]
 
 Needs the pinned LGPL FFmpeg in the development folder (`scripts/fetch-ffmpeg`).
 The script makes an original 8 s clip with that FFmpeg (a green box moving
-left to right over navy at 60 px/s, VP9 in WebM) and seeds "Motion Hymn" with the clip
+left to right over navy at 60 px/s, VP9 in WebM, with a 440 Hz Opus
+tone) and seeds "Motion Hymn" with the clip
 as its song master (Verse 1, Chorus, Verse 2) plus a Bridge slide whose own
 background names a missing video, and "Still Hymn" on a navy color. Checks,
 in order:
@@ -20,7 +21,9 @@ in order:
    lyrics; two captures 0.8 s apart differ in the video strip above the text
    while the text stays (text over a playing video). The Live pane shows the
    transport row (`video-transport`), its renderer-reported position reads
-   "Playing", and an FFmpeg decoder child runs for it.
+   "Playing" with the sound note "No sound output" (M2-04: the tone is
+   decoded and consumed in step by the null output; no device here), and two
+   FFmpeg decoder children (picture and sound) run for it.
 3. Next (Chorus): the lyrics change and the video keeps running without a
    restart (the reported position keeps rising past the 8 s clip and wraps:
    Repeating loops, SRC-10).
@@ -68,7 +71,8 @@ def make_clip(out: Path) -> Path:
     graph = (
         "color=c=0x203060:size=640x360:rate=30:d=8[bg];"
         "color=c=0x00ff00:size=80x80:rate=30[box];"
-        "[bg][box]overlay=x='t*60':y=30:shortest=1"
+        "[bg][box]overlay=x='t*60':y=30:shortest=1[v];"
+        "sine=frequency=440:sample_rate=48000:duration=8[a]"
     )
     done = subprocess.run(
         [
@@ -80,6 +84,14 @@ def make_clip(out: Path) -> Path:
             "-y",
             "-filter_complex",
             graph,
+            "-map",
+            "[v]",
+            "-map",
+            "[a]",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "64k",
             "-c:v",
             "libvpx-vp9",
             "-deadline",
@@ -239,10 +251,17 @@ def body(session: nx.Session) -> str:
     summary["go_live_first_change_ms"] = ms
     control("video-transport")
     summary["position_after_go_live"] = wait_position("Playing", "the Playing report")
+    summary["playing_after_s"] = round(time.monotonic() - started, 1)
     session.save(operator, "02-operator-transport")
+    summary["sound_note"] = wait_position(
+        "No sound output", "the sound note of the transport row"
+    )
+    summary["sound_note_after_s"] = round(time.monotonic() - started, 1)
     summary["ffmpeg_playing"] = len(ffmpeg_pids(app))
-    if not ffmpeg_pids(app):
-        raise nx.Failure("no FFmpeg decoder runs for the live video")
+    if len(ffmpeg_pids(app)) < 2:
+        raise nx.Failure(
+            f"picture and sound decoders expected, found {ffmpeg_pids(app)}"
+        )
     # This VM only (software Vulkan, debug build): CPU share of the audience
     # and its decoder over 2 s of playback, and the audience's RSS.
     watched = [audience_pid, *ffmpeg_pids(app)]
@@ -288,9 +307,16 @@ def body(session: nx.Session) -> str:
     summary["position_after_loop"] = position()
     if "Playing" not in position():
         raise nx.Failure(f"the video stopped at the loop point: {position()!r}")
-    wrapped = position().split("·")[-1].strip().split("/")[0].strip()
-    if wrapped not in ("0:00", "0:01", "0:02", "0:03", "0:04"):
-        raise nx.Failure(f"the reported position did not wrap: {position()!r}")
+    # "Playing · m:ss / 0:08 · sound": the position is the clip time, so
+    # past 8 s it reads the time since the loop point (one second slack
+    # for the report cadence and the whole-second display).
+    report = position()
+    elapsed = time.monotonic() - started
+    minutes, seconds = report.split("·")[1].split("/")[0].strip().split(":")
+    wrapped = int(minutes) * 60 + int(seconds)
+    summary["loop_check"] = {"elapsed_s": round(elapsed, 1), "position_s": wrapped}
+    if not (wrapped < 8 and wrapped <= elapsed - 8 + 1.5):
+        raise nx.Failure(f"the reported position did not wrap: {report!r}")
 
     # 4. Pause, Play, Restart.
     press_control("video-play-pause")

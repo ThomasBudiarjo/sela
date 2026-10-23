@@ -354,8 +354,9 @@ MPEG-2, ProRes, MJPEG, FFV1. Only FFV1 (generated clips) has been decoded
 here. Hardware decode, 4K/60 performance and memory per resolution are not
 measured.
 
-Not used: hardware decode, audio (M2-04 with `cpal`), seeking (M2-03), a
-frame pool. Looping is `DecodeOptions::looping` (video-playback). Each frame allocates its buffer; pooling waits for a
+Not used: hardware decode, seeking (M2-03), a frame pool. Audio is a
+separate decode (`media::audio`, video-playback; "Audio of video
+backgrounds" below). Looping is `DecodeOptions::looping` (video-playback). Each frame allocates its buffer; pooling waits for a
 profile showing it matters.
 
 ## Video backgrounds and playback (M2-02, M2-03, M2-05 basic)
@@ -494,6 +495,43 @@ playback best guesses") and parity-pending.md (Stream: video-playback).
   poster and name, Aspect Ratio and Repeating (EW8-OBS-032). Editor
   previews and theme thumbnails show the poster frame.
 
+### Audio of video backgrounds (M2-04 feasible part)
+
+- A background video with an audio stream (ffprobe reports one) gets an
+  audio output in the renderer process; a silent video opens none. The
+  playback thread opens it after the first-frame gate, so a slow device
+  never delays a cue's acceptance.
+- `media::audio::AudioDecoder` runs a second supervised FFmpeg child that
+  decodes the first audio stream to interleaved `f32le` at the output's
+  rate and channel count (`-vn -sn -dn -ac -ar`, `-stream_loop -1` before
+  the input when Repeating), pushing into a bounded single-producer,
+  single-consumer `SampleRing` (500 ms; the decoder waits for room, so a
+  stalled output never grows memory). A failure leaves the video playing,
+  silent, reported as "Sound failed".
+- The output (`audience::audio::Output`) follows the video's media clock:
+  the playback thread stores "playing" and the video position (in frames)
+  in atomics; the output callback (`render`) uses only atomics and the ring
+  (no lock, allocation or I/O) and keeps the consumed-frame count within
+  40 ms of the video (`sync_step`: further behind skips ahead, further
+  ahead plays silence). The video is the master clock. Pause and the end of
+  a play-once video silence it; Restart stops the old decode, empties the
+  ring and decodes from the start. Masks never mute it (best guess,
+  EW8-OBS-006 unobserved; EW8-OBS-VP-13).
+- Devices: on Windows the default output device through `cpal` 0.18.2
+  (WASAPI shared mode, `f32` at the device's mix rate and channels), the
+  stream kept on its own thread. Elsewhere, or when no device opens, a null
+  output consumes the samples in real time, so the clock and the decoder
+  behave the same; the report says so. No ALSA/PulseAudio/CoreAudio output
+  is built (Linux and macOS are development targets here).
+- Reports: wire kind 9 STATUS carries an audio byte (none, playing, no
+  device, failed; docs/delivery.md); the transport row appends "Sound on",
+  "No sound output" or "Sound failed; the video plays on silently".
+- Not done: volume (EW8-OBS-032 Volume), mute, fades, routing to a chosen
+  device, audio-only items and background audio playlists, device unplug
+  and sample-rate change handling beyond "Sound failed", resampling drift
+  over hours, and any measured A/V offset on real speakers. None of the
+  M2-04 qualification (actual speakers or capture measurement) has run.
+
 ### Measurements (this VM only)
 
 Debug build, 4 vCPU cloud container, lavapipe software Vulkan, Xvfb,
@@ -501,6 +539,8 @@ Debug build, 4 vCPU cloud container, lavapipe software Vulkan, Xvfb,
 30 fps clip: Go Live to the first audience change 159-418 ms across runs
 (capture polling included); while playing, the audience process used 48%
 of one CPU and its FFmpeg child 7% (2 s sample), audience RSS 131 MiB.
+With the clip's 440 Hz Opus tone (null output): audience 47%, picture
+decoder 7.5%, sound decoder 0.5%, audience RSS 133 MiB.
 Outside Sela, the pinned FFmpeg decodes a 1080p30 VP9 clip to RGBA at
 about 140 frames/s on this VM. None of this is a frame pacing, GPU, 1080p60
 or hardware claim (M2-08).
@@ -512,6 +552,10 @@ or hardware claim (M2-08).
   LRU, latest-wins worker; import, refusals, cancel and real posters with
   FFmpeg), `transport::tests` (video tag, MEDIA, STATUS, status slot),
   `media::decode::tests` (cover/stretch chains, `-stream_loop`),
+  `media::audio::tests` (ring order and wrap across threads, sync steps,
+  audio arguments, a real tone decoded at 440 Hz, a missing input fails),
+  `audience::audio::tests` (silence while paused or flushed, skip ahead and
+  wait, whole frames and volume, the null output's real-time rate),
   `schedule_file::tests` (version 6), fuzz strategies for video fills and the
   new frames.
 - I: `tests/media_decode.rs` (`cover_and_stretch_fill_the_cue_extent_without_bars`,
@@ -520,15 +564,17 @@ or hardware claim (M2-08).
 - R (real GPU adapter, lavapipe here; skipped without one unless
   `SELA_REQUIRE_GPU=1`): `audience::video::tests` (primed first frame, start,
   pause, play, restart, loop; shared playback; play once and end; failures
-  before the first frame).
-- GPUI: `tests::video_playback` (7) and
+  before the first frame; a tone's audio follows the clock, pauses and
+  restarts, a silent clip opens no output).
+- GPUI: `tests::video_playback` (8, the transport row's sound note) and
   `song_library::tests::select_media_videos_sets_a_repeating_video_fill_that_saves`.
 - N: `scripts/video-x11.py` (PASS on `:123`); `scripts/video-windows.py`
   NOT RUN (no Windows host).
 
 ### Open
 
-- Audio of a video background (M2-04), volume (EW8-OBS-032 Volume).
+- Audio qualification on real speakers (M2-04, PP-VP-13), volume
+  (EW8-OBS-032 Volume), mute, fades, device routing, audio-only items.
 - Seek and a position slider; a start position; videos as logo (SRC-10 "Set
   as Logo Background"); videos as schedule items of their own; the Videos
   list context menu (delete, rename, relink) and Locate… for videos; videos
@@ -536,7 +582,7 @@ or hardware claim (M2-08).
 - Resizing the audience restarts a background video (the new extent is a new
   playback).
 - Next-cue preload, GPU memory budgets, hardware decode, 1080p60 and 4K
-  pacing (M2-05, M2-08); the EasyWorship observations PP-VP-01..12.
+  pacing (M2-05, M2-08); the EasyWorship observations PP-VP-01..13.
 
 ## Native checks
 

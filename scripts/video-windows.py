@@ -3,11 +3,13 @@ M2-05 basic).
 
 Windows counterpart of scripts/video-x11.py, same checks in the same order
 (see that docstring): an original 8 s clip (a green box moving right at
-60 px/s over navy, VP9 in WebM) made with the pinned FFmpeg; "Motion Hymn"
+60 px/s over navy, VP9 in WebM, with a 440 Hz Opus tone) made with the
+pinned FFmpeg; "Motion Hymn"
 over it as the song master plus a Bridge naming a missing video; Media ›
 Videos lists "sela-motion" with a thumbnail; Go Live plays the video under
-the lyrics (two captures 0.8 s apart differ above the text, an ffmpeg.exe
-child of the audience runs, the transport row reports "Playing"); Next keeps
+the lyrics (two captures 0.8 s apart differ above the text, two ffmpeg.exe
+children of the audience run, picture and sound, the transport row reports
+"Playing" and "Sound on" when a default output device exists, M2-04); Next keeps
 the video running and its reported position wraps after 8 s; Pause holds the
 picture, Play continues, Restart starts over; Black blacks out while the
 video runs on underneath; Clear shows the video without text; the Bridge
@@ -22,7 +24,9 @@ build in .amp\\in\\ffmpeg\\n8.1.3-lgpl), `cargo build --locked` and `cargo
 build --locked --examples`, a secondary monitor for the audience
 (SELA_AUDIENCE_MONITOR=secondary), the keyboard and mouse idle for the whole
 run. Takes over the real keyboard; never run with EasyWorship open. Also
-listen: the clip is silent, so no audio check is made (audio is open, M2-04).
+listen (speakers on, PP-VP-13): the tone plays from Go Live, stops while
+paused, starts over on Restart and keeps playing under Black and Clear;
+the script cannot hear it, so note what you heard in the work log.
 Status: NOT RUN (no Windows host when written, 2026-10-23).
 """
 
@@ -76,7 +80,8 @@ def make_clip(out: pathlib.Path) -> pathlib.Path:
     graph = (
         "color=c=0x203060:size=640x360:rate=30:d=8[bg];"
         "color=c=0x00ff00:size=80x80:rate=30[box];"
-        "[bg][box]overlay=x='t*60':y=30:shortest=1"
+        "[bg][box]overlay=x='t*60':y=30:shortest=1[v];"
+        "sine=frequency=440:sample_rate=48000:duration=8[a]"
     )
     subprocess.run(
         [
@@ -88,6 +93,14 @@ def make_clip(out: pathlib.Path) -> pathlib.Path:
             "-y",
             "-filter_complex",
             graph,
+            "-map",
+            "[v]",
+            "-map",
+            "[a]",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "64k",
             "-c:v",
             "libvpx-vp9",
             "-deadline",
@@ -214,8 +227,12 @@ def main() -> int:
         nw.press(operator, "pagedown")
         wait_for(10, "the video cue going live", lambda: lo.digest(screen) != before)
         summary["position_after_go_live"] = position("Playing", "the Playing report")
-        if not lo.children(audience_pid):
-            raise nw.Failure("no ffmpeg.exe child decodes the live video")
+        # "Sound on", "No sound output" (no device) or "Sound failed".
+        summary["sound_note"] = position("ound", "the sound note")
+        if "Sound failed" in summary["sound_note"]:
+            raise nw.Failure(f"the audio failed: {summary['sound_note']!r}")
+        if len(lo.children(audience_pid)) < 2:
+            raise nw.Failure("picture and sound ffmpeg.exe children expected")
         first = shot(screen, "02-verse-video")
         if lo.ink_box(*first) is None:
             raise nw.Failure("no lyrics over the video")

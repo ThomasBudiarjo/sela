@@ -154,6 +154,7 @@ fn seeds() -> Vec<Vec<u8>> {
             state: crate::playback::PlayState::Paused,
             position: Duration::from_millis(1500),
             duration: Some(Duration::from_secs(9)),
+            audio: crate::playback::AudioState::Playing,
         },
     )));
     seeds

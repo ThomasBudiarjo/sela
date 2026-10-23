@@ -173,6 +173,9 @@ fn fake_audience_child() {
                             },
                         ),
                         duration: Some(Duration::from_secs(10)),
+                        // No device in the fake renderer, like a host
+                        // without sound output.
+                        audio: sela::playback::AudioState::NoDevice,
                     },
                 )
                 .write(out())

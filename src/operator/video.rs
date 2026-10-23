@@ -18,7 +18,7 @@ use super::*;
 use sela::{
     background::{Aspect, VideoRef},
     media::backend::Availability,
-    playback::{MediaAction, PlayState, clock_text},
+    playback::{AudioState, MediaAction, MediaStatus, PlayState, clock_text},
     videos::{self, Listed, Lru, Substitute, ThumbKey},
 };
 
@@ -139,6 +139,40 @@ fn release(
     }
 }
 
+/// The transport row's report: state, position and the sound note.
+pub(crate) fn transport_line(status: Option<MediaStatus>) -> String {
+    let state = match status.map(|s| s.state) {
+        None | Some(PlayState::Primed) => t!(Msg::VideoStarting),
+        Some(PlayState::Playing) => t!(Msg::VideoPlaying),
+        Some(PlayState::Paused) => t!(Msg::VideoPaused),
+        Some(PlayState::Ended) => t!(Msg::VideoEnded),
+        Some(PlayState::Failed) => t!(Msg::VideoFailed),
+    };
+    match status {
+        Some(status) => {
+            let line = format!(
+                "{state} · {}",
+                position_text(status.position, status.duration)
+            );
+            match sound_text(status.audio) {
+                Some(sound) => format!("{line} · {sound}"),
+                None => line,
+            }
+        }
+        None => state.to_owned(),
+    }
+}
+
+/// The sound note of the transport row; nothing for a silent video.
+fn sound_text(audio: AudioState) -> Option<&'static str> {
+    match audio {
+        AudioState::None => None,
+        AudioState::Playing => Some(t!(Msg::VideoSoundOn)),
+        AudioState::NoDevice => Some(t!(Msg::VideoSoundNoDevice)),
+        AudioState::Failed => Some(t!(Msg::VideoSoundFailed)),
+    }
+}
+
 /// `m:ss / m:ss` of a status, or just the position when the length is unknown.
 fn position_text(position: Duration, duration: Option<Duration>) -> String {
     match duration {
@@ -148,7 +182,6 @@ fn position_text(position: Duration, duration: Option<Duration>) -> String {
 }
 
 impl Operator {
-    /// The slide on the audience now (acknowledged), if its background is a video.
     /// The video of the slide the renderer acknowledged. A video that could
     /// not be played went out as black (a warning substituted it), so it has
     /// no transport.
@@ -551,20 +584,7 @@ impl Operator {
             Some(_) => true,
             None => status.is_none_or(|s| s.state == PlayState::Playing),
         };
-        let state = match status.map(|s| s.state) {
-            None | Some(PlayState::Primed) => t!(Msg::VideoStarting),
-            Some(PlayState::Playing) => t!(Msg::VideoPlaying),
-            Some(PlayState::Paused) => t!(Msg::VideoPaused),
-            Some(PlayState::Ended) => t!(Msg::VideoEnded),
-            Some(PlayState::Failed) => t!(Msg::VideoFailed),
-        };
-        let line = match status {
-            Some(status) => format!(
-                "{state} · {}",
-                position_text(status.position, status.duration)
-            ),
-            None => state.to_owned(),
-        };
+        let line = transport_line(status);
         let rejected = output.and_then(Supervisor::media_rejected).map(|(_, e)| e);
         Some(
             div()

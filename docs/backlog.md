@@ -1296,6 +1296,18 @@ into audience/audio unexpectedly.
 
 Depends on: M2-02, M2-03. Tests: U, I, H, P.
 
+Progress (video-playback, 2026-10-23; feasible part, implemented-unqualified):
+the audio of a background video plays in the renderer process from a second
+supervised FFmpeg decode into a bounded lock-free ring (500 ms); the video
+is the master clock and the output callback (atomics and the ring only)
+keeps within 40 ms of it, following Pause/Play/Restart, loop and the end;
+masks never mute it (best guess, EW8-OBS-VP-13). Windows opens the default
+device through `cpal` 0.18.2; elsewhere a null output consumes in real time.
+The report's audio state shows in the Live transport row. Headless tests
+only (unit, real decode, real-GPU playback with the null output, GPUI,
+`scripts/video-x11.py`); no speakers, capture measurement, Windows run,
+volume, mute, fades, routing, device loss or audio-only items (PP-VP-13).
+
 - [ ] Define master clock, drift correction, mute/volume/fade and output-device routing.
 - [ ] Implement audio-only resources and observed playlist/background-audio behavior.
 - [ ] Keep real-time callbacks free of blocking allocation/I/O and bound buffering.

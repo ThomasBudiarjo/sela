@@ -37,6 +37,13 @@ tempfile = "=3.27.0"
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.190"
 
+# Audio of video backgrounds (M2-04, owner decision: audio through cpal).
+# Windows only: Windows is the release platform and cpal there reuses the
+# `windows` 0.62 crate GPUI already pulls; on other platforms the renderer
+# plays audio into its null output (no ALSA build dependency).
+[target.'cfg(windows)'.dependencies]
+cpal = { version = "=0.18.2", default-features = false }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["wayland", "x11"] }
 

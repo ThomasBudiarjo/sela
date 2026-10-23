@@ -884,6 +884,9 @@ pub enum Msg {
     VideosNoProfile,
     VideosEmptyHint,
     ImportVideo,
+    VideoSoundOn,
+    VideoSoundNoDevice,
+    VideoSoundFailed,
 }
 
 impl Msg {
@@ -1688,6 +1691,9 @@ impl Msg {
         Msg::VideosNoProfile,
         Msg::VideosEmptyHint,
         Msg::ImportVideo,
+        Msg::VideoSoundOn,
+        Msg::VideoSoundNoDevice,
+        Msg::VideoSoundFailed,
     ];
 
     pub fn english(self) -> &'static str {
@@ -2663,6 +2669,9 @@ impl Msg {
                 "No videos yet. Use Import video… to add an MP4, MOV, MKV, WebM or AVI file."
             }
             Self::ImportVideo => "Import video…",
+            Self::VideoSoundOn => "Sound on",
+            Self::VideoSoundNoDevice => "No sound output",
+            Self::VideoSoundFailed => "Sound failed; the video plays on silently",
         }
     }
 
@@ -3681,6 +3690,9 @@ impl Msg {
                 "Belum ada video. Gunakan Impor video… untuk menambahkan file MP4, MOV, MKV, WebM atau AVI."
             }
             Self::ImportVideo => "Impor video…",
+            Self::VideoSoundOn => "Suara aktif",
+            Self::VideoSoundNoDevice => "Tidak ada keluaran suara",
+            Self::VideoSoundFailed => "Suara gagal; video tetap diputar tanpa suara",
         }
     }
 }
@@ -3750,7 +3762,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 800);
+        assert_eq!(Msg::ALL.len(), 803);
     }
 
     #[test]

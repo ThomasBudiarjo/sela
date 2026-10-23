@@ -163,6 +163,11 @@ fn a_video_slide_goes_live_after_its_pin_check_and_the_transport_follows_the_ren
     cx.run_until_parked();
     assert!(cx.debug_bounds("video-transport").is_some());
     assert!(cx.debug_bounds("video-position").is_some());
+    // The report's sound note reaches the transport row (M2-04).
+    let line = operator.read_with(&cx, |o, _| {
+        crate::operator::video::transport_line(o.output.as_ref().unwrap().media_status())
+    });
+    assert_eq!(line, "Playing · 0:00 / 0:10 · No sound output");
     assert_eq!(
         operator.read_with(&cx, |o, _| o.live_video().map(|(v, _, repeat)| (v, repeat))),
         Some((video.clone(), true))
@@ -439,5 +444,29 @@ fn a_real_import_lists_the_video_and_its_thumbnail_lands(cx: &mut TestAppContext
     // Bounded: never more posters than the cache's entry cap.
     assert!(
         operator.read_with(&cx, |o, _| o.video.thumb_cache.len()) <= sela::videos::THUMB_ENTRIES
+    );
+}
+
+#[test]
+fn the_transport_line_names_state_position_and_sound() {
+    use crate::operator::video::transport_line;
+    use sela::playback::{AudioState, MediaStatus};
+    assert_eq!(transport_line(None), "Starting video…");
+    let status = MediaStatus {
+        scene: sela::scene::ContentVersion { id: 1, revision: 1 },
+        state: PlayState::Paused,
+        position: Duration::from_millis(65_400),
+        duration: None,
+        audio: AudioState::None,
+    };
+    assert_eq!(transport_line(Some(status)), "Paused · 1:05");
+    let failed = MediaStatus {
+        audio: AudioState::Failed,
+        duration: Some(Duration::from_secs(125)),
+        ..status
+    };
+    assert_eq!(
+        transport_line(Some(failed)),
+        "Paused · 1:05 / 2:05 · Sound failed; the video plays on silently"
     );
 }
