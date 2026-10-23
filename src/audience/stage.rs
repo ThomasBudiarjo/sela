@@ -62,9 +62,12 @@ pub struct Base {
     pub clock: Option<Region>,
 }
 
-/// Coverage for every panel field except the clock. Fails like a slide
-/// raster: a missing glyph or text that cannot fit rejects the cue, and the
-/// stage keeps its previous scene.
+/// Coverage for every panel field except the clock. The panel comes in the
+/// live slide's face; a character that face lacks is drawn as a stand-in
+/// (`stage::covered`), and a label, the message or the next slide that still
+/// cannot be drawn is left blank, so nothing but the current slide itself
+/// can reject the cue (the stage then keeps its previous scene). The
+/// current slide is the one the audience already drew in this face.
 pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
     let panel = stage.panel();
     let layout = stage::layout(extent, panel).ok_or(TextError::Bounds)?;
@@ -82,21 +85,22 @@ pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
         extent,
         stage,
     };
-    canvas.draw(
+    // Optional fields: a failure leaves that area blank.
+    let _ = canvas.draw(
         Channel::Note,
         &panel.current_label,
         layout.label,
         (Align::Left, VAlign::Middle),
         None,
-    )?;
+    );
     if let Some(region) = layout.message {
-        canvas.draw(
+        let _ = canvas.draw(
             Channel::Note,
             &panel.message,
             region,
             (Align::Center, VAlign::Middle),
             None,
-        )?;
+        );
     }
     let current = canvas.draw(
         Channel::Fill,
@@ -109,23 +113,23 @@ pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
         canvas.fill(Channel::Next, region, DIVIDER);
     }
     if let Some(region) = layout.next_label {
-        canvas.draw(
+        let _ = canvas.draw(
             Channel::Next,
             &panel.next_label,
             region,
             (Align::Left, VAlign::Middle),
             None,
-        )?;
+        );
     }
     if let Some(region) = layout.next {
         let cap = current.map(|size| (f32::from(size) * NEXT_SHARE).max(8.) as u16);
-        canvas.draw(
+        let _ = canvas.draw(
             Channel::Next,
             &panel.next,
             region,
             (Align::Center, VAlign::Top),
             cap,
-        )?;
+        );
     }
     Ok(Base {
         extent,
@@ -134,11 +138,12 @@ pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
     })
 }
 
-/// The base coverage with `clock` drawn right-aligned in the header.
-pub fn with_clock(base: &Base, stage: &PreparedStage, clock: &str) -> Result<Vec<u8>, TextError> {
+/// The base coverage with `clock` drawn right-aligned in the header (left
+/// blank if the face cannot draw it at all).
+pub fn with_clock(base: &Base, stage: &PreparedStage, clock: &str) -> Vec<u8> {
     let mut coverage = base.coverage.clone();
     if let Some(region) = base.clock {
-        Canvas {
+        let _ = Canvas {
             coverage: &mut coverage,
             extent: base.extent,
             stage,
@@ -149,9 +154,9 @@ pub fn with_clock(base: &Base, stage: &PreparedStage, clock: &str) -> Result<Vec
             region,
             (Align::Right, VAlign::Middle),
             None,
-        )?;
+        );
     }
-    Ok(coverage)
+    coverage
 }
 
 /// The stage process's local time of day. Reads the system time zone, so it
@@ -184,6 +189,8 @@ impl Canvas<'_> {
         }
         let font = self.stage.font();
         let face = self.stage.face_index();
+        let text = stage::covered(text, font, face).ok_or(TextError::InvalidFont)?;
+        let text = text.as_ref();
         let mut size = stage::fit(text, font, face, region).ok_or(TextError::MissingGlyph)?;
         if let Some(cap) = cap {
             size = size.min(cap.max(4));
@@ -308,7 +315,7 @@ mod tests {
         // The clock region stays empty until a clock is drawn.
         let clock = base.clock.unwrap();
         assert_eq!(ink(&base.coverage, clock, Channel::Fill), 0);
-        let timed = with_clock(&base, stage, "02:35").unwrap();
+        let timed = with_clock(&base, stage, "02:35");
         assert!(ink(&timed, clock, Channel::Fill) > 0);
         assert_eq!(
             ink(&timed, layout.current, Channel::Fill),
@@ -334,12 +341,45 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_glyph_rejects_the_stage_cue() {
-        let cue = cue(StagePanel {
+    fn a_glyph_the_face_lacks_never_costs_the_current_slide() {
+        // Review finding (stage-display): an uncovered next slide used to
+        // reject the whole panel, leaving performers a slide behind.
+        let latin = cue(StagePanel {
+            next: "\u{4e2d}\u{6587} \u{1F600}".into(),
+            next_label: "Next · \u{4e2d}".into(),
+            message: "\u{4e2d}".into(),
+            ..panel()
+        });
+        let stage = latin.stage().unwrap();
+        let drawn = base(stage, EXTENT).expect("the current slide is drawn");
+        let layout = stage::layout(EXTENT, stage.panel()).unwrap();
+        assert!(ink(&drawn.coverage, layout.current, Channel::Fill) > 0);
+        // Stand-ins are drawn where the face lacks a glyph.
+        assert!(ink(&drawn.coverage, layout.next.unwrap(), Channel::Next) > 0);
+        // An uncovered current slide is drawn with stand-ins too.
+        let cjk = cue(StagePanel {
             current: "\u{4e2d}\u{6587}".into(),
             ..panel()
         });
-        assert!(base(cue.stage().unwrap(), EXTENT).is_err());
+        let stage = cjk.stage().unwrap();
+        let drawn = base(stage, EXTENT).unwrap();
+        let layout = stage::layout(EXTENT, stage.panel()).unwrap();
+        assert!(ink(&drawn.coverage, layout.current, Channel::Fill) > 0);
+    }
+
+    #[test]
+    fn a_next_area_that_cannot_be_drawn_is_left_blank() {
+        // One line too long to fit at any legible size: the next area stays
+        // blank and the current slide is still drawn.
+        let cue = cue(StagePanel {
+            next: "x".repeat(stage::MAX_FIELD_BYTES),
+            ..panel()
+        });
+        let stage = cue.stage().unwrap();
+        let drawn = base(stage, EXTENT).expect("the panel still builds");
+        let layout = stage::layout(EXTENT, stage.panel()).unwrap();
+        assert!(ink(&drawn.coverage, layout.current, Channel::Fill) > 0);
+        assert_eq!(ink(&drawn.coverage, layout.next.unwrap(), Channel::Next), 0);
     }
 
     #[test]

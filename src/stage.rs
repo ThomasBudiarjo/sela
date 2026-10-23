@@ -279,6 +279,51 @@ const MAX_SIZE: f32 = 288.;
 /// `region` without wrapping (one line per `\n`). `None` when the face lacks
 /// a glyph, the text is too long or nothing fits. The renderer still checks
 /// the shaped glyphs and steps down if the estimate is too large.
+/// Stand-ins for a character the face cannot draw, in order of preference.
+const STAND_INS: [char; 2] = ['\u{FFFD}', '?'];
+
+/// Invisible format characters (joiners, variation selectors, BOM): dropped
+/// when the face lacks them rather than shown as a stand-in.
+fn ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{E0100}'..='\u{E01EF}'
+    )
+}
+
+/// `text` with every character the face cannot draw replaced by U+FFFD (or
+/// `?`, or nothing when the face has neither); invisible format characters
+/// it lacks are dropped. Newlines are kept. A stage field therefore never
+/// fails for one uncovered character: the current slide still reaches the
+/// performers even when a label, the message or the next slide holds a
+/// glyph the live slide's face lacks. `None` only for an unparsable face.
+pub fn covered<'a>(
+    text: &'a str,
+    font: &[u8],
+    face_index: u32,
+) -> Option<std::borrow::Cow<'a, str>> {
+    use std::borrow::Cow;
+    let face = ttf_parser::Face::parse(font, face_index).ok()?;
+    let has = |c: char| c == '\n' || face.glyph_index(c).is_some_and(|glyph| glyph.0 != 0);
+    if text.chars().all(has) {
+        return Some(Cow::Borrowed(text));
+    }
+    let stand_in = STAND_INS.into_iter().find(|c| has(*c));
+    Some(Cow::Owned(
+        text.chars()
+            .filter_map(|c| match c {
+                c if has(c) => Some(c),
+                c if ignorable(c) => None,
+                _ => stand_in,
+            })
+            .collect(),
+    ))
+}
+
 pub fn fit(text: &str, font: &[u8], face_index: u32, region: Region) -> Option<u16> {
     if text.is_empty()
         || text.len() > MAX_FIELD_BYTES
@@ -310,6 +355,36 @@ pub fn fit(text: &str, font: &[u8], face_index: u32, region: Region) -> Option<u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn covered_substitutes_only_what_the_face_lacks() {
+        let font = crate::fonts::BUNDLED;
+        assert!(matches!(
+            covered("Signal\nHymn", font, 0).unwrap(),
+            std::borrow::Cow::Borrowed("Signal\nHymn")
+        ));
+        // CJK is outside DejaVu Sans: each character becomes a stand-in,
+        // the covered text and the line break stay.
+        let mixed = covered("Next \u{4e2d}\u{6587}\nend", font, 0).unwrap();
+        assert_eq!(mixed, "Next \u{FFFD}\u{FFFD}\nend");
+        // A joiner or variation selector the face lacks is dropped.
+        assert_eq!(covered("a\u{E0100}b", font, 0).unwrap(), "ab");
+        assert!(covered("x", b"not a font", 0).is_none());
+        assert!(
+            fit(
+                &mixed,
+                font,
+                0,
+                Region {
+                    x: 0,
+                    y: 0,
+                    width: 400,
+                    height: 200
+                }
+            )
+            .is_some()
+        );
+    }
 
     const HD: Extent = Extent {
         width: 1920,

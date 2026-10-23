@@ -1202,7 +1202,9 @@ chords/notes (later scope, not started), physical viewing-distance check.
   not established in the pinned reference, with stable arrangement association.
 - [x] Test last slide, repeated chorus, empty next item and rapid arrangement change.
   (`stage::tests`, GPUI `the_last_slide_points_at_the_next_schedule_item` and
-  `arrangement_changes_and_repeated_choruses_keep_next_deterministic`, 2026-10-22.)
+  `arrangement_changes_and_repeated_choruses_keep_next_deterministic`, 2026-10-22;
+  the latter switches the live entry's arrangement seven times in a row,
+  six of them before the previous rebuild settled, review round 2026-10-23.)
 - [ ] Verify stage-only information never enters audience/stream renders or bundles
   intended to exclude private notes; inspect at actual stage viewing distance.
 
@@ -1243,9 +1245,13 @@ Depends on: M3-02, M3-04. Tests: U, R, N, H.
 Owner scope (Mission 2026-10): only the stage clock. Progress (stage-display,
 2026-10-22): the stage process draws local time of day ("HH:MM", chrono
 `Local`) on its own clock worker, redrawn on the minute and independent of the
-operator UI (it keeps running when the operator stalls or exits). Countdowns,
-service timers, audience clocks, fake-clock/suspension tests and the EW clock
-audit (PP-STG-04) are not started; no box below is ticked.
+operator UI (it keeps running when the operator stalls or exits). The clock
+worker's tick (`clock_step`) takes the clock source and upload as parameters
+and has fake-clock unit tests (minute change, full-slot retry, new frame,
+stale redraw dropped, upload failure ends the stage process; 2026-10-23).
+Countdowns, service timers, audience clocks, midnight/wall-clock-correction
+and suspension tests and the EW clock audit (PP-STG-04) are not started; no
+box below is ticked.
 
 - [ ] Audit timer modes/start/pause/reset/expiry and output visibility against reference.
 - [ ] Use monotonic elapsed time and explicit wall-clock/timezone conversion where needed.

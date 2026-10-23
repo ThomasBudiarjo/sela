@@ -253,6 +253,11 @@ pub(super) struct Operator {
     pub(super) preview_slide: usize,
     pub(super) live: Option<Item>,
     pub(super) live_slide: Option<usize>,
+    /// The item `live_slide` belongs to: replaced only when one of its cues
+    /// is handed to the audience supervisor. `live` already names a newly
+    /// requested item while its cue is still preparing (or failed), so the
+    /// stage panel is built from this, never from `live` (M3-02).
+    pub(super) on_air: Option<Item>,
     launcher: Launcher,
     pub(super) output: Option<Supervisor>,
     output_extent: Option<Extent>,
@@ -542,6 +547,7 @@ impl Operator {
             preview_slide: 0,
             live: None,
             live_slide: None,
+            on_air: None,
             launcher,
             output: None,
             output_extent: None,

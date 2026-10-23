@@ -32,9 +32,9 @@ each output. Checks, in order:
 6. The stage process is killed (SIGKILL): the operator reports "Stage output
    lost", the audience process and window stay, and Next still changes the
    audience frame with its acknowledgment.
-7. Live › Show Stage Output twice (off, then a fresh session): a new stage
-   process shows the current slide (Bridge) with "End of schedule" next,
-   without the audience PID or frame changing.
+7. One Live › Show Stage Output, as the lost status says, restarts the
+   stage: a new stage process shows the current slide (Bridge) with "End of
+   schedule" next, without the audience PID or frame changing.
 8. Edit › Options… › Foldback shows the enable check box, the Automatic and
    monitor rows and the content check boxes (AT-SPI roles and names are
    recorded and the page is captured); Esc cancels without touching either
@@ -356,8 +356,9 @@ def body(session: nx.Session) -> str:
 
     # 7. Restart only the stage from the Live menu.
     audience_frame = nx.digest(audience_wid)
-    run.menu("bar-live-stage")  # stops the lost session
-    run.menu("bar-live-stage")  # starts a fresh one
+    if "Live › Show Stage Output restarts it" not in summary["status_stage_lost"]:
+        raise nx.Failure("the lost status does not name the restart")
+    run.menu("bar-live-stage")  # one activation restarts a lost stage
     restarted = app.stage(20)
     if not restarted or restarted[0] == stage_pid:
         raise nx.Failure(f"no fresh stage process after the restart ({restarted})")

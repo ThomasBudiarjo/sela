@@ -348,8 +348,12 @@ Design note: [stage-display.md](stage-display.md). Linux evidence (GPUI tests,
   or capture the foldback for slide 1, 2 and 3: what is current, what is
   "next" (whole next slide or its first line), labels, colours, font sizes,
   margins, and how long text is fitted. Sela now: header label + clock,
-  current slide large white, "Next · name" and next slide in sky blue.
-  Re-run: `stage-display-x11.py`, `stage-display-windows.py`.
+  current slide large white, "Next · name" and next slide in sky blue, all
+  in the live slide's own face (stand-ins for characters it lacks); also
+  check which font EW's foldback uses (song font or the Foldback Default
+  Font) with a CJK or symbol song. Re-run: `stage-display-x11.py`,
+  `stage-display-windows.py`, unit
+  `a_glyph_the_face_lacks_never_costs_the_current_slide`.
 - [ ] **PP-STG-03 Next at the end of an item and of the schedule**
   (EW8-OBS-STG-2). Steps: schedule A then B; show A's last slide; then B's
   last slide; then a library song not in the schedule; also an arrangement
@@ -371,8 +375,13 @@ Design note: [stage-display.md](stage-display.md). Linux evidence (GPUI tests,
   toggle Live › Show Live Output with Foldback enabled and watch the
   foldback; look for any foldback-only toggle in the menus and toolbar;
   close the foldback window or unplug its monitor during Live. Sela now:
-  follows Live output; Live › Show Stage Output restarts only the stage.
-  Re-run: `stage-display-windows.py` steps 1, 5, 6.
+  follows Live output (also when settings or the monitor list land after
+  Live output came on); Live › Show Stage Output is inert while Live output
+  is off, stops a running stage, and restarts a lost one in one activation;
+  it touches only the stage. Re-run: `stage-display-windows.py` steps 1, 5,
+  6; GPUI `a_lost_stage_never_touches_the_audience_and_restarts_alone`,
+  `the_stage_never_starts_without_live_output`,
+  `a_late_monitor_list_still_starts_the_stage`.
 - [ ] **PP-STG-07 Stage-only messages** (EW8-OBS-STG-6; M3-04). Steps: in
   Alerts, check whether a message can target the foldback only and how it
   looks there; confirm the audience never shows it. Sela now: Live › Stage

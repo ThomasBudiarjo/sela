@@ -17,12 +17,16 @@ borderless monitor-covering placement. Checks, in order:
 3. Go Live (song-0, go-live) and Next: both outputs change; the stage shows
    white current text and sky-blue next text, the audience shows no stage
    colors; the Live status names both acknowledged slides.
-4. Live > Stage Message..., typed text, Show on Stage: the stage gains the
-   amber band, the audience frame is unchanged.
+4. Live > Stage Message..., typed text with a "b" in it (typed and pressed
+   as a key: no Black toggles while typing, neither output changes before
+   Show on Stage), Show on Stage: the stage gains the amber message band
+   (counted in its band, so a clock-minute tick cannot pass for it), the
+   audience frame is unchanged.
 5. The stage process is terminated: the Live status reports it lost; the
    audience process stays and Next still changes it.
-6. Live > Show Stage Output twice restarts only the stage, on the current
-   slide; the audience PID and frame are unchanged.
+6. One Live > Show Stage Output (the lost status names it) restarts only
+   the stage, on the current slide; the audience PID and frame are
+   unchanged.
 7. Options > Foldback, uncheck "Enable support for Foldback Output", OK:
    the stage ends, the audience stays, settings.txt drops stage_enabled.
 8. Ctrl+Q exits 0 and ends the audience.
@@ -154,6 +158,25 @@ def wait_change(hwnd: int, before: bytes, what: str, timeout: float = 10.0) -> N
     time.sleep(0.5)
 
 
+def band(
+    shot: tuple[int, int, bytes], top: float, bottom: float
+) -> tuple[int, int, bytes]:
+    """Rows top..bottom (shares of the height) of a BGRA capture."""
+    width, height, pixels = shot
+    first, last = int(height * top), int(height * bottom)
+    return width, last - first, pixels[first * width * 4 : last * width * 4]
+
+
+def body_digest(hwnd: int) -> bytes:
+    """Stage frame below the header, so a clock-minute tick is not a change."""
+    return band(nw.capture_client(hwnd), 0.12, 0.88)[2]
+
+
+def message_band(hwnd: int) -> int:
+    width, height, pixels = band(nw.capture_client(hwnd), 0.12, 0.25)
+    return lo.hits(width, height, pixels, NOTE_RGB, tolerance=40)
+
+
 def colors(shot: tuple[int, int, bytes]) -> dict[str, int]:
     width, height, pixels = shot
     return {
@@ -275,14 +298,28 @@ def main() -> int:
         wait_change(stage_hwnd, before_stage, "stage next")
         run.wait_status("showing Signal Hymn · Chorus")
 
-        # 4. Stage message.
-        audience_frame, before_stage = digest(audience_hwnd), digest(stage_hwnd)
+        # 4. Stage message: private while typed (a "b" typed and pressed as
+        # a key must not fire Black), stage-only once shown. The header
+        # (clock) is left out of the comparison: the minute may change.
+        audience_frame, before_stage = digest(audience_hwnd), body_digest(stage_hwnd)
         run.live_menu("bar-live-stage-message")
         time.sleep(0.4)
-        nw.type_text(run.hwnd, "Wrap up by eleven")
+        nw.type_text(run.hwnd, "Wrap up by eleven ")
+        nw.press(run.hwnd, "b")
+        time.sleep(0.5)
+        if digest(audience_hwnd) != audience_frame:
+            raise nw.Failure("typing in the stage message changed the audience")
+        if body_digest(stage_hwnd) != before_stage:
+            raise nw.Failure("the stage changed before Show on Stage")
+        nw.press(run.hwnd, "backspace")
+        nw.press(run.hwnd, "backspace")
         run.click("dialog-confirm")
-        wait_change(stage_hwnd, before_stage, "stage message")
         run.wait_status("Stage message: Wrap up by eleven")
+        deadline = time.monotonic() + 10
+        while message_band(stage_hwnd) < 10:
+            if time.monotonic() >= deadline:
+                raise nw.Failure("no message band on the stage")
+            time.sleep(0.1)
         summary["stage_message"] = check_stage(
             "message", run.capture(stage_hwnd, "03-stage-message"), next_text=True
         )
@@ -303,7 +340,8 @@ def main() -> int:
 
         # 6. Restart only the stage.
         audience_frame = digest(audience_hwnd)
-        run.live_menu("bar-live-stage")
+        if "Show Stage Output restarts it" not in summary["status_lost"]:
+            raise nw.Failure("the lost status does not name the restart")
         run.live_menu("bar-live-stage")
         restarted = stage_window(operator_pid, 15)
         if not restarted or restarted[0] == stage_pid:

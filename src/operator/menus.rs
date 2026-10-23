@@ -703,10 +703,12 @@ impl BarItem {
             // Mirrors the toolbar Logo button: usable only when a logo is
             // chosen or already showing.
             BarItem::LogoOnLive => !(operator.logo.is_none() && !operator.masks.is_on(Mask::Logo)),
-            // Foldback must be enabled in Options (EW8-OBS-056) and a stage
-            // child must exist; the message can be prepared before Live.
+            // Foldback must be enabled in Options (EW8-OBS-056), a stage
+            // child must exist and Live output must be on (the stage starts
+            // and stops with it); a running stage can always be stopped. The
+            // message can be prepared before Live.
             BarItem::ShowStageOutput => {
-                operator.stage_enabled() && operator.stage_available()
+                operator.stage_enabled() && operator.stage_available() && operator.output.is_some()
                     || operator.stage.output.is_some()
             }
             BarItem::StageMessage => operator.stage_enabled() || operator.stage.output.is_some(),

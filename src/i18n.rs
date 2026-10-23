@@ -1665,7 +1665,7 @@ impl Msg {
             Self::FoldbackShowNext => "Show next slide",
             Self::OptionsTabAlertsClocks => "Alerts and Clocks",
             Self::StageMonitorMissing => {
-                "The chosen foldback monitor ({name}) is not connected; the stage uses a free monitor instead."
+                "The chosen foldback monitor ({name}) is not connected; the stage uses a free monitor instead, or stays off when none is free."
             }
         }
     }
@@ -2269,7 +2269,7 @@ impl Msg {
             Self::FoldbackShowNext => "Tampilkan slide berikutnya",
             Self::OptionsTabAlertsClocks => "Peringatan dan Jam",
             Self::StageMonitorMissing => {
-                "Monitor foldback yang dipilih ({name}) tidak terhubung; panggung memakai monitor bebas."
+                "Monitor foldback yang dipilih ({name}) tidak terhubung; panggung memakai monitor bebas, atau tetap mati bila tidak ada yang bebas."
             }
         }
     }

@@ -7,9 +7,14 @@
 //! - Independence: each output has its own process, epoch, supervisor and
 //!   receipts. A stage that fails, exits or is turned off never changes the
 //!   audience session, and the reverse; the stage keeps its last panel.
-//! - Content follows the operator's live request: when a slide cue is handed
-//!   to the audience supervisor, the stage panel for that slide is sent too,
-//!   so a slide that fails to prepare changes neither output.
+//! - Content follows what was handed to the audience: the panel is built
+//!   from `on_air`/`live_slide`, which change only when a slide cue is given
+//!   to the audience supervisor, so a slide (or a newly chosen item) that
+//!   fails to prepare or is refused changes neither output.
+//! - The panel is drawn in the live slide's resolved face (the bytes the
+//!   audience cue carries, shared by `Arc`), so the stage covers the same
+//!   scripts as the audience; the renderer substitutes characters that face
+//!   lacks instead of refusing the panel (`stage::covered`).
 //! - The stage message is typed in a dialog and only sent on OK (EW alerts
 //!   are M3-04; this is the stage-only line).
 use super::*;
@@ -44,8 +49,12 @@ pub(crate) struct StageState {
     placement_override: bool,
     pub(crate) output: Option<Supervisor>,
     extent: Option<Extent>,
-    /// Panel handed to this session's supervisor; a differing panel is sent.
-    sent: Option<StagePanel>,
+    /// Panel and face handed to this session's supervisor; a differing
+    /// panel or face is sent.
+    sent: Option<(StagePanel, ContentVersion)>,
+    /// Live output came on before the stored settings or the monitor list
+    /// had landed: the start decision is taken again when they land.
+    recheck: bool,
     revision: u64,
     /// (version, current label) of recently sent panels.
     shown: VecDeque<(ContentVersion, String)>,
@@ -54,7 +63,6 @@ pub(crate) struct StageState {
     pub(crate) message_input: Option<Entity<TextInput>>,
     /// Why the stage did not start, or why a panel could not be built.
     pub(crate) note: Option<String>,
-    font: Arc<[u8]>,
     pub(crate) section: OptionsSection,
     /// Foldback settings being edited while Options is open.
     pub(crate) draft: Option<StageSettings>,
@@ -70,12 +78,12 @@ impl Default for StageState {
             output: None,
             extent: None,
             sent: None,
+            recheck: false,
             revision: 0,
             shown: VecDeque::with_capacity(SHOWN),
             message: String::new(),
             message_input: None,
             note: None,
-            font: Arc::from(fonts::BUNDLED),
             section: OptionsSection::default(),
             draft: None,
             rows: Vec::new(),
@@ -84,11 +92,12 @@ impl Default for StageState {
     }
 }
 
-/// The face every stage panel is drawn in (bundled DejaVu Sans).
-const STAGE_FONT: ContentVersion = ContentVersion {
-    id: u128::from_le_bytes(*b"sela-stage-font\0"),
-    revision: 1,
-};
+/// The face for "Nothing live" (bundled DejaVu Sans, one shared copy).
+fn idle_face() -> (ContentVersion, Arc<[u8]>, u32) {
+    let resolved = fonts::Resolved::bundled(&Default::default());
+    let face = resolved.face();
+    (face.version(), face.bytes_arc(), face.index())
+}
 
 impl Operator {
     /// Installs the stage child command (`main` and tests); without one the
@@ -109,18 +118,44 @@ impl Operator {
     }
 
     /// Live output on starts the stage when Foldback is enabled; Live output
-    /// off stops it. Called after every Live output toggle.
+    /// off stops it. Called after every Live output toggle, and again when
+    /// the stored settings or the monitor list land after Live output came
+    /// on (`recheck`).
     pub(crate) fn follow_live_output(&mut self) {
+        self.stage.recheck = false;
         if self.output.is_some() {
-            if self.stage_enabled() && self.stage.output.is_none() {
+            if !self.settings_loaded_for_options() {
+                self.stage.recheck = true;
+            } else if self.stage_enabled() && self.stage.output.is_none() {
                 self.start_stage();
+                self.stage.recheck = self.stage.output.is_none()
+                    && !self.stage.placement_override
+                    && self.settings.monitors.is_none();
             }
-        } else if self.stage.output.is_some() {
-            self.stop_stage();
+        } else {
+            // A start note (no monitor yet, none free) no longer applies.
+            self.stage.note = None;
+            if self.stage.output.is_some() {
+                self.stop_stage();
+            }
+        }
+    }
+
+    /// The stored settings or the monitor list landed: a start decision
+    /// taken without them is taken again.
+    pub(crate) fn stage_inputs_landed(&mut self) {
+        if self.stage.recheck {
+            self.follow_live_output();
         }
     }
 
     pub(crate) fn start_stage(&mut self) {
+        // The stage follows Live output (EW8-OBS-STG-5, UNOBSERVED best
+        // guess): it never runs on its own.
+        if self.output.is_none() {
+            self.stage.note = Some(t!(Msg::TurnOnLiveFirst).into());
+            return;
+        }
         let Some(launcher) = self.stage.launcher.clone() else {
             self.stage.note = Some(t!(Msg::StageUnavailable).into());
             return;
@@ -136,7 +171,14 @@ impl Operator {
             )
         };
         let Some(monitor) = monitor else {
-            self.stage.note = Some(t!(Msg::StageNoMonitor).into());
+            self.stage.note = Some(
+                if self.settings.monitors.is_none() {
+                    t!(Msg::DetectingMonitors)
+                } else {
+                    t!(Msg::StageNoMonitor)
+                }
+                .into(),
+            );
             return;
         };
         self.stage.output = Some(Supervisor::start(
@@ -155,17 +197,25 @@ impl Operator {
         self.stage.sent = None;
     }
 
-    /// Live › Show Stage Output: restarts or stops only the stage.
+    /// Live › Show Stage Output: stops a running stage; starts one that is
+    /// off; a lost stage is restarted at once (the lost-status hint names
+    /// this item), never only stopped. Only the stage is touched.
     pub(crate) fn toggle_stage_output(&mut self) {
-        if self.stage.output.is_some() {
-            self.stop_stage();
-        } else {
-            self.start_stage();
+        match self.stage.output.as_ref().map(Supervisor::status) {
+            Some(Status::Lost(_)) => {
+                self.stop_stage();
+                self.start_stage();
+            }
+            Some(_) => self.stop_stage(),
+            None => self.start_stage(),
         }
     }
 
     /// Polls the stage session and sends the panel when it differs from the
-    /// one already handed over. Building a panel is string copies only.
+    /// one already handed over. Building a panel copies the slide strings
+    /// and clones the face's `Arc`; the supervisor then encodes the wire
+    /// frame, face bytes included, on this thread like an audience cue
+    /// (bounded by `MAX_SOURCE_BYTES`; see docs/stage-display.md).
     pub(crate) fn poll_stage(&mut self) -> bool {
         let now = Instant::now();
         let Some(output) = self.stage.output.as_mut() else {
@@ -181,9 +231,16 @@ impl Operator {
             changed = true;
         }
         let panel = self.stage_panel();
-        if self.stage.sent.as_ref() == Some(&panel) {
+        let face = self.stage_face();
+        if self
+            .stage
+            .sent
+            .as_ref()
+            .is_some_and(|(sent, version)| *sent == panel && *version == face.0)
+        {
             return changed;
         }
+        let face_version = face.0;
         self.stage.revision += 1;
         let version = ContentVersion {
             id: stage::STAGE_ID,
@@ -194,7 +251,7 @@ impl Operator {
             extent,
             stage::BACKGROUND,
             panel.clone(),
-            (STAGE_FONT, self.stage.font.clone(), 0),
+            face,
             caps,
         );
         let Some(output) = self.stage.output.as_mut() else {
@@ -210,16 +267,28 @@ impl Operator {
                     self.stage
                         .shown
                         .push_back((version, panel.current_label.clone()));
-                    self.stage.sent = Some(panel);
+                    self.stage.sent = Some((panel, face_version));
                     self.stage.note = None;
                 }
             }
             Err(error) => {
-                self.stage.sent = Some(panel);
+                self.stage.sent = Some((panel, face_version));
                 self.stage.note = Some(t!(Msg::StageNotShown, error = error));
             }
         }
         true
+    }
+
+    /// The live slide's resolved face; the bundled face while nothing is on
+    /// air. Arc clones only.
+    pub(crate) fn stage_face(&self) -> (ContentVersion, Arc<[u8]>, u32) {
+        self.on_air
+            .as_ref()
+            .zip(self.live_slide)
+            .and_then(|(item, index)| item.resolved.as_ref()?.get(index).map(|r| r.face()))
+            .map_or_else(idle_face, |face| {
+                (face.version(), face.bytes_arc(), face.index())
+            })
     }
 
     /// The panel for the slide last handed to the audience supervisor.
@@ -231,7 +300,7 @@ impl Operator {
             show_next: options.next,
             ..StagePanel::default()
         };
-        let live = self.live.as_ref().zip(self.live_slide);
+        let live = self.on_air.as_ref().zip(self.live_slide);
         let Some((item, slide)) = live
             .and_then(|(item, index)| item.slides.get(index).map(|slide| (item, (index, slide))))
         else {

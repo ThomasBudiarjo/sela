@@ -200,6 +200,29 @@ fn rig(
     override_placement: bool,
     monitors: Vec<settings::MonitorInfo>,
 ) -> Rig {
+    rig_with(
+        cx,
+        songs,
+        (audience, stage),
+        stored,
+        override_placement,
+        monitors,
+        None,
+    )
+}
+
+/// `rig` with a settings loader of the test's own (the settle then waits
+/// for the catalog only).
+fn rig_with(
+    cx: &mut TestAppContext,
+    songs: fn(&tempfile::TempDir) -> std::path::PathBuf,
+    (audience, stage): (&'static str, Vec<&'static str>),
+    stored: &str,
+    override_placement: bool,
+    monitors: Vec<settings::MonitorInfo>,
+    loader: Option<settings::Loader>,
+) -> Rig {
+    let wait_loaded = loader.is_none();
     let dir = tempfile::tempdir().unwrap();
     let library = songs(&dir);
     std::fs::write(
@@ -210,10 +233,13 @@ fn rig(
     let log = dir.path().join("outputs.log");
     let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
     let launcher = stage_launcher(stage, log.clone(), spawned.clone());
-    let config = crate::operator::SettingsConfig {
+    let mut config = crate::operator::SettingsConfig {
         list_monitors: Arc::new(move || monitors.clone()),
         ..Default::default()
     };
+    if let Some(loader) = loader {
+        config.loader = loader;
+    }
     let audience = audience_launcher(audience, log.clone());
     let window = cx.update(|cx| {
         bind_operator_keys(cx);
@@ -238,7 +264,7 @@ fn rig(
         .read_with(&visual, |p, _| p.operator.clone());
     visual.simulate_resize(size(px(1280.), px(800.)));
     settle(&mut visual, &operator, "settings and catalog", |o| {
-        o.settings_loaded_for_options() && !o.catalog.is_empty()
+        (o.settings_loaded_for_options() || !wait_loaded) && !o.catalog.is_empty()
     });
     Rig {
         cx: visual,
@@ -439,12 +465,23 @@ fn a_lost_stage_never_touches_the_audience_and_restarts_alone(cx: &mut TestAppCo
         submitted(o)
     });
 
-    // Live › Show Stage Output twice: off, then a fresh stage session that
-    // gets the current slide without anything being re-sent to the audience.
-    for _ in 0..2 {
-        click(&mut rig.cx, "bar-live");
-        click(&mut rig.cx, "bar-live-stage");
-    }
+    // One Live › Show Stage Output, as the lost status says, restarts it: a
+    // fresh stage session that gets the current slide without anything
+    // being re-sent to the audience (review finding: it used to only stop
+    // the lost session and needed a second activation).
+    assert!(operator.read_with(&rig.cx, |o, _| {
+        o.stage_lines()
+            .iter()
+            .any(|(line, _)| line.ends_with("Live › Show Stage Output restarts it"))
+    }));
+    let lost_epoch = operator.read_with(&rig.cx, |o, _| o.stage.output.as_ref().unwrap().epoch());
+    click(&mut rig.cx, "bar-live");
+    click(&mut rig.cx, "bar-live-stage");
+    operator.read_with(&rig.cx, |o, _| {
+        let stage = o.stage.output.as_ref().expect("restarted, not stopped");
+        assert_ne!(stage.epoch(), lost_epoch);
+        assert!(!matches!(stage.status(), Status::Lost(_)));
+    });
     let panel = wait_for_panel(&mut rig, "restarted stage", |p| {
         p[0] == "Signal Hymn · Chorus"
     });
@@ -694,14 +731,32 @@ fn arrangement_changes_and_repeated_choruses_keep_next_deterministic(cx: &mut Te
     settle(&mut rig.cx, &operator, "Short preview", |o| {
         o.preview.as_ref().is_some_and(|p| p.slides.len() == 2)
     });
+    // Rapid switching, each click landing before the previous rebuild has
+    // settled, also leaves the stage alone.
+    for _ in 0..6 {
+        click(&mut rig.cx, "preview-arrangement");
+        operator.update(&mut rig.cx, |o, cx| o.poll(cx));
+    }
     for _ in 0..10 {
         operator.update(&mut rig.cx, |o, cx| o.poll(cx));
         std::thread::sleep(Duration::from_millis(5));
     }
+    if operator.read_with(&rig.cx, |o, _| {
+        o.preview.as_ref().is_some_and(|p| p.slides.len() == 3)
+    }) {
+        click(&mut rig.cx, "preview-arrangement");
+    }
+    settle(&mut rig.cx, &operator, "Short preview again", |o| {
+        o.preview.as_ref().is_some_and(|p| p.slides.len() == 2)
+    });
     assert_eq!(
         lines(&rig.log, "stage").len(),
         sent,
         "no new panel was sent"
+    );
+    assert_eq!(
+        last_panel(&rig.log).unwrap()[2..4],
+        ["Next · Chorus", "chorus words"]
     );
     click(&mut rig.cx, "live-next");
     let panel = wait_for_panel(&mut rig, "chorus of Full", |p| p[0] == "Arranged · Chorus");
@@ -868,4 +923,316 @@ fn no_free_monitor_keeps_the_stage_off_instead_of_covering_the_audience(cx: &mut
         );
     });
     assert!(rig.monitors.lock().unwrap().is_empty());
+}
+
+fn monitor(name: &str, primary: bool) -> settings::MonitorInfo {
+    settings::MonitorInfo {
+        name: name.into(),
+        width: 1920,
+        height: 1080,
+        x: 0,
+        y: 0,
+        primary,
+    }
+}
+
+fn stage_epoch(o: &Operator) -> Option<Epoch> {
+    o.stage.output.as_ref().map(|stage| stage.epoch())
+}
+
+/// Review blocker: Go Live of another item used to put that item on the
+/// stage (with the old slide index) before its cue was handed to the
+/// audience, and a failed preparation left that wrong panel on the stage.
+#[gpui::test]
+fn a_new_item_that_fails_to_prepare_never_changes_the_stage(cx: &mut TestAppContext) {
+    use sela::preparation::cue::{Built, CuePreparer};
+    let mut rig = rig(
+        cx,
+        library_with_songs,
+        "apply",
+        vec!["apply"],
+        ENABLED,
+        true,
+        Vec::new(),
+    );
+    let operator = rig.operator.clone();
+    settle(&mut rig.cx, &operator, "two songs", |o| {
+        o.catalog.len() == 2
+    });
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "both outputs", |o| {
+        connected(o) && stage_connected(o)
+    });
+    let hymn = song_row(&mut rig.cx, &operator, "Signal Hymn");
+    let canticle = song_row(&mut rig.cx, &operator, SECOND_SONG);
+    click(&mut rig.cx, hymn);
+    settle(&mut rig.cx, &operator, "hymn preview", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.title == "Signal Hymn" && p.resolved.is_some())
+    });
+    click(&mut rig.cx, "preview-slide-2");
+    click(&mut rig.cx, "go-live");
+    wait_for_panel(&mut rig, "bridge on stage", |p| {
+        p[0] == "Signal Hymn · Bridge"
+    });
+    settle(&mut rig.cx, &operator, "bridge on both", |o| {
+        o.on_screen() == Some("Signal Hymn · Bridge") && stage_shows(o, "Signal Hymn · Bridge")
+    });
+    // The stage draws in the live slide's own resolved face.
+    operator.read_with(&rig.cx, |o, _| {
+        let live = o.on_air.as_ref().unwrap();
+        let face = live.resolved.as_ref().unwrap()[2].face().version();
+        assert_eq!(o.stage_face().0, face);
+    });
+    let sent = lines(&rig.log, "stage").len();
+
+    // The other song's cue fails to prepare: neither output changes.
+    let failing = CuePreparer::with_builder(|_, _| -> Result<Built, _> {
+        Err(sela::scene::PrepareError::InvalidScene)
+    })
+    .unwrap();
+    operator.update(&mut rig.cx, |o, _| o.cue_preparer = Some(failing));
+    click(&mut rig.cx, canticle);
+    settle(&mut rig.cx, &operator, "canticle preview", |o| {
+        o.preview
+            .as_ref()
+            .is_some_and(|p| p.title == SECOND_SONG && p.resolved.is_some())
+    });
+    click(&mut rig.cx, "go-live");
+    settle(&mut rig.cx, &operator, "failure reported", |o| {
+        o.live_message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Slide could not be prepared"))
+    });
+    for _ in 0..20 {
+        operator.update(&mut rig.cx, |o, cx| o.poll(cx));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    operator.read_with(&rig.cx, |o, _| {
+        assert_eq!(o.live.as_ref().unwrap().title, SECOND_SONG, "the request");
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Bridge"));
+        assert!(stage_shows(o, "Signal Hymn · Bridge"));
+    });
+    assert_eq!(lines(&rig.log, "stage").len(), sent, "no panel was sent");
+    assert_eq!(last_panel(&rig.log).unwrap()[0], "Signal Hymn · Bridge");
+
+    // While the new item's cue is still preparing the stage stays too, and
+    // it follows once the cue is handed to the audience.
+    let (open, preparer) = gated_preparer(Default::default());
+    operator.update(&mut rig.cx, |o, _| o.cue_preparer = Some(preparer));
+    click(&mut rig.cx, "go-live");
+    for _ in 0..20 {
+        operator.update(&mut rig.cx, |o, cx| o.poll(cx));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        lines(&rig.log, "stage").len(),
+        sent,
+        "nothing while preparing"
+    );
+    open.send(()).unwrap();
+    let panel = wait_for_panel(&mut rig, "canticle on stage", |p| {
+        p[0] == format!("{SECOND_SONG} · Verse 1")
+    });
+    assert_eq!(panel[1], "Quiet original line");
+    settle(&mut rig.cx, &operator, "canticle on both", |o| {
+        o.on_screen() == Some("Quiet Canticle · Verse 1")
+            && stage_shows(o, "Quiet Canticle · Verse 1")
+    });
+    assert_audience_private(&rig.log);
+}
+
+/// Review finding: the stage could be started from the Live menu (or the
+/// command) while Live output was off.
+#[gpui::test]
+fn the_stage_never_starts_without_live_output(cx: &mut TestAppContext) {
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "apply",
+        vec!["apply"],
+        ENABLED,
+        true,
+        Vec::new(),
+    );
+    let operator = rig.operator.clone();
+    click(&mut rig.cx, "bar-live");
+    click(&mut rig.cx, "bar-live-stage");
+    rig.cx.simulate_keystrokes("escape");
+    operator.update(&mut rig.cx, |o, _| {
+        assert!(o.output.is_none() && o.stage.output.is_none());
+        o.toggle_stage_output();
+        assert!(o.stage.output.is_none(), "the command refuses too");
+        assert_eq!(o.stage.note.as_deref(), Some("Turn on Live output first"));
+    });
+    assert!(
+        rig.monitors.lock().unwrap().is_empty(),
+        "nothing was spawned"
+    );
+}
+
+/// Review finding: Live output turned on before the monitor scan answered
+/// skipped the stage for good ("No free monitor").
+#[gpui::test]
+fn a_late_monitor_list_still_starts_the_stage(cx: &mut TestAppContext) {
+    let list = vec![
+        monitor("P", true),
+        monitor("AUD", false),
+        monitor("STG", false),
+    ];
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "apply",
+        vec!["apply"],
+        ENABLED,
+        false,
+        list.clone(),
+    );
+    let operator = rig.operator.clone();
+    // As if `sela --list-monitors` had not answered yet.
+    operator.update(&mut rig.cx, |o, _| o.settings.monitors = None);
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "audience", connected);
+    operator.read_with(&rig.cx, |o, _| {
+        assert!(o.stage.output.is_none());
+        assert_eq!(o.stage.note.as_deref(), Some("Detecting monitors…"));
+    });
+    operator.update(&mut rig.cx, |o, _| o.monitors_scanned(list));
+    settle(&mut rig.cx, &operator, "stage started", stage_connected);
+    assert_eq!(*rig.monitors.lock().unwrap(), ["name:STG".to_string()]);
+    // A later scan result never starts a stage the operator stopped.
+    click(&mut rig.cx, "bar-live");
+    click(&mut rig.cx, "bar-live-stage");
+    operator.update(&mut rig.cx, |o, _| {
+        assert!(o.stage.output.is_none());
+        o.monitors_scanned(vec![
+            monitor("P", true),
+            monitor("AUD", false),
+            monitor("STG", false),
+        ]);
+        assert!(o.stage.output.is_none());
+    });
+}
+
+/// Review finding: Live output turned on before the stored settings loaded
+/// never started the enabled stage.
+#[gpui::test]
+fn settings_that_load_after_live_output_still_start_the_stage(cx: &mut TestAppContext) {
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new(gate);
+    let loader: settings::Loader = Arc::new(move |path| {
+        let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        settings::load(path)
+    });
+    let mut rig = rig_with(
+        cx,
+        library_with_song,
+        ("apply", vec!["apply"]),
+        ENABLED,
+        true,
+        Vec::new(),
+        Some(loader),
+    );
+    let operator = rig.operator.clone();
+    assert!(!operator.read_with(&rig.cx, |o, _| o.settings_loaded_for_options()));
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "audience", connected);
+    assert!(operator.read_with(&rig.cx, |o, _| o.stage.output.is_none()));
+    release.send(()).unwrap();
+    settle(
+        &mut rig.cx,
+        &operator,
+        "stage after the load",
+        stage_connected,
+    );
+}
+
+/// Review finding: the Options paths that move an output had no test. A new
+/// Foldback monitor restarts only the stage; a new audience monitor
+/// restarts both, and Automatic keeps the stage off the new audience monitor.
+#[gpui::test]
+fn options_monitor_changes_restart_the_right_outputs(cx: &mut TestAppContext) {
+    let mut rig = rig(
+        cx,
+        library_with_song,
+        "apply",
+        vec!["apply"],
+        ENABLED,
+        false,
+        vec![
+            monitor("P", true),
+            monitor("AUD", false),
+            monitor("STG", false),
+            monitor("STG2", false),
+        ],
+    );
+    let operator = rig.operator.clone();
+    settle(&mut rig.cx, &operator, "monitors listed", |o| {
+        o.settings.monitors.is_some()
+    });
+    click(&mut rig.cx, "live-output");
+    settle(&mut rig.cx, &operator, "both outputs", |o| {
+        connected(o) && stage_connected(o)
+    });
+    click(&mut rig.cx, "song-0");
+    settle(&mut rig.cx, &operator, "preview", |o| o.preview.is_some());
+    click(&mut rig.cx, "go-live");
+    settle(&mut rig.cx, &operator, "verse on both", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1") && stage_shows(o, "Signal Hymn · Verse 1")
+    });
+    let (audience_epoch, first_stage, sent) = operator.read_with(&rig.cx, |o, _| {
+        (
+            o.output.as_ref().unwrap().epoch(),
+            stage_epoch(o),
+            submitted(o),
+        )
+    });
+
+    // Foldback › STG2 (rows: Automatic, P, AUD, STG, STG2).
+    rig.cx.simulate_keystrokes("alt-e enter");
+    click(&mut rig.cx, "options-section-foldback");
+    click(&mut rig.cx, "options-stage-monitor-4");
+    click(&mut rig.cx, "dialog-confirm");
+    settle(&mut rig.cx, &operator, "stage restarted", |o| {
+        stage_connected(o) && stage_epoch(o) != first_stage
+    });
+    wait_for_panel(&mut rig, "restarted stage panel", |p| {
+        p[0] == "Signal Hymn · Verse 1"
+    });
+    operator.read_with(&rig.cx, |o, _| {
+        assert_eq!(o.output.as_ref().unwrap().epoch(), audience_epoch);
+        assert_eq!(submitted(o), sent, "the audience got nothing");
+        assert!(connected(o));
+    });
+    assert_eq!(
+        *rig.monitors.lock().unwrap(),
+        ["name:STG".to_string(), "name:STG2".to_string()]
+    );
+
+    // Back to Automatic, then Main Output › STG: both outputs restart and the
+    // stage moves to the free AUD (rows: Default, P, AUD, STG, STG2).
+    rig.cx.simulate_keystrokes("alt-e enter");
+    click(&mut rig.cx, "options-section-foldback");
+    click(&mut rig.cx, "options-stage-monitor-0");
+    click(&mut rig.cx, "dialog-confirm");
+    settle(
+        &mut rig.cx,
+        &operator,
+        "stage back on Automatic",
+        stage_connected,
+    );
+    let before = operator.read_with(&rig.cx, |o, _| stage_epoch(o));
+    rig.cx.simulate_keystrokes("alt-e enter");
+    click(&mut rig.cx, "options-monitor-3");
+    click(&mut rig.cx, "dialog-confirm");
+    settle(&mut rig.cx, &operator, "both restarted", |o| {
+        connected(o)
+            && stage_connected(o)
+            && o.output.as_ref().unwrap().epoch() != audience_epoch
+            && stage_epoch(o) != before
+    });
+    let spawned = rig.monitors.lock().unwrap().clone();
+    assert_eq!(spawned.last().unwrap(), "name:AUD", "{spawned:?}");
 }

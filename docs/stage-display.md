@@ -31,12 +31,19 @@ only the stage clock from clocks/timers (M3-05).
   item's own slide snapshot, so a repeated chorus is next exactly where the
   arrangement repeats it and an arrangement or song edit after Go Live
   changes nothing until the item goes live again.
-- **When it changes.** The panel follows the operator's live request: it is
-  rebuilt (string copies only) on each poll and sent when it differs from
-  the one handed to the stage session, which happens when a slide cue is
+- **When it changes.** The panel follows what was handed to the audience,
+  not the newest request: it is built from `on_air` (the item whose slide
+  cue was last given to the audience supervisor) and `live_slide`, both set
+  only at that hand-over, never from `live` (which already names a newly
+  chosen item while its cue prepares). It is rebuilt on each poll (slide
+  strings copied, the face's `Arc` cloned) and sent when it or its face
+  differs from the one handed to the stage session: when a slide cue is
   handed to the audience supervisor, when the stage (re)connects or changes
   extent, and when the message, clock/next options or the schedule
-  neighbour change. A slide that fails to prepare changes neither output.
+  neighbour change. A slide, or a newly chosen item, that fails to prepare
+  or is refused by the audience changes neither output (GPUI test
+  `a_new_item_that_fails_to_prepare_never_changes_the_stage`, which also
+  covers the time while the new item's cue is still preparing).
   The Live pane shows each output's own acknowledged state ("On screen: …"
   for the audience, "Stage W×H · showing …" for the stage).
 - **Composition** (`src/audience/stage.rs`, stage preparation worker only):
@@ -46,22 +53,42 @@ only the stage clock from clocks/timers (M3-05).
   the current size). `stage::fit` estimates sizes from the face's advances;
   the raster steps down at most six times if shaping still overflows. The
   three colours ride the compositor's existing fill/outline/shadow coverage
-  channels, so no new shader or GPU path exists. Bundled DejaVu Sans; a
-  missing glyph rejects the cue (the previous panel stays), like slides.
+  channels, so no new shader or GPU path exists. **Face:** the live slide's
+  resolved face (the same bytes the audience cue carries), bundled DejaVu
+  Sans while nothing is live, so the stage covers the scripts the song's
+  font covers. Labels, the message, the next slide and the clock are drawn
+  in that face too; a character it lacks becomes U+FFFD (or `?`; invisible
+  joiners and variation selectors are dropped) via `stage::covered`, and an
+  optional field that still cannot be drawn is left blank. Only the current
+  slide itself can reject a stage cue, and it is the text the audience
+  already drew in this face, so a glyph in the next slide never holds the
+  stage a slide behind. The next slide is drawn in the current slide's face
+  even when its own slide uses another one (one face per stage cue).
 - **Clock.** The stage process draws local time ("HH:MM", 24-hour, chrono
   `Local`) itself: a `stage-clock` worker checks every 250 ms and, when the
   minute changes, re-uploads the applied panel's coverage with the new time
   (one frame held, one result slot, retried when full). The event loop only
-  swaps in a redraw of the panel that is still applied. The clock keeps
+  swaps in a redraw of the panel that is still applied at the same extent
+  (`redraw_applies`). A clock upload failure is reported to the event loop,
+  which ends the stage process (never a silently frozen clock); the
+  operator then shows the stage lost. `clock_step` takes the clock source
+  and the upload as parameters, so `audience::tests` drive it with a fake
+  clock (minute change, full slot retry, new frame, failure). The clock keeps
   running when the operator stalls or exits; it is not acknowledged to the
   operator (it is renderer-owned content, not an operator command).
 - **Lifecycle.** Options › Foldback › "Enable support for Foldback Output"
   (default off, EW8-OBS-056) makes the stage start and stop with Live
-  output. Live › Show Stage Output (Sela addition) stops or restarts only
-  the stage; Live › Stage Message… opens a one-line dialog whose text is
-  private until Show on Stage (Clear Message removes it, Cancel/Esc keeps the
-  old one). Disabling Foldback stops only the stage; a new stage monitor
-  restarts only the stage.
+  output. If Live output comes on before the stored settings or the monitor
+  list have loaded, the start decision is taken again when they land. Live ›
+  Show Stage Output (Sela addition) stops a running stage, starts a stopped
+  one while Live output is on (it is inert while Live output is off), and
+  restarts a lost one in a single activation, as the lost status says; it
+  touches only the stage. Live › Stage Message… opens a one-line dialog whose
+  text is private until Show on Stage (Clear Message removes it, Cancel/Esc
+  keeps the old one). Disabling Foldback stops only the stage; a new stage
+  monitor restarts only the stage; a new audience monitor restarts both
+  outputs, and an Automatic stage then moves off the new audience monitor
+  (GPUI test `options_monitor_changes_restart_the_right_outputs`).
 - **Monitor choice** (`settings::stage_monitor_arg`): the saved stage
   monitor while connected, else the first monitor that is neither primary nor
   the audience's monitor. With no such monitor the stage is **not started**
@@ -96,7 +123,9 @@ so a stage version never collides with a slide version.
 ## Bounds and failure isolation
 
 Per stage session: the supervisor's one in-flight plus one wanted cue (the
-panel is at most 5 × 4 KiB of text plus the shared 0.7 MiB bundled font),
+panel is at most 5 × 4 KiB of text plus the live slide's face, at most
+`MAX_SOURCE_BYTES` = 8 MiB, shared by `Arc` with the audience cue; 0.7 MiB
+for the bundled face),
 the renderer's one queued and one buffered preparation, the applied frame's
 base coverage (W×H×4, ~8 MiB at 1080p), one clock redraw in flight and one
 waiting. A stage process that exits, is killed, times out or sends garbage
@@ -105,8 +134,17 @@ its pending cues and its masks are untouched (GPUI test
 `a_lost_stage_never_touches_the_audience_and_restarts_alone`, X11 step 6).
 A lost audience leaves the stage running (`a_lost_audience_leaves_the_stage_running`),
 but Go Live then refuses as before ("Output state unknown"): the stage keeps
-its last panel until Live output is restarted. Stage GPU upload failure ends
-the stage process only.
+its last panel until Live output is restarted. Stage GPU upload failure
+(panel or clock redraw) ends the stage process only.
+
+Known cost (open, not fixed): like an audience cue, every stage cue carries
+its face bytes on the wire. `Frame::command` encodes them on the operator UI
+thread inside the supervisor, they are piped again, and the stage renderer
+parses them per cue, so each slide change or message change moves the face
+size (0.7 MiB bundled, up to 8 MiB installed) through the operator thread
+and the stage pipe. It is bounded by the supervisor's one in-flight plus one
+wanted cue; a per-session face cache on the wire (send by version once) is
+the follow-up and applies to audience cues as well.
 
 ## Decisions and best guesses (UNOBSERVED in EW 8.0.49)
 
@@ -125,9 +163,11 @@ Foldback › General tab.
   `transport::tests::malformed_stage_frames_fail_before_becoming_cues`,
   `audience::tests::each_renderer_admits_only_its_own_cue_kind`,
   `audience::stage::tests` (colour channels per region, clock never touches
-  the slide, blank next/message, missing glyph, long text).
+  the slide, blank next/message, uncovered glyphs drawn as stand-ins, an
+  undrawable next area left blank, long text), `stage::tests::covered_*`,
+  `audience::tests` clock worker tests (fake clock and upload).
 - I/E (GPUI with fake renderer children that mirror the routing rules and log
-  every scene): `src/tests/stage_display.rs`, nine tests.
+  every scene): `src/tests/stage_display.rs`, fourteen tests.
 - N (X11): `scripts/stage-display-x11.py --display :118` PASS; captures in
   `.amp/in/artifacts/stage-display-x11/`.
 - Not run: `scripts/stage-display-windows.py` (no Windows host), physical

@@ -129,8 +129,7 @@ impl SettingsState {
         let monitor_scan = cx.spawn(async move |this, cx| {
             let monitors = scan.await;
             let _ = this.update(cx, |this, cx| {
-                this.settings.monitors = Some(monitors);
-                this.settings.sync_slot();
+                this.monitors_scanned(monitors);
                 cx.notify();
             });
         });
@@ -274,6 +273,8 @@ impl Operator {
                         self.song_order = self.settings.current.song_order;
                         self.catalog_stale = true;
                     }
+                    // Live output may have come on before Foldback was known.
+                    self.stage_inputs_landed();
                 }
                 settings::Reply::Saved(Ok(())) => {
                     self.settings.pending_saves = self.settings.pending_saves.saturating_sub(1);
@@ -344,6 +345,14 @@ impl Operator {
     }
 
     /// The initial settings load replied; Options edits wait for it.
+    /// The startup monitor scan answered. A stage start that waited for the
+    /// list is decided again.
+    pub(crate) fn monitors_scanned(&mut self, monitors: Vec<MonitorInfo>) {
+        self.settings.monitors = Some(monitors);
+        self.settings.sync_slot();
+        self.stage_inputs_landed();
+    }
+
     pub(crate) fn settings_loaded_for_options(&self) -> bool {
         self.settings.loaded
     }
