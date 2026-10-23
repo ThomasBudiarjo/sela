@@ -3,7 +3,7 @@
 //! that mirror the renderers' routing rules and log every scene they get.
 use super::*;
 use crate::operator::{Dialog, StageLauncher};
-use sela::{output::Loss, settings};
+use sela::{output::Loss, scene::ContentVersion, settings};
 
 /// `tests::settle` with a longer bound: every rig starts two renderer
 /// children (each a fresh test-binary process), which takes several seconds
@@ -29,8 +29,9 @@ fn settle(
 /// Renderer stand-in for either output. `SELA_FAKE_ROLE` is `audience` or
 /// `stage`; like the real renderers, an audience refuses stage cues and a
 /// stage refuses anything else. Every scene is appended to `SELA_FAKE_LOG`
-/// as one line: role, kind (`stage`/`scene`) and the stage fields with
-/// newlines shown as `|`. `SELA_FAKE_MODE`: `apply`, `exit-after:<n>` (exit
+/// as one line: role, kind (`stage`/`scene`), the stage fields (or the
+/// audience text) with newlines shown as `|`, then the face it carries
+/// (`face_field`). `SELA_FAKE_MODE`: `apply`, `exit-after:<n>` (exit
 /// after the nth applied scene), `reject-at:<n>` (fail the nth scene), or
 /// `exit` (exit right after reporting the surface).
 #[test]
@@ -67,19 +68,23 @@ fn fake_output_child() {
                         Some(stage) => {
                             let p = stage.panel();
                             format!(
-                                "{role}\tstage\t{}\t{}\t{}\t{}\t{}\t{}{}",
+                                "{role}\tstage\t{}\t{}\t{}\t{}\t{}\t{}{}\t{}",
                                 p.current_label,
                                 p.current,
                                 p.next_label,
                                 p.next,
                                 p.message,
                                 u8::from(p.show_clock),
-                                u8::from(p.show_next)
+                                u8::from(p.show_next),
+                                face_field(stage.font_version(), stage.face_index()),
                             )
                         }
                         None => format!(
-                            "{role}\tscene\t{}",
-                            cue.text().map(|t| t.content()).unwrap_or_default()
+                            "{role}\tscene\t{}\t{}",
+                            cue.text().map(|t| t.content()).unwrap_or_default(),
+                            cue.text()
+                                .map(|t| face_field(t.font_version(), t.face_index()))
+                                .unwrap_or_default()
                         ),
                     };
                     let mut file = std::fs::OpenOptions::new()
@@ -125,6 +130,12 @@ fn fake_output_child() {
         }
     }
     std::process::exit(0);
+}
+
+/// A face as the fake children log it: font version id and revision, and
+/// the face index.
+fn face_field(version: ContentVersion, index: u32) -> String {
+    format!("{:x}:{}:{index}", version.id, version.revision)
 }
 
 /// The audience tests here never send a logo, so a Logo mask always fails
@@ -979,11 +990,16 @@ fn a_new_item_that_fails_to_prepare_never_changes_the_stage(cx: &mut TestAppCont
     settle(&mut rig.cx, &operator, "bridge on both", |o| {
         o.on_screen() == Some("Signal Hymn · Bridge") && stage_shows(o, "Signal Hymn · Bridge")
     });
-    // The stage draws in the live slide's own resolved face.
+    // The face that reached the stage child is the one the audience child
+    // got for the same slide (review round 2: compare what was received,
+    // not the operator's own state).
+    let audience_face = lines(&rig.log, "audience").pop().unwrap()[2].clone();
+    let stage_face = last_panel(&rig.log).unwrap()[6].clone();
+    assert_eq!(stage_face, audience_face);
     operator.read_with(&rig.cx, |o, _| {
         let live = o.on_air.as_ref().unwrap();
-        let face = live.resolved.as_ref().unwrap()[2].face().version();
-        assert_eq!(o.stage_face().0, face);
+        let face = live.resolved.as_ref().unwrap()[2].face();
+        assert_eq!(stage_face, face_field(face.version(), face.index()));
     });
     let sent = lines(&rig.log, "stage").len();
 

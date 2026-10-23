@@ -28,6 +28,14 @@ const NEXT_SHARE: f32 = 0.6;
 /// Shaped-text fallbacks when the advance estimate is slightly too large.
 const RETRIES: usize = 6;
 
+/// Which text a field holds: slide text in the live slide's face, or panel
+/// chrome (labels, clock, message) in the face `stage::chrome_face` picks.
+#[derive(Clone, Copy)]
+enum Ink {
+    Slide,
+    Chrome,
+}
+
 #[derive(Clone, Copy)]
 enum Channel {
     Fill = 0,
@@ -62,12 +70,15 @@ pub struct Base {
     pub clock: Option<Region>,
 }
 
-/// Coverage for every panel field except the clock. The panel comes in the
-/// live slide's face; a character that face lacks is drawn as a stand-in
-/// (`stage::covered`), and a label, the message or the next slide that still
-/// cannot be drawn is left blank, so nothing but the current slide itself
-/// can reject the cue (the stage then keeps its previous scene). The
-/// current slide is the one the audience already drew in this face.
+/// Coverage for every panel field except the clock. The current and next
+/// slides come in the live slide's face; the labels, clock and message in
+/// the bundled DejaVu Sans unless only the live face draws them
+/// (`stage::chrome_face`). A character the chosen face lacks is drawn as a
+/// stand-in (`stage::covered`), and a label, the message or the next slide
+/// that still cannot be drawn is left blank, so nothing but the current
+/// slide itself can reject the cue (the stage then keeps its previous
+/// scene). The current slide is the one the audience already drew in this
+/// face.
 pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
     let panel = stage.panel();
     let layout = stage::layout(extent, panel).ok_or(TextError::Bounds)?;
@@ -87,6 +98,7 @@ pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
     };
     // Optional fields: a failure leaves that area blank.
     let _ = canvas.draw(
+        Ink::Chrome,
         Channel::Note,
         &panel.current_label,
         layout.label,
@@ -95,6 +107,7 @@ pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
     );
     if let Some(region) = layout.message {
         let _ = canvas.draw(
+            Ink::Chrome,
             Channel::Note,
             &panel.message,
             region,
@@ -103,6 +116,7 @@ pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
         );
     }
     let current = canvas.draw(
+        Ink::Slide,
         Channel::Fill,
         &panel.current,
         layout.current,
@@ -114,6 +128,7 @@ pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
     }
     if let Some(region) = layout.next_label {
         let _ = canvas.draw(
+            Ink::Chrome,
             Channel::Next,
             &panel.next_label,
             region,
@@ -124,6 +139,7 @@ pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
     if let Some(region) = layout.next {
         let cap = current.map(|size| (f32::from(size) * NEXT_SHARE).max(8.) as u16);
         let _ = canvas.draw(
+            Ink::Slide,
             Channel::Next,
             &panel.next,
             region,
@@ -138,8 +154,8 @@ pub fn base(stage: &PreparedStage, extent: Extent) -> Result<Base, TextError> {
     })
 }
 
-/// The base coverage with `clock` drawn right-aligned in the header (left
-/// blank if the face cannot draw it at all).
+/// The base coverage with `clock` drawn right-aligned in the header, in the
+/// bundled face (`stage::chrome_face`; left blank if it cannot be drawn).
 pub fn with_clock(base: &Base, stage: &PreparedStage, clock: &str) -> Vec<u8> {
     let mut coverage = base.coverage.clone();
     if let Some(region) = base.clock {
@@ -149,6 +165,7 @@ pub fn with_clock(base: &Base, stage: &PreparedStage, clock: &str) -> Vec<u8> {
             stage,
         }
         .draw(
+            Ink::Chrome,
             Channel::Fill,
             clock,
             region,
@@ -178,6 +195,7 @@ impl Canvas<'_> {
     /// returns the size used, `None` for empty text.
     fn draw(
         &mut self,
+        ink: Ink,
         channel: Channel,
         text: &str,
         region: Region,
@@ -187,8 +205,14 @@ impl Canvas<'_> {
         if text.trim().is_empty() {
             return Ok(None);
         }
-        let font = self.stage.font();
-        let face = self.stage.face_index();
+        let (live, live_index) = (self.stage.font(), self.stage.face_index());
+        let (font, face) = match ink {
+            Ink::Slide => (live, live_index),
+            Ink::Chrome => match stage::chrome_face(text, live, live_index) {
+                stage::ChromeFace::Live => (live, live_index),
+                stage::ChromeFace::Bundled => (sela::fonts::BUNDLED, 0),
+            },
+        };
         let text = stage::covered(text, font, face).ok_or(TextError::InvalidFont)?;
         let text = text.as_ref();
         let mut size = stage::fit(text, font, face, region).ok_or(TextError::MissingGlyph)?;
@@ -259,16 +283,17 @@ mod tests {
     };
 
     fn cue(panel: StagePanel) -> PreparedCue {
+        cue_in(panel, sela::fonts::BUNDLED)
+    }
+
+    /// A stage cue whose live slide face is `font`.
+    fn cue_in(panel: StagePanel, font: &[u8]) -> PreparedCue {
         PreparedCue::for_stage(
             ContentVersion { id: 1, revision: 1 },
             EXTENT,
             stage::BACKGROUND,
             panel,
-            (
-                ContentVersion { id: 9, revision: 1 },
-                Arc::from(sela::fonts::BUNDLED),
-                0,
-            ),
+            (ContentVersion { id: 9, revision: 1 }, Arc::from(font), 0),
             RendererCapabilities {
                 max_texture_dimension: 4096,
             },
@@ -321,6 +346,55 @@ mod tests {
             ink(&timed, layout.current, Channel::Fill),
             ink(&base.coverage, layout.current, Channel::Fill),
             "the clock never touches the slide text"
+        );
+    }
+
+    /// One channel of `coverage` inside `region`, row by row.
+    fn pixels(coverage: &[u8], region: Region, channel: Channel) -> Vec<u8> {
+        let mut out = Vec::new();
+        for y in region.y..region.bottom() {
+            for x in region.x..region.right() {
+                let at = (y as usize * EXTENT.width as usize + x as usize) * 4 + channel as usize;
+                out.push(coverage[at]);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn chrome_stays_in_the_bundled_face_whatever_the_song_face() {
+        // Review finding (stage-display round 2): the clock, labels and
+        // message followed the live song's face, so a decorative or symbol
+        // face made them unreadable. A different live face (Bold here)
+        // changes the slide text only.
+        let regular = cue(panel());
+        let bold = cue_in(panel(), sela::fonts::BUNDLED_BOLD);
+        let (regular, bold) = (regular.stage().unwrap(), bold.stage().unwrap());
+        let layout = stage::layout(EXTENT, regular.panel()).unwrap();
+        let (a, b) = (base(regular, EXTENT).unwrap(), base(bold, EXTENT).unwrap());
+        for (region, channel) in [
+            (layout.label, Channel::Note),
+            (layout.message.unwrap(), Channel::Note),
+            (layout.next_label.unwrap(), Channel::Next),
+        ] {
+            assert_eq!(
+                pixels(&a.coverage, region, channel),
+                pixels(&b.coverage, region, channel)
+            );
+        }
+        let clock = a.clock.unwrap();
+        assert_eq!(
+            pixels(&with_clock(&a, regular, "02:35"), clock, Channel::Fill),
+            pixels(&with_clock(&b, bold, "02:35"), clock, Channel::Fill),
+        );
+        assert_ne!(
+            pixels(&a.coverage, layout.current, Channel::Fill),
+            pixels(&b.coverage, layout.current, Channel::Fill),
+            "the slide itself is drawn in the live face"
+        );
+        assert_ne!(
+            pixels(&a.coverage, layout.next.unwrap(), Channel::Next),
+            pixels(&b.coverage, layout.next.unwrap(), Channel::Next),
         );
     }
 

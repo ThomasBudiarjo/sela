@@ -275,10 +275,6 @@ pub fn layout(extent: Extent, panel: &StagePanel) -> Option<Layout> {
 pub const LINE_HEIGHT: f32 = 1.3;
 const MAX_SIZE: f32 = 288.;
 
-/// Largest font size, by the face's advance widths, at which `text` fits
-/// `region` without wrapping (one line per `\n`). `None` when the face lacks
-/// a glyph, the text is too long or nothing fits. The renderer still checks
-/// the shaped glyphs and steps down if the estimate is too large.
 /// Stand-ins for a character the face cannot draw, in order of preference.
 const STAND_INS: [char; 2] = ['\u{FFFD}', '?'];
 
@@ -308,7 +304,7 @@ pub fn covered<'a>(
 ) -> Option<std::borrow::Cow<'a, str>> {
     use std::borrow::Cow;
     let face = ttf_parser::Face::parse(font, face_index).ok()?;
-    let has = |c: char| c == '\n' || face.glyph_index(c).is_some_and(|glyph| glyph.0 != 0);
+    let has = |c: char| c == '\n' || draws(&face, c);
     if text.chars().all(has) {
         return Some(Cow::Borrowed(text));
     }
@@ -324,6 +320,54 @@ pub fn covered<'a>(
     ))
 }
 
+/// The face has a real (non-`.notdef`) glyph for `c`.
+fn draws(face: &ttf_parser::Face, c: char) -> bool {
+    face.glyph_index(c).is_some_and(|glyph| glyph.0 != 0)
+}
+
+/// Which face draws a stage chrome field: the header label, the clock, the
+/// "Next ·" label and the stage message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChromeFace {
+    /// The bundled DejaVu Sans (`fonts::BUNDLED`, face 0).
+    Bundled,
+    /// The live slide's face.
+    Live,
+}
+
+/// Chrome stays in the bundled text face, so a decorative, script or symbol
+/// song face never makes the clock or labels hard to read (UNOBSERVED best
+/// guess; EW's Foldback "Default Font" may own this). The live face is used
+/// only when it draws every character of `text` and the bundled face does
+/// not (a CJK title, say). An unparsable live face falls back to bundled.
+pub fn chrome_face(text: &str, live: &[u8], live_index: u32) -> ChromeFace {
+    let Ok(bundled) = ttf_parser::Face::parse(crate::fonts::BUNDLED, 0) else {
+        return ChromeFace::Bundled;
+    };
+    let Ok(live) = ttf_parser::Face::parse(live, live_index) else {
+        return ChromeFace::Bundled;
+    };
+    chrome_choice(text, |c| draws(&bundled, c), |c| draws(&live, c))
+}
+
+fn chrome_choice(
+    text: &str,
+    bundled: impl Fn(char) -> bool,
+    live: impl Fn(char) -> bool,
+) -> ChromeFace {
+    let all =
+        |has: &dyn Fn(char) -> bool| text.chars().all(|c| c == '\n' || ignorable(c) || has(c));
+    if !all(&bundled) && all(&live) {
+        ChromeFace::Live
+    } else {
+        ChromeFace::Bundled
+    }
+}
+
+/// Largest font size, by the face's advance widths, at which `text` fits
+/// `region` without wrapping (one line per `\n`). `None` when the face lacks
+/// a glyph, the text is too long or nothing fits. The renderer still checks
+/// the shaped glyphs and steps down if the estimate is too large.
 pub fn fit(text: &str, font: &[u8], face_index: u32, region: Region) -> Option<u16> {
     if text.is_empty()
         || text.len() > MAX_FIELD_BYTES
@@ -355,6 +399,45 @@ pub fn fit(text: &str, font: &[u8], face_index: u32, region: Region) -> Option<u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chrome_prefers_the_bundled_face_unless_only_the_live_face_draws_it() {
+        // Review finding (stage-display round 2): chrome in a symbol or
+        // digit-less song face made the clock unreadable.
+        let latin = |c: char| c.is_ascii() || c == '\u{b7}';
+        let cjk = |c: char| matches!(c, '\u{4e2d}' | '\u{6587}' | ' ' | '\u{b7}');
+        let symbols = |c: char| c.is_ascii_alphabetic();
+        // Digits and labels the bundled face draws stay bundled, whatever
+        // the live face covers.
+        assert_eq!(chrome_choice("02:35", latin, symbols), ChromeFace::Bundled);
+        assert_eq!(
+            chrome_choice("Next \u{b7} Chorus", latin, latin),
+            ChromeFace::Bundled
+        );
+        // A title only the live face draws uses the live face.
+        assert_eq!(
+            chrome_choice("\u{4e2d}\u{6587} \u{b7} \u{4e2d}", latin, cjk),
+            ChromeFace::Live
+        );
+        // Neither covers it: bundled, with stand-ins.
+        assert_eq!(
+            chrome_choice("\u{4e2d} x", latin, symbols),
+            ChromeFace::Bundled
+        );
+        // Line breaks and invisible format characters never decide.
+        assert_eq!(
+            chrome_choice("\u{4e2d}\n\u{200D}", latin, cjk),
+            ChromeFace::Live
+        );
+        // Real faces: the bundled face draws a clock; a bad live face falls
+        // back to bundled.
+        let bold = crate::fonts::BUNDLED_BOLD;
+        assert_eq!(chrome_face("02:35", bold, 0), ChromeFace::Bundled);
+        assert_eq!(
+            chrome_face("\u{4e2d}", b"not a font", 0),
+            ChromeFace::Bundled
+        );
+    }
 
     #[test]
     fn covered_substitutes_only_what_the_face_lacks() {

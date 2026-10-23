@@ -56,8 +56,14 @@ only the stage clock from clocks/timers (M3-05).
   channels, so no new shader or GPU path exists. **Face:** the live slide's
   resolved face (the same bytes the audience cue carries), bundled DejaVu
   Sans while nothing is live, so the stage covers the scripts the song's
-  font covers. Labels, the message, the next slide and the clock are drawn
-  in that face too; a character it lacks becomes U+FFFD (or `?`; invisible
+  font covers. The current and next slides are drawn in that face. The
+  chrome (header label, clock, "Next ·" label, stage message) is drawn in
+  the bundled DejaVu Sans (`fonts::BUNDLED`, compiled into the stage
+  process, never sent), and in the live face only when that face draws
+  every character of the field and DejaVu Sans does not (a CJK title):
+  `stage::chrome_face` (review round 2: a decorative, script, symbol or
+  digit-less song face used to make the clock and labels unreadable).
+  In the chosen face a character it lacks becomes U+FFFD (or `?`; invisible
   joiners and variation selectors are dropped) via `stage::covered`, and an
   optional field that still cannot be drawn is left blank. Only the current
   slide itself can reject a stage cue, and it is the text the audience
@@ -137,14 +143,23 @@ but Go Live then refuses as before ("Output state unknown"): the stage keeps
 its last panel until Live output is restarted. Stage GPU upload failure
 (panel or clock redraw) ends the stage process only.
 
-Known cost (open, not fixed): like an audience cue, every stage cue carries
-its face bytes on the wire. `Frame::command` encodes them on the operator UI
-thread inside the supervisor, they are piped again, and the stage renderer
-parses them per cue, so each slide change or message change moves the face
-size (0.7 MiB bundled, up to 8 MiB installed) through the operator thread
-and the stage pipe. It is bounded by the supervisor's one in-flight plus one
-wanted cue; a per-session face cache on the wire (send by version once) is
-the follow-up and applies to audience cues as well.
+Known cost (measured, budgeted, not removed): like an audience cue, every
+stage cue carries its face bytes on the wire. `Frame::command` encodes them
+on the operator UI thread inside the supervisor, they are piped again (on
+the supervisor's writer thread), and the stage renderer parses them per
+cue, so each slide change or message change moves the face size (0.7 MiB
+bundled, up to 8 MiB installed) through the operator thread and the stage
+pipe. It is bounded by the supervisor's one in-flight plus one wanted cue.
+Budget: the UI-thread encode of one stage cue stays at p95 <= 8 ms with an
+8 MiB face (half a 60 Hz frame). Measured 2026-10-23 in this Linux
+container (4 vCPU, dev profile, `sela` at opt-level 0), 50 encodes each:
+`cargo run --locked -j 3 --example stage_frame_cost` reported bundled face
+(0.72 MiB) median 0.02 ms / p95 0.03 ms / max 0.04 ms, 8 MiB face median
+0.58 ms / p95 0.61 ms / max 0.67 ms; the example exits non-zero over
+budget. Not measured: Windows hosts, a release build, and the pipe write
+and renderer parse (off the UI thread). A per-session face cache on the
+wire (send by version once) is the follow-up and applies to audience cues
+as well.
 
 ## Decisions and best guesses (UNOBSERVED in EW 8.0.49)
 
@@ -164,8 +179,18 @@ Foldback › General tab.
   `audience::tests::each_renderer_admits_only_its_own_cue_kind`,
   `audience::stage::tests` (colour channels per region, clock never touches
   the slide, blank next/message, uncovered glyphs drawn as stand-ins, an
-  undrawable next area left blank, long text), `stage::tests::covered_*`,
-  `audience::tests` clock worker tests (fake clock and upload).
+  undrawable next area left blank, long text, chrome identical whatever the
+  live face `chrome_stays_in_the_bundled_face_whatever_the_song_face`),
+  `stage::tests::covered_*`,
+  `stage::tests::chrome_prefers_the_bundled_face_unless_only_the_live_face_draws_it`,
+  `audience::tests` clock worker tests (fake clock and upload; the event
+  loop's `next_clock` turns a failed upload or a gone worker into ending the
+  stage process, `a_clock_upload_failure_is_reported_never_a_silent_freeze`).
+  The `fail()`/winit exit itself needs an `ActiveEventLoop` and is not unit
+  tested; a stage process that exits is shown lost by the GPUI test
+  `a_lost_stage_never_touches_the_audience_and_restarts_alone`.
+- Performance: `examples/stage_frame_cost.rs` (UI-thread encode budget,
+  see Bounds).
 - I/E (GPUI with fake renderer children that mirror the routing rules and log
   every scene): `src/tests/stage_display.rs`, fourteen tests.
 - N (X11): `scripts/stage-display-x11.py --display :118` PASS; captures in

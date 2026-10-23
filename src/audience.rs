@@ -465,6 +465,26 @@ fn redraw_applies(
 ) -> bool {
     applied.is_some_and(|frame| Arc::ptr_eq(frame, redraw)) && shown == redraw.cue.extent()
 }
+/// What the event loop does with the clock worker's next result.
+enum ClockPoll<R> {
+    /// Nothing new this turn.
+    Idle,
+    /// A redraw to swap in when it still applies (`redraw_applies`).
+    Swap(ClockFrame<R>),
+    /// The clock can no longer advance: end the stage process with this
+    /// message (the operator then shows the stage lost). A worker that
+    /// reported a failed upload, or that is gone, never leaves a silently
+    /// frozen clock.
+    End(&'static str),
+}
+fn next_clock<R>(results: &Receiver<ClockResult<R>>) -> ClockPoll<R> {
+    match results.try_recv() {
+        Ok(ClockResult::Redraw(clock)) => ClockPoll::Swap(clock),
+        Ok(ClockResult::Failed) => ClockPoll::End("stage clock upload failed"),
+        Err(mpsc::TryRecvError::Empty) => ClockPoll::Idle,
+        Err(mpsc::TryRecvError::Disconnected) => ClockPoll::End("stage clock worker ended"),
+    }
+}
 impl Audience {
     fn fail(&mut self, el: &ActiveEventLoop, message: String) {
         self.failure = Some(message);
@@ -926,13 +946,13 @@ impl Audience {
         let Some(results) = &self.clock_results else {
             return Ok(());
         };
-        let clock = match results.try_recv() {
-            Ok(ClockResult::Redraw(clock)) => clock,
-            Ok(ClockResult::Failed) => {
-                self.fail(el, "stage clock upload failed".into());
+        let clock = match next_clock(results) {
+            ClockPoll::Swap(clock) => clock,
+            ClockPoll::Idle => return Ok(()),
+            ClockPoll::End(message) => {
+                self.fail(el, message.into());
                 return Err(());
             }
-            Err(_) => return Ok(()),
         };
         let applied = self.stage_applied.as_ref();
         if let Some((extent, ready)) = &mut self.applied_ready
@@ -1650,7 +1670,37 @@ mod tests {
             clock_step(&slot, &mut drawn, &|| "10:41".to_owned(), failing, &results),
             ClockStep::Stop
         );
-        assert!(matches!(received.try_recv(), Ok(ClockResult::Failed)));
+        // Review finding (stage-display round 2): the event loop's reading
+        // of that report ends the process instead of ignoring it.
+        assert!(matches!(
+            next_clock(&received),
+            ClockPoll::End("stage clock upload failed")
+        ));
+        assert!(matches!(next_clock(&received), ClockPoll::Idle));
+        // A worker that is gone (it stopped, or panicked) also ends the
+        // stage instead of leaving the last minute on screen.
+        drop(results);
+        assert!(matches!(
+            next_clock(&received),
+            ClockPoll::End("stage clock worker ended")
+        ));
+    }
+
+    #[test]
+    fn the_event_loop_swaps_in_a_redraw_the_worker_sent() {
+        let slot = Mutex::new(Some(stage_frame(true, STAGE_EXTENT)));
+        let (results, received) = mpsc::sync_channel(1);
+        let mut drawn = None;
+        assert!(matches!(next_clock(&received), ClockPoll::Idle));
+        assert_eq!(
+            clock_step(&slot, &mut drawn, &|| "10:41".to_owned(), drew, &results),
+            ClockStep::Sent
+        );
+        let ClockPoll::Swap(clock) = next_clock(&received) else {
+            panic!("a redraw was sent");
+        };
+        assert_eq!(clock.ready, "10:41");
+        assert!(matches!(next_clock(&received), ClockPoll::Idle));
     }
 
     #[test]

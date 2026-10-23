@@ -215,7 +215,8 @@ impl Operator {
     /// one already handed over. Building a panel copies the slide strings
     /// and clones the face's `Arc`; the supervisor then encodes the wire
     /// frame, face bytes included, on this thread like an audience cue
-    /// (bounded by `MAX_SOURCE_BYTES`; see docs/stage-display.md).
+    /// (bounded by `MAX_SOURCE_BYTES`; budget p95 <= 8 ms at 8 MiB, measured
+    /// by `examples/stage_frame_cost.rs`; see docs/stage-display.md).
     pub(crate) fn poll_stage(&mut self) -> bool {
         let now = Instant::now();
         let Some(output) = self.stage.output.as_mut() else {

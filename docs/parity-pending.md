@@ -348,12 +348,15 @@ Design note: [stage-display.md](stage-display.md). Linux evidence (GPUI tests,
   or capture the foldback for slide 1, 2 and 3: what is current, what is
   "next" (whole next slide or its first line), labels, colours, font sizes,
   margins, and how long text is fitted. Sela now: header label + clock,
-  current slide large white, "Next · name" and next slide in sky blue, all
-  in the live slide's own face (stand-ins for characters it lacks); also
-  check which font EW's foldback uses (song font or the Foldback Default
-  Font) with a CJK or symbol song. Re-run: `stage-display-x11.py`,
-  `stage-display-windows.py`, unit
-  `a_glyph_the_face_lacks_never_costs_the_current_slide`.
+  current slide large white, "Next · name" and next slide in sky blue; the
+  slides in the live slide's own face, the label, clock, "Next ·" label and
+  message in bundled DejaVu Sans unless only the song face draws them
+  (stand-ins for characters the chosen face lacks); also check which font
+  EW's foldback uses for the slide and for its clock/labels (song font or
+  the Foldback Default Font) with a CJK song and with a symbol/script song.
+  Re-run: `stage-display-x11.py`, `stage-display-windows.py`, unit
+  `a_glyph_the_face_lacks_never_costs_the_current_slide`,
+  `chrome_stays_in_the_bundled_face_whatever_the_song_face`.
 - [ ] **PP-STG-03 Next at the end of an item and of the schedule**
   (EW8-OBS-STG-2). Steps: schedule A then B; show A's last slide; then B's
   last slide; then a library song not in the schedule; also an arrangement

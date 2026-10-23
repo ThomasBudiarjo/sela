@@ -344,7 +344,6 @@ impl Operator {
         }
     }
 
-    /// The initial settings load replied; Options edits wait for it.
     /// The startup monitor scan answered. A stage start that waited for the
     /// list is decided again.
     pub(crate) fn monitors_scanned(&mut self, monitors: Vec<MonitorInfo>) {
@@ -353,6 +352,7 @@ impl Operator {
         self.stage_inputs_landed();
     }
 
+    /// The initial settings load replied; Options edits wait for it.
     pub(crate) fn settings_loaded_for_options(&self) -> bool {
         self.settings.loaded
     }
