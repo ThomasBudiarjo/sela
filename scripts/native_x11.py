@@ -1783,7 +1783,6 @@ class App:
         self.wid), keyed by id, in window-relative client coordinates.
         Coordinates are only valid for the layout at the time of the call."""
         wid = wid or self.wid
-        title = window_name(wid)
         atspi = self._a11y()
 
         def collect():
@@ -1791,6 +1790,10 @@ class App:
             if registered is None:
                 return None
             bus, root = registered
+            # Read the title on every attempt: it can change while we wait
+            # (the UI language or the schedule name arrives after the first
+            # frame), and a stale title never matches the AT-SPI frame.
+            title = window_name(wid)
             frames = [p for _, p in atspi.children(bus, root)]
             with concurrent.futures.ThreadPoolExecutor(8) as pool:
                 for frame in frames:
@@ -1821,7 +1824,10 @@ class App:
             return None
 
         return wait_until(
-            collect, timeout, f"the AT-SPI tree of {title!r}", interval=0.3
+            collect,
+            timeout,
+            f"the AT-SPI tree of {window_name(wid)!r}",
+            interval=0.3,
         )
 
     def control(self, aid: str, wid: int | None = None) -> Control:
