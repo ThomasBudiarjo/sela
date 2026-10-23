@@ -218,6 +218,22 @@ impl Worker {
     }
 }
 
+#[cfg(test)]
+impl Worker {
+    /// Stops the worker and waits for its thread, so every file it opened
+    /// is closed when this returns (`Drop` does not wait).
+    fn shut_down(mut self) {
+        self.commands.take();
+        if let Some(thread) = self.thread.take() {
+            while !thread.is_finished() {
+                while self.replies.try_recv().is_ok() {}
+                std::thread::yield_now();
+            }
+            let _ = thread.join();
+        }
+    }
+}
+
 impl Drop for Worker {
     fn drop(&mut self) {
         self.commands.take();
@@ -643,6 +659,8 @@ pub(crate) mod tests {
         // A bundle whose bytes do not match their checksum is reported.
         let mut bad = synthetic_bundles();
         bad[1].sha256 = "0".repeat(64);
+        // Windows refuses to delete a file the worker still has open.
+        worker.shut_down();
         std::fs::remove_file(store::path_for(&folder, "SYB")).unwrap();
         let worker = Worker::start(folder, bad).unwrap();
         let (entries, notes) = catalog(&worker);

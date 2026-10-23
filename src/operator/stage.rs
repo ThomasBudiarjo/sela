@@ -8,7 +8,7 @@
 //!   receipts. A stage that fails, exits or is turned off never changes the
 //!   audience session, and the reverse; the stage keeps its last panel.
 //! - Content follows what was handed to the audience: the panel is built
-//!   from `on_air`/`live_slide`, which change only when a slide cue is given
+//!   from `on_air`/`on_air_slide`, which change only when a slide cue is given
 //!   to the audience supervisor, so a slide (or a newly chosen item) that
 //!   fails to prepare or is refused changes neither output.
 //! - The panel is drawn in the live slide's resolved face (the bytes the
@@ -285,7 +285,7 @@ impl Operator {
     pub(crate) fn stage_face(&self) -> (ContentVersion, Arc<[u8]>, u32) {
         self.on_air
             .as_ref()
-            .zip(self.live_slide)
+            .zip(self.on_air_slide)
             .and_then(|(item, index)| item.resolved.as_ref()?.get(index).map(|r| r.face()))
             .map_or_else(idle_face, |face| {
                 (face.version(), face.bytes_arc(), face.index())
@@ -301,7 +301,7 @@ impl Operator {
             show_next: options.next,
             ..StagePanel::default()
         };
-        let live = self.on_air.as_ref().zip(self.live_slide);
+        let live = self.on_air.as_ref().zip(self.on_air_slide);
         let Some((item, slide)) = live
             .and_then(|(item, index)| item.slides.get(index).map(|slide| (item, (index, slide))))
         else {

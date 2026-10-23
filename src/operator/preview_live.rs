@@ -686,6 +686,7 @@ impl Operator {
         self.output_extent = None;
         self.live_slide = None;
         self.on_air = None;
+        self.on_air_slide = None;
         // Masks do carry over (EW8-OBS-017); a fresh renderer starts unmasked.
         self.sent_mask = self.output.as_ref().map(|_| Layer::None);
         self.unmask.cancel();
@@ -945,6 +946,7 @@ impl Operator {
                                 .live
                                 .clone()
                                 .filter(|live| live.version == pending.item);
+                            self.on_air_slide = Some(pending.index);
                             let clean = pending.warning.is_none();
                             self.presented = Some((pending.generation, pending.index, clean));
                             if !clean {

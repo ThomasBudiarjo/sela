@@ -188,7 +188,10 @@ pub fn write(
         let _ = fs::remove_file(&partial);
         return Err(error);
     }
-    fs::File::open(&partial)
+    // Write access: Windows refuses FlushFileBuffers on a read-only handle.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&partial)
         .and_then(|file| file.sync_all())
         .map_err(|e| Error::Io(e.to_string()))?;
     fs::rename(&partial, path).map_err(|e| {
@@ -512,6 +515,8 @@ pub(crate) mod tests {
         let translation = open(&path).unwrap();
         assert!(translation.index_rebuilt);
         assert_eq!(translation.search("alpha", 5).unwrap().0.len(), 1);
+        // Close it: Windows refuses to delete or replace an open file.
+        drop(translation);
 
         // Random bytes and a foreign SQLite file.
         fs::write(&path, b"this is not a database at all, not even close....").unwrap();

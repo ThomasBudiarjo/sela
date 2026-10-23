@@ -328,11 +328,15 @@ pub(super) struct Operator {
     pub(super) preview_slide: usize,
     pub(super) live: Option<Item>,
     pub(super) live_slide: Option<usize>,
-    /// The item `live_slide` belongs to: replaced only when one of its cues
-    /// is handed to the audience supervisor. `live` already names a newly
+    /// The item last handed to the audience supervisor: replaced only when
+    /// one of its cues is handed over. `live` already names a newly
     /// requested item while its cue is still preparing (or failed), so the
     /// stage panel is built from this, never from `live` (M3-02).
     pub(super) on_air: Option<Item>,
+    /// The slide of `on_air` last handed over. Kept apart from
+    /// `live_slide`, which a Go Live of another item clears at once
+    /// (SC2-LIVE-01) while the old slide is still on screen.
+    pub(super) on_air_slide: Option<usize>,
     launcher: Launcher,
     pub(super) output: Option<Supervisor>,
     output_extent: Option<Extent>,
@@ -652,6 +656,7 @@ impl Operator {
             live: None,
             live_slide: None,
             on_air: None,
+            on_air_slide: None,
             launcher,
             output: None,
             output_extent: None,
