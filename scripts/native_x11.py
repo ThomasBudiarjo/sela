@@ -1824,6 +1824,8 @@ class App:
         Coordinates are only valid for the layout at the time of the call."""
         wid = wid or self.wid
         atspi = self._a11y()
+        # The title the last attempt compared against, for the timeout message.
+        last = {"title": window_name(wid)}
 
         def collect():
             registered = self._app_root(atspi)
@@ -1834,6 +1836,7 @@ class App:
             # (the UI language or the schedule name arrives after the first
             # frame), and a stale title never matches the AT-SPI frame.
             title = window_name(wid)
+            last["title"] = title
             frames = [p for _, p in atspi.children(bus, root)]
             with concurrent.futures.ThreadPoolExecutor(8) as pool:
                 for frame in frames:
@@ -1863,12 +1866,13 @@ class App:
                     return found
             return None
 
-        return wait_until(
-            collect,
-            timeout,
-            f"the AT-SPI tree of {window_name(wid)!r}",
-            interval=0.3,
-        )
+        try:
+            return wait_until(collect, timeout, "the AT-SPI tree", interval=0.3)
+        except Failure:
+            raise Failure(
+                f"timed out after {timeout}s waiting for the AT-SPI tree of "
+                f"{last['title']!r}"
+            ) from None
 
     def control(self, aid: str, wid: int | None = None) -> Control:
         found = self.controls(wid)

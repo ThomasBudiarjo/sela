@@ -188,7 +188,10 @@ pub fn write(
         let _ = fs::remove_file(&partial);
         return Err(error);
     }
-    fs::File::open(&partial)
+    // Write access: Windows refuses FlushFileBuffers on a read-only handle.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&partial)
         .and_then(|file| file.sync_all())
         .map_err(|e| Error::Io(e.to_string()))?;
     fs::rename(&partial, path).map_err(|e| {
