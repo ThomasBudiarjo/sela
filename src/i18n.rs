@@ -833,6 +833,57 @@ pub enum Msg {
     FoldbackShowNext,
     OptionsTabAlertsClocks,
     StageMonitorMissing,
+    VideoErrIo,
+    VideoErrMissing,
+    VideoErrSourceMissing,
+    VideoErrUnsupported,
+    VideoErrNotVideo,
+    VideoErrTooLarge,
+    VideoErrInvalidName,
+    VideoErrReadDenied,
+    VideoErrProfileDenied,
+    VideoErrDiskFull,
+    VideoErrCancelled,
+    VideoErrUnavailable,
+    VideoErrBusy,
+    VideoErrDisconnected,
+    VideoWhyMissing,
+    VideoWhyNoVideo,
+    VideoWhyCodec,
+    VideoWhyCorrupt,
+    VideoWhyTooLarge,
+    VideoWhyNotLocal,
+    VideoWhySlow,
+    VideoWhyDecoder,
+    BgVideoMissing,
+    BgVideoChanged,
+    BgVideoUnreadable,
+    BgVideoUnavailable,
+    LoadingVideos,
+    NoVideosYet,
+    VideosHeader,
+    RepeatingLabel,
+    RepeatingOn,
+    RepeatingOff,
+    VideoImportReused,
+    VideoImported,
+    VideoImportFailed,
+    NoProfileVideoImport,
+    NoVideoLive,
+    VideoStarting,
+    VideoPlaying,
+    VideoPaused,
+    VideoEnded,
+    VideoFailed,
+    VideoTransport,
+    VideoPause,
+    VideoPlay,
+    VideoRestart,
+    VideoCommandRefused,
+    MediaHeader,
+    VideosNoProfile,
+    VideosEmptyHint,
+    ImportVideo,
 }
 
 impl Msg {
@@ -1586,6 +1637,57 @@ impl Msg {
         Msg::FoldbackShowNext,
         Msg::OptionsTabAlertsClocks,
         Msg::StageMonitorMissing,
+        Msg::VideoErrIo,
+        Msg::VideoErrMissing,
+        Msg::VideoErrSourceMissing,
+        Msg::VideoErrUnsupported,
+        Msg::VideoErrNotVideo,
+        Msg::VideoErrTooLarge,
+        Msg::VideoErrInvalidName,
+        Msg::VideoErrReadDenied,
+        Msg::VideoErrProfileDenied,
+        Msg::VideoErrDiskFull,
+        Msg::VideoErrCancelled,
+        Msg::VideoErrUnavailable,
+        Msg::VideoErrBusy,
+        Msg::VideoErrDisconnected,
+        Msg::VideoWhyMissing,
+        Msg::VideoWhyNoVideo,
+        Msg::VideoWhyCodec,
+        Msg::VideoWhyCorrupt,
+        Msg::VideoWhyTooLarge,
+        Msg::VideoWhyNotLocal,
+        Msg::VideoWhySlow,
+        Msg::VideoWhyDecoder,
+        Msg::BgVideoMissing,
+        Msg::BgVideoChanged,
+        Msg::BgVideoUnreadable,
+        Msg::BgVideoUnavailable,
+        Msg::LoadingVideos,
+        Msg::NoVideosYet,
+        Msg::VideosHeader,
+        Msg::RepeatingLabel,
+        Msg::RepeatingOn,
+        Msg::RepeatingOff,
+        Msg::VideoImportReused,
+        Msg::VideoImported,
+        Msg::VideoImportFailed,
+        Msg::NoProfileVideoImport,
+        Msg::NoVideoLive,
+        Msg::VideoStarting,
+        Msg::VideoPlaying,
+        Msg::VideoPaused,
+        Msg::VideoEnded,
+        Msg::VideoFailed,
+        Msg::VideoTransport,
+        Msg::VideoPause,
+        Msg::VideoPlay,
+        Msg::VideoRestart,
+        Msg::VideoCommandRefused,
+        Msg::MediaHeader,
+        Msg::VideosNoProfile,
+        Msg::VideosEmptyHint,
+        Msg::ImportVideo,
     ];
 
     pub fn english(self) -> &'static str {
@@ -2490,6 +2592,77 @@ impl Msg {
             Self::StageMonitorMissing => {
                 "The chosen foldback monitor ({name}) is not connected; the stage uses a free monitor instead, or stays off when none is free."
             }
+            Self::VideoErrIo => {
+                "Video file cannot be read or written ({kind}); check the file and the profile folder, then try again"
+            }
+            Self::VideoErrMissing => "Video file is missing from the profile",
+            Self::VideoErrSourceMissing => {
+                "The chosen file no longer exists or changed while it was copied; choose it again"
+            }
+            Self::VideoErrUnsupported => {
+                "Only MP4, M4V, MOV, MKV, WebM, AVI and MPEG videos can be imported"
+            }
+            Self::VideoErrNotVideo => "This file cannot be played as a video: {reason}",
+            Self::VideoErrTooLarge => {
+                "Video file is larger than 16 GiB; export a smaller copy and import it"
+            }
+            Self::VideoErrInvalidName => "Video file name is not usable",
+            Self::VideoErrReadDenied => {
+                "Sela is not allowed to read this file. Check its permissions, or copy it to a folder you own and import the copy"
+            }
+            Self::VideoErrProfileDenied => {
+                "Sela is not allowed to change the profile's Resources/Videos folder. Make sure it is not read-only, then try again"
+            }
+            Self::VideoErrDiskFull => "The disk is full; free some space, then try again",
+            Self::VideoErrCancelled => "Import cancelled; nothing was added",
+            Self::VideoErrUnavailable => {
+                "Video and audio are unavailable, so videos cannot be imported or played"
+            }
+            Self::VideoErrBusy => "Video work is still running; try again",
+            Self::VideoErrDisconnected => "Video worker stopped; restart Sela",
+            Self::VideoWhyMissing => "the file is missing",
+            Self::VideoWhyNoVideo => "it has no video picture",
+            Self::VideoWhyCodec => "its video format is not supported",
+            Self::VideoWhyCorrupt => "it is damaged or not a video",
+            Self::VideoWhyTooLarge => "its picture is too large",
+            Self::VideoWhyNotLocal => "only local files can be played",
+            Self::VideoWhySlow => "reading it took too long",
+            Self::VideoWhyDecoder => "the decoder stopped unexpectedly",
+            Self::BgVideoMissing => "Background video ‘{name}’ is missing; showing black",
+            Self::BgVideoChanged => {
+                "Background video ‘{name}’ was replaced by a different file; showing black"
+            }
+            Self::BgVideoUnreadable => "Background video ‘{name}’ cannot be read; showing black",
+            Self::BgVideoUnavailable => {
+                "Background video ‘{name}’ cannot play because video is unavailable; showing black"
+            }
+            Self::LoadingVideos => "Loading videos…",
+            Self::NoVideosYet => "No videos yet. Import one.",
+            Self::VideosHeader => "Videos",
+            Self::RepeatingLabel => "Repeating",
+            Self::RepeatingOn => "On",
+            Self::RepeatingOff => "Off",
+            Self::VideoImportReused => "‘{name}’ is already in the profile; nothing was copied",
+            Self::VideoImported => "Imported video ‘{name}’",
+            Self::VideoImportFailed => "Video import failed: {error}",
+            Self::NoProfileVideoImport => "No profile folder; videos cannot be imported",
+            Self::NoVideoLive => "The live slide has no video",
+            Self::VideoStarting => "Starting video…",
+            Self::VideoPlaying => "Playing",
+            Self::VideoPaused => "Paused",
+            Self::VideoEnded => "Ended",
+            Self::VideoFailed => "Video stopped; the last picture stays. Restart to try again",
+            Self::VideoTransport => "Video controls",
+            Self::VideoPause => "Pause",
+            Self::VideoPlay => "Play",
+            Self::VideoRestart => "Restart",
+            Self::VideoCommandRefused => "Video command not applied: {error}",
+            Self::MediaHeader => "Media",
+            Self::VideosNoProfile => "Videos · no profile",
+            Self::VideosEmptyHint => {
+                "No videos yet. Use Import video… to add an MP4, MOV, MKV, WebM or AVI file."
+            }
+            Self::ImportVideo => "Import video…",
         }
     }
 
@@ -3435,6 +3608,79 @@ impl Msg {
             Self::StageMonitorMissing => {
                 "Monitor foldback yang dipilih ({name}) tidak terhubung; panggung memakai monitor bebas, atau tetap mati bila tidak ada yang bebas."
             }
+            Self::VideoErrIo => {
+                "File video tidak dapat dibaca atau ditulis ({kind}); periksa file dan folder profil, lalu coba lagi"
+            }
+            Self::VideoErrMissing => "File video tidak ada di profil",
+            Self::VideoErrSourceMissing => {
+                "File yang dipilih sudah tidak ada atau berubah saat disalin; pilih lagi"
+            }
+            Self::VideoErrUnsupported => {
+                "Hanya video MP4, M4V, MOV, MKV, WebM, AVI dan MPEG yang dapat diimpor"
+            }
+            Self::VideoErrNotVideo => "File ini tidak dapat diputar sebagai video: {reason}",
+            Self::VideoErrTooLarge => {
+                "File video lebih besar dari 16 GiB; ekspor salinan yang lebih kecil lalu impor"
+            }
+            Self::VideoErrInvalidName => "Nama file video tidak dapat dipakai",
+            Self::VideoErrReadDenied => {
+                "Sela tidak diizinkan membaca file ini. Periksa izinnya, atau salin ke folder milik Anda lalu impor salinannya"
+            }
+            Self::VideoErrProfileDenied => {
+                "Sela tidak diizinkan mengubah folder Resources/Videos profil. Pastikan folder tidak hanya-baca, lalu coba lagi"
+            }
+            Self::VideoErrDiskFull => "Disk penuh; kosongkan ruang, lalu coba lagi",
+            Self::VideoErrCancelled => "Impor dibatalkan; tidak ada yang ditambahkan",
+            Self::VideoErrUnavailable => {
+                "Video dan audio tidak tersedia, jadi video tidak dapat diimpor atau diputar"
+            }
+            Self::VideoErrBusy => "Pekerjaan video masih berjalan; coba lagi",
+            Self::VideoErrDisconnected => "Pekerja video berhenti; mulai ulang Sela",
+            Self::VideoWhyMissing => "file tidak ditemukan",
+            Self::VideoWhyNoVideo => "file tidak berisi gambar video",
+            Self::VideoWhyCodec => "format videonya tidak didukung",
+            Self::VideoWhyCorrupt => "file rusak atau bukan video",
+            Self::VideoWhyTooLarge => "gambarnya terlalu besar",
+            Self::VideoWhyNotLocal => "hanya file lokal yang dapat diputar",
+            Self::VideoWhySlow => "membacanya terlalu lama",
+            Self::VideoWhyDecoder => "dekoder berhenti tiba-tiba",
+            Self::BgVideoMissing => "Video latar ‘{name}’ tidak ditemukan; menampilkan hitam",
+            Self::BgVideoChanged => {
+                "Video latar ‘{name}’ diganti dengan file lain; menampilkan hitam"
+            }
+            Self::BgVideoUnreadable => "Video latar ‘{name}’ tidak dapat dibaca; menampilkan hitam",
+            Self::BgVideoUnavailable => {
+                "Video latar ‘{name}’ tidak dapat diputar karena video tidak tersedia; menampilkan hitam"
+            }
+            Self::LoadingVideos => "Memuat video…",
+            Self::NoVideosYet => "Belum ada video. Impor satu.",
+            Self::VideosHeader => "Video",
+            Self::RepeatingLabel => "Berulang",
+            Self::RepeatingOn => "Aktif",
+            Self::RepeatingOff => "Mati",
+            Self::VideoImportReused => "‘{name}’ sudah ada di profil; tidak ada yang disalin",
+            Self::VideoImported => "Video ‘{name}’ diimpor",
+            Self::VideoImportFailed => "Impor video gagal: {error}",
+            Self::NoProfileVideoImport => "Tidak ada folder profil; video tidak dapat diimpor",
+            Self::NoVideoLive => "Slide yang tayang tidak memiliki video",
+            Self::VideoStarting => "Memulai video…",
+            Self::VideoPlaying => "Diputar",
+            Self::VideoPaused => "Dijeda",
+            Self::VideoEnded => "Selesai",
+            Self::VideoFailed => {
+                "Video berhenti; gambar terakhir tetap tampil. Mulai ulang untuk mencoba lagi"
+            }
+            Self::VideoTransport => "Kontrol video",
+            Self::VideoPause => "Jeda",
+            Self::VideoPlay => "Putar",
+            Self::VideoRestart => "Ulangi",
+            Self::VideoCommandRefused => "Perintah video tidak diterapkan: {error}",
+            Self::MediaHeader => "Media",
+            Self::VideosNoProfile => "Video · tidak ada profil",
+            Self::VideosEmptyHint => {
+                "Belum ada video. Gunakan Impor video… untuk menambahkan file MP4, MOV, MKV, WebM atau AVI."
+            }
+            Self::ImportVideo => "Impor video…",
         }
     }
 }
@@ -3504,7 +3750,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 749);
+        assert_eq!(Msg::ALL.len(), 800);
     }
 
     #[test]

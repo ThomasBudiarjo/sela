@@ -85,12 +85,19 @@ impl MediaBackend {
 
 impl Operator {
     pub(crate) fn poll_media_backend(&mut self) -> bool {
-        self.media_backend.poll()
+        let changed = self.media_backend.poll();
+        if changed {
+            // The song editor's previews use the same build (no second lookup).
+            sela::videos::remember_tools(self.media_tools());
+            // A cue waiting for the lookup substitutes or plays now.
+            if self.deferred_send.is_some() {
+                self.retry_deferred();
+            }
+        }
+        changed
     }
 
-    /// The accepted FFmpeg build, for the video stream (M2-02 playback).
-    // Only tests call it until the video-playback stream wires decoding in.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The accepted FFmpeg build: video import, thumbnails and Live (M2-02).
     pub(crate) fn media_tools(&self) -> Option<sela::media::decode::Tools> {
         self.media_backend
             .availability

@@ -435,6 +435,8 @@ struct Backdrops {
     profile: Option<PathBuf>,
     /// Least recently fitted first.
     fitted: Mutex<VecDeque<Backdrop>>,
+    /// Video posters (first frames) at the preview size, same bound.
+    posters: Mutex<VecDeque<((sela::background::VideoRef, Aspect), Arc<[u8]>)>>,
 }
 
 impl Backdrops {
@@ -442,6 +444,62 @@ impl Backdrops {
         Self {
             profile,
             fitted: Mutex::new(VecDeque::new()),
+            posters: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// A video background previews as its first frame (the audience plays
+    /// it); black with the substitution warning when it cannot be read.
+    fn poster(
+        &self,
+        video: &sela::background::VideoRef,
+        aspect: Aspect,
+    ) -> (PreparedBackground, Option<String>) {
+        let key = (video.clone(), aspect);
+        let cached = {
+            let posters = self.posters.lock().unwrap_or_else(|e| e.into_inner());
+            posters
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.clone())
+        };
+        let poster = match cached {
+            Some(rgba) => Ok(rgba),
+            None => self
+                .profile
+                .as_deref()
+                .ok_or(sela::videos::Substitute::Missing)
+                .and_then(|profile| {
+                    sela::videos::poster(
+                        profile,
+                        sela::videos::tools().as_ref(),
+                        video,
+                        aspect,
+                        PREVIEW,
+                    )
+                })
+                .inspect(|rgba| {
+                    let mut posters = self.posters.lock().unwrap_or_else(|e| e.into_inner());
+                    posters.retain(|(k, _)| *k != key);
+                    posters.push_back((key.clone(), rgba.clone()));
+                    while posters.len() > BACKDROPS {
+                        posters.pop_front();
+                    }
+                }),
+        };
+        match poster {
+            Ok(rgba) => (
+                PreparedBackground::Image {
+                    version: sela::videos::poster_version(video, aspect),
+                    extent: PREVIEW,
+                    rgba,
+                },
+                None,
+            ),
+            Err(why) => (
+                sela::slides::color_background(sela::background::BLACK),
+                Some(why.warning(&video.name)),
+            ),
         }
     }
 
@@ -452,6 +510,7 @@ impl Backdrops {
         let (image, aspect) = match plan(slide.background.as_ref()) {
             Plan::Color(rgb) => return (sela::slides::color_background(rgb), None),
             Plan::Image(image, aspect) => (image, aspect),
+            Plan::Video(video, aspect, _) => return self.poster(video, aspect),
         };
         let key = (image.clone(), aspect);
         let cached = {
@@ -537,6 +596,8 @@ fn pixels(
             crate::audience::compositor::blend_over(rgba, &coverage, &blend)?,
             size,
         )),
+        // Previews receive posters as images; a video cue never comes here.
+        PreparedBackground::Video { .. } => None,
     }
 }
 

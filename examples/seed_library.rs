@@ -17,6 +17,11 @@
 //! margins, copyright hidden), "Low Contrast" (white on near white), "Missing
 //! Face" (a family no system has) and "Wide Picture" (a 4:1 image, Stretch);
 //! --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
+//! `--video-song CLIP` copies the original clip CLIP into the profile's
+//! Resources/Videos as `sela-motion.<ext>` and seeds "Motion Hymn" (three
+//! slides over that video as the song master, then one slide whose own
+//! background names a missing video) and "Still Hymn" (one slide on the
+//! master color), for `scripts/video-x11.py` (M2-02/M2-03).
 use image::ImageEncoder;
 use sela::{
     arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId},
@@ -26,7 +31,7 @@ use sela::{
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs] [--sort-songs] [--themes]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs] [--sort-songs] [--themes] [--video-song CLIP]";
 
 /// `scripts/themes-x11.py` samples these.
 const NAVY: [u8; 3] = [20, 30, 90];
@@ -80,6 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut metadata = false;
     let mut sort = false;
     let mut themes = false;
+    let mut video_clip: Option<std::path::PathBuf> = None;
     let mut extra = 0usize;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -99,6 +105,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             flag if flag == "--metadata-songs" => metadata = true,
             flag if flag == "--sort-songs" => sort = true,
             flag if flag == "--themes" => themes = true,
+            flag if flag == "--video-song" => {
+                video_clip = Some(args.next().ok_or(USAGE)?.into());
+            }
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -337,6 +346,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let bytes = sela::schedule_file::encode(&document).map_err(|e| format!("{e:?}"))?;
         std::fs::write(folder.join("Sunday.selaschedule"), bytes)?;
+        return Ok(());
+    }
+    if let Some(clip) = video_clip {
+        let profile = path.parent().ok_or("database has no folder")?;
+        let dir = sela::videos::videos_dir(profile);
+        std::fs::create_dir_all(&dir)?;
+        let ext = clip
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or("the clip needs an extension")?;
+        let name = format!("sela-motion.{ext}");
+        if dir.join(&name).exists() {
+            return Err(format!("{name} already exists").into());
+        }
+        std::fs::copy(&clip, dir.join(&name))?;
+        let video = sela::videos::video_ref(profile, &name).map_err(|e| e.to_string())?;
+        let with = |label: &str, background: Option<Background>| Section {
+            background,
+            ..section(label, &format!("{label} motion line"))
+        };
+        let missing = sela::background::VideoRef {
+            name: "sela-missing.mp4".into(),
+            ..video.clone()
+        };
+        let plain = |title: &str, sections: Vec<Section>, master: Option<Background>| Song {
+            title: title.into(),
+            authors: String::new(),
+            copyright: String::new(),
+            license: String::new(),
+            administrator: String::new(),
+            song_number: String::new(),
+            variants: Vec::new(),
+            sections,
+            master,
+        };
+        for song in [
+            plain(
+                "Motion Hymn",
+                vec![
+                    with("Verse 1", None),
+                    with("Chorus", None),
+                    with("Verse 2", None),
+                    with("Bridge", Some(Background::video(missing))),
+                ],
+                Some(Background::video(video)),
+            ),
+            plain(
+                "Still Hymn",
+                vec![with("Verse 1", None)],
+                Some(Background::color(MASTER)),
+            ),
+        ] {
+            repository
+                .save_song(None, song)
+                .map_err(|e| format!("{e:?}"))?;
+        }
         return Ok(());
     }
     if background {

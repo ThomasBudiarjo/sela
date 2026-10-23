@@ -6,7 +6,7 @@
 //! only.
 use super::*;
 use crate::ui::theme::{self, ACCENT, BORDER, FAINT};
-use sela::background::{Background, Fill};
+use sela::background::{Background, Fill, VideoRef};
 use sela::format::{
     Align, MAX_FIXED_SIZE, MAX_OPACITY, MAX_OUTLINE_SIZE, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET,
     Outline, Shadow, Size, SlideFormat, VAlign,
@@ -293,7 +293,7 @@ impl FillChoice {
             Shown::Own(Some(b)) => Some(match b.fill {
                 Fill::None => FillChoice::None,
                 Fill::Color(_) => FillChoice::Color,
-                Fill::Media(_) => FillChoice::Media,
+                Fill::Media(_) | Fill::Video { .. } => FillChoice::Media,
             }),
         }
     }
@@ -314,6 +314,7 @@ impl FillChoice {
             (FillChoice::Color, Some(Fill::Color(rgb))) => Fill::Color(rgb),
             (FillChoice::Color, _) => Fill::Color(COLOR_FILL),
             (FillChoice::Media, Some(Fill::Media(image))) => Fill::Media(image),
+            (FillChoice::Media, Some(video @ Fill::Video { .. })) => video,
             (FillChoice::Media, _) => Fill::Media(None),
         };
         Some(Background { fill, aspect })
@@ -345,10 +346,21 @@ pub(super) fn stem(name: &str) -> &str {
     name.rsplit_once('.').map_or(name, |(stem, _)| stem)
 }
 
-/// Profile images for Select Media…, listed and thumbnailed off the UI
-/// thread one job at a time.
+/// Select Media… categories (EW8-OBS-039 lists Videos first, then Images;
+/// Feeds and collections are not built).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum MediaKind {
+    #[default]
+    Videos,
+    Images,
+}
+
+/// Profile videos or images for Select Media…, listed and thumbnailed off
+/// the UI thread one job at a time.
 #[derive(Default)]
 pub(super) struct Media {
+    /// The category listed in `names`.
+    pub(super) kind: MediaKind,
     /// `None` until listed; the error text when listing failed.
     pub(super) names: Option<Result<Vec<String>, String>>,
     /// By name, for the first `MEDIA_THUMBS` names; `None` = unreadable.
@@ -383,9 +395,10 @@ pub(super) enum Ctl {
     BackgroundColor,
     SelectMedia,
     Aspect,
+    Repeat,
     EditLayouts,
 }
-const CTLS: usize = 25;
+const CTLS: usize = 26;
 impl Ctl {
     fn tab(self) -> isize {
         TAB + match self {
@@ -414,7 +427,8 @@ impl Ctl {
             Ctl::BackgroundColor => -7,
             Ctl::SelectMedia => -6,
             Ctl::Aspect => -5,
-            Ctl::EditLayouts => -4,
+            Ctl::Repeat => -4,
+            Ctl::EditLayouts => -3,
         }
     }
 }
@@ -809,7 +823,42 @@ impl Library {
         self.apply_background(cx, |b| *b = Some(Background::image(image.clone())));
     }
 
-    /// Starts listing the profile's images unless that is under way.
+    /// Choosing a video keeps the aspect default (Zoom) and repeats
+    /// (UNOBSERVED best guess for EW's Repeating Auto).
+    pub(super) fn choose_video(&mut self, video: VideoRef, cx: &mut Context<Self>) {
+        self.apply_background(cx, |b| *b = Some(Background::video(video.clone())));
+    }
+
+    /// The Slide pane's Repeating checkbox for a video fill.
+    pub(super) fn toggle_repeat(&mut self, cx: &mut Context<Self>) {
+        self.apply_background(cx, |b| {
+            if let Some(Background {
+                fill: Fill::Video { repeat, .. },
+                ..
+            }) = b
+            {
+                *repeat = !*repeat;
+            }
+        });
+    }
+
+    /// Switches Select Media… to another category and lists it.
+    pub(super) fn media_category(&mut self, kind: MediaKind, cx: &mut Context<Self>) {
+        if self.pane.media.kind == kind {
+            return;
+        }
+        self.pane.media.kind = kind;
+        self.pane.media.names = None;
+        self.pane.media.task = None;
+        if let Some(open) = &mut self.pane.menu {
+            open.highlight = 0;
+        }
+        self.list_media(cx);
+        cx.notify();
+    }
+
+    /// Starts listing the profile's videos or images (the chosen category)
+    /// unless that is under way.
     pub(super) fn list_media(&mut self, cx: &mut Context<Self>) {
         if self.pane.media.task.is_some() {
             return;
@@ -818,13 +867,20 @@ impl Library {
             self.pane.media.names = Some(Err(t!(Msg::NoProfileImages).into()));
             return;
         };
-        let names = cx
-            .background_executor()
-            .spawn(async move { sela::images::list(&profile) });
+        let kind = self.pane.media.kind;
+        let names = cx.background_executor().spawn(async move {
+            match kind {
+                MediaKind::Images => sela::images::list(&profile).map_err(|e| e.to_string()),
+                MediaKind::Videos => sela::videos::list(&profile).map_err(|e| e.message()),
+            }
+        });
         self.pane.media.task = Some(cx.spawn(async move |this, cx| {
             let names = names.await;
             let _ = this.update(cx, |this, cx| {
                 this.pane.media.task = None;
+                if this.pane.media.kind != kind {
+                    return;
+                }
                 for (_, old) in this.pane.media.thumbs.drain() {
                     if let Some(old) = old {
                         cx.drop_image(old, None);
@@ -854,10 +910,29 @@ impl Library {
         else {
             return;
         };
+        let kind = self.pane.media.kind;
         let raster = cx.background_executor().spawn({
             let name = name.clone();
             async move {
-                let mut rgba = sela::images::thumbnail(&profile, &name, MEDIA_THUMB).ok()?;
+                let mut rgba = match kind {
+                    MediaKind::Images => {
+                        sela::images::thumbnail(&profile, &name, MEDIA_THUMB).ok()?
+                    }
+                    // A video's thumbnail is its first frame (EW8-OBS-039
+                    // shows thumbnails; which frame is unobserved).
+                    MediaKind::Videos => {
+                        let video = sela::videos::video_ref(&profile, &name).ok()?;
+                        sela::videos::poster(
+                            &profile,
+                            sela::videos::tools().as_ref(),
+                            &video,
+                            Aspect::Zoom,
+                            MEDIA_THUMB,
+                        )
+                        .ok()?
+                        .to_vec()
+                    }
+                };
                 for pixel in rgba.as_chunks_mut::<4>().0 {
                     pixel.swap(0, 2);
                 }
@@ -868,6 +943,9 @@ impl Library {
             let thumb = raster.await;
             let _ = this.update(cx, |this, cx| {
                 this.pane.media.task = None;
+                if this.pane.media.kind != kind {
+                    return this.list_media(cx);
+                }
                 if let Some(Some(old)) = this.pane.media.thumbs.insert(name, thumb) {
                     cx.drop_image(old, None);
                 }
@@ -882,6 +960,24 @@ impl Library {
         let Some(profile) = self.backdrops.profile.clone() else {
             return;
         };
+        if sela::videos::valid_name(&name) {
+            let pinned = cx.background_executor().spawn({
+                let name = name.clone();
+                async move { sela::videos::video_ref(&profile, &name) }
+            });
+            cx.spawn(async move |this, cx| {
+                let pinned = pinned.await;
+                let _ = this.update(cx, |this, cx| match pinned {
+                    Ok(video) => this.choose_video(video, cx),
+                    Err(e) => {
+                        this.reject_status(t!(Msg::ImageUnusable, name = name, error = e));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let pinned = cx.background_executor().spawn({
             let name = name.clone();
             async move { sela::images::image_ref(&profile, &name) }
@@ -915,6 +1011,7 @@ impl Library {
             prompt: Some(t!(Msg::ImportPrompt).into()),
         });
         let executor = cx.background_executor().clone();
+        let kind = self.pane.media.kind;
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
                 return;
@@ -923,7 +1020,22 @@ impl Library {
                 return;
             };
             let imported = executor
-                .spawn(async move { sela::images::import(&profile, &path) })
+                .spawn(async move {
+                    match kind {
+                        MediaKind::Images => {
+                            sela::images::import(&profile, &path).map_err(|e| e.to_string())
+                        }
+                        // Probed and copied like the Media tab's video import.
+                        MediaKind::Videos => match sela::videos::tools() {
+                            Some(tools) => {
+                                sela::videos::import(&profile, &path, &tools, &mut || false)
+                                    .map(|imported| imported.name)
+                                    .map_err(|e| e.message())
+                            }
+                            None => Err(sela::videos::Error::Unavailable.message()),
+                        },
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 match imported {
@@ -1102,7 +1214,10 @@ impl Library {
             }
             Menu::Media => {
                 let chosen = match self.pane_background() {
-                    Shown::Own(Some(b)) => b.image_ref().map(|i| i.name.clone()),
+                    Shown::Own(Some(b)) => b
+                        .image_ref()
+                        .map(|i| i.name.clone())
+                        .or_else(|| b.video_ref().map(|v| v.name.clone())),
                     _ => None,
                 };
                 let names = match &self.pane.media.names {
@@ -1154,6 +1269,16 @@ impl Library {
             restore,
         });
         if menu == Menu::Media {
+            // Opens on the chosen media's category; Videos first otherwise.
+            let kind = match self.pane_background() {
+                Shown::Own(Some(b)) if b.image_ref().is_some() => MediaKind::Images,
+                _ => MediaKind::Videos,
+            };
+            if kind != self.pane.media.kind {
+                self.pane.media.kind = kind;
+                self.pane.media.names = None;
+                self.pane.media.task = None;
+            }
             self.list_media(cx);
         }
         if let Menu::Color(_) = menu {
@@ -2154,12 +2279,32 @@ impl Library {
             _ => None,
         };
         let image = own.as_ref().and_then(|b| b.image_ref().cloned());
-        if image.is_some() && self.pane.media.names.is_none() {
+        let video = own.as_ref().and_then(|b| match &b.fill {
+            Fill::Video { video, repeat } => Some((video.clone(), *repeat)),
+            _ => None,
+        });
+        let media_name = image
+            .as_ref()
+            .map(|i| i.name.clone())
+            .or_else(|| video.as_ref().map(|(v, _)| v.name.clone()));
+        if media_name.is_some() && self.pane.menu.is_none() {
+            let kind = if image.is_some() {
+                MediaKind::Images
+            } else {
+                MediaKind::Videos
+            };
+            if self.pane.media.kind != kind {
+                self.pane.media.kind = kind;
+                self.pane.media.names = None;
+                self.pane.media.task = None;
+            }
+        }
+        if media_name.is_some() && self.pane.media.names.is_none() {
             self.list_media(cx);
         }
-        let thumb = image
+        let thumb = media_name
             .as_ref()
-            .and_then(|i| self.pane.media.thumbs.get(&i.name).cloned().flatten());
+            .and_then(|n| self.pane.media.thumbs.get(n).cloned().flatten());
         let aspect = own.as_ref().map_or(Aspect::default(), |b| b.aspect);
         div()
             .flex()
@@ -2180,7 +2325,7 @@ impl Library {
                             .border_color(rgb(0x9a9ea5))
                             .bg(rgb_of(match plan(self.draft.master.as_ref()) {
                                 Plan::Color(rgb) => rgb,
-                                Plan::Image(..) => [0x30, 0x34, 0x3a],
+                                Plan::Image(..) | Plan::Video(..) => [0x30, 0x34, 0x3a],
                             })),
                     )
                     .child(div().text_size(px(12.)).child(t!(Msg::SongMaster))),
@@ -2248,9 +2393,9 @@ impl Library {
                                 .whitespace_nowrap()
                                 .text_size(px(12.))
                                 .child(
-                                    image
-                                        .as_ref()
-                                        .map_or(t!(Msg::FillNone), |i| stem(&i.name))
+                                    media_name
+                                        .as_deref()
+                                        .map_or(t!(Msg::FillNone), stem)
                                         .to_owned(),
                                 ),
                         ),
@@ -2280,6 +2425,36 @@ impl Library {
                             cx,
                         )),
                 )
+                // EW8-OBS-032: Repeating, enabled for a video (disabled for
+                // an image, so not shown for one here).
+                .when_some(
+                    video.as_ref().map(|(_, repeat)| *repeat),
+                    |d, repeat| {
+                        d.child(
+                            div()
+                                .mt_1()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(div().w(px(80.)).child(label(t!(Msg::RepeatingLabel))))
+                                .child(
+                                    self.pane_button(
+                                        Ctl::Repeat,
+                                        if repeat {
+                                            t!(Msg::RepeatingOn)
+                                        } else {
+                                            t!(Msg::RepeatingOff)
+                                        },
+                                        repeat,
+                                        true,
+                                        cx,
+                                        |s, _, cx| s.toggle_repeat(cx),
+                                    )
+                                    .debug_selector(|| "format-repeat".into()),
+                                ),
+                        )
+                    },
+                )
             })
             .when(!self.layouts && self.theme.is_none(), |d| {
                 d.child(div().mt_3().flex().child(self.pane_button(
@@ -2307,9 +2482,12 @@ impl Library {
                 .child(text)
                 .into_any_element()
         };
+        let videos = self.pane.media.kind == MediaKind::Videos;
         let body = match &self.pane.media.names {
+            None if videos => status(t!(Msg::LoadingVideos).into(), FAINT),
             None => status(t!(Msg::LoadingImages).into(), FAINT),
             Some(Err(e)) => status(e.clone(), 0xb36b00),
+            Some(Ok(_)) if count == 0 && videos => status(t!(Msg::NoVideosYet).into(), FAINT),
             Some(Ok(_)) if count == 0 => status(t!(Msg::NoImagesYet).into(), FAINT),
             Some(Ok(_)) => div()
                 .h(px(260.))
@@ -2390,15 +2568,36 @@ impl Library {
             .flex()
             .flex_col()
             .gap_1()
-            // EW8-OBS-039 lists Videos, Images and Feeds; Sela has images.
+            // EW8-OBS-039 lists Videos, Images and Feeds in a category ▾;
+            // Sela has Videos and Images as two category buttons.
             .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::MUTED))
-                    .child(t!(Msg::ImagesHeader)),
+                div().flex().gap_1().px_1().children(
+                    [
+                        (MediaKind::Videos, Msg::VideosHeader, "media-videos"),
+                        (MediaKind::Images, Msg::ImagesHeader, "media-images"),
+                    ]
+                    .map(|(kind, msg, id)| {
+                        let active = self.pane.media.kind == kind;
+                        div()
+                            .id(id)
+                            .debug_selector(move || id.into())
+                            .role(Role::Tab)
+                            .aria_label(t!(msg))
+                            .aria_selected(active)
+                            .accessibility_id(id)
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.))
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(if active { 0x292c30 } else { theme::MUTED }))
+                            .when(active, |d| d.bg(rgb(0xeef0f3)))
+                            .cursor_pointer()
+                            .hover(|d| d.bg(rgb(0xeef0f3)))
+                            .on_click(cx.listener(move |s, _, _, cx| s.media_category(kind, cx)))
+                            .child(t!(msg))
+                    }),
+                ),
             )
             .child(body)
             .child(
@@ -2438,6 +2637,11 @@ fn describe(master: Option<&Background>) -> String {
         Some(Fill::Media(Some(image))) => t!(
             Msg::DescribeMedia,
             name = stem(&image.name),
+            aspect = aspect_label(master.map_or(Aspect::default(), |b| b.aspect))
+        ),
+        Some(Fill::Video { video, .. }) => t!(
+            Msg::DescribeMedia,
+            name = stem(&video.name),
             aspect = aspect_label(master.map_or(Aspect::default(), |b| b.aspect))
         ),
     }

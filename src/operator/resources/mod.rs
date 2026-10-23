@@ -63,6 +63,7 @@ impl Operator {
         match self.tab {
             0 => self.song_list(cx),
             1 => self.scripture_detail(cx),
+            2 if self.video.category == super::video::Category::Videos => self.video_list(cx),
             2 => self.image_list(cx),
             3 => presentations::detail(),
             _ => self.theme_list(window, cx),

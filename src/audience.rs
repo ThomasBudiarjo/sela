@@ -9,9 +9,12 @@ pub mod stage;
 #[allow(dead_code)]
 #[path = "audience/text.rs"]
 pub mod text;
+#[path = "audience/video.rs"]
+pub mod video;
 use sela::{
     delivery::{Command, DeliveryError, Epoch, Lane, Outcome, Payload, RendererSession, Stamp},
     masks::Layer,
+    playback::{MediaStatus, PlayState},
     scene::{Extent, PreparedBackground, PreparedCue, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
@@ -20,6 +23,7 @@ use std::{
     io,
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     time::{Duration, Instant},
@@ -144,9 +148,21 @@ struct Audience {
     waiting: Option<Frame>,
     completions: Option<Receiver<Completion>>,
     caps: RendererCapabilities,
-    /// Accepted commands in session order; masks carry no composition.
-    ready: VecDeque<(Stamp, Option<compositor::ReadyComposition>)>,
+    /// Accepted commands in session order; masks carry no composition. A
+    /// video scene also carries its primed playback.
+    ready: VecDeque<(
+        Stamp,
+        Option<compositor::ReadyComposition>,
+        Option<Arc<video::Playback>>,
+    )>,
     applied_ready: Option<(Extent, compositor::ReadyComposition)>,
+    /// The applied scene's video; dropping it (a scene without that video
+    /// applied) stops the decoder.
+    applied_video: Option<Arc<video::Playback>>,
+    /// Set by a playback thread after it wrote a new frame.
+    video_dirty: Arc<AtomicBool>,
+    /// Last video report offered to the operator, and when.
+    reported_media: Option<(MediaStatus, Instant)>,
     /// Stage only: accepted stage frames by stamp, the applied one, and the
     /// clock worker's slot and results.
     stage_ready: VecDeque<(Stamp, Arc<StageFrame>)>,
@@ -171,7 +187,17 @@ type Prepared = (
     Command,
     compositor::ReadyComposition,
     Option<Arc<StageFrame>>,
+    Option<Arc<video::Playback>>,
 );
+/// Video report cadence while a video plays (and at once on a change).
+const MEDIA_STATUS_INTERVAL: Duration = Duration::from_millis(250);
+/// What a video cue's preparation needs besides the compositor.
+#[derive(Clone)]
+struct VideoContext {
+    tools: Arc<video::ToolsCell>,
+    registry: Arc<video::Registry>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+}
 /// A stage cue's static coverage, kept so the clock worker can redraw only
 /// the clock on top of it.
 struct StageFrame {
@@ -292,8 +318,9 @@ fn draw<'a>(
 fn prepare_frame(
     frame: Frame,
     caps: RendererCapabilities,
-    compositor: &compositor::Compositor,
+    compositor: &Arc<compositor::Compositor>,
     stage_role: bool,
+    videos: &VideoContext,
 ) -> Result<Prepared, PreparationFailure> {
     let command = frame
         .into_command(Instant::now(), caps)
@@ -305,7 +332,7 @@ fn prepare_frame(
     if stage_role {
         let cue = cue.clone();
         let (ready, frame) = prepare_stage(cue, compositor, &stage::local_clock())?;
-        return Ok((command, ready, Some(frame)));
+        return Ok((command, ready, Some(frame), None));
     }
     let size = cue.extent();
     let coverage = text::layers(cue)
@@ -314,7 +341,34 @@ fn prepare_frame(
     let blend = cue.text().map_or(compositor::Blend::plain(), |text| {
         compositor::Blend::from_style(&text.style())
     });
+    if let PreparedBackground::Video { version, source } = cue.background() {
+        // The first frame must be on the texture before the cue can be
+        // accepted; a failure rejects it and the live scene stays.
+        let key = video::Key {
+            source: (**source).clone(),
+            extent: size,
+            version: *version,
+        };
+        let playback = video::prime(
+            &videos.tools,
+            &videos.registry,
+            compositor,
+            key,
+            command.deadline(),
+            videos.wake.clone(),
+        )
+        .map_err(|failure| {
+            // Startup-style diagnostic on stderr; stdout stays binary.
+            eprintln!("audience: video cue rejected: {}", failure.describe());
+            PreparationFailure::Resource
+        })?;
+        let ready = compositor
+            .prepare_native_video(size, playback.texture(), &coverage, &blend)
+            .map_err(|_| PreparationFailure::Upload)?;
+        return Ok((command, ready, None, Some(playback)));
+    }
     let background = match cue.background() {
+        PreparedBackground::Video { .. } => unreachable!("handled above"),
         PreparedBackground::Color(rgba) => compositor::Image {
             width: 1,
             height: 1,
@@ -334,11 +388,13 @@ fn prepare_frame(
             &blend,
             match cue.background() {
                 PreparedBackground::Color(_) => compositor::Fit::Cover,
-                PreparedBackground::Image { .. } => compositor::Fit::Contain,
+                PreparedBackground::Image { .. } | PreparedBackground::Video { .. } => {
+                    compositor::Fit::Contain
+                }
             },
         )
         .map_err(|_| PreparationFailure::Upload)?;
-    Ok((command, ready, None))
+    Ok((command, ready, None, None))
 }
 /// Routing guard (M3-02): stage content never reaches an audience renderer,
 /// and a stage renderer never shows an audience slide or logo in place of
@@ -663,6 +719,22 @@ impl ApplicationHandler for Audience {
         let worker = compositor.clone();
         let wake = self.wake.clone();
         let stage_role = self.config.stage;
+        let videos = {
+            let (proxy, dirty) = (self.wake.clone(), self.video_dirty.clone());
+            VideoContext {
+                // A stage renderer never plays video: no FFmpeg lookup.
+                tools: if stage_role {
+                    video::ToolsCell::none()
+                } else {
+                    video::ToolsCell::locate_in_background()
+                },
+                registry: Arc::default(),
+                wake: Arc::new(move || {
+                    dirty.store(true, Ordering::Release);
+                    let _ = proxy.send_event(());
+                }),
+            }
+        };
         if stage_role {
             let (clock_tx, clock_rx) = mpsc::sync_channel(1);
             let (slot, painter, wake) = (
@@ -694,6 +766,7 @@ impl ApplicationHandler for Audience {
                         },
                         &worker,
                         stage_role,
+                        &videos,
                     );
                     let fatal = matches!(result, Err(PreparationFailure::Upload));
                     if results
@@ -769,7 +842,7 @@ impl ApplicationHandler for Audience {
                 self.redraw_wanted = reconfigure;
                 if !self.detached && self.session.pending().is_some() {
                     let stamp = self.session.pending().unwrap().stamp();
-                    let Some((prepared_stamp, ready)) = self.ready.pop_front() else {
+                    let Some((prepared_stamp, ready, playback)) = self.ready.pop_front() else {
                         el.exit();
                         return;
                     };
@@ -783,6 +856,7 @@ impl ApplicationHandler for Audience {
                     let surface = g.extent();
                     let layer = self.session.layer();
                     let (applied_ready, logo_ready) = (&self.applied_ready, &self.logo_ready);
+                    let applied_video = self.applied_video.as_ref();
                     let scene = applied_ready.as_ref().map(|(_, r)| r);
                     let logo = logo_ready.as_ref().map(|(_, r)| r);
                     let mut extent = None;
@@ -807,6 +881,24 @@ impl ApplicationHandler for Audience {
                                         Some(new),
                                     )
                                 }
+                            }
+                            Payload::Media(action) => {
+                                // Only the applied scene's video can be
+                                // controlled; the scene itself is redrawn
+                                // unchanged.
+                                let Some(video) = applied_video else {
+                                    return Err(DeliveryError::RenderFailed);
+                                };
+                                video.command(*action);
+                                draw(
+                                    shown(
+                                        layer,
+                                        fits(applied_ready, surface),
+                                        fits(logo_ready, surface),
+                                    ),
+                                    scene,
+                                    logo,
+                                )
                             }
                             Payload::Mask(next) => {
                                 if *next == Layer::Logo && fits(logo_ready, surface) != Some(true) {
@@ -840,6 +932,13 @@ impl ApplicationHandler for Audience {
                                 self.logo_ready = Some((extent, ready));
                             } else {
                                 self.applied_ready = Some((extent, ready));
+                                // The video starts with its scene; the one
+                                // replaced stops unless this scene shares it.
+                                if let Some(playback) = &playback {
+                                    playback.start();
+                                }
+                                self.applied_video = playback;
+                                self.reported_media = None;
                                 self.apply_stage(ack.stamp);
                             }
                         }
@@ -897,6 +996,10 @@ impl ApplicationHandler for Audience {
             return;
         }
         self.report_surface(el);
+        if self.video_dirty.swap(false, Ordering::AcqRel) && self.applied_video.is_some() {
+            self.redraw_wanted = true;
+        }
+        self.report_media();
         let now = Instant::now();
         let settling =
             self.config.report_surface && self.gpu.as_ref().map(Gpu::extent) != self.reported;
@@ -927,6 +1030,34 @@ impl ApplicationHandler for Audience {
     }
 }
 impl Audience {
+    /// Offers the applied video's state to the operator: at once when it
+    /// changed state, else every `MEDIA_STATUS_INTERVAL` while it plays.
+    /// Best effort through the pipe's status slot; never a receipt.
+    fn report_media(&mut self) {
+        if self.detached {
+            return;
+        }
+        let (Some(video), Some(scene)) = (&self.applied_video, self.session.applied()) else {
+            return;
+        };
+        let status = video.status(scene.version());
+        let now = Instant::now();
+        let due = match self.reported_media {
+            None => true,
+            Some((last, at)) => {
+                last.state != status.state
+                    || last.scene != status.scene
+                    || (status.state == PlayState::Playing
+                        && now.saturating_duration_since(at) >= MEDIA_STATUS_INTERVAL)
+                    || (status.state != PlayState::Playing && last.position != status.position)
+            }
+        };
+        if due {
+            self.pipes
+                .offer_status(Frame::status(self.config.epoch, status));
+            self.reported_media = Some((status, now));
+        }
+    }
     /// Stage only: the scene applied with `stamp` becomes the clock's base.
     fn apply_stage(&mut self, stamp: Stamp) {
         let Some(at) = self.stage_ready.iter().position(|(s, _)| *s == stamp) else {
@@ -973,9 +1104,9 @@ impl Audience {
             Ok(command) => {
                 let ack = self.session.accept(command, Instant::now());
                 if ack.outcome == Outcome::Accepted
-                    && !self.ready.iter().any(|(s, _)| *s == ack.stamp)
+                    && !self.ready.iter().any(|(s, _, _)| *s == ack.stamp)
                 {
-                    self.ready.push_back((ack.stamp, None));
+                    self.ready.push_back((ack.stamp, None, None));
                 }
                 ack
             }
@@ -990,17 +1121,17 @@ impl Audience {
             match self.completions.as_ref().unwrap().try_recv() {
                 Ok(completion) => {
                     let ack = match completion.result {
-                        Ok((command, ready, frame)) => {
+                        Ok((command, ready, frame, playback)) => {
                             let ack = self.session.accept(command, Instant::now());
                             if ack.outcome == Outcome::Accepted
-                                && !self.ready.iter().any(|(s, _)| *s == ack.stamp)
+                                && !self.ready.iter().any(|(s, _, _)| *s == ack.stamp)
                             {
-                                self.ready.push_back((ack.stamp, Some(ready)));
+                                self.ready.push_back((ack.stamp, Some(ready), playback));
                                 if let Some(frame) = frame {
                                     // Bounded like `ready`: one per accepted command.
                                     let ready = &self.ready;
                                     self.stage_ready
-                                        .retain(|(s, _)| ready.iter().any(|(r, _)| r == s));
+                                        .retain(|(s, _)| ready.iter().any(|(r, _, _)| r == s));
                                     self.stage_ready.push_back((ack.stamp, frame));
                                 }
                             }
@@ -1126,6 +1257,9 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         },
         ready: VecDeque::with_capacity(2),
         applied_ready: None,
+        applied_video: None,
+        video_dirty: Arc::default(),
+        reported_media: None,
         stage_ready: VecDeque::with_capacity(2),
         stage_applied: None,
         clock_slot: Arc::default(),

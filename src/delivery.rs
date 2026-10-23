@@ -1,6 +1,7 @@
 //! Bounded, single-owner command/acknowledgment model; not an IPC transport.
 use crate::{
     masks::Layer,
+    playback::MediaAction,
     scene::{ContentVersion, PreparedCue},
 };
 use std::{collections::VecDeque, sync::Arc, time::Instant};
@@ -39,13 +40,16 @@ pub enum Payload {
     /// The image drawn for `Layer::Logo`; never shown by itself.
     Logo(Arc<PreparedCue>),
     Mask(Layer),
+    /// A transport command for the applied scene's video (M2-03). Nothing
+    /// to prepare; it never replaces the scene.
+    Media(MediaAction),
 }
 
 impl Payload {
     pub fn cue(&self) -> Option<&Arc<PreparedCue>> {
         match self {
             Self::Scene(cue) | Self::Logo(cue) => Some(cue),
-            Self::Mask(_) => None,
+            Self::Mask(_) | Self::Media(_) => None,
         }
     }
 }
@@ -69,7 +73,9 @@ impl Command {
     pub(crate) fn lane(&self) -> Lane {
         self.lane
     }
-    pub(crate) fn deadline(&self) -> Instant {
+    /// The renderer-local instant after which this command is TimedOut;
+    /// preparation that waits (a video's first frame) stops before it.
+    pub fn deadline(&self) -> Instant {
         self.deadline
     }
 
@@ -147,6 +153,7 @@ enum Sent {
     Scene(ContentVersion),
     Logo(ContentVersion),
     Mask(Layer),
+    Media,
 }
 
 struct Pending {
@@ -216,6 +223,17 @@ impl Delivery {
         self.submit_payload(Payload::Mask(layer), Lane::Safety, now, deadline)
     }
 
+    /// A video transport command. Safety lane, like masks: it must not wait
+    /// for a slide (or a video's first frame) in preparation.
+    pub fn submit_media(
+        &mut self,
+        action: MediaAction,
+        now: Instant,
+        deadline: Instant,
+    ) -> Result<Stamp, DeliveryError> {
+        self.submit_payload(Payload::Media(action), Lane::Safety, now, deadline)
+    }
+
     fn submit_payload(
         &mut self,
         payload: Payload,
@@ -245,6 +263,7 @@ impl Delivery {
             Payload::Scene(cue) => Sent::Scene(cue.version()),
             Payload::Logo(cue) => Sent::Logo(cue.version()),
             Payload::Mask(layer) => Sent::Mask(*layer),
+            Payload::Media(_) => Sent::Media,
         };
         self.pending.push_back(Pending {
             stamp,
@@ -358,6 +377,7 @@ impl Delivery {
                             self.confirmed_mask = (ack.stamp.sequence, layer);
                         }
                     }
+                    Sent::Media => {}
                 }
                 self.counters.applied = self.counters.applied.saturating_add(1);
             }
@@ -514,6 +534,7 @@ impl RendererSession {
                 Payload::Scene(cue) => self.applied = Some(cue),
                 Payload::Logo(cue) => self.logo = Some(cue),
                 Payload::Mask(layer) => self.layer = layer,
+                Payload::Media(_) => {}
             }
             Outcome::Applied
         };

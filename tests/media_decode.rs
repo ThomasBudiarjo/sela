@@ -311,6 +311,83 @@ fn exact_fit_letterboxes_into_the_cue_extent_as_a_background() {
 }
 
 #[test]
+fn cover_and_stretch_fill_the_cue_extent_without_bars() {
+    let Some(tools) = tools("cover_and_stretch_fill_the_cue_extent_without_bars") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    // A 4:3 clip, left half red and right half blue, into 16:9.
+    let clip = generate(
+        &tools,
+        dir.path(),
+        "halves.mkv",
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:size=160x240:rate=10,pad=320:240:0:0:color=blue",
+            "-frames:v",
+            "2",
+            "-c:v",
+            "ffv1",
+        ],
+    );
+    let extent = Extent {
+        width: 640,
+        height: 360,
+    };
+    for fit in [Fit::Cover(extent), Fit::Stretch(extent)] {
+        let run = decode(
+            &tools,
+            &clip,
+            DecodeOptions {
+                fit,
+                max_frames: Some(1),
+                ..Default::default()
+            },
+        );
+        let frame = &run.frames[0];
+        assert_eq!(frame.extent, extent, "{fit:?}");
+        // No bars: the edges are the picture, red left and blue right.
+        assert!(near(frame.pixel(2, 180), [255, 0, 0, 255], 16), "{fit:?}");
+        assert!(near(frame.pixel(637, 180), [0, 0, 255, 255], 16), "{fit:?}");
+        assert!(near(frame.pixel(2, 2), [255, 0, 0, 255], 16), "{fit:?}");
+    }
+}
+
+#[test]
+fn looping_continues_past_the_end_with_increasing_timestamps() {
+    let Some(tools) = tools("looping_continues_past_the_end_with_increasing_timestamps") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    // Five frames at 10 fps; three loops' worth of frames are read.
+    let clip = testsrc(&tools, dir.path(), "short.mkv", "64x36", 10, "0.5");
+    let decoder = Decoder::start(
+        &tools,
+        &clip,
+        DecodeOptions {
+            looping: true,
+            max_frames: Some(15),
+            ..Default::default()
+        },
+    );
+    let run = run(&decoder);
+    assert_eq!(run.failed, None);
+    assert_eq!(run.end, Some((15, true)), "only the limit ends a loop");
+    assert_eq!(run.frames.len(), 15);
+    for pair in run.frames.windows(2) {
+        assert!(pair[1].pts > pair[0].pts, "{:?}", pair);
+    }
+    // Frame 7 is the third frame of the second pass, at 0.7 s, not 0.2 s,
+    // and the loop point needed no timestamp repair.
+    assert!((run.frames[7].pts.as_secs_f64() - 0.7).abs() < 0.02);
+    assert!(run.frames.iter().all(|f| !f.repaired));
+    // The second pass shows the same pictures as the first.
+    assert_eq!(run.frames[1].rgba, run.frames[6].rgba);
+}
+
+#[test]
 fn within_fit_shrinks_large_pictures_and_never_enlarges_small_ones() {
     let Some(tools) = tools("within_fit_shrinks_large_pictures_and_never_enlarges_small_ones")
     else {
