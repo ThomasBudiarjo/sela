@@ -8,6 +8,7 @@ impl Operator {
             | self.poll_settings(cx)
             | self.poll_schedule_files()
             | self.poll_song_import()
+            | self.poll_bundles()
             | self.poll_media_backend()
             | self.poll_scripture(cx);
         changed |= self.poll_autosave(cx);

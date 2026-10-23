@@ -20,6 +20,7 @@ use std::{
 
 mod arrangement_rendering;
 mod autosave_recovery;
+mod bundle_transfer;
 mod focus_modality;
 mod layout_startup;
 mod media_backend;
@@ -3173,6 +3174,10 @@ mod menu_bar {
                 &[
                     "bar-profiles-default",
                     "bar-profiles-manager",
+                    // Sela rows the captures do NOT show (known deviation,
+                    // PP-BUN-02, UNOBSERVED, M1-13).
+                    "bar-profiles-backup",
+                    "bar-profiles-restore",
                     "bar-profiles-demo-data",
                     "bar-profiles-utilities",
                 ],

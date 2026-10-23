@@ -409,7 +409,10 @@ impl Operator {
                     self.close_dialog(window, cx);
                     self.restore_recovery();
                 }
-                Some(Dialog::Preflight | Dialog::FileError | Dialog::StageMessage) | None => return,
+                Some(
+                    Dialog::Preflight | Dialog::FileError | Dialog::StageMessage | Dialog::Bundle,
+                )
+                | None => return,
             },
             Control::DialogCancel if self.dialog.is_some() => {
                 if self.dialog == Some(Dialog::UpdateItems) {
@@ -426,6 +429,11 @@ impl Operator {
                 }
                 if self.dialog == Some(Dialog::Recovery) {
                     self.decline_recovery();
+                }
+                if self.dialog == Some(Dialog::Bundle)
+                    && self.bundles.view.as_ref().is_some_and(|v| v.working)
+                {
+                    self.cancel_bundle_job();
                 }
                 self.close_dialog(window, cx);
             }

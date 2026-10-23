@@ -232,6 +232,8 @@ impl Operator {
                                 Some(t!(Msg::PreflightAttention, count = items));
                         }
                         self.show_dialog_later(Dialog::Preflight);
+                    } else {
+                        self.show_package_notes_if_clean();
                     }
                 }
                 Ok(preflight::Reply::Checked(..)) => {}
@@ -436,10 +438,23 @@ impl Operator {
             }
             list = list.child(group);
         }
+        let package = self.package_notes().map(|lines| {
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(t!(Msg::BundlePackageNotes)),
+                )
+                .child(super::bundles::bundle_lines("preflight-package", lines))
+        });
         div()
             .flex()
             .flex_col()
             .gap_2()
+            .children(package)
             .child(caption(t!(Msg::PreflightIntro).into(), MUTED))
             .child(if report.items.is_empty() && report.logo.is_none() {
                 caption(t!(Msg::PreflightAllClear).into(), MUTED).into_any_element()

@@ -23,6 +23,9 @@ pub(crate) struct SaveJob {
     /// in the order of `versions`; an entry without one takes its song's
     /// library theme in the file.
     pub(crate) themes: Vec<(EntryId, Option<sela::schedule::ItemTheme>)>,
+    /// Export Standalone Schedule (M1-13): the document goes to the bundle
+    /// worker instead of the file, and the schedule stays as it is.
+    pub(crate) package: bool,
 }
 
 /// The one file operation on the schedule file worker.
@@ -133,6 +136,15 @@ impl Operator {
     }
 
     fn begin_save(&mut self, path: PathBuf, then: Option<Then>) {
+        self.begin_save_to(path, then, false);
+    }
+
+    /// File › Export Standalone Schedule…, after its Save dialog.
+    pub(crate) fn begin_export(&mut self, path: PathBuf) {
+        self.begin_save_to(path, None, true);
+    }
+
+    fn begin_save_to(&mut self, path: PathBuf, then: Option<Then>, package: bool) {
         if self.schedule_busy() {
             return self.report_busy();
         }
@@ -160,11 +172,13 @@ impl Operator {
             then,
             document: self.schedule.document(),
             themes: songs().map(|e| (e.id, e.theme.clone())).collect(),
+            package,
         };
         if self.queue(
             storage::Command::ThemedSongs(versions),
             Request::SaveSchedule(job),
-        ) {
+        ) && !package
+        {
             self.schedule_message = Some(t!(Msg::Saving).into());
         }
     }
@@ -194,7 +208,13 @@ impl Operator {
                 if let Ok(Ok(Some(paths))) = picked
                     && let Some(path) = paths.into_iter().next()
                 {
-                    this.begin_read(path);
+                    // A standalone schedule is unpacked into the profile
+                    // first (M1-13), then opened like any schedule file.
+                    if sela::bundle::is_bundle(&path) {
+                        this.begin_package_open(path);
+                    } else {
+                        this.begin_read(path);
+                    }
                 }
                 cx.notify();
             });
@@ -275,6 +295,18 @@ impl Operator {
             items,
             scripture: job.scripture.clone(),
         };
+        if job.package {
+            // The title is the schedule's, not the package file's.
+            let title = self
+                .schedule
+                .path()
+                .and_then(Path::file_stem)
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or(document.title.clone());
+            let document = ScheduleFile { title, ..document };
+            self.export_document(job.path, document);
+            return;
+        }
         let queued = self
             .file_worker
             .as_ref()

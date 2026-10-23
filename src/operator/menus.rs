@@ -756,6 +756,10 @@ pub(crate) enum BarItem {
     StageMessage,
     ProfileDefault,
     ProfilesManager,
+    /// Sela addition (UNOBSERVED placement, M1-13): whole-profile backup.
+    BackupProfile,
+    /// Sela addition (UNOBSERVED placement, M1-13): restore as a new profile.
+    RestoreProfile,
     DemoData,
     Utilities,
     ViewPreviewLive,
@@ -803,6 +807,8 @@ impl BarItem {
             BarItem::StageMessage => Msg::BarStageMessage,
             BarItem::ProfileDefault => Msg::BarDefault,
             BarItem::ProfilesManager => Msg::BarProfilesManager,
+            BarItem::BackupProfile => Msg::BarBackupProfile,
+            BarItem::RestoreProfile => Msg::BarRestoreProfile,
             BarItem::DemoData => Msg::BarDemoData,
             BarItem::Utilities => Msg::BarUtilities,
             BarItem::ViewPreviewLive => Msg::BarPreviewLive,
@@ -865,6 +871,8 @@ impl BarItem {
             BarItem::StageMessage => "bar-live-stage-message",
             BarItem::ProfileDefault => "bar-profiles-default",
             BarItem::ProfilesManager => "bar-profiles-manager",
+            BarItem::BackupProfile => "bar-profiles-backup",
+            BarItem::RestoreProfile => "bar-profiles-restore",
             BarItem::DemoData => "bar-profiles-demo-data",
             BarItem::Utilities => "bar-profiles-utilities",
             BarItem::ViewPreviewLive => "bar-view-preview-live",
@@ -900,6 +908,11 @@ impl BarItem {
             // chosen or already showing.
             BarItem::LogoOnLive => !(operator.logo.is_none() && !operator.masks.is_on(Mask::Logo)),
             BarItem::ImportSongs | BarItem::ImportFolder => !operator.song_import.active(),
+            // M1-13: a library and profile are needed, and one job at a time.
+            BarItem::ExportStandalone => operator.worker.is_some() && operator.bundle_enabled(true),
+            BarItem::BackupProfile | BarItem::RestoreProfile => {
+                operator.worker.is_some() && operator.bundle_enabled(false)
+            }
             // Foldback must be enabled in Options (EW8-OBS-056), a stage
             // child must exist and Live output must be on (the stage starts
             // and stops with it); a running stage can always be stopped. The
@@ -998,6 +1011,8 @@ const LIVE_MENU: &[BarEntry] = &[
 const PROFILES_MENU: &[BarEntry] = &[
     BarEntry::Item(BarItem::ProfileDefault),
     BarEntry::Item(BarItem::ProfilesManager),
+    BarEntry::Item(BarItem::BackupProfile),
+    BarEntry::Item(BarItem::RestoreProfile),
     BarEntry::Separator,
     BarEntry::Item(BarItem::DemoData),
     BarEntry::Separator,
@@ -1202,6 +1217,9 @@ impl Operator {
             BarItem::BlackOnLive => self.toggle_mask(Mask::Black),
             BarItem::ClearOnLive => self.toggle_mask(Mask::Clear),
             BarItem::ShowLiveOutput => self.toggle_output(),
+            BarItem::ExportStandalone => self.prompt_export_standalone(cx),
+            BarItem::BackupProfile => self.prompt_backup_profile(cx),
+            BarItem::RestoreProfile => self.prompt_restore_profile(cx),
             BarItem::ImportSongs => self.begin_song_import(false, cx),
             BarItem::ImportFolder => self.begin_song_import(true, cx),
             BarItem::ShowStageOutput => self.toggle_stage_output(),

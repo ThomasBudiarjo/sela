@@ -6,6 +6,7 @@ pub mod arrangement;
 pub mod arrangement_edit;
 pub mod autosave;
 pub mod background;
+pub mod bundle;
 pub mod delivery;
 pub mod fonts;
 pub mod format;

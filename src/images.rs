@@ -628,6 +628,97 @@ fn relink_with(
     }
 }
 
+/// Header checks a bundle's embedded image must pass before anything is
+/// stored (M1-13): PNG or JPEG, still, within the size and dimension bounds.
+/// Pixel data is not decoded; preparation and preflight do that later.
+pub fn check_embedded(bytes: &[u8]) -> Result<(), Error> {
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(Error::TooLarge);
+    }
+    check_image(bytes)?;
+    let inspected = inspect(bytes, false)?;
+    if inspected.over_budget {
+        return Err(Error::Dimensions);
+    }
+    Ok(())
+}
+
+/// An embedded image stored by `adopt`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Adopted {
+    /// The name it has in `Resources/Images` (the pinned one, or a numbered
+    /// variant when a different image already uses that name).
+    pub name: String,
+    /// Identical bytes were already stored under `name`; nothing was copied.
+    pub reused: bool,
+}
+
+/// Stores a bundle's embedded image byte for byte, so its SHA-256 pin still
+/// holds (M1-13). An identical image under `name` (or a numbered variant) is
+/// reused; a different image is never replaced: the copy takes the next free
+/// " (n)" name. Names are compared ignoring letter case, so a profile moved
+/// to a case-insensitive volume keeps the same images. Blocking.
+pub fn adopt(
+    profile: &Path,
+    name: &str,
+    bytes: &[u8],
+    cancel: &AtomicBool,
+) -> Result<Adopted, Error> {
+    if !valid_name(name) {
+        return Err(Error::InvalidName);
+    }
+    check_embedded(bytes)?;
+    let (stem, ext) = name.rsplit_once('.').ok_or(Error::InvalidName)?;
+    let dir = images_dir(profile);
+    fs::create_dir_all(&dir).map_err(io_error)?;
+    let mut existing = std::collections::HashMap::new();
+    for entry in fs::read_dir(&dir).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        if let Some(found) = entry.file_name().to_str() {
+            existing.insert(found.to_lowercase(), found.to_owned());
+        }
+    }
+    let mut temporary = None;
+    for attempt in 1..=MAX_NAME_ATTEMPTS {
+        if cancel.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+        let candidate = numbered(stem, attempt, ext);
+        if !valid_name(&candidate) {
+            return Err(Error::InvalidName);
+        }
+        if let Some(found) = existing.get(&candidate.to_lowercase()) {
+            let path = dir.join(found);
+            let same = fs::symlink_metadata(&path).is_ok_and(|m| m.is_file())
+                && read_bounded(&path).is_ok_and(|stored| stored == bytes);
+            if same {
+                return Ok(Adopted {
+                    name: found.clone(),
+                    reused: true,
+                });
+            }
+            continue;
+        }
+        if temporary.is_none() {
+            temporary = Some(write_temporary(&dir, bytes, &mut || {
+                cancel.load(Ordering::Acquire)
+            })?);
+        }
+        let file = temporary.as_ref().expect("written above");
+        match link_new(&file.0, &dir.join(&candidate)) {
+            Ok(()) => {
+                return Ok(Adopted {
+                    name: candidate,
+                    reused: false,
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+    Err(Error::InvalidName)
+}
+
 /// SHA-256 of a profile image without decoding it, read with the usual
 /// bounds; preflight compares it with pinned references.
 pub fn content_hash(profile: &Path, name: &str) -> Result<[u8; 32], Substitute> {

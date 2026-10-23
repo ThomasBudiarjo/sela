@@ -535,6 +535,21 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     })?;
     Ok(())
 }
+/// Newest library schema this Sela opens (`PRAGMA user_version`).
+pub fn newest_schema() -> i64 {
+    SCHEMA_VERSIONS[SCHEMA_VERSIONS.len() - 1]
+}
+/// `PRAGMA user_version` of a Sela library file, read through a hardened
+/// read-only connection (bundle manifests, M1-13). Not a validation: use
+/// `Repository::restore_new` for that. Blocking.
+pub fn library_schema(path: &std::path::Path) -> Result<i64> {
+    let db = open_untrusted_read_only(path)?;
+    let app: i64 = db.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+    if app != APP {
+        return Err(Error::Unsupported);
+    }
+    Ok(db.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+}
 impl Repository {
     /// Blocking, worker-only. Publishes a verified standalone database, never overwrites.
     pub fn backup_new(&self, destination: &std::path::Path, cancel: &AtomicBool) -> Result<()> {
