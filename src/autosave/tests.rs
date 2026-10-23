@@ -459,6 +459,12 @@ fn an_unanswered_offer_survives_a_second_crash() {
     let second = Store::open(dir.path(), &config()).unwrap().1.offer;
     assert!(first.is_some());
     assert_eq!(first, second);
+    // A marker attempted while the offer is open keeps the previous run's.
+    let (mut store, _) = Store::open(dir.path(), &config()).unwrap();
+    store.mark_uncommitted(12, 1).unwrap();
+    drop(store);
+    let third = Store::open(dir.path(), &config()).unwrap().1.offer;
+    assert_eq!(first, third, "the previous run's marker stays");
 }
 
 #[test]

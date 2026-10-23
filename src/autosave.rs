@@ -331,9 +331,12 @@ pub fn fingerprint(schedule: &Schedule) -> u64 {
             },
             &mut hasher,
         );
-        // Titles change only with the pinned revision (insert, re-pin,
-        // open, restore), so their length is enough and keeps a 32-entry
-        // fingerprint cheap on the UI thread.
+        // Titles change with the pinned revision (insert, re-pin, open,
+        // restore), so their length is enough and keeps a 32-entry
+        // fingerprint cheap on the UI thread (whole titles measured 149 us
+        // per tick, docs/autosave.md). Only reopening a hand-edited file
+        // could change a title alone; the revision then keeps the old
+        // display title for the same pinned song until the next change.
         entry.title.len().hash(&mut hasher);
     }
     schedule.baseline().len().hash(&mut hasher);
@@ -860,9 +863,12 @@ impl Store {
 
     /// Records that the schedule (`fingerprint`, `items` entries) differs
     /// from the newest commit. A marker for exactly the committed schedule
-    /// arrives late and is dropped.
+    /// arrives late and is dropped. While the previous run's offer is open
+    /// its marker stays (like [`Store::clear_uncommitted`]): the operator
+    /// writes nothing until the answer, and the store keeps that promise
+    /// on its own.
     pub fn mark_uncommitted(&mut self, fingerprint: u64, items: usize) -> Result<(), Error> {
-        if self.last_fingerprint == Some(fingerprint) {
+        if self.offer_open || self.last_fingerprint == Some(fingerprint) {
             return Ok(());
         }
         self.session.state = State::Running;
