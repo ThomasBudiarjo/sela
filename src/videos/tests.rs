@@ -146,6 +146,55 @@ fn verify_reports_missing_changed_and_invalid_and_gives_an_absolute_path() {
     assert!(Substitute::Missing.warning("Waves.mp4").contains("‘Waves’"));
 }
 
+/// A check answers for the file as it was when its read started: one made
+/// before a cue was asked for is not fresh for that cue, and a deletion or
+/// replacement after an earlier check shows up in the next one.
+#[test]
+fn a_pin_check_is_fresh_only_for_cues_asked_for_before_its_read() {
+    let profile = temp();
+    let dir = videos_dir(profile.path());
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("a.mp4"), b"first").unwrap();
+    let pinned = video_ref(profile.path(), "a.mp4").unwrap();
+    let checks = Checker::checks(profile.path().to_owned()).unwrap();
+    let check = |checks: &Checker| {
+        checks.want([pinned.clone()]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some((video, checked)) = checks.poll() {
+                assert_eq!(video, pinned);
+                break checked;
+            }
+            assert!(Instant::now() < deadline, "bounded wait for a check");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    let asked = Instant::now();
+    let first = check(&checks);
+    assert!(first.result.is_ok());
+    assert!(first.fresh_for(asked));
+    // A later cue cannot use it: the file may have changed since.
+    std::thread::sleep(Duration::from_millis(2));
+    let later = Instant::now();
+    assert!(!first.fresh_for(later));
+    fs::write(dir.join("a.mp4"), b"other").unwrap();
+    let second = check(&checks);
+    assert!(second.fresh_for(later));
+    assert_eq!(second.result, Err(Substitute::Changed));
+    fs::remove_file(dir.join("a.mp4")).unwrap();
+    assert_eq!(check(&checks).result, Err(Substitute::Missing));
+}
+
+#[test]
+fn the_lru_keeps_entries_by_key_and_value() {
+    let mut lru = Lru::new(usize::MAX, 4);
+    lru.insert("a", Some(1), 0);
+    lru.insert("b", None, 0);
+    lru.insert("c", Some(3), 0);
+    lru.retain_entries(|k, v| *k == "c" || v.is_none());
+    assert!(lru.contains(&"b") && lru.contains(&"c") && !lru.contains(&"a"));
+}
+
 #[test]
 fn the_lru_evicts_oldest_by_bytes_and_count_but_keeps_the_newest() {
     let mut lru = Lru::new(10, 3);
@@ -488,6 +537,7 @@ fn a_real_thumbnail_is_the_first_frame_at_the_thumbnail_size() {
     assert_eq!(listed.len(), (THUMB.width * THUMB.height * 4) as usize);
     // Pin checks share the worker shape.
     let checks = Checker::checks(profile.path().to_owned()).unwrap();
+    let asked = Instant::now();
     checks.want([pinned.clone()]);
     let deadline = Instant::now() + Duration::from_secs(10);
     let checked = loop {
@@ -498,5 +548,7 @@ fn a_real_thumbnail_is_the_first_frame_at_the_thumbnail_size() {
         std::thread::sleep(Duration::from_millis(5));
     };
     assert_eq!(checked.0, pinned);
-    assert_eq!(checked.1, Ok(path(profile.path(), "a.mp4")));
+    assert_eq!(checked.1.result, Ok(path(profile.path(), "a.mp4")));
+    // Read after it was asked for, so it may go out with that cue.
+    assert!(checked.1.fresh_for(asked));
 }

@@ -377,6 +377,7 @@ pub enum Msg {
     ImportingName,
     ImportCancel,
     ImportCancelling,
+    MediaImportCancel,
     ImportNoteDownscaled,
     ImportNoteReused,
     ImportNoteOriented,
@@ -1190,6 +1191,7 @@ impl Msg {
         Msg::ImportingName,
         Msg::ImportCancel,
         Msg::ImportCancelling,
+        Msg::MediaImportCancel,
         Msg::ImportNoteDownscaled,
         Msg::ImportNoteReused,
         Msg::ImportNoteOriented,
@@ -2027,6 +2029,7 @@ impl Msg {
             Self::ImportingName => "Importing {name}…",
             Self::ImportCancel => "Cancel",
             Self::ImportCancelling => "Cancelling import…",
+            Self::MediaImportCancel => "Cancel import",
             Self::ImportNoteDownscaled => {
                 "Downscaled from {from} to {to} to fit the output; the original file is unchanged"
             }
@@ -3018,6 +3021,7 @@ impl Msg {
             Self::ImportingName => "Mengimpor {name}…",
             Self::ImportCancel => "Batal",
             Self::ImportCancelling => "Membatalkan impor…",
+            Self::MediaImportCancel => "Batalkan impor",
             Self::ImportNoteDownscaled => {
                 "Diperkecil dari {from} ke {to} agar sesuai keluaran; berkas asli tidak diubah"
             }
@@ -3762,7 +3766,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 803);
+        assert_eq!(Msg::ALL.len(), 804);
     }
 
     #[test]

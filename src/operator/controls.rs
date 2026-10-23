@@ -305,6 +305,9 @@ impl Operator {
             Control::MediaVideos if !self.collapsed && self.tab == 2 => {
                 self.video.category = video::Category::Videos;
                 self.video.message = None;
+                // Videos imported elsewhere (the Song Editor's Select
+                // Media…) show up without a restart.
+                self.video.rescan();
             }
             Control::MediaImages if !self.collapsed && self.tab == 2 => {
                 self.video.category = video::Category::Images;

@@ -156,7 +156,7 @@ fn a_video_slide_goes_live_after_its_pin_check_and_the_transport_follows_the_ren
             .checked
             .iter()
             .find(|(k, _)| **k == video)
-            .map(|(_, v)| v.clone())
+            .map(|(_, v)| v.result.clone())
     });
     let path = checked.expect("checked").expect("present");
     assert!(path.is_absolute() && path.ends_with("Resources/Videos/motion.mp4"));
@@ -195,7 +195,7 @@ fn a_video_slide_goes_live_after_its_pin_check_and_the_transport_follows_the_ren
         operator.read_with(&cx, |o, _| o.output.as_ref().unwrap().media_rejected()),
         None
     );
-    // The actions work from the keyboard-free action route as well.
+    // The same toggle as the button, called directly.
     operator.update(&mut cx, |o, _| o.toggle_video_playback());
     settle(&mut cx, &operator, "paused by action", |o| {
         media_state(o) == Some(PlayState::Paused)
@@ -328,15 +328,111 @@ fn a_video_the_renderer_cannot_open_keeps_the_previous_scene(cx: &mut TestAppCon
     settle(&mut cx, &operator, "pin checked", |o| {
         o.video.checked.contains(&video)
     });
-    // ...then the file goes away before Go Live: the renderer cannot open
+    // ...and again for the Go Live cue; the file goes away after that
+    // check but before the renderer opens it, so the renderer cannot open
     // it and refuses the cue (the fake mirrors the first-frame gate).
+    operator.update(&mut cx, |o, _| o.go_live());
+    assert!(operator.read_with(&cx, |o, _| o.deferred_send.is_some()));
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        let fresh = operator.update(&mut cx, |o, _| {
+            let request = o.video.cue_request;
+            let (pinned, checked) = o.video.checks.as_ref().unwrap().poll()?;
+            let fresh = checked.fresh_for(request) && pinned == video;
+            o.video.checked.insert(pinned, checked, 0);
+            fresh.then_some(())
+        });
+        if fresh.is_some() {
+            break;
+        }
+        assert!(Instant::now() < end, "bounded wait for the Go Live check");
+        std::thread::sleep(Duration::from_millis(2));
+    }
     std::fs::remove_file(sela::videos::videos_dir(dir.path()).join("motion.mp4")).unwrap();
-    click(&mut cx, "go-live");
+    operator.update(&mut cx, |o, _| o.retry_deferred());
     settle(&mut cx, &operator, "renderer refusal", |o| {
         o.output.as_ref().unwrap().rejected().is_some()
     });
     operator.read_with(&cx, |o, _| {
         assert_eq!(live_version(o), still, "the previous scene stays live");
+        assert_eq!(o.live_video(), None);
+    });
+}
+
+/// A video that played once is checked again for every cue: replaced
+/// bytes or a deleted file after an earlier, successful check substitute
+/// black with the warning instead of reaching the renderer (PP-VP-08).
+#[gpui::test]
+fn a_video_replaced_or_deleted_after_it_played_is_caught_on_the_next_go_live(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let (library, video) = library_with_video_song(&dir);
+    let file = sela::videos::videos_dir(dir.path()).join("motion.mp4");
+    let (mut cx, operator) = open_with(&mut *cx, library, Arc::new(|| Ok(located())));
+    settle(&mut cx, &operator, "located", ready);
+    let go_live = |cx: &mut VisualTestContext, title: &'static str| {
+        preview(cx, &operator, title);
+        click(cx, "go-live");
+        settle(cx, &operator, "slide live", |o| {
+            o.on_air.as_ref().is_some_and(|item| item.title == title)
+                && o.deferred_send.is_none()
+                && o.pending_cues.is_empty()
+                && live_version(o).is_some()
+        });
+    };
+    go_live(&mut cx, MOTION);
+    settle(&mut cx, &operator, "video playing", |o| {
+        media_state(o) == Some(PlayState::Playing)
+    });
+    assert!(operator.read_with(&cx, |o, _| o.video.checked.contains(&video)));
+    go_live(&mut cx, STILL);
+    // A poster of the pinned clip, as the thumbnailer would have made it.
+    let poster =
+        sela::videos::ThumbKey::Pinned(video.clone(), Default::default(), sela::images::TILE);
+    let has_poster = |o: &Operator| {
+        o.video.thumb_cache.iter().any(|(key, image)| {
+            matches!(key, sela::videos::ThumbKey::Pinned(v, ..) if *v == video) && image.is_some()
+        })
+    };
+    operator.update(&mut cx, |o, _| {
+        let pixels = image::RgbaImage::new(sela::images::TILE.width, sela::images::TILE.height);
+        let image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
+        o.video.thumb_cache.insert(poster.clone(), Some(image), 0);
+    });
+    assert!(operator.read_with(&cx, |o, _| has_poster(o)));
+    // Same name, other bytes: the earlier check must not stand.
+    std::fs::write(&file, b"another clip under the same name").unwrap();
+    go_live(&mut cx, MOTION);
+    // The tile no longer shows a picture of the pinned clip either.
+    assert!(!operator.read_with(&cx, |o, _| has_poster(o)));
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(
+            o.live_message.as_deref(),
+            Some("Background video ‘motion’ was replaced by a different file; showing black")
+        );
+        assert_eq!(o.live_video(), None, "the replaced bytes never play");
+    });
+    // Back to the pinned bytes: it plays again, without a warning.
+    std::fs::write(&file, b"original motion clip bytes").unwrap();
+    go_live(&mut cx, STILL);
+    go_live(&mut cx, MOTION);
+    settle(&mut cx, &operator, "video playing again", |o| {
+        o.live_video().is_some() && o.live_message.is_none()
+    });
+    // Deleted while live: the next cue (a step to the Chorus, same master
+    // video) is black with the missing warning, not a renderer refusal.
+    std::fs::remove_file(&file).unwrap();
+    click(&mut cx, "live-next");
+    settle(&mut cx, &operator, "chorus live", |o| {
+        o.live_slide == Some(1) && o.deferred_send.is_none() && o.pending_cues.is_empty()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(
+            o.live_message.as_deref(),
+            Some("Background video ‘motion’ is missing; showing black")
+        );
+        assert_eq!(o.output.as_ref().unwrap().rejected(), None);
         assert_eq!(o.live_video(), None);
     });
 }
@@ -376,6 +472,66 @@ fn the_media_tab_lists_videos_by_name_and_imports_off_the_ui_thread(cx: &mut Tes
         sela::videos::list(dir.path()).unwrap(),
         vec!["motion.mp4".to_owned()]
     );
+    // A video imported elsewhere (the Song Editor's Select Media…) shows up
+    // when the Videos category is opened again, without a restart.
+    std::fs::write(
+        sela::videos::videos_dir(dir.path()).join("editor.mp4"),
+        b"imported by the song editor",
+    )
+    .unwrap();
+    click(&mut cx, "media-category-images");
+    click(&mut cx, "media-category-videos");
+    settle(&mut cx, &operator, "rescanned", |o| {
+        o.video.listed.len() == 2
+    });
+}
+
+/// Posters follow the Videos list's scroll position: rows past the first
+/// [`LIST_THUMBS`] get theirs once scrolled into view (M2-05 basic).
+#[gpui::test]
+fn videos_list_posters_follow_the_rows_scrolled_into_view(cx: &mut TestAppContext) {
+    use crate::operator::video::LIST_THUMBS;
+    let dir = tempfile::tempdir().unwrap();
+    let (library, _) = library_with_video_song(&dir);
+    let folder = sela::videos::videos_dir(dir.path());
+    let total = LIST_THUMBS + 16;
+    for n in 1..total {
+        std::fs::write(folder.join(format!("clip {n:03}.mp4")), format!("clip {n}")).unwrap();
+    }
+    let (mut cx, operator) = open_with(&mut *cx, library, Arc::new(|| Ok(located())));
+    settle(&mut cx, &operator, "located", ready);
+    click(&mut cx, "Media");
+    click(&mut cx, "media-category-videos");
+    settle(&mut cx, &operator, "listed", |o| {
+        o.video.listed.len() == total
+    });
+    // The fake FFmpeg cannot decode: each wanted poster lands as "none",
+    // which is enough to see which rows were asked for.
+    let asked = |o: &Operator, index: usize| {
+        let key = sela::videos::ThumbKey::File(o.video.listed[index].clone());
+        o.video.thumb_cache.contains(&key)
+    };
+    settle(&mut cx, &operator, "first posters", |o| asked(o, 0));
+    assert!(!operator.read_with(&cx, |o, _| asked(o, total - 1)));
+    let last = format!("video-{}", total - 1);
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        let list = cx.debug_bounds("video-list").expect("video list");
+        let row = cx.debug_bounds(Box::leak(last.clone().into_boxed_str()));
+        if row.is_some_and(|row| row.bottom() <= list.bottom()) {
+            break;
+        }
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: list.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-400.))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        assert!(Instant::now() < end, "scrolled to the last row");
+    }
+    settle(&mut cx, &operator, "last row's poster", |o| {
+        asked(o, total - 1)
+    });
 }
 
 /// With the pinned development FFmpeg: a real import probes and copies the

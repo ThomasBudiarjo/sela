@@ -11,7 +11,11 @@ use sela::format::{
     Align, MAX_FIXED_SIZE, MAX_OPACITY, MAX_OUTLINE_SIZE, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET,
     Outline, Shadow, Size, SlideFormat, VAlign,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 pub(super) const WIDTH: f32 = 284.;
 const TAB: isize = 1000;
@@ -378,6 +382,87 @@ pub(super) struct Media {
     /// By name, for the first `MEDIA_THUMBS` names; `None` = unreadable.
     pub(super) thumbs: HashMap<String, Option<Arc<RenderImage>>>,
     pub(super) task: Option<Task<()>>,
+    /// The Import… running from this picker: one at a time (the Busy
+    /// bound), shown in the status line, and the Import row turns into
+    /// Cancel import for a video.
+    pub(super) importing: Option<MediaImport>,
+}
+
+/// One Select Media… import in progress. Dropping it (the import ended,
+/// or the editor window closed and took the pane with it) cancels a video
+/// copy still running, so nothing keeps copying for a closed editor.
+pub(super) struct MediaImport {
+    pub(super) name: String,
+    pub(super) kind: MediaKind,
+    cancel: Arc<AtomicBool>,
+}
+
+impl MediaImport {
+    pub(super) fn cancel(&self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+
+    pub(super) fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Acquire)
+    }
+
+    /// The flag the copy polls between chunks (tests watch it too).
+    #[cfg(test)]
+    pub(super) fn flag(&self) -> Arc<AtomicBool> {
+        self.cancel.clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn new(name: &str, kind: MediaKind) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl Drop for MediaImport {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+/// Why a Select Media… import did not add a file.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum MediaImportError {
+    Cancelled,
+    Failed(String),
+}
+
+/// Copies `path` into the profile like the Media tab's import: an image
+/// directly, a video after FFmpeg probed it, in chunks that stop once
+/// `cancel` is set. Blocks: background threads only.
+pub(super) fn import_media_file(
+    kind: MediaKind,
+    profile: &std::path::Path,
+    path: &std::path::Path,
+    tools: Option<sela::media::decode::Tools>,
+    cancel: &AtomicBool,
+) -> Result<String, MediaImportError> {
+    match kind {
+        MediaKind::Images => {
+            sela::images::import(profile, path).map_err(|e| MediaImportError::Failed(e.to_string()))
+        }
+        MediaKind::Videos => {
+            let tools = tools.ok_or_else(|| {
+                MediaImportError::Failed(sela::videos::Error::Unavailable.message())
+            })?;
+            sela::videos::import(profile, path, &tools, &mut || {
+                cancel.load(Ordering::Acquire)
+            })
+            .map(|imported| imported.name)
+            .map_err(|error| match error {
+                sela::videos::Error::Cancelled => MediaImportError::Cancelled,
+                error => MediaImportError::Failed(error.message()),
+            })
+        }
+    }
 }
 
 /// Focusable pane buttons, in layout order.
@@ -1007,22 +1092,33 @@ impl Library {
         .detach();
     }
 
-    /// Import… copies a chosen PNG or JPEG into the profile (as the Media
-    /// tab's import does) and sets it as the background.
+    /// Import… copies a chosen PNG or JPEG, or a video FFmpeg can play,
+    /// into the profile (as the Media tab's import does) and sets it as the
+    /// background. While one runs the row is Cancel import (a video) or
+    /// shows the import (an image); a second import is refused.
     pub(super) fn import_media(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menu(window, cx);
-        let Some(profile) = self.backdrops.profile.clone() else {
+        if let Some(import) = &self.pane.media.importing {
+            if import.kind == MediaKind::Videos {
+                import.cancel();
+                self.set_status(t!(Msg::ImportCancelling));
+            } else {
+                self.set_status(t!(Msg::ImportBusy));
+            }
+            cx.notify();
+            return;
+        }
+        if self.backdrops.profile.is_none() {
             self.set_status(t!(Msg::NoProfileImport));
             cx.notify();
             return;
-        };
+        }
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
             prompt: Some(t!(Msg::ImportPrompt).into()),
         });
-        let executor = cx.background_executor().clone();
         let kind = self.pane.media.kind;
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
@@ -1031,32 +1127,60 @@ impl Library {
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
-            let imported = executor
-                .spawn(async move {
-                    match kind {
-                        MediaKind::Images => {
-                            sela::images::import(&profile, &path).map_err(|e| e.to_string())
-                        }
-                        // Probed and copied like the Media tab's video import.
-                        MediaKind::Videos => match sela::videos::tools() {
-                            Some(tools) => {
-                                sela::videos::import(&profile, &path, &tools, &mut || false)
-                                    .map(|imported| imported.name)
-                                    .map_err(|e| e.message())
-                            }
-                            None => Err(sela::videos::Error::Unavailable.message()),
-                        },
-                    }
-                })
-                .await;
             let _ = this.update(cx, |this, cx| {
+                this.start_media_import(kind, path, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Starts the chosen import on a background thread, unless one runs.
+    pub(super) fn start_media_import(
+        &mut self,
+        kind: MediaKind,
+        path: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(profile) = self.backdrops.profile.clone() else {
+            self.set_status(t!(Msg::NoProfileImport));
+            return;
+        };
+        if self.pane.media.importing.is_some() {
+            self.set_status(t!(Msg::ImportBusy));
+            return;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.pane.media.importing = Some(MediaImport {
+            name: name.clone(),
+            kind,
+            cancel: cancel.clone(),
+        });
+        self.set_status(t!(Msg::ImportingName, name = name));
+        let tools = sela::videos::tools();
+        let job = cx
+            .background_executor()
+            .spawn(async move { import_media_file(kind, &profile, &path, tools, &cancel) });
+        cx.spawn(async move |this, cx| {
+            let imported = job.await;
+            let _ = this.update(cx, |this, cx| {
+                this.pane.media.importing = None;
                 match imported {
                     Ok(name) => {
                         this.set_status(t!(Msg::ImportedName, name = name));
                         this.pane.media.names = None;
                         this.pick_media(name, cx);
                     }
-                    Err(e) => this.set_status(t!(Msg::ImportFailed, error = e)),
+                    Err(MediaImportError::Cancelled) => {
+                        this.set_status(sela::videos::Error::Cancelled.message());
+                    }
+                    Err(MediaImportError::Failed(e)) => {
+                        this.set_status(t!(Msg::ImportFailed, error = e));
+                    }
                 }
                 cx.notify();
             });
@@ -1239,11 +1363,21 @@ impl Library {
                 names
                     .iter()
                     .map(|n| (stem(n).to_owned(), true, chosen.as_ref() == Some(n)))
-                    .chain(std::iter::once((
-                        t!(Msg::ImportMenuItem).to_owned(),
-                        self.backdrops.profile.is_some(),
-                        false,
-                    )))
+                    .chain(std::iter::once(match &self.pane.media.importing {
+                        // Cancel import while a video copies; an image
+                        // import is short and only shown.
+                        Some(import) if import.kind == MediaKind::Videos => (
+                            t!(Msg::MediaImportCancel).to_owned(),
+                            !import.cancelled(),
+                            false,
+                        ),
+                        Some(import) => (t!(Msg::ImportingName, name = import.name), false, false),
+                        None => (
+                            t!(Msg::ImportMenuItem).to_owned(),
+                            self.backdrops.profile.is_some(),
+                            false,
+                        ),
+                    }))
                     .collect()
             }
             Menu::Color(_) => Vec::new(),
@@ -2496,6 +2630,7 @@ impl Library {
         let rows = self.menu_rows(Menu::Media);
         let count = rows.len() - 1;
         let import_enabled = rows[count].1;
+        let import_label = rows[count].0.clone();
         let status = |text: String, color: u32| {
             div()
                 .p_2()
@@ -2626,6 +2761,9 @@ impl Library {
                 div()
                     .id("media-import")
                     .debug_selector(|| "media-import".into())
+                    .role(Role::MenuItem)
+                    .aria_label(import_label.clone())
+                    .accessibility_id("media-import")
                     .mt_1()
                     .pt_1()
                     .h(px(28.))
@@ -2639,7 +2777,7 @@ impl Library {
                         d.bg(rgb(0xe8ecfb))
                     })
                     .text_color(rgb(if import_enabled { 0x292c30 } else { FAINT }))
-                    .child(t!(Msg::ImportMenuItem))
+                    .child(import_label)
                     .when(import_enabled, |d| {
                         d.cursor_pointer().hover(|d| d.bg(rgb(0xeef0f3))).on_click(
                             cx.listener(move |s, _, w, cx| s.choose(Menu::Media, count, w, cx)),

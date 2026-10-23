@@ -405,10 +405,21 @@ playback best guesses") and parity-pending.md (Stream: video-playback).
    UI thread by `videos::Checker` (latest-wins list: a deferred cue, the live
    slide, the previewed slide and their neighbours). While a check or the
    FFmpeg lookup is still running, the cue is deferred ("Preparing
-   background…") and the live scene stays. A missing, changed or unreadable
-   file, or no usable FFmpeg, substitutes black behind the text with the
-   warning "Background video ‘NAME’ is missing; showing black" (the M1-05h
-   image rule; no Go Live dialog for videos yet).
+   background…") and the live scene stays. Every video cue (Go Live, Next,
+   Previous, a re-cue after a surface change) uses only a check whose file
+   read started after that cue was asked for (`videos::Checked::fresh_for`,
+   `VideoState::cue_request`): an older answer, even a successful one from
+   a minute earlier, is dropped and the pin is read again, because the
+   renderer opens the file only when the cue arrives (review round 1: a
+   cached check let a deleted file reach the renderer, which refused it
+   with no warning, and let replaced bytes play). The cost is one check
+   (at most 2 MiB read, on the checker thread) plus one 16 ms poll per
+   video cue. A missing, changed or unreadable file, or no usable FFmpeg,
+   substitutes black behind the text with the warning "Background video
+   ‘NAME’ is missing; showing black" (the M1-05h image rule; no Go Live
+   dialog for videos and no preflight rows yet, see Open). A file removed
+   between that check and the renderer's open is still refused by the
+   first-frame gate (RenderFailed; the live scene stays).
 2. Wire: background tag 2 in the version-2 command body: content version,
    aspect, flags (bit 0 repeat), the absolute UTF-8 path (at most 4,096
    bytes). `scene::VideoSource::is_valid` applies `ffmpeg::input_args` rules
@@ -457,8 +468,10 @@ playback best guesses") and parity-pending.md (Stream: video-playback).
   with its toggle state, Restart `video-restart`, status `video-position`
   "Playing · 0:03 / 0:08") shows while the acknowledged live slide plays a
   video; never for a substituted or refused one. Its text is the renderer's
-  report, not the request. GPUI actions `ToggleVideoPlayback` and
-  `RestartVideo` have no default keys (EW media shortcuts are unobserved).
+  report, not the request. The buttons are the only route: EW media
+  shortcuts are unobserved (PP-VP-07), so no GPUI actions or keys are
+  defined for them until a shortcut is observed (the unbound actions of the
+  first slice were removed as dead code in review round 1).
   Preview never plays a video: its tiles show the first frame.
 
 ### Thumbnails and caches (M2-05 basic)
@@ -475,12 +488,34 @@ playback best guesses") and parity-pending.md (Stream: video-playback).
   pin checks: 32 entries. Keys carry the identity (a listed file's name,
   length and mtime; a pin's fingerprint), so a changed file gets new keys;
   a rescan of the Videos folder drops posters of files that changed or left
-  (and releases their GPUI atlas sprites) and clears the pin checks.
+  (and releases their GPUI atlas sprites) and clears the pin checks. A slide
+  poster follows its pin's checks: a check that fails drops the poster (the
+  tile no longer shows a clip that is gone or replaced), a check that passes
+  drops a failed ("none") poster so it is made again; a rescan also retries
+  failed slide posters. Opening Media › Videos rescans, so videos imported
+  from the Song Editor appear without a restart.
 - Priority: the live video is decoded in the renderer process by its own
   child, so posters never delay it; the operator wants posters for the
-  previewed and live items' tiles first, then at most the first 64 list
-  rows. Next-cue preload, GPU budgets and the shared preparation scheduler
-  of M2-05 are open.
+  previewed and live items' tiles first, then the Videos-list rows in view
+  (read from the list's `ScrollHandle` each poll), then up to 8 rows past
+  each edge, at most 64 (`LIST_THUMBS`): scrolling moves that window, and
+  posters already made stay in the LRU. The list itself is still built
+  eagerly (at most `MAX_VIDEOS` = 4,096 rows, each a focus stop); a
+  `uniform_list` would drop off-screen rows from the Tab order, so it waits
+  for the list's keyboard model (open, M2-05). Next-cue preload, GPU
+  budgets and the shared preparation scheduler of M2-05 are open.
+- Upstream GPUI patterns (zed-industries/zed at the pinned
+  `a84689073d296dfd39987bc7dd478e43ef76d83a`, Apache-2.0 for `crates/gpui`):
+  posters are `gpui::img(Arc<RenderImage>)` (`crates/gpui/src/elements/img.rs`);
+  evicted posters are released with `App::drop_image(image, None)`
+  (`crates/gpui/src/app.rs:2983`, which visits only windows not being
+  updated, so it is called from the poll task outside any window update,
+  as in docs/themes.md); the visible rows come from `ScrollHandle::top_item`
+  / `bottom_item` / `bounds_for_item` (`crates/gpui/src/elements/div.rs`,
+  `impl ScrollHandle`); the category buttons use the `accesskit::Role`
+  `TabList`/`Tab` roles through `InteractiveElement::role`
+  (`crates/gpui/src/elements/div.rs`). Only public GPUI API is used; no Zed
+  application code was copied.
 
 ### Media tab and editor
 
@@ -494,6 +529,14 @@ playback best guesses") and parity-pending.md (Stream: video-playback).
   else Videos (EW8-OBS-039 lists Videos first). A video fill shows its
   poster and name, Aspect Ratio and Repeating (EW8-OBS-032). Editor
   previews and theme thumbnails show the poster frame.
+- Select Media… › Import… runs one import at a time on a background
+  thread (a second one is refused with "Another import is still
+  finishing"), shows "Importing NAME…" in the editor status line, and turns
+  its row (`media-import`, AccessKit menu item) into Cancel import while a
+  video copies; Cancel sets the flag the copy polls between 1 MiB chunks
+  ("Import cancelled; nothing was added"). The import's guard
+  (`format_pane::MediaImport`) cancels on drop, so closing the editor stops
+  its copy. An image import is short and is only shown, not cancellable.
 
 ### Audio of video backgrounds (M2-04 feasible part)
 
@@ -566,8 +609,14 @@ or hardware claim (M2-08).
   pause, play, restart, loop; shared playback; play once and end; failures
   before the first frame; a tone's audio follows the clock, pauses and
   restarts, a silent clip opens no output).
-- GPUI: `tests::video_playback` (8, the transport row's sound note) and
-  `song_library::tests::select_media_videos_sets_a_repeating_video_fill_that_saves`.
+- GPUI: `tests::video_playback` (10, the transport row's sound note; review
+  round 1 added `a_video_replaced_or_deleted_after_it_played_is_caught_on_the_next_go_live`
+  and `videos_list_posters_follow_the_rows_scrolled_into_view`, and the
+  Media-tab rescan in `the_media_tab_lists_videos_by_name_and_imports_off_the_ui_thread`),
+  `song_library::tests::select_media_videos_sets_a_repeating_video_fill_that_saves`,
+  `song_library::tests::select_media_video_import_is_one_at_a_time_shown_and_cancellable`
+  and `song_library::tests::a_cancelled_select_media_video_import_leaves_no_file`
+  (real FFmpeg).
 - N: `scripts/video-x11.py` (PASS on `:123`); `scripts/video-windows.py`
   NOT RUN (no Windows host).
 
@@ -578,7 +627,14 @@ or hardware claim (M2-08).
 - Seek and a position slider; a start position; videos as logo (SRC-10 "Set
   as Logo Background"); videos as schedule items of their own; the Videos
   list context menu (delete, rename, relink) and Locate… for videos; videos
-  in the schedule preflight report and the Go Live missing-file dialog.
+  in the schedule preflight report and the Go Live missing-file dialog
+  (backlog M2-02 open box).
+- A transport command in flight holds the next Black/Clear/Logo for one
+  Safety-lane round trip (masks and transport share the one-command Safety
+  lane; a mask still goes before a queued transport command). A lane of its
+  own changes the wire protocol and the renderer's per-lane acceptance
+  (backlog M2-03 open box).
+- A virtualized Videos list (`uniform_list`) with a keyboard model.
 - Resizing the audience restarts a background video (the new extent is a new
   playback).
 - Next-cue preload, GPU memory budgets, hardware decode, 1080p60 and 4K

@@ -193,14 +193,6 @@ impl Render for Operator {
                 this.toggle_mask(Mask::Clear);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &ToggleVideoPlayback, _, cx| {
-                this.toggle_video_playback();
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &RestartVideo, _, cx| {
-                this.restart_video();
-                cx.notify();
-            }))
             .on_action(cx.listener(|this, _: &GoLive, _, cx| {
                 // Later PageDown/PageUp, arrows and label keys then drive
                 // Live, which is how a presenter remote advances.

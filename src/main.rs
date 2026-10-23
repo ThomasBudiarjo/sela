@@ -33,9 +33,7 @@ actions!(
         ScheduleFirstItem,
         ScheduleLastItem,
         PreviewPreviousSlide,
-        PreviewNextSlide,
-        ToggleVideoPlayback,
-        RestartVideo
+        PreviewNextSlide
     ]
 );
 

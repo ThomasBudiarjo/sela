@@ -5171,6 +5171,123 @@ mod tests {
         );
     }
 
+    /// video-playback review: Select Media… › Videos › Import runs one
+    /// import at a time, says so in the status line, turns the row into
+    /// Cancel import (which reaches the copy), and an editor that closes
+    /// cancels its copy (the import's guard is dropped with the pane).
+    #[gpui::test]
+    fn select_media_video_import_is_one_at_a_time_shown_and_cancellable(cx: &mut TestAppContext) {
+        use format_pane::{MediaImport, MediaKind};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        std::fs::create_dir_all(sela::videos::videos_dir(dir.path())).unwrap();
+        let source = dir.path().join("Clip.mp4");
+        std::fs::write(&source, b"a long video, as far as this test knows").unwrap();
+        let (mut cx, view) = format_fixture(cx, path);
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Media Fill");
+        click(&mut cx, "format-SelectMedia");
+        // Started, not yet run: the background thread has not been polled.
+        view.update(&mut cx, |v, cx| {
+            v.start_media_import(MediaKind::Videos, source.clone(), cx)
+        });
+        let flag = view.read_with(&cx, |v, _| {
+            assert_eq!(v.status, "Importing Clip.mp4…");
+            let rows = v.menu_rows(format_pane::Menu::Media);
+            assert_eq!(rows.last().unwrap().0, "Cancel import");
+            assert!(rows.last().unwrap().1, "Cancel import is enabled");
+            v.pane.media.importing.as_ref().unwrap().flag()
+        });
+        // One at a time: a second import is refused, the first one stays.
+        let other = dir.path().join("Other.mp4");
+        view.update(&mut cx, |v, cx| {
+            v.start_media_import(MediaKind::Videos, other, cx)
+        });
+        view.read_with(&cx, |v, _| {
+            assert_eq!(v.status, sela::t!(sela::i18n::Msg::ImportBusy));
+            assert_eq!(v.pane.media.importing.as_ref().unwrap().name, "Clip.mp4");
+        });
+        // The row now cancels instead of prompting for another file.
+        cx.update(|window, cx| view.update(cx, |v, cx| v.import_media(window, cx)));
+        assert!(!cx.did_prompt_for_paths());
+        assert!(flag.load(std::sync::atomic::Ordering::Acquire));
+        view.read_with(&cx, |v, _| {
+            assert_eq!(v.status, "Cancelling import…");
+            let rows = v.menu_rows(format_pane::Menu::Media);
+            assert!(!rows.last().unwrap().1, "Cancel is spent");
+        });
+        // The job ends (refused or cancelled) and Import… is back.
+        cx.run_until_parked();
+        view.read_with(&cx, |v, _| {
+            assert!(v.pane.media.importing.is_none());
+            assert_ne!(v.status, "Importing Clip.mp4…");
+            let rows = v.menu_rows(format_pane::Menu::Media);
+            assert_eq!(rows.last().unwrap().0, "Import…");
+        });
+        assert!(
+            !sela::videos::videos_dir(dir.path())
+                .join("Clip.mp4")
+                .exists()
+        );
+        // Dropping the guard (the editor closed) cancels the copy.
+        let guard = MediaImport::new("Clip.mp4", MediaKind::Videos);
+        let flag = guard.flag();
+        assert!(!flag.load(std::sync::atomic::Ordering::Acquire));
+        drop(guard);
+        assert!(flag.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    /// With the pinned development FFmpeg: a cancelled Select Media… video
+    /// import stops before copying and leaves no file.
+    #[test]
+    fn a_cancelled_select_media_video_import_leaves_no_file() {
+        use format_pane::{MediaImportError, MediaKind, import_media_file};
+        let Ok(found) = sela::media::ffmpeg::locate() else {
+            let message = "SKIPPED a_cancelled_select_media_video_import_leaves_no_file: no FFmpeg";
+            assert!(
+                std::env::var_os("SELA_REQUIRE_FFMPEG").is_none_or(|v| v != "1"),
+                "{message}"
+            );
+            eprintln!("{message}");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join("Loop.mkv");
+        let status = std::process::Command::new(&found.ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x90:rate=10:duration=1",
+            ])
+            .args(["-c:v", "ffv1"])
+            .arg(&clip)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let tools = sela::media::decode::Tools::from(&found);
+        let profile = dir.path().join("profile");
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(
+            import_media_file(
+                MediaKind::Videos,
+                &profile,
+                &clip,
+                Some(tools.clone()),
+                &cancel
+            ),
+            Err(MediaImportError::Cancelled)
+        );
+        assert_eq!(sela::videos::list(&profile).unwrap(), Vec::<String>::new());
+        // Not cancelled, the same call imports it.
+        cancel.store(false, std::sync::atomic::Ordering::Release);
+        assert_eq!(
+            import_media_file(MediaKind::Videos, &profile, &clip, Some(tools), &cancel),
+            Ok("Loop.mkv".to_owned())
+        );
+    }
+
     #[gpui::test]
     fn ctrl_a_and_the_master_reach_slides_and_cancel_discards(cx: &mut TestAppContext) {
         use sela::background::Background;

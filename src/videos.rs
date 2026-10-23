@@ -29,7 +29,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const VIDEOS: &str = "Resources/Videos";
@@ -593,6 +593,11 @@ impl<K: PartialEq, V> Lru<K, V> {
         self.entries.retain(|(k, _, _)| keep(k));
     }
 
+    /// Keeps only entries whose key and value pass `keep`.
+    pub fn retain_entries(&mut self, mut keep: impl FnMut(&K, &V) -> bool) {
+        self.entries.retain(|(k, v, _)| keep(k, v));
+    }
+
     pub fn bytes(&self) -> usize {
         self.entries.iter().map(|(_, _, b)| b).sum()
     }
@@ -685,7 +690,25 @@ pub struct Lookups<K, V> {
 
 pub type Thumbnailer = Lookups<ThumbKey, Thumb>;
 /// Pin checks of slide videos before a cue: the playable path or why not.
-pub type Checker = Lookups<VideoRef, Result<PathBuf, Substitute>>;
+pub type Checker = Lookups<VideoRef, Checked>;
+
+/// One pin check: [`verify`]'s answer and when its file read started.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Checked {
+    pub result: Result<PathBuf, Substitute>,
+    pub started: Instant,
+}
+
+impl Checked {
+    /// True when the file was read at or after `request`: only such a check
+    /// may go out with a cue asked for at `request`. An older answer may
+    /// name a file that was deleted or replaced since (the image rule
+    /// checks on every Go Live; a video is checked for every cue, because
+    /// the renderer opens the file only when the cue arrives).
+    pub fn fresh_for(&self, request: Instant) -> bool {
+        self.started >= request
+    }
+}
 
 impl Lookups<ThumbKey, Thumb> {
     /// Poster frames of profile videos (first frames, Zoom for listed files).
@@ -702,11 +725,16 @@ impl Lookups<ThumbKey, Thumb> {
     }
 }
 
-impl Lookups<VideoRef, Result<PathBuf, Substitute>> {
-    /// [`verify`] of each wanted pin (reads at most 2 MiB per video).
+impl Lookups<VideoRef, Checked> {
+    /// [`verify`] of each wanted pin (reads at most 2 MiB per video),
+    /// stamped with the time the read started.
     pub fn checks(profile: PathBuf) -> io::Result<Self> {
         Self::start_with("sela-video-check", move |video: &VideoRef| {
-            verify(&profile, video)
+            let started = Instant::now();
+            Checked {
+                result: verify(&profile, video),
+                started,
+            }
         })
     }
 }

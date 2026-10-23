@@ -1244,17 +1244,21 @@ Linux evidence only.
   (Four frames per playback; late frames skipped to the newest due one.)
 - [ ] Handle cancellation, end-of-stream, bad timestamps, corrupt media and decoder
   stalls without replacing a valid scene with partially prepared content.
-- [x] Recycle resources safely on cue switch; prevent stale frames after seek/restart.
-  (A replaced playback drops its decoder; Restart reopens it; no seek yet.)
+- [x] Recycle resources safely on cue switch and Restart. (A replaced
+  playback drops its decoder; Restart reopens it.)
+- [ ] Prevent stale frames after seek (seek is not built; M2-03).
 - [x] Test variable frame rate, multiple resolutions, short clips, unsupported codecs
   and failed first-frame preparation; inspect text overlay on playing video.
   (media-core decode tests; `failures_before_the_first_frame_never_give_a_playback`;
   overlay captures in `.amp/in/artifacts/video-x11/`.)
 - [x] Video slide backgrounds: a Media Fill video per slide or song master
-  (EW8-OBS-032 Volume and Media Usage, EW8-OBS-039 Videos category), with
-  the M1-05h resolution, gate and missing-file substitution. (Linux; Volume
-  and Media Usage are not built; the Go Live missing-file dialog is
-  images-only.)
+  (EW8-OBS-039 Videos category), with the M1-05h resolution and the
+  missing/changed-file black substitution with a warning, the pin checked
+  again for every cue (review round 1). (Linux.)
+- [ ] Videos in the Go Live missing-file dialog and the schedule preflight
+  report (M1-05h gate; images only today: a missing video goes live black
+  with the warning, without asking first).
+- [ ] EW8-OBS-032 Volume and Media Usage for a video fill (not built).
 - [ ] FFmpeg children end when Sela itself crashes or is killed, on every
   platform (media-core review rounds 1-2). Linux: `PR_SET_PDEATHSIG(SIGKILL)`
   on the spawning thread, tested (`a_child_dies_when_its_parent_is_sigkilled`).
@@ -1285,6 +1289,12 @@ GPUI `tests::video_playback`, `scripts/video-x11.py`.
   Black/Clear/Logo continuation/restore; actual audio qualification belongs to M2-04.
 - [ ] Test seek while loading, repeated toggles, loop boundary, end-of-stream under
   mask, rapid cue change and failed seek while previous scene is active.
+- [ ] Masks never wait behind a transport command: today both share the
+  one-command Safety lane, so Black/Clear/Logo pressed while Pause/Play/
+  Restart is in flight waits one round trip (review round 1); a lane of
+  its own needs a wire and renderer acceptance change.
+- [ ] Keyboard routes for Play/Pause and Restart once EW's media shortcuts
+  are observed (PP-VP-07; buttons only today).
 - [x] Inspect transport feedback against actual presented position, not only requests.
   (STATUS carries the presented frame's time; `video-x11.py` checks Paused
   holds the picture and Restart shows the first frames.)
@@ -1328,8 +1338,10 @@ in-flight deduplication (`videos::Lookups`), cached in a byte- and
 entry-bounded LRU (16 MiB / 256 posters) keyed by content identity, so a
 changed file gets new keys and a rescan drops stale posters and their GPUI
 atlas sprites. The live video never waits for them (it decodes in the
-renderer process). Open: next-cue preload, the shared preparation
-scheduler, GPU and disk budgets, scrolling/import storm and allocation
+renderer process). Videos-list posters follow the rows scrolled into
+view (at most 64 wanted at once); slide posters follow their pin checks.
+Open: next-cue preload, the shared preparation scheduler, GPU and disk
+budgets, a virtualized Videos list, scrolling/import storm and allocation
 profiling.
 
 - [ ] Share bounded preparation ownership where appropriate; prioritize live-ready

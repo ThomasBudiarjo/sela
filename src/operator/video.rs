@@ -19,12 +19,15 @@ use sela::{
     background::{Aspect, VideoRef},
     media::backend::Availability,
     playback::{AudioState, MediaAction, MediaStatus, PlayState, clock_text},
-    videos::{self, Listed, Lru, Substitute, ThumbKey},
+    videos::{self, Checked, Listed, Lru, Substitute, ThumbKey},
 };
 
-/// Thumbnails wanted for the Videos list at once (rows past this show a
-/// placeholder until the list is shorter).
+/// Videos-list posters wanted at once: the rows scrolled into view first,
+/// then their neighbours, never more than this (scrolling moves the window;
+/// posters already made stay in the bounded cache).
 pub(crate) const LIST_THUMBS: usize = 64;
+/// Rows beyond each edge of the visible ones whose posters are wanted too.
+const LIST_THUMB_MARGIN: usize = 8;
 /// Pin checks remembered (live, preview and their neighbours).
 const CHECKS: usize = 32;
 /// List row picture, in logical pixels (half of `videos::THUMB`).
@@ -51,6 +54,9 @@ pub(crate) struct VideoState {
     scanned: bool,
     pub(crate) selected: Option<String>,
     pub(crate) rows: Vec<FocusHandle>,
+    /// The Videos list's scroll state: which rows are in view decides
+    /// which posters are wanted.
+    pub(crate) scroll: gpui::ScrollHandle,
     /// The file name of an import in flight.
     pub(crate) importing: Option<String>,
     pub(crate) message: Option<String>,
@@ -61,9 +67,13 @@ pub(crate) struct VideoState {
     /// not re-sent every poll (the worker itself never repeats the poster
     /// it is making: the in-flight deduplication of M2-05).
     wanted_thumbs: Vec<ThumbKey>,
-    checks: Option<videos::Checker>,
-    pub(crate) checked: Lru<VideoRef, Result<PathBuf, Substitute>>,
+    pub(crate) checks: Option<videos::Checker>,
+    pub(crate) checked: Lru<VideoRef, Checked>,
     wanted_checks: Vec<VideoRef>,
+    /// When the newest cue was asked for (`send`, `refresh_live_request`):
+    /// a video cue only uses a pin check whose read started since, so a
+    /// file deleted or replaced after an earlier check is caught.
+    pub(crate) cue_request: Instant,
 }
 
 impl VideoState {
@@ -82,6 +92,7 @@ impl VideoState {
             scanned: false,
             selected: None,
             rows: Vec::new(),
+            scroll: gpui::ScrollHandle::new(),
             importing: None,
             message: None,
             thumbs: None,
@@ -90,12 +101,13 @@ impl VideoState {
             checks,
             checked: Lru::new(usize::MAX, CHECKS),
             wanted_checks: Vec::new(),
+            cue_request: Instant::now(),
         };
         state.rescan();
         state
     }
 
-    fn rescan(&mut self) {
+    pub(crate) fn rescan(&mut self) {
         if let Some(worker) = &self.worker
             && worker.submit(videos::Job::Scan).is_ok()
         {
@@ -137,6 +149,33 @@ fn release(
             cx.drop_image(image, None);
         }
     }
+}
+
+/// Videos-list rows whose posters are wanted, most urgent first: the rows
+/// in view, then up to [`LIST_THUMB_MARGIN`] past each edge, at most
+/// [`LIST_THUMBS`]. Before the list was laid out, its first rows.
+pub(crate) fn list_thumb_rows(scroll: &gpui::ScrollHandle, rows: usize) -> Vec<usize> {
+    if rows == 0 {
+        return Vec::new();
+    }
+    if scroll.bounds_for_item(0).is_none() {
+        return (0..rows.min(LIST_THUMBS)).collect();
+    }
+    let last = rows - 1;
+    let top = scroll.top_item().min(last);
+    let bottom = scroll.bottom_item().clamp(top, last);
+    let mut wanted: Vec<usize> = (top..=bottom).take(LIST_THUMBS).collect();
+    for step in 1..=LIST_THUMB_MARGIN {
+        for index in [bottom.checked_add(step), top.checked_sub(step)]
+            .into_iter()
+            .flatten()
+        {
+            if index <= last && wanted.len() < LIST_THUMBS {
+                wanted.push(index);
+            }
+        }
+    }
+    wanted
 }
 
 /// The transport row's report: state, position and the sound note.
@@ -256,11 +295,9 @@ impl Operator {
         }
         if !self.collapsed && self.tab == 2 && self.video.category == Category::Videos {
             wanted.extend(
-                self.video
-                    .listed
-                    .iter()
-                    .take(LIST_THUMBS)
-                    .map(|listed| ThumbKey::File(listed.clone())),
+                list_thumb_rows(&self.video.scroll, self.video.listed.len())
+                    .into_iter()
+                    .map(|index| ThumbKey::File(self.video.listed[index].clone())),
             );
         }
         wanted
@@ -277,9 +314,12 @@ impl Operator {
     }
 
     /// The cue background for a video slide: the playable path once its pin
-    /// was checked, black with the substitution warning when it cannot play
-    /// (the image rule), or `None` while a check or the FFmpeg lookup is
-    /// still running (the cue is deferred and retried when it lands).
+    /// was checked for this cue, black with the substitution warning when it
+    /// cannot play (the image rule), or `None` while a check or the FFmpeg
+    /// lookup is still running (the cue is deferred and retried when it
+    /// lands). A check older than the cue request is never used: the file
+    /// may have been deleted or replaced since, and the renderer opens it
+    /// only when the cue arrives.
     pub(crate) fn video_background(
         &mut self,
         video: &VideoRef,
@@ -300,8 +340,12 @@ impl Operator {
         if self.profile.is_none() || self.video.checks.is_none() {
             return black(Substitute::Missing);
         }
+        let cue_request = self.video.cue_request;
         match self.video.checked.get(video).cloned() {
-            Some(Ok(path)) => Some((
+            Some(Checked {
+                result: Ok(path),
+                started,
+            }) if started >= cue_request => Some((
                 PreparedBackground::Video {
                     version: videos::background_version(video, aspect, repeat),
                     source: Arc::new(sela::scene::VideoSource {
@@ -312,8 +356,16 @@ impl Operator {
                 },
                 None,
             )),
-            Some(Err(why)) => black(why),
-            None => {
+            Some(Checked {
+                result: Err(why),
+                started,
+            }) if started >= cue_request => black(why),
+            stale => {
+                if stale.is_some() {
+                    // Checked again for this cue: missing, so the next poll
+                    // keeps wanting it until the fresh answer lands.
+                    self.video.checked.retain(|checked| checked != video);
+                }
                 // This one first; the others follow on the next poll.
                 if let Some(checks) = &self.video.checks {
                     let mut wanted = vec![video.clone()];
@@ -343,7 +395,7 @@ impl Operator {
             .checked
             .iter()
             .find(|(k, _)| *k == video)
-            .and_then(|(_, v)| v.as_ref().err())
+            .and_then(|(_, v)| v.result.as_ref().err())
             .map(|why| why.warning(&video.name))
     }
 
@@ -378,10 +430,13 @@ impl Operator {
                     // posters go, and a missing video may be back.
                     let keep: Vec<Listed> = listed.clone();
                     let before = self.video.thumb_images();
-                    self.video.thumb_cache.retain(|key| match key {
-                        ThumbKey::File(file) => keep.contains(file),
-                        ThumbKey::Pinned(..) => true,
-                    });
+                    self.video
+                        .thumb_cache
+                        .retain_entries(|key, poster| match key {
+                            ThumbKey::File(file) => keep.contains(file),
+                            // A slide poster that failed is tried again.
+                            ThumbKey::Pinned(..) => poster.is_some(),
+                        });
                     release(before, &self.video.thumb_images(), cx);
                     self.video.checked.retain(|_| false);
                     self.video.wanted_checks.clear();
@@ -420,6 +475,18 @@ impl Operator {
                 break;
             };
             changed = true;
+            // A slide poster follows its pin: a picture of a file that is
+            // gone or replaced goes, and one that failed is tried again
+            // once the file checks out.
+            let ok = result.result.is_ok();
+            let before = self.video.thumb_images();
+            self.video
+                .thumb_cache
+                .retain_entries(|key, poster| match key {
+                    ThumbKey::Pinned(pinned, ..) if *pinned == video => poster.is_some() == ok,
+                    _ => true,
+                });
+            release(before, &self.video.thumb_images(), cx);
             self.video.checked.insert(video, result, 0);
             retry = true;
         }
@@ -732,6 +799,8 @@ impl Operator {
         }
         div()
             .id("video-list")
+            .debug_selector(|| "video-list".into())
+            .track_scroll(&self.video.scroll)
             .role(Role::List)
             .aria_label(t!(Msg::VideosHeader))
             .accessibility_id("video-list")
@@ -742,9 +811,7 @@ impl Operator {
             .children(self.video.listed.iter().enumerate().map(|(index, listed)| {
                 let selected = self.video.selected.as_ref() == Some(&listed.name);
                 let label = videos::stem(&listed.name).to_owned();
-                let thumb = (index < LIST_THUMBS)
-                    .then(|| self.video.list_thumb(listed))
-                    .flatten();
+                let thumb = self.video.list_thumb(listed);
                 let select = move |this: &mut Self| {
                     this.video.selected = this.video.listed.get(index).map(|l| l.name.clone());
                 };

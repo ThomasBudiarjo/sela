@@ -856,9 +856,15 @@ reference-observations "Video playback — UNOBSERVED best guesses".
   `cargo test --bin sela tests::video_playback`.
 - [ ] **PP-VP-08 Missing and replaced videos** (EW8-OBS-VP-9). Steps: delete
   the clip from EW's media folder (or rename it), open the service and Go
-  Live; then replace it with another clip of the same name. Sela now: black
-  plus the warning, the transport hidden; a replaced file counts as changed
-  (fingerprint). Re-run: `video-windows.py` step 7.
+  Live; then replace it with another clip of the same name; also do both
+  after the clip has already played once in the session, and while the
+  song is live before pressing Next. Does EW ask before going live (as for
+  images), show black, or keep the old picture? Sela now: every video cue
+  re-reads the pin (also after an earlier successful play): black plus the
+  warning, the transport hidden; a replaced file counts as changed
+  (fingerprint); no Go Live dialog for videos. Re-run: `video-windows.py`
+  step 7 and
+  `cargo test --locked --bin sela tests::video_playback::a_video_replaced_or_deleted_after_it_played_is_caught_on_the_next_go_live`.
 - [ ] **PP-VP-09 Preview of a video slide** (EW8-OBS-VP-10, VP-2). Steps:
   select the song in Preview: does the Preview thumbnail play? Which frame
   shows? Sela now: never plays, first frame. Re-run: none (GPUI tests).
@@ -880,6 +886,16 @@ reference-observations "Video playback — UNOBSERVED best guesses".
   except on Windows (`cpal`, default device, unqualified). Re-run:
   `scripts/video-windows.py` (listen; step 2 checks "Sound on") and
   `cargo test --locked --bin sela audience::video::tests::a_videos_audio_follows_its_clock`.
+- [ ] **PP-VP-14 Importing a large video from the song editor**
+  (EW8-OBS-VP-9 note, EW8-OBS-039). Steps: in EW's slide editor open
+  Select Media… › Videos › Import (or +) and pick a multi-GB clip; note
+  whether a progress indicator and a Cancel appear, whether a second import
+  can start meanwhile, and what happens when the editor closes during the
+  copy; then check Media › Videos for the clip. Sela now: one import at a
+  time ("Another import is still finishing"), "Importing NAME…" in the
+  status line, the Import row becomes Cancel import, closing the editor
+  cancels the copy, Media › Videos rescans when opened. Re-run:
+  `cargo test --locked --bin sela song_library::tests::select_media_video_import_is_one_at_a_time_shown_and_cancellable`.
 - [ ] **PP-VP-12 Windows run of `scripts/video-windows.py`**. Steps: as in
   [Windows script run order](#windows-script-run-order) row 32. Sela now:
   Linux only (`scripts/video-x11.py` PASS on `:123`, 2026-10-23). Re-run:

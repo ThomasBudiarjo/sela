@@ -790,6 +790,8 @@ impl Operator {
         self.request_generation += 1;
         self.unmask.cancel();
         self.cue_failed = false;
+        // A video background is checked again for this request.
+        self.video.cue_request = Instant::now();
         self.dispatch(index, self.request_generation);
     }
 
@@ -1033,6 +1035,7 @@ impl Operator {
         // (this one sets it again if it fails too).
         self.cue_failed = false;
         self.cancel_cues();
+        self.video.cue_request = Instant::now();
         self.dispatch(index, generation);
         self.unmask.retain_only(generation);
         // Without a cue carrying the id, the `live_slide` fallback could later
