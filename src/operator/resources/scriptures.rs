@@ -162,6 +162,18 @@ pub(crate) struct ScriptureTab {
     _observer: Subscription,
 }
 
+#[cfg(test)]
+impl ScriptureTab {
+    /// Stops the scripture worker and waits until its thread has closed
+    /// every translation file, as when Sela is not running. Windows refuses
+    /// to delete a file the worker still has open (os error 32).
+    pub(crate) fn close_translation_files(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            worker.shut_down();
+        }
+    }
+}
+
 impl ScriptureTab {
     pub(crate) fn new(cx: &mut Context<Operator>) -> Self {
         let input = cx.new(|cx| {
