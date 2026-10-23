@@ -1070,6 +1070,14 @@ folder; switching to it from the menu waits for M1-12b.
   `images::Error` EN/ID `Msg` reasons as done for library and file system
   failures (`src/operator/bundles.rs` `library_line`/`io_line`); found by
   review round 2.
+- [ ] Videos in bundles and backups: M1-13 predates M2-02 video
+  backgrounds. A standalone schedule whose slides use a `Fill::Video`
+  background carries no video and its preflight does not list it, and a
+  profile backup leaves out `Resources/Videos` without listing it as
+  skipped (`src/bundle.rs` `profile_files`, `backgrounds`). Decide per
+  EW8-OBS-BUN-1/5 whether videos are packaged (size limits) or listed as
+  not included, then cover both in tests; found at the video-playback
+  integration (2026-10-23).
 
 Acceptance: S04 passes; portability does not imply permission to redistribute assets.
 
