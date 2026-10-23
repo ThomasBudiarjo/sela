@@ -108,14 +108,23 @@ impl Operator {
                 .role(Role::Status)
                 .aria_label(text)
                 .accessibility_id("media-unavailable")
-                .flex_shrink_0()
+                // Shrinks and truncates in a narrow header (the accessible
+                // name keeps the full text) so the controls keep their size.
+                .min_w_0()
+                .overflow_hidden()
                 .flex()
                 .items_center()
                 .gap_1()
                 .text_size(px(TEXT_CAPTION))
                 .text_color(rgb(SENDING))
-                .child(div().size(px(6.)).rounded_full().bg(rgb(SENDING)))
-                .child(text)
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(rgb(SENDING)),
+                )
+                .child(div().min_w_0().truncate().child(text))
                 .into_any_element(),
         )
     }

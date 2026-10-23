@@ -174,12 +174,13 @@ fn a_generated_clip_decodes_every_frame_in_order_with_timestamps() {
         &tools,
         &clip,
         DecodeOptions {
-            content_id: 7,
+            content_id: Some(7),
             ..Default::default()
         },
     );
     assert_eq!(result.failed, None);
     let opened = result.opened.unwrap();
+    assert_eq!(opened.content_id, 7);
     let video = opened.info.video.as_ref().unwrap();
     assert_eq!(
         (video.codec.as_str(), video.width, video.height),
@@ -818,6 +819,139 @@ fn a_frame_larger_than_the_budget_is_refused() {
     assert_eq!(result.opened.unwrap().queue_frames, 2);
 }
 
+/// The budget is enforced, not only reported: a consumer that stops
+/// reading leaves at most `Opened::queue_frames` frames held by the decoder
+/// (review finding: the channel used to keep the requested 8).
+#[test]
+fn the_frame_budget_bounds_the_frames_held_while_the_consumer_waits() {
+    let Some(tools) = tools("the_frame_budget_bounds_the_frames_held_while_the_consumer_waits")
+    else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let clip = testsrc(&tools, dir.path(), "clip.mkv", "320x240", 30, "2");
+    let frame_bytes = 320 * 240 * 4;
+    let decoder = Decoder::start(
+        &tools,
+        &clip,
+        DecodeOptions {
+            queue_frames: 8,
+            frame_budget: 2 * frame_bytes,
+            stall_timeout: Duration::from_millis(300),
+            ..Default::default()
+        },
+    );
+    let opened = match decoder.next_timeout(WAIT) {
+        Some(DecodeEvent::Opened(opened)) => opened,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(opened.queue_frames, 2);
+    // Do not consume: the decoder fills what it may hold, then waits.
+    let mut most = 0;
+    let watched = Instant::now();
+    while watched.elapsed() < Duration::from_millis(1200) {
+        most = most.max(decoder.buffered_frames());
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(most, 2, "held frames stay within the budget");
+    let rest = run_after(&decoder, true);
+    assert_eq!(rest.failed, None, "waiting on the consumer is not a stall");
+    assert_eq!(rest.end, Some((60, false)));
+    assert_eq!(rest.frames.len(), 60, "no frame lost");
+    assert_eq!(decoder.buffered_frames(), 0);
+}
+
+/// Tiny frames let far more than the 256 queued frame lines pile up on
+/// stderr. Stopping at `max_frames` must still end the decode instead of
+/// waiting forever on the stderr thread (review finding).
+#[test]
+fn stopping_early_with_many_pending_frame_lines_still_ends() {
+    let Some(tools) = tools("stopping_early_with_many_pending_frame_lines_still_ends") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let clip = testsrc(&tools, dir.path(), "clip.mkv", "64x36", 30, "20");
+    let decoder = Decoder::start(
+        &tools,
+        &clip,
+        DecodeOptions {
+            fit: Fit::Within(Extent {
+                width: 1,
+                height: 1,
+            }),
+            queue_frames: 1,
+            max_frames: Some(2),
+            ..Default::default()
+        },
+    );
+    match decoder.next_timeout(WAIT) {
+        Some(DecodeEvent::Opened(opened)) => {
+            assert_eq!(
+                opened.extent,
+                Extent {
+                    width: 1,
+                    height: 1
+                }
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    // FFmpeg decodes all 600 frames ahead into the pipes meanwhile.
+    std::thread::sleep(Duration::from_millis(1500));
+    let rest = run_after(&decoder, true);
+    assert_eq!(rest.failed, None);
+    assert_eq!(rest.frames.len(), 2);
+    assert_eq!(rest.end, Some((2, true)));
+}
+
+/// Decoders started with the default options never share frame versions.
+#[test]
+fn default_decoders_get_distinct_content_ids() {
+    let Some(tools) = tools("default_decoders_get_distinct_content_ids") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let clip = solid(&tools, dir.path(), "red.mkv", "red", "16x16", 1);
+    let first = decode(&tools, &clip, DecodeOptions::default());
+    let second = decode(&tools, &clip, DecodeOptions::default());
+    let (a, b) = (&first.frames[0].version, &second.frames[0].version);
+    assert_ne!(a.id, b.id);
+    assert_eq!((a.revision, b.revision), (0, 0));
+    assert_eq!(first.opened.unwrap().content_id, a.id);
+    assert_ne!(a.id, 0);
+}
+
+/// `first_frame`'s own deadline is a timeout, not a decoder stall: a probe
+/// still running when it passes is reported as `TimedOut`.
+#[cfg(unix)]
+#[test]
+fn first_frame_reports_its_own_deadline_as_a_timeout() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir.path().join("ffprobe");
+    std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let clip = dir.path().join("clip.mkv");
+    std::fs::write(&clip, b"not decoded").unwrap();
+    let tools = Tools {
+        ffmpeg: PathBuf::from("/nonexistent/ffmpeg"),
+        ffprobe: fake,
+    };
+    let timeout = Duration::from_millis(300);
+    let started = Instant::now();
+    let result = first_frame(
+        &tools,
+        &clip,
+        Extent {
+            width: 64,
+            height: 36,
+        },
+        timeout,
+    );
+    assert_eq!(result.err(), Some(MediaError::TimedOut(timeout)));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
 /// The system FFmpeg of this Linux distribution is a GPL build: the license
 /// check refuses it (VAL-MEDIA-003 negative case), and the pinned build is
 /// accepted with its version.
@@ -845,4 +979,30 @@ fn the_locator_refuses_a_gpl_system_build_and_accepts_the_pinned_one() {
         "pinned 8.1 build, got {}",
         located.version
     );
+}
+
+/// `scripts/fetch-ffmpeg` treats a flag without its value as a usage error
+/// (exit 2 with a message), not a silent exit 1 that looks like a failed
+/// download (review finding). Nothing is downloaded on these paths.
+#[cfg(unix)]
+#[test]
+fn fetch_ffmpeg_reports_a_missing_flag_value_as_usage() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/fetch-ffmpeg");
+    for args in [
+        &["--platform"][..],
+        &["--dest"],
+        &["--platform", ""],
+        &["--dest", "/nonexistent/x", "--platform"],
+    ] {
+        let output = Command::new("bash")
+            .arg(&script)
+            .args(args)
+            .env("SELA_FFMPEG_BASE_URL", "file:///nonexistent")
+            .stdin(Stdio::null())
+            .output()
+            .expect("run bash");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
+        assert!(stderr.contains("needs a value"), "{args:?}: {stderr}");
+    }
 }

@@ -31,10 +31,18 @@ platform=""
 dest=""
 keep=0
 force=0
+# A flag that takes a value must have one: usage error (exit 2), not a
+# silent `shift` failure under `set -e`.
+value_of() {
+  if [ $# -lt 2 ] || [ -z "$2" ]; then
+    echo "fetch-ffmpeg: $1 needs a value" >&2
+    exit 2
+  fi
+}
 while [ $# -gt 0 ]; do
   case "$1" in
-    --platform) platform="${2:-}"; shift 2 ;;
-    --dest) dest="${2:-}"; shift 2 ;;
+    --platform) value_of "$@"; platform="$2"; shift 2 ;;
+    --dest) value_of "$@"; dest="$2"; shift 2 ;;
     --keep-archive) keep=1; shift ;;
     --force) force=1; shift ;;
     -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;

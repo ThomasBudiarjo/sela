@@ -10,10 +10,12 @@
 //!
 //! Events arrive in order: [`DecodeEvent::Opened`], any number of
 //! [`DecodeEvent::Frame`], then exactly one terminal event
-//! ([`DecodeEvent::End`] or [`DecodeEvent::Failed`]). The queue holds at most
-//! [`Opened::queue_frames`] events; when it is full the reader stops reading,
-//! the pipe fills and FFmpeg blocks (backpressure). A full queue never counts
-//! as a stall: only time spent waiting on FFmpeg does. Dropping the
+//! ([`DecodeEvent::End`] or [`DecodeEvent::Failed`]). The decoder holds at
+//! most [`Opened::queue_frames`] decoded frames at once (queued for the
+//! consumer plus the one being filled), so their bytes stay within
+//! [`DecodeOptions::frame_budget`]. When that many are held the reader stops
+//! reading, the pipe fills and FFmpeg blocks (backpressure). A full queue
+//! never counts as a stall: only time spent waiting on FFmpeg does. Dropping the
 //! [`Decoder`] cancels: the child tree is killed at once and the threads end
 //! on their own, so a consumer on the UI thread or frame path never waits.
 
@@ -30,7 +32,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// Upper bound on [`DecodeOptions::queue_frames`].
@@ -67,11 +69,14 @@ pub enum Fit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodeOptions {
     pub fit: Fit,
-    /// Frames the queue may hold, 1..=[`MAX_QUEUE_FRAMES`]; lowered further
-    /// so the queue fits `frame_budget`.
+    /// Decoded frames the decoder may hold at once (queued plus the one
+    /// being filled), 1..=[`MAX_QUEUE_FRAMES`]; lowered further so that many
+    /// frames fit `frame_budget`. The applied value is
+    /// [`Opened::queue_frames`].
     pub queue_frames: usize,
-    /// Bytes the queued frames may occupy. A single frame larger than this
-    /// fails with [`MediaError::TooLarge`].
+    /// Bytes the frames held by the decoder may occupy; enforced, not only
+    /// reported. A single frame larger than this fails with
+    /// [`MediaError::TooLarge`]. Frames the consumer has taken are its own.
     pub frame_budget: usize,
     /// How long FFmpeg may produce nothing while Sela waits for it.
     pub stall_timeout: Duration,
@@ -79,7 +84,9 @@ pub struct DecodeOptions {
     /// Stop after this many frames (a poster frame is `Some(1)`).
     pub max_frames: Option<u64>,
     /// `ContentVersion::id` of the frames; the revision is the frame index.
-    pub content_id: u128,
+    /// `None` (the default) takes a fresh process-unique id per
+    /// [`Decoder::start`], so two decoders never share frame versions.
+    pub content_id: Option<u128>,
 }
 
 impl Default for DecodeOptions {
@@ -91,9 +98,19 @@ impl Default for DecodeOptions {
             stall_timeout: DEFAULT_STALL_TIMEOUT,
             probe_timeout: probe::PROBE_TIMEOUT,
             max_frames: None,
-            content_id: 0,
+            content_id: None,
         }
     }
+}
+
+/// High bits of generated decoder content ids ("sela-vid"), apart from the
+/// random song and media ids that share `ContentVersion::id`.
+const GENERATED_ID_TAG: u128 = (u64::from_be_bytes(*b"sela-vid") as u128) << 64;
+
+/// A content id no other decoder in this process has used.
+fn fresh_content_id() -> u128 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    GENERATED_ID_TAG | u128::from(NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 /// The two executables of one located FFmpeg build.
@@ -171,8 +188,11 @@ pub struct Opened {
     pub info: MediaInfo,
     /// Size of every frame that follows.
     pub extent: Extent,
-    /// Queue capacity after the budget was applied.
+    /// Most decoded frames the decoder holds at once, after the budget was
+    /// applied: `queue_frames * extent bytes <= frame_budget`.
     pub queue_frames: usize,
+    /// `ContentVersion::id` of every frame that follows.
+    pub content_id: u128,
 }
 
 #[derive(Debug)]
@@ -210,9 +230,41 @@ struct Shared {
     start: Instant,
     pid: AtomicU32,
     child: Mutex<Option<Supervised>>,
+    /// Decoded frames allocated by the supervisor and not yet taken by the
+    /// consumer: the frame being filled plus those in the event queue.
+    held: Mutex<usize>,
+    /// Signalled when the consumer takes a frame or cancels.
+    room: Condvar,
 }
 
 impl Shared {
+    /// Waits until fewer than `limit` frames are held, then reserves one.
+    /// `false` when the decoder was cancelled meanwhile.
+    fn reserve_frame(&self, limit: usize) -> bool {
+        let Ok(mut held) = self.held.lock() else {
+            return false;
+        };
+        while *held >= limit {
+            if self.cancelled.load(Ordering::SeqCst) {
+                return false;
+            }
+            held = match self.room.wait_timeout(held, WATCHDOG_TICK) {
+                Ok((held, _)) => held,
+                Err(_) => return false,
+            };
+        }
+        *held += 1;
+        true
+    }
+
+    /// One held frame was taken by the consumer or discarded.
+    fn release_frame(&self) {
+        if let Ok(mut held) = self.held.lock() {
+            *held = held.saturating_sub(1);
+        }
+        self.room.notify_all();
+    }
+
     fn set_phase(&self, phase: Phase) {
         self.phase.store(phase as u8, Ordering::SeqCst);
     }
@@ -253,11 +305,15 @@ impl Decoder {
             start: Instant::now(),
             pid: AtomicU32::new(0),
             child: Mutex::new(None),
+            held: Mutex::new(0),
+            room: Condvar::new(),
         });
+        let content_id = options.content_id.unwrap_or_else(fresh_content_id);
         let job = Job {
             tools: tools.clone(),
             input: input.to_path_buf(),
             options,
+            content_id,
             shared: shared.clone(),
             events: sender,
         };
@@ -271,12 +327,27 @@ impl Decoder {
     /// The next event if one is queued. Never blocks: for the UI thread and
     /// the frame path.
     pub fn try_next(&self) -> Option<DecodeEvent> {
-        self.events.try_recv().ok()
+        self.took(self.events.try_recv().ok())
     }
 
     /// Waits up to `timeout` for the next event. Worker threads only.
     pub fn next_timeout(&self, timeout: Duration) -> Option<DecodeEvent> {
-        self.events.recv_timeout(timeout).ok()
+        self.took(self.events.recv_timeout(timeout).ok())
+    }
+
+    /// A frame the consumer takes leaves the decoder's budget.
+    fn took(&self, event: Option<DecodeEvent>) -> Option<DecodeEvent> {
+        if let Some(DecodeEvent::Frame(_)) = event {
+            self.shared.release_frame();
+        }
+        event
+    }
+
+    /// Decoded frames the decoder holds right now (queued plus the one being
+    /// filled); never more than [`Opened::queue_frames`]. Their bytes are
+    /// this times the [`Opened::extent`] size. For diagnostics and tests.
+    pub fn buffered_frames(&self) -> usize {
+        self.shared.held.lock().map_or(0, |held| *held)
     }
 
     /// The running `ffmpeg` child's process id, for diagnostics.
@@ -291,12 +362,16 @@ impl Decoder {
 impl Drop for Decoder {
     fn drop(&mut self) {
         self.shared.cancelled.store(true, Ordering::SeqCst);
+        self.shared.room.notify_all();
         self.shared.kill();
     }
 }
 
 /// Decodes the first frame of `input` fitted to `extent` (a poster frame or
 /// a still background). Blocks until it lands or fails: worker threads only.
+/// When `timeout` passes first (a slow probe, start or decode) the result is
+/// [`MediaError::TimedOut`]; the decoder's own stall watchdog still reports
+/// [`MediaError::Stalled`].
 pub fn first_frame(
     tools: &Tools,
     input: &Path,
@@ -324,7 +399,7 @@ pub fn first_frame(
             }
             Some(DecodeEvent::End { .. }) => return Err(MediaError::NoFrames),
             Some(DecodeEvent::Failed(error)) => return Err(error),
-            None => return Err(MediaError::Stalled(timeout)),
+            None => return Err(MediaError::TimedOut(timeout)),
         }
     }
 }
@@ -525,6 +600,7 @@ struct Job {
     tools: Tools,
     input: PathBuf,
     options: DecodeOptions,
+    content_id: u128,
     shared: Arc<Shared>,
     events: SyncSender<DecodeEvent>,
 }
@@ -595,6 +671,7 @@ impl Job {
                 info,
                 extent: frame,
                 queue_frames,
+                content_id: self.content_id,
             }))
             .is_err()
         {
@@ -637,7 +714,11 @@ impl Job {
                 .spawn(move || watch(&shared, timeout))
                 .map_err(|error| MediaError::Spawn(error.to_string()))?
         };
-        let (stop, delivered) = self.frames(stdout, &meta_rx, frame, frame_rate);
+        let (stop, delivered) = self.frames(stdout, &meta_rx, frame, frame_rate, queue_frames);
+        // No more frame lines are read: let the stderr thread run to the end
+        // of stderr instead of waiting on a full metadata queue, so FFmpeg is
+        // never held on its stderr and the join below always returns.
+        drop(meta_rx);
         let status = match stop {
             Stop::Eof { .. } if !self.shared.stalled.load(Ordering::SeqCst) => self.wait_exit(),
             _ => None,
@@ -690,14 +771,16 @@ impl Job {
     }
 
     /// Reads frames until stdout ends, the limit is reached, the consumer
-    /// leaves or a frame is inconsistent. Returns how it stopped and how
-    /// many frames were delivered.
+    /// leaves or a frame is inconsistent. At most `held_limit` frames are
+    /// held at once: a frame's buffer is only allocated once one is free.
+    /// Returns how it stopped and how many frames were delivered.
     fn frames(
         &self,
         mut stdout: impl Read,
         meta: &Receiver<FrameMeta>,
         extent: Extent,
         frame_rate: Option<f64>,
+        held_limit: usize,
     ) -> (Stop, u64) {
         let frame_bytes = extent.width as usize * extent.height as usize * 4;
         let mut clock = Clock::new(frame_rate);
@@ -710,16 +793,24 @@ impl Job {
             {
                 return (Stop::Limit, delivered);
             }
+            // Waiting for the consumer to take a frame is not a stall.
+            self.shared.set_phase(Phase::Blocked);
+            if !self.shared.reserve_frame(held_limit) {
+                return (Stop::Gone, delivered);
+            }
+            self.shared.touch();
             self.shared.set_phase(Phase::Producing);
             // The showinfo line comes before the frame's bytes: FFmpeg logs
             // it in the filter graph, before encoding and muxing.
             let Ok(meta) = meta.recv() else {
+                self.shared.release_frame();
                 // stderr closed: FFmpeg exited or was killed. Anything left
                 // on stdout is an incomplete frame.
                 let partial = drain(&mut stdout, &self.shared);
                 return (Stop::Eof { partial }, delivered);
             };
             if meta.size != Some((extent.width, extent.height)) {
+                self.shared.release_frame();
                 let size = meta
                     .size
                     .map_or("unknown".into(), |(w, h)| format!("{w}x{h}"));
@@ -735,6 +826,8 @@ impl Job {
             let buffer = Arc::get_mut(&mut rgba).expect("fresh buffer is unique");
             let read = read_full(&mut stdout, buffer, &self.shared);
             if read < frame_bytes {
+                drop(rgba);
+                self.shared.release_frame();
                 return (Stop::Eof { partial: read }, delivered);
             }
             let (pts, repaired) = clock.place(&meta);
@@ -749,12 +842,13 @@ impl Job {
                 extent,
                 rgba,
                 version: ContentVersion {
-                    id: self.options.content_id,
+                    id: self.content_id,
                     revision: delivered,
                 },
             };
             self.shared.set_phase(Phase::Blocked);
             if self.events.send(DecodeEvent::Frame(frame)).is_err() {
+                self.shared.release_frame();
                 return (Stop::Gone, delivered);
             }
             self.shared.touch();
@@ -815,8 +909,9 @@ fn drain(pipe: &mut impl Read, shared: &Shared) -> usize {
     }
 }
 
-/// Reads FFmpeg's stderr line by line: frame lines go to `meta`, the rest
-/// to a bounded tail for diagnostics. Every line counts as progress.
+/// Reads FFmpeg's stderr line by line to its end: frame lines go to `meta`
+/// until the supervisor stops reading them, the rest to a bounded tail for
+/// diagnostics. Every line counts as progress.
 fn read_stderr(
     stderr: impl Read,
     shared: &Shared,
@@ -825,6 +920,7 @@ fn read_stderr(
 ) {
     let mut reader = BufReader::new(stderr);
     let mut line = Vec::new();
+    let mut frames_wanted = true;
     loop {
         line.clear();
         match (&mut reader)
@@ -853,9 +949,9 @@ fn read_stderr(
         let text = String::from_utf8_lossy(&line);
         let text = text.trim_end();
         if let Some(frame) = parse_showinfo(text) {
-            if meta.send(frame).is_err() {
-                return;
-            }
+            // Once the supervisor dropped its receiver, frame lines are
+            // discarded but stderr is still drained.
+            frames_wanted = frames_wanted && meta.send(frame).is_ok();
         } else if !text.contains("Parsed_showinfo")
             && !text.is_empty()
             && let Ok(mut tail) = tail.lock()

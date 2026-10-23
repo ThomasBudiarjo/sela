@@ -26,6 +26,11 @@ Three operator launches on the same seeded library with a private profile:
 3. "missing": SELA_FFMPEG_DIR empty and SELA_FFMPEG_NO_DEV_COPY=1. The log
    says unavailable (Missing) and the warning reads "... FFmpeg was not
    found".
+4. "narrow-id": the GPL setup again on a second library whose profile says
+   `language=id`, resized to the 720x440 minimum. The Indonesian warning
+   ("Video dan audio tidak tersedia: ...") must stay inside the window and
+   right of the Resources header controls, which keep their wide-window
+   width (it truncates instead of squeezing them).
 
 The warning must appear within 20 s of the window (the probe bound) while
 the window already responds; Ctrl+Q then exits cleanly each time.
@@ -49,6 +54,9 @@ GPL_DIR = "/usr/bin"
 WARNING_ID = "media-unavailable"
 GPL_TEXT = "Video and audio unavailable: the FFmpeg found is a GPL build"
 MISSING_TEXT = "Video and audio unavailable: FFmpeg was not found"
+GPL_TEXT_ID = "Video dan audio tidak tersedia: FFmpeg yang ditemukan berlisensi GPL"
+HEADER_CONTROLS = ("collapse-resources", "quit", "reset-layout")
+MIN_WINDOW = (720, 440)
 # `SENDING` (amber) of the warning text and dot.
 AMBER_RGB = (0xD9, 0x9A, 0x2B)
 LOG_TIMEOUT = 20.0
@@ -209,6 +217,55 @@ def missing(session: nx.Session, library: Path) -> None:
     quit_cleanly(session, app, operator, "missing")
 
 
+def narrow_indonesian(session: nx.Session, library: Path) -> None:
+    summary = session.summary
+    (library.parent / "settings.txt").write_text("sela-settings 1\nlanguage=id\n")
+    app, operator = launch(
+        session,
+        library,
+        "narrow-id",
+        {"SELA_FFMPEG_DIR": GPL_DIR, "SELA_FFMPEG_NO_DEV_COPY": "1"},
+    )
+    control = wait_warning(app, operator, "narrow-id")
+    if control.name != GPL_TEXT_ID:
+        raise nx.Failure(f"narrow-id: warning reads {control.name!r}")
+    controls = app.controls(operator)
+    wide = {key: controls[key].width for key in HEADER_CONTROLS}
+    settled = nx.resize(operator, *MIN_WINDOW)
+    summary["narrow_id_size"] = settled
+    if settled is None or settled[0] > MIN_WINDOW[0] + 1:
+        raise nx.Failure(f"narrow-id: the window did not shrink: {settled}")
+
+    def laid_out():
+        found = app.controls(operator)
+        warn = found.get(WARNING_ID)
+        if warn is None or any(key not in found for key in HEADER_CONTROLS):
+            return None
+        # AT-SPI bounds follow the next frame; wait for the narrow layout.
+        if warn.x + warn.width > settled[0]:
+            return None
+        return found
+
+    found = nx.wait_until(laid_out, 5.0, "narrow-id: the narrow layout", interval=0.25)
+    warn = found[WARNING_ID]
+    narrow = {key: found[key].width for key in HEADER_CONTROLS}
+    reset = found["reset-layout"]
+    summary["narrow_id_warning"] = [warn.x, warn.y, warn.width, warn.height]
+    summary["narrow_id_controls"] = {"wide": wide, "narrow": narrow}
+    image = session.save(nx.capture_stable(operator), "narrow-id-operator-warning")
+    if narrow != wide:
+        raise nx.Failure(f"narrow-id: header controls squeezed: {wide} -> {narrow}")
+    if reset.x + reset.width > warn.x:
+        raise nx.Failure(
+            f"narrow-id: the warning overlaps Reset layout: {reset} {warn}"
+        )
+    amber = amber_in(image, warn)
+    summary["narrow_id_amber_samples"] = amber
+    if amber < 5:
+        raise nx.Failure(f"narrow-id: the truncated warning is not drawn ({amber})")
+    quit_cleanly(session, app, operator, "narrow-id")
+
+
 def body(session: nx.Session) -> str:
     data = session.temp("sela-media-")
     library = nx.seed_library(data / "library.sqlite", seed=session.args.seed)
@@ -216,10 +273,13 @@ def body(session: nx.Session) -> str:
     session.summary["accepted_version"] = version
     gpl_refused(session, library)
     missing(session, library)
+    second = nx.seed_library(data / "narrow" / "library.sqlite", seed=session.args.seed)
+    narrow_indonesian(session, second)
     return (
         f"FFmpeg {version} accepted without a warning; the GPL system build and a "
         "missing FFmpeg each show the media-unavailable status while Live output, "
-        "Go Live and Black keep working"
+        "Go Live and Black keep working; the Indonesian warning truncates at the "
+        "minimum window without squeezing the header controls"
     )
 
 

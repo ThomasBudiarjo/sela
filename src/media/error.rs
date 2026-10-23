@@ -35,6 +35,9 @@ pub enum MediaError {
     /// The decoder produced nothing for this long while Sela was waiting for
     /// it (not while Sela's queue was full) and was killed.
     Stalled(Duration),
+    /// A blocking helper's overall deadline (e.g. `first_frame`'s `timeout`)
+    /// passed before a result, whatever was slow: probe, start or decode.
+    TimedOut(Duration),
     /// The decoder exited abnormally or was killed by someone else.
     Crashed(String),
     /// The decoder ended without a single frame (failed first-frame
@@ -74,6 +77,11 @@ impl fmt::Display for MediaError {
             Self::Stalled(timeout) => write!(
                 f,
                 "the decoder stopped responding for {} s",
+                timeout.as_secs_f32()
+            ),
+            Self::TimedOut(timeout) => write!(
+                f,
+                "preparing the picture took longer than {} s",
                 timeout.as_secs_f32()
             ),
             Self::Crashed(detail) => write!(f, "the decoder stopped unexpectedly ({detail})"),

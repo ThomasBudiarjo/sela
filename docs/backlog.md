@@ -1042,7 +1042,9 @@ logs the accepted version or every refusal, and shows a non-blocking
 "Video and audio unavailable" status for a missing, GPL or nonfree build
 (Ubuntu's GPL `/usr/bin/ffmpeg` is the negative case). Process isolation is
 decided (FFmpeg as supervised children: process group on Unix, Job Object on
-Windows) and the CPU frame queue is bounded by count and bytes; a
+Windows; only the Job Object also ends children when Sela itself dies) and
+the CPU frames a decoder holds are bounded by count and by `frame_budget`
+bytes (enforced; review round 1 fixed a reported-only bound); a
 provisional software-decode matrix is in [media](media.md). Checkboxes stay
 open: no hardware decode, GPU/audio budgets or Windows evidence yet.
 Windows runs: parity-pending PP-MC-03.

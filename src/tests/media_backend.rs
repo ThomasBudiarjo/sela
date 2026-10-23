@@ -213,3 +213,40 @@ fn the_real_locator_accepts_the_pinned_development_build(cx: &mut TestAppContext
     cx.run_until_parked();
     assert!(cx.debug_bounds("media-unavailable").is_none());
 }
+
+/// The longest warning (Indonesian, nonfree) at the minimum window size
+/// truncates inside the Resources header instead of pushing the header
+/// controls or running past the window edge (review finding).
+#[gpui::test]
+fn the_longest_warning_fits_the_minimum_window_without_squeezing_controls(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = open_with(cx, &dir, Arc::new(|| Err(refused(Refusal::Nonfree))));
+    settle(&mut cx, &operator, "refused", |o| {
+        o.media_backend.availability == Availability::Unavailable(Unavailable::Nonfree)
+    });
+    sela::i18n::set_language(sela::i18n::Language::Indonesian);
+    operator.update(&mut cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let wide: Vec<_> = ["collapse-resources", "quit", "reset-layout"]
+        .iter()
+        .map(|id| cx.debug_bounds(id).expect(id).size)
+        .collect();
+    let (width, height) = sela::pane_layout::MIN_WINDOW;
+    cx.simulate_resize(size(px(width as f32), px(height as f32)));
+    operator.update(&mut cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let warning = cx.debug_bounds("media-unavailable").expect("warning shown");
+    let reset = cx.debug_bounds("reset-layout").expect("reset-layout");
+    let narrow: Vec<_> = ["collapse-resources", "quit", "reset-layout"]
+        .iter()
+        .map(|id| cx.debug_bounds(id).expect(id).size)
+        .collect();
+    sela::i18n::set_language(sela::i18n::Language::English);
+    assert_eq!(narrow, wide, "header controls keep their size");
+    assert!(reset.right() <= warning.left(), "{reset:?} {warning:?}");
+    assert!(
+        warning.right() <= px(width as f32),
+        "the warning stays inside the window: {warning:?}"
+    );
+    assert!(warning.size.width > px(0.));
+}

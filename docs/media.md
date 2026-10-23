@@ -202,6 +202,10 @@ not been evaluated.
 - When FFmpeg is unusable the Resources status row shows an amber dot and
   "Video and audio unavailable: …" (AccessKit role Status, id
   `media-unavailable`, its text as the accessible name; EN and ID strings).
+  In a narrow header it shrinks and truncates (the output line too) so the
+  header controls keep their size; the accessible name keeps the full text
+  (GPUI test `the_longest_warning_fits_the_minimum_window_without_squeezing_controls`:
+  Indonesian nonfree text at 720x440).
   The reason shown is the most actionable one, whatever the lookup order:
   nonfree build, then GPL build, then a copy that did not run, then nothing
   found (`backend::Unavailable::of`).
@@ -232,11 +236,11 @@ preparation worker consumes. It has no GPUI types.
 ```rust
 let decoder = Decoder::start(&tools, path, DecodeOptions {
     fit: Fit::Exact(cue_extent),      // or Fit::Source / Fit::Within(max)
-    queue_frames: 4,                  // 1..=16, lowered to fit frame_budget
-    frame_budget: 128 << 20,          // bytes of queued frames
+    queue_frames: 4,                  // frames held at once, 1..=16, lowered to fit frame_budget
+    frame_budget: 128 << 20,          // bytes of frames held by the decoder (enforced)
     stall_timeout: Duration::from_secs(5),
     max_frames: None,                 // Some(1) for a poster frame
-    content_id,                       // ContentVersion::id of the frames
+    content_id: None,                 // None: a fresh process-unique ContentVersion::id
     ..Default::default()
 });
 // UI thread / frame path: never blocks.
@@ -247,20 +251,26 @@ drop(decoder); // cancels: the ffmpeg tree is killed at once
 ```
 
 `first_frame(&tools, path, extent, timeout)` is the blocking poster-frame
-helper for workers (thumbnails, failed first-frame preparation).
+helper for workers (thumbnails, failed first-frame preparation). Its own
+`timeout` passing first is `TimedOut(timeout)` (whatever was slow: probe,
+start or decode); `Stalled` stays the decoder watchdog's verdict.
 
 How it works:
 
 1. `start` returns at once. A supervisor thread (`sela-decoder`) checks the
    path (`input_args` rules), runs ffprobe, picks the output size and sends
-   `Opened { info, extent, queue_frames }`.
+   `Opened { info, extent, queue_frames, content_id }` (`queue_frames` as
+   applied after the budget).
 2. It starts `ffmpeg -loglevel info -nostats -nostdin -hide_banner
    -protocol_whitelist file -i <path> -map 0:<video> -an -sn -dn -vf
    scale=W:H:flags=bicubic,setsar=1[,pad=...],format=rgba,showinfo=checksum=0
    -fps_mode passthrough -f rawvideo -pix_fmt rgba pipe:1` in its own kill
    domain (`media::process::Supervised`: a new process group killed with
    `SIGKILL` on Unix; a Job Object with `KILL_ON_JOB_CLOSE` and
-   `CREATE_NO_WINDOW` on Windows).
+   `CREATE_NO_WINDOW` on Windows). Only the Job Object also ends the tree
+   when Sela itself dies: Unix has no parent-death signal here, so after a
+   Sela crash or `SIGKILL` a child blocked on a slow read, or a hanging
+   ffprobe, lingers (open gap).
 3. `showinfo`, last in the chain, prints each output frame's number,
    timestamp, duration and size on stderr before the frame's bytes reach
    stdout. A stderr thread parses those lines (bounded line length, last 32
@@ -272,10 +282,20 @@ How it works:
    missing (`NOPTS`), repeated or backwards timestamp becomes the previous
    one plus the frame's duration (or 1/rate, or 1/30 s) with
    `VideoFrame::repaired` set.
-5. Frames go through a bounded channel (`queue_frames`). When it is full the
-   supervisor blocks, the pipe fills and FFmpeg stops (backpressure). At
-   most `queue_frames + 1` decoded frames exist per decoder. A frame larger
-   than `frame_budget` is refused (`TooLarge`); sides above 8192 are shrunk.
+5. The decoder holds at most `Opened::queue_frames` decoded frames at once,
+   counting the one being filled and those queued for the consumer:
+   `min(queue_frames clamped to 1..=16, frame_budget / frame bytes)`. A
+   frame's buffer is allocated only after a slot is free, and a slot frees
+   when the consumer takes the frame (`try_next`/`next_timeout`), so held
+   bytes never exceed `frame_budget` (`Decoder::buffered_frames` reports the
+   count). While no slot is free the supervisor stops reading, the pipe
+   fills and FFmpeg stops (backpressure). Frames the consumer has taken are
+   its own memory. A frame larger than `frame_budget` is refused
+   (`TooLarge`); sides above 8192 are shrunk. Example: the defaults (4
+   frames, four 4K frames of budget) on an 8K source hold one 132.7 MB frame.
+   After the frame loop stops (end, limit, consumer gone, bad frame) the
+   supervisor drops its frame-line receiver, so the stderr thread drains
+   stderr to its end instead of waiting on a full line queue.
 6. A watchdog thread kills FFmpeg when it produced nothing (no byte, no
    line) for `stall_timeout` while the supervisor was waiting on it. Time
    blocked on a full queue never counts.
@@ -298,6 +318,10 @@ Failure handling (all in `tests/media_decode.rs` unless noted):
 | ffmpeg silent (fake that sleeps) | `Stalled` at the stall timeout; the child is gone |
 | ffmpeg killed from outside | `Crashed("ffmpeg signal: 9 (SIGKILL)")` after the frames already read |
 | Consumer stops reading for 4× the stall timeout | FFmpeg held (still running), then all 60 frames, no stall |
+| `queue_frames: 8` with a budget of two frames, consumer not reading | `Opened::queue_frames == 2`, never more than 2 frames held, then all 60 frames |
+| 1x1 frames, `max_frames: Some(2)`, hundreds of frame lines pending | `End { frames: 2, limited: true }`, no hang |
+| `first_frame` deadline passes during a hanging probe | `TimedOut(timeout)` |
+| Two decoders with default options | different `ContentVersion::id`s |
 | Decoder dropped mid-stream | the ffmpeg process is gone within the bound; `drop` takes < 100 ms |
 | Crafted local HLS playlist or ffconcat naming `http://127.0.0.1:<port>` (VAL-MEDIA-038) | `ProtocolRefused`, and a listener on that port saw no connection |
 
@@ -327,7 +351,9 @@ profile showing it matters.
   `python3 scripts/native_x11.py serve --display :115`): PASS. Run "with"
   (development copy accepted, no warning), "gpl" (`SELA_FFMPEG_DIR=/usr/bin`,
   Ubuntu's GPL build, plus `SELA_FFMPEG_NO_DEV_COPY=1`: warning, then Live
-  output, Go Live and Ctrl+B on the real audience) and "missing".
+  output, Go Live and Ctrl+B on the real audience), "missing" and
+  "narrow-id" (Indonesian GPL warning at 720x440: truncated inside the window,
+  header buttons unchanged).
 - Windows: `scripts/media-backend-windows.py` (adds the console-window check
   and runs `tests/media_decode.rs` on Windows, which exercises the Job
   Object) and `scripts/fetch-ffmpeg.ps1`: written and linted, **not run**

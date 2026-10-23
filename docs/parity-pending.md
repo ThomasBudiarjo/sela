@@ -352,7 +352,13 @@ Common Windows prerequisites are listed once in
   probe, the GPL and missing warnings with Live output/Go Live/Black still
   working, and runs `cargo test --locked --test media_decode` with
   `SELA_REQUIRE_FFMPEG=1` (the drop and outside-kill tests exercise the Job
-  Object). Sela now: Linux only (`scripts/media-backend-x11.py` PASS).
+  Object). Not covered by that Windows run: the stall-watchdog, hanging-probe
+  and `first_frame` timeout tests and the `fetch-ffmpeg` usage test use
+  `cfg(unix)` shell fakes, and the GPL half of the locator test needs
+  `/usr/bin`; check those paths on Windows by hand (a `.cmd` ffprobe that
+  runs `timeout /t 30` must end in `ProbeTimedOut`; `fetch-ffmpeg.ps1
+  -Platform` without a value must fail as a usage error) or port the fakes.
+  Sela now: Linux only (`scripts/media-backend-x11.py` PASS).
   Re-run: the same commands.
 - [ ] **PP-MC-04 Mapped network and subst drives** (docs/media.md "Decoder
   input arguments" known gap). Steps: map a share as `Z:` and `subst Y:` a

@@ -416,6 +416,8 @@ impl Render for Operator {
                     ))
                     .child(
                         div()
+                            .min_w_0()
+                            .truncate()
                             .text_size(px(TEXT_CAPTION))
                             .text_color(rgb(MUTED))
                             .child(self.output_line()),

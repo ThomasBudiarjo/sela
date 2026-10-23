@@ -1,11 +1,17 @@
 //! Supervised FFmpeg child processes (M2-02, VAL-MEDIA-030/031).
 //!
 //! Every long-running FFmpeg tool runs in its own kill domain so that
-//! cancelling, a stall or Sela's own exit takes the whole tree down:
+//! cancelling, a stall or dropping its owner takes the whole tree down. Only
+//! on Windows does Sela's own abnormal exit do the same:
 //!
 //! - Unix: the child leads a new process group (`process_group(0)`) and
 //!   [`Supervised::kill`] sends `SIGKILL` to the group before the leader is
-//!   reaped, so the group id cannot have been reused.
+//!   reaped, so the group id cannot have been reused. There is no
+//!   parent-death signal: if Sela crashes or is `SIGKILL`ed, nothing kills
+//!   the group. A decoder then ends when its next write to the closed pipe
+//!   fails, but a child blocked on a slow read (a hung network mount) or a
+//!   sleeping ffprobe lingers, and its timeout died with Sela. Open gap,
+//!   tracked in docs/work-log.md (media-core).
 //! - Windows: the child is assigned to a Job Object with
 //!   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; closing the job handle (on drop,
 //!   or when Sela's process ends for any reason) terminates every process in
