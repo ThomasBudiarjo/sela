@@ -17,7 +17,7 @@ use sela::scripture::{
     self, Book, ParseError, Reference, Snapshot, VerseId,
     bundled::{self, Bundle},
     passage::{self, Located, Missing},
-    worker::{self, CatalogNote, Command, Entry, ImportError, Reply, State},
+    worker::{self, CatalogNote, Command, Damage, Entry, ImportError, Reply, State},
 };
 use std::collections::BTreeSet;
 
@@ -114,6 +114,9 @@ pub(crate) struct ScriptureTab {
     pub(crate) failure: Option<String>,
     pub(crate) translations: Vec<Entry>,
     pub(crate) catalog_pending: bool,
+    /// The first catalog reply has been applied: later ones (after an
+    /// import) refresh the list of translations only.
+    catalog_loaded: bool,
     /// Id of the translation the list shows.
     pub(crate) current: Option<String>,
     pub(crate) mode: Mode,
@@ -176,6 +179,7 @@ impl ScriptureTab {
             failure: None,
             translations: Vec::new(),
             catalog_pending: false,
+            catalog_loaded: false,
             current: None,
             mode: Mode::Reference,
             input,
@@ -233,6 +237,18 @@ impl ScriptureTab {
             .filter(|(id, _)| self.selection.contains(id))
             .cloned()
             .collect()
+    }
+
+    /// Drops the shown rows, selection and any passage or search still on
+    /// its way, so no reply for the previous translation lands.
+    fn forget_shown(&mut self) {
+        self.generations.advance();
+        self.pending = None;
+        self.queued = None;
+        self.reference = None;
+        let hits = self.mode == Mode::Keyword;
+        self.set_rows(Vec::new(), hits);
+        self.selection.clear();
     }
 
     fn set_rows(&mut self, rows: Vec<(VerseId, String)>, hits: bool) {
@@ -315,12 +331,57 @@ pub(crate) fn missing_note(missing: Missing, translation: &str) -> Note {
     Note { text, error: true }
 }
 
+/// The EN/ID wording of a translation file's problem; only the detail in
+/// parentheses (a check's name, the system's reason) stays untranslated.
+pub(crate) fn store_error(error: &sela::scripture::store::Error) -> String {
+    use sela::scripture::store::Error;
+    match error {
+        Error::NotFound => t!(Msg::ScriptureWhyMissing).into(),
+        Error::Io(detail) => t!(Msg::ScriptureWhyIo, detail = detail),
+        Error::Unsupported => t!(Msg::ScriptureWhyUnsupported).into(),
+        Error::Corrupt(detail) => t!(Msg::ScriptureWhyCorrupt, detail = detail),
+        Error::Invalid(detail) => t!(Msg::ScriptureWhyInvalid, detail = detail),
+    }
+}
+
+pub(crate) fn damage(why: &Damage) -> String {
+    use sela::scripture::bundled::Error;
+    match why {
+        Damage::Store(error) => store_error(error),
+        Damage::Bundle(Error::Checksum) => t!(Msg::ScriptureWhyChecksum).into(),
+        Damage::Bundle(Error::Inflate) => t!(Msg::ScriptureWhyInflate).into(),
+        Damage::Bundle(Error::Format(detail)) => t!(Msg::ScriptureWhyBundle, detail = detail),
+        Damage::FileName => t!(Msg::ScriptureWhyFileName).into(),
+    }
+}
+
+/// A failed passage or search, phrased for the note under the box.
+fn read_error(error: &worker::Error, translation: &str) -> String {
+    match error {
+        worker::Error::Unknown(id) => t!(Msg::ScriptureNotInstalled, translation = id),
+        worker::Error::Unavailable(why) => t!(
+            Msg::ScriptureDamaged,
+            translation = translation,
+            error = damage(why)
+        ),
+        worker::Error::TooLong => t!(
+            Msg::ScriptureErrTooLong,
+            max = sela::scripture::store::MAX_PASSAGE
+        ),
+        worker::Error::Store(error) => t!(
+            Msg::ScriptureDamaged,
+            translation = translation,
+            error = store_error(error)
+        ),
+    }
+}
+
 fn import_error(error: &ImportError) -> String {
     use sela::scripture::import::Rejected;
     match error {
-        ImportError::Unreadable(why) => why.clone(),
+        ImportError::Unreadable(detail) => t!(Msg::ScriptureWhyUnreadable, detail = detail),
         ImportError::TooMany => t!(Msg::ScriptureRejectTooMany).into(),
-        ImportError::Store(error) => error.to_string(),
+        ImportError::Store(error) => store_error(error),
         ImportError::Rejected(rejected) => match rejected {
             Rejected::TooLarge => t!(Msg::ScriptureRejectTooLarge).into(),
             Rejected::InvalidUtf8 => t!(Msg::ScriptureRejectEncoding).into(),
@@ -449,7 +510,10 @@ impl Operator {
             .is_some_and(worker::Worker::stopped)
         {
             self.scripture.worker = None;
-            self.scripture.failure = Some(t!(Msg::ScriptureUnavailable, error = "stopped"));
+            self.scripture.failure = Some(t!(
+                Msg::ScriptureUnavailable,
+                error = t!(Msg::ScriptureWhyStopped)
+            ));
             changed = true;
         }
         changed
@@ -468,6 +532,7 @@ impl Operator {
                     })
                     .collect();
                 let ready = |e: &&Entry| matches!(e.state, State::Ready { .. });
+                let before = self.scripture.current.clone();
                 let keep = self
                     .scripture
                     .current_entry()
@@ -486,18 +551,31 @@ impl Operator {
                             (t!(Msg::ScriptureRebuilt, translation = id), false)
                         }
                         CatalogNote::Failed(id, why) => (
-                            t!(Msg::ScriptureDamaged, translation = id, error = why),
+                            t!(Msg::ScriptureDamaged, translation = id, error = damage(why)),
                             true,
                         ),
-                        CatalogNote::Folder(why) => {
-                            (t!(Msg::ScriptureUnavailable, error = why), true)
-                        }
+                        CatalogNote::Folder(why) => (
+                            t!(
+                                Msg::ScriptureUnavailable,
+                                error = t!(Msg::ScriptureWhyFolder, detail = why)
+                            ),
+                            true,
+                        ),
                     });
                 } else if self.scripture.translations.is_empty() {
                     self.scripture.message = Some((t!(Msg::ScriptureNoTranslations).into(), true));
                 }
-                // Text typed while the catalog loaded applies now.
-                self.scripture_text_changed(cx);
+                if !std::mem::replace(&mut self.scripture.catalog_loaded, true) {
+                    // Text typed while the first catalog loaded applies now.
+                    self.scripture_text_changed(cx);
+                } else if self.scripture.current != before {
+                    // The shown translation became unusable: its rows go,
+                    // Preview and Live stay as they are.
+                    self.scripture.forget_shown();
+                }
+                // Any other refresh (after an import, whether it succeeded
+                // or not) leaves the list, the selection and Preview alone:
+                // only an operator action changes Preview.
             }
             Reply::Passage {
                 generation,
@@ -514,22 +592,9 @@ impl Operator {
                 {
                     match result {
                         Ok(verses) => self.passage_landed(pending, verses, cx),
-                        Err(worker::Error::TooLong) => {
-                            self.scripture.note = Some(Note {
-                                text: t!(
-                                    Msg::ScriptureErrTooLong,
-                                    max = sela::scripture::store::MAX_PASSAGE
-                                ),
-                                error: true,
-                            });
-                        }
                         Err(error) => {
                             self.scripture.note = Some(Note {
-                                text: t!(
-                                    Msg::ScriptureDamaged,
-                                    translation = translation,
-                                    error = error.to_string()
-                                ),
+                                text: read_error(&error, &translation),
                                 error: true,
                             });
                         }
@@ -538,7 +603,9 @@ impl Operator {
                 self.pump_scripture();
             }
             Reply::Search {
-                generation, result, ..
+                generation,
+                translation,
+                result,
             } => {
                 self.scripture.in_flight = false;
                 if self.scripture.generations.is_current(generation)
@@ -553,7 +620,7 @@ impl Operator {
                         }
                         Err(error) => {
                             self.scripture.note = Some(Note {
-                                text: t!(Msg::ScriptureUnavailable, error = error.to_string()),
+                                text: read_error(&error, &translation),
                                 error: true,
                             });
                         }
@@ -802,6 +869,10 @@ impl Operator {
         }
         self.scripture.mode = mode;
         self.scripture.note = None;
+        // The shown reference belongs to the list it loaded; after a mode
+        // switch the list shows hits (or nothing), so a translation switch
+        // must not reload it with a hit selected (EW8 UNOBSERVED).
+        self.scripture.reference = None;
         self.scripture.suggestions.clear();
         self.scripture.input.update(cx, |input, cx| {
             let _ = input.set_text("", cx);
@@ -825,25 +896,34 @@ impl Operator {
         };
         if let State::Damaged(why) = &entry.state {
             self.scripture.note = Some(Note {
-                text: t!(Msg::ScriptureDamaged, translation = id, error = why),
+                text: t!(Msg::ScriptureDamaged, translation = id, error = damage(why)),
                 error: true,
             });
             cx.notify();
             return;
         }
+        // A typed reference still loading is retyped in the new translation
+        // rather than replaced by the shown one.
+        let typed_pending = self
+            .scripture
+            .pending
+            .as_ref()
+            .is_some_and(|p| matches!(p.select, Select::Range(..)));
         match (self.scripture.mode, self.scripture.reference) {
-            (Mode::Reference, Some(reference)) => {
+            (Mode::Reference, Some(reference)) if !typed_pending => {
                 let keep: Vec<VerseId> = self.scripture.selection.iter().copied().collect();
-                self.load_reference(reference, id, Some(keep));
+                // With nothing selected the referenced verses are selected
+                // there, as if typed again.
+                let keep = (!keep.is_empty()).then_some(keep);
+                self.load_reference(reference, id, keep);
             }
             _ => {
+                // Nothing for the old translation may land after this: the
+                // rows and selection go, and the box's text (reference or
+                // keyword) is looked up in the new translation.
+                self.scripture.forget_shown();
                 self.scripture.current = Some(id);
-                if self.scripture.mode == Mode::Keyword {
-                    self.scripture_text_changed(cx);
-                } else {
-                    self.scripture.set_rows(Vec::new(), false);
-                    self.scripture.selection.clear();
-                }
+                self.scripture_text_changed(cx);
             }
         }
         cx.notify();
@@ -1569,13 +1649,18 @@ impl Operator {
             }))
             .child(div().flex_1())
             .when(selected > 0, |d| {
+                let count = t!(Msg::ScriptureSelectionCount, count = selected);
                 d.child(
                     div()
+                        .id("scripture-selection-count")
                         .debug_selector(|| "scripture-selection-count".into())
+                        .role(Role::Status)
+                        .aria_label(count.clone())
+                        .accessibility_id("scripture-selection-count")
                         .px_3()
                         .text_size(px(TEXT_CAPTION))
                         .text_color(rgb(MUTED))
-                        .child(t!(Msg::ScriptureSelectionCount, count = selected)),
+                        .child(count),
                 )
             })
             .into_any_element()

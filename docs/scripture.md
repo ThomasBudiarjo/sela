@@ -1,10 +1,18 @@
 # Scriptures
 
 Status (2026-10-22, stream `scripture`): M4-03 and M4-04 are
-**implemented-unqualified**. Everything below is checked by unit, GPUI and
-Linux/X11 native tests; Windows runs, EasyWorship 8.0.49 observations and
-physical-output checks are still open (docs/parity-pending.md, Stream:
-scripture).
+**implemented-unqualified**. The behavior below is checked by unit tests
+(`src/scripture/*`), GPUI tests (`src/tests/scripture.rs`, including the
+Import Bible… button and its file prompt, the catalog refresh after an
+import, translation switches and the `.selaschedule` v4 save/reopen) and the
+Linux/X11 native script `scripts/scripture-x11.py` (typing, Go Live, the
+malformed note, the WEB switch, keyword search, Import Bible… through the
+portal dialog, Add to Schedule; with `--kind dual` also the per-slide
+reference strip on a 1920x1080 audience). Not checked by any test: the red
+styling of a damaged translation row (visual only) and the native
+`.selaschedule` v4 save/reopen (in-process only). Windows runs, EasyWorship
+8.0.49 observations and physical-output checks are still open
+(docs/parity-pending.md, Stream: scripture).
 
 | Part | Where |
 | --- | --- |
@@ -108,7 +116,11 @@ stay as they were. A translation switch keeps the selected verses: the new
 translation's chapters are loaded (`passage::chapters`, which only needs the
 chapters to exist) and the verses it lacks are named ("Not in WEB: 3 John
 1:15"); if it lacks the book or chapter, the switch is refused and the old
-translation stays shown. The parser still uses KJV chapter counts, so a
+translation stays shown. With nothing selected, the referenced verses are
+selected in the new translation; a reference typed but not yet loaded, and
+the box's text after a Reference/Keyword switch (which forgets the shown
+reference), are looked up in the new translation instead, and nothing still
+on its way for the old translation can land afterwards. The parser still uses KJV chapter counts, so a
 translation with more chapters in a book than the KJV cannot reach them by
 reference (none bundled; open).
 
@@ -134,7 +146,12 @@ Import Bible… (Scriptures footer) reads one OSIS, USFX or Zefania XML file
 - The id comes from the file (`identifier`, OSIS work id) or the file name,
   upper-cased ASCII, and never replaces another translation (`SYA-2`).
   Imported rights are unknown to Sela, so the translation is marked
-  restricted (`redistributable = false`).
+  restricted (`redistributable = false`). The flag is recorded, not yet
+  enforced: a schedule item pinned from it still carries its verse text in
+  the `.selaschedule` file (see Schedule items).
+- After an import (whether it succeeded or failed) the catalog is refreshed
+  for the new row only: the verse list, its selection, Preview and the
+  schedule selection stay as the operator left them.
 
 ## Scriptures tab
 
@@ -163,7 +180,11 @@ UNOBSERVED best guesses"):
 Every string is in `src/i18n.rs` (English and Indonesian), every control has
 an AccessKit id and role (`scripture-reference`, `scripture-mode-*`,
 `scripture-suggestion-N`, `scripture-note`, `scripture-verses`, `verse-N`,
-`translation-<ID>`, `scripture-import`, `scripture-add`, `scripture-message`).
+`translation-<ID>`, `scripture-import`, `scripture-add`, `scripture-message`,
+`scripture-selection-count`). Problems reported by the worker (a damaged or
+unreadable file, a failed bundle install, a stopped reader) are phrased in
+the UI language; only a technical detail in parentheses (a check's name, the
+system's error text) stays untranslated.
 
 ## Preview, Go Live and pagination
 

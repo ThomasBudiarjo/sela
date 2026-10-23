@@ -718,6 +718,7 @@ scripture) with the exact observation to make.
 | Keyword search | Separate Keyword mode, all words must match (last as prefix), canonical order, 200 hits; starts at two characters (owner decision, not EW behavior). |
 | Slides | 44-character lines, 6 lines per slide, breaks between verses (EW8-OBS-056 flow/minimum size semantics unobserved); verse numbers on. |
 | Reference on output | Every slide carries its own reference over the translation name as the footer strip ("After Each Slide", Show Complete Passage off); book names in the translation's language, not abbreviated. |
-| Translation switch | Keeps the selected verses; names those the new translation lacks; refuses the switch when the book or chapter is missing. |
+| Translation switch | Keeps the selected verses; names those the new translation lacks; refuses the switch when the book or chapter is missing. With nothing selected it selects the referenced verses there; after a Reference/Keyword switch, or while a typed reference is still loading, it looks the box's text up in the new translation (PP-BIB-07). |
+| Bible import | Import Bible… adds the translation row and changes nothing else: the verse list, selection, Preview and schedule selection stay (PP-BIB-10). |
 | Schedule item | Add to Schedule pins the selected verse text (like a song revision); title "John 3:16-18 (KJV)". EW's own scripture schedule item and its update behavior are unobserved. |
 | Typing | Never triggers live shortcuts (same `SelaShow && !SelaTextInput` rule as the Songs search, EW8-OBS-047 best guess). |

@@ -599,6 +599,18 @@ pub enum Msg {
     ScriptureNotInstalled,
     ScriptureRestricted,
     ScriptureAddedToSchedule,
+    ScriptureWhyMissing,
+    ScriptureWhyIo,
+    ScriptureWhyUnsupported,
+    ScriptureWhyCorrupt,
+    ScriptureWhyInvalid,
+    ScriptureWhyChecksum,
+    ScriptureWhyInflate,
+    ScriptureWhyBundle,
+    ScriptureWhyFileName,
+    ScriptureWhyFolder,
+    ScriptureWhyUnreadable,
+    ScriptureWhyStopped,
 }
 
 impl Msg {
@@ -1122,6 +1134,18 @@ impl Msg {
         Msg::ScriptureNotInstalled,
         Msg::ScriptureRestricted,
         Msg::ScriptureAddedToSchedule,
+        Msg::ScriptureWhyMissing,
+        Msg::ScriptureWhyIo,
+        Msg::ScriptureWhyUnsupported,
+        Msg::ScriptureWhyCorrupt,
+        Msg::ScriptureWhyInvalid,
+        Msg::ScriptureWhyChecksum,
+        Msg::ScriptureWhyInflate,
+        Msg::ScriptureWhyBundle,
+        Msg::ScriptureWhyFileName,
+        Msg::ScriptureWhyFolder,
+        Msg::ScriptureWhyUnreadable,
+        Msg::ScriptureWhyStopped,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1715,6 +1739,18 @@ impl Msg {
             Self::ScriptureNotInstalled => "{translation} is not installed",
             Self::ScriptureRestricted => "restricted",
             Self::ScriptureAddedToSchedule => "Added {reference} to the schedule",
+            Self::ScriptureWhyMissing => "the file is missing",
+            Self::ScriptureWhyIo => "the file cannot be read or written ({detail})",
+            Self::ScriptureWhyUnsupported => "not a Sela Bible file, or one from a newer Sela",
+            Self::ScriptureWhyCorrupt => "the file fails a check ({detail})",
+            Self::ScriptureWhyInvalid => "the text was refused ({detail})",
+            Self::ScriptureWhyChecksum => "the bundled copy fails its checksum",
+            Self::ScriptureWhyInflate => "the bundled copy cannot be decompressed",
+            Self::ScriptureWhyBundle => "the bundled copy is invalid ({detail})",
+            Self::ScriptureWhyFileName => "the file name does not match the translation inside",
+            Self::ScriptureWhyFolder => "the Scripture folder cannot be created ({detail})",
+            Self::ScriptureWhyUnreadable => "the file cannot be read ({detail})",
+            Self::ScriptureWhyStopped => "the Bible reader stopped",
         }
     }
 
@@ -2331,6 +2367,20 @@ impl Msg {
             Self::ScriptureNotInstalled => "{translation} tidak terpasang",
             Self::ScriptureRestricted => "terbatas",
             Self::ScriptureAddedToSchedule => "{reference} ditambahkan ke jadwal",
+            Self::ScriptureWhyMissing => "berkas tidak ada",
+            Self::ScriptureWhyIo => "berkas tidak dapat dibaca atau ditulis ({detail})",
+            Self::ScriptureWhyUnsupported => {
+                "bukan berkas Alkitab Sela, atau dari Sela yang lebih baru"
+            }
+            Self::ScriptureWhyCorrupt => "berkas gagal diperiksa ({detail})",
+            Self::ScriptureWhyInvalid => "teks ditolak ({detail})",
+            Self::ScriptureWhyChecksum => "salinan bawaan gagal uji checksum",
+            Self::ScriptureWhyInflate => "salinan bawaan tidak dapat diekstrak",
+            Self::ScriptureWhyBundle => "salinan bawaan tidak valid ({detail})",
+            Self::ScriptureWhyFileName => "nama berkas tidak cocok dengan terjemahan di dalamnya",
+            Self::ScriptureWhyFolder => "folder Alkitab tidak dapat dibuat ({detail})",
+            Self::ScriptureWhyUnreadable => "berkas tidak dapat dibaca ({detail})",
+            Self::ScriptureWhyStopped => "pembaca Alkitab berhenti",
         }
     }
 }
@@ -2400,7 +2450,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 519);
+        assert_eq!(Msg::ALL.len(), 531);
     }
 
     #[test]

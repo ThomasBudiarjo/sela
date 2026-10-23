@@ -468,11 +468,29 @@ fn corrupt_translation_files_are_rebuilt_or_listed_unusable(cx: &mut TestAppCont
     operator.read_with(&cx, |o, _| {
         assert_eq!(tab(o).current.as_deref(), Some("SYA"));
         assert!(
-            note(o).is_some_and(|n| n.starts_with("USER is damaged: damaged")),
+            note(o).is_some_and(
+                |n| n.starts_with("USER is damaged: the file fails a check (")
+                    || n == "USER is damaged: not a Sela Bible file, or one from a newer Sela"
+            ),
             "{:?}",
             note(o)
         );
     });
+    // The reason is phrased in the UI language too, not the worker's English.
+    sela::i18n::set_language(sela::i18n::Language::Indonesian);
+    click(&mut cx, "translation-SYB");
+    cx.run_until_parked();
+    click(&mut cx, "translation-USER");
+    let indonesian = operator.read_with(&cx, |o, _| note(o));
+    sela::i18n::set_language(sela::i18n::Language::English);
+    assert!(
+        indonesian
+            .as_deref()
+            .is_some_and(|n| n.starts_with("USER rusak: ")
+                && (n.contains("berkas gagal diperiksa")
+                    || n.contains("bukan berkas Alkitab Sela"))),
+        "{indonesian:?}"
+    );
     // The rebuilt bundle works.
     type_box(&mut cx, &operator, "John 3:16");
     settle(&mut cx, &operator, "passage", |o| {
@@ -492,7 +510,38 @@ fn importing_a_user_file_adds_a_restricted_translation(cx: &mut TestAppContext) 
         <VERS vnumber="17">Teks sintetis tujuh belas</VERS></CHAPTER></BIBLEBOOK></XMLBIBLE>"#,
     )
     .unwrap();
-    operator.update(&mut cx, |o, _| o.start_scripture_import(file.clone()));
+    // Import Bible… asks for one file (no folders); cancelling imports nothing.
+    click(&mut cx, "scripture-import");
+    assert!(cx.did_prompt_for_paths(), "Import Bible… asks for a file");
+    cx.simulate_path_prompt_response(|options| {
+        assert!(options.files && !options.directories && !options.multiple);
+        None
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        operator.read_with(&cx, |o, _| tab(o).importing.clone()),
+        None
+    );
+    // While an import runs the button is disabled and asks for nothing.
+    operator.update(&mut cx, |o, _| o.scripture.importing = Some("busy".into()));
+    cx.run_until_parked();
+    click(&mut cx, "scripture-import");
+    assert!(
+        !cx.did_prompt_for_paths(),
+        "no second import while one runs"
+    );
+    operator.update(&mut cx, |o, _| o.scripture.importing = None);
+    cx.run_until_parked();
+    click(&mut cx, "scripture-import");
+    assert!(cx.did_prompt_for_paths());
+    let picked = file.clone();
+    cx.simulate_path_prompt_response(move |_| Some(vec![picked]));
+    cx.run_until_parked();
+    assert_eq!(
+        operator.read_with(&cx, |o, _| tab(o).importing.clone()),
+        Some("synthetic-zefania.xml".into()),
+        "the picked file is being imported"
+    );
     settle(&mut cx, &operator, "import", |o| tab(o).importing.is_none());
     operator.read_with(&cx, |o, _| {
         assert_eq!(
@@ -578,7 +627,7 @@ fn scripture_schedule_items_are_pinned_snapshots_that_survive_save_and_reopen(
         assert_eq!(previewed(o), Some((Some(entry), "John 3:16-18 (SYA)")));
         assert!(o.selected_song.is_none());
     });
-    // Live from the schedule item, then Page Down to the next item.
+    // Live from the schedule item.
     click(&mut cx, "live-output");
     settle(&mut cx, &operator, "output connection", connected);
     click(&mut cx, "go-live");
@@ -637,5 +686,154 @@ fn scripture_schedule_items_are_pinned_snapshots_that_survive_save_and_reopen(
     click(&mut cx, "go-live");
     settle(&mut cx, &operator, "reopened item live", |o| {
         o.on_screen() == Some("John 3:36; 4:2 (SYA) · John 3:36; 4:2")
+    });
+}
+
+/// Reviewer blocker: a catalog refresh after an import (successful or not)
+/// re-ran the typed reference and replaced Preview, the schedule selection
+/// and the manual verse selection with no operator action.
+#[gpui::test]
+fn a_catalog_refresh_after_an_import_leaves_preview_and_selection_alone(cx: &mut TestAppContext) {
+    let (mut cx, operator, dir) = open_tab(cx, |_| {});
+    type_box(&mut cx, &operator, "John 3:16-18");
+    settle(&mut cx, &operator, "passage", |o| selected(o).len() == 3);
+    // A manual (Ctrl+click) selection that differs from the typed range.
+    let ctrl = gpui::Modifiers {
+        control: true,
+        ..Default::default()
+    };
+    let bounds = cx.debug_bounds("verse-2").unwrap();
+    cx.simulate_click(bounds.center(), ctrl);
+    assert_eq!(
+        operator.read_with(&cx, |o, _| selected(o)),
+        [43_003_016, 43_003_018]
+    );
+    // The operator moves on to a song in the schedule.
+    click(&mut cx, "Songs");
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, "schedule-item-0");
+    settle(&mut cx, &operator, "song preview", |o| {
+        preview_title(o) == Some("Signal Hymn")
+    });
+    let entry = operator.read_with(&cx, |o, _| o.schedule.entries()[0].id);
+    click(&mut cx, "Scriptures");
+    let good = dir.path().join("refresh-zefania.xml");
+    std::fs::write(
+        &good,
+        r#"<XMLBIBLE biblename="Refresh"><INFORMATION><identifier>SREF</identifier></INFORMATION>
+        <BIBLEBOOK bnumber="43"><CHAPTER cnumber="3"><VERS vnumber="16">Refresh</VERS></CHAPTER>
+        </BIBLEBOOK></XMLBIBLE>"#,
+    )
+    .unwrap();
+    let bad = dir.path().join("not-a-bible.xml");
+    std::fs::write(&bad, b"<song/>").unwrap();
+    for (file, translations) in [(bad, 2), (good, 3)] {
+        operator.update(&mut cx, |o, _| o.start_scripture_import(file));
+        settle(&mut cx, &operator, "import and catalog refresh", |o| {
+            tab(o).importing.is_none()
+                && !tab(o).catalog_pending
+                && tab(o).translations.len() == translations
+        });
+        // Give any passage the refresh might have asked for time to land.
+        for _ in 0..20 {
+            operator.update(&mut cx, |o, cx| o.poll(cx));
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(previewed(o), Some((Some(entry), "Signal Hymn")));
+            assert_eq!(o.selected_entry, Some(entry), "schedule selection stays");
+            assert_eq!(
+                selected(o),
+                [43_003_016, 43_003_018],
+                "manual selection stays"
+            );
+            assert_eq!(tab(o).current.as_deref(), Some("SYA"));
+        });
+    }
+}
+
+/// Reviewer major: a translation switch with nothing selected, or after a
+/// keyword hit outside the shown reference, was refused with a wrong note.
+#[gpui::test]
+fn translation_switch_with_no_selection_or_after_keyword_hits(cx: &mut TestAppContext) {
+    let (mut cx, operator, _dir) = open_tab(cx, |_| {});
+    type_box(&mut cx, &operator, "John 3:16-18");
+    settle(&mut cx, &operator, "passage", |o| selected(o).len() == 3);
+    let ctrl = gpui::Modifiers {
+        control: true,
+        ..Default::default()
+    };
+    for row in ["verse-1", "verse-2", "verse-3"] {
+        let bounds = cx.debug_bounds(row).unwrap();
+        cx.simulate_click(bounds.center(), ctrl);
+    }
+    assert!(operator.read_with(&cx, |o, _| selected(o)).is_empty());
+    // Nothing selected: the referenced verses are selected in SYB.
+    click(&mut cx, "translation-SYB");
+    settle(&mut cx, &operator, "switch with no selection", |o| {
+        tab(o).current.as_deref() == Some("SYB")
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(note(o), None);
+        assert_eq!(selected(o), [43_003_016, 43_003_017, 43_003_018]);
+        assert_eq!(preview_title(o), Some("John 3:16-18 (SYB)"));
+    });
+    // A keyword hit outside John 3, then back to Reference mode: the switch
+    // does not reload John 3 with the hit kept.
+    click(&mut cx, "scripture-mode-keyword");
+    type_box(&mut cx, &operator, "third");
+    settle(&mut cx, &operator, "hits", |o| tab(o).rows.len() == 1);
+    click(&mut cx, "verse-0");
+    assert_eq!(operator.read_with(&cx, |o, _| selected(o)), [64_001_014]);
+    click(&mut cx, "scripture-mode-reference");
+    click(&mut cx, "translation-SYA");
+    settle(&mut cx, &operator, "switch after hits", |o| {
+        tab(o).current.as_deref() == Some("SYA")
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(note(o), None, "no false 'Not in SYA' note");
+        assert!(tab(o).selection.is_empty());
+        // Preview keeps the hit the operator chose.
+        assert_eq!(preview_title(o), Some("3 John 1:14 (SYB)"));
+    });
+}
+
+/// Reviewer minor: a switch while a reply for the old translation was in
+/// flight could be reverted by it, or label the old text with the new id.
+#[gpui::test]
+fn a_switch_while_a_reply_is_in_flight_is_not_reverted_or_mislabelled(cx: &mut TestAppContext) {
+    let (mut cx, operator, _dir) = open_tab(cx, |_| {});
+    // Typed, and SYB clicked before the SYA passage is polled.
+    type_box(&mut cx, &operator, "John 3:16");
+    click(&mut cx, "translation-SYB");
+    settle(&mut cx, &operator, "typed reference in SYB", |o| {
+        preview_title(o) == Some("John 3:16 (SYB)")
+    });
+    for _ in 0..20 {
+        operator.update(&mut cx, |o, cx| o.poll(cx));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(tab(o).current.as_deref(), Some("SYB"));
+        assert_eq!(selected(o), [43_003_016]);
+        assert_eq!(
+            o.preview.as_ref().unwrap().slides[0].text,
+            "16 Beta verse 16 lamp"
+        );
+    });
+    // Keyword hits in SYB; switch to SYA and Add before the new search
+    // lands: the SYB text is never pinned as SYA.
+    click(&mut cx, "scripture-mode-keyword");
+    type_box(&mut cx, &operator, "lamp");
+    settle(&mut cx, &operator, "SYB hits", |o| tab(o).rows.len() == 3);
+    click(&mut cx, "verse-0");
+    click(&mut cx, "translation-SYA");
+    operator.update(&mut cx, |o, _| o.add_scripture_to_schedule());
+    operator.read_with(&cx, |o, _| {
+        // The SYB hits are gone with the switch, so nothing is selected.
+        assert!(o.schedule.entries().is_empty(), "{:?}", entry_titles(o));
     });
 }

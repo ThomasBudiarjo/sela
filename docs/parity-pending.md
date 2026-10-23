@@ -366,9 +366,14 @@ is a Sela best guess recorded in docs/reference-observations.md
   selection and Preview kept. Re-run: `scripture-windows.py`.
 - [ ] **PP-BIB-07 Translation switch** (M4-03). Steps: with John 3:16-18
   shown, pick another installed translation; then pick one lacking the book.
-  Sela now: the same verses in the new translation, missing ones named; a
-  translation lacking the book or chapter is refused. Re-run:
-  `cargo test --bin sela tests::scripture::translation_switch_keeps_the_verses_and_reports_mismatched_canon`.
+  Also: Ctrl+click every verse off, then switch; and switch after a keyword
+  search with a hit selected. Sela now: the same verses in the new
+  translation, missing ones named; a translation lacking the book or chapter
+  is refused; with nothing selected the referenced verses are selected
+  there; after a mode switch the box's text is looked up there. Re-run:
+  `cargo test --bin sela tests::scripture::translation_switch` (both
+  `translation_switch_*` tests) and
+  `tests::scripture::a_switch_while_a_reply_is_in_flight_is_not_reverted_or_mislabelled`.
 - [ ] **PP-BIB-08 Scripture schedule items** (M4-04). Steps: add a passage to
   the schedule, save the schedule, reopen it; record the item title, whether
   the text is stored in the `.ews` and whether it follows a later Bible
@@ -377,12 +382,17 @@ is a Sela best guess recorded in docs/reference-observations.md
 - [ ] **PP-BIB-09 Windows run of the Sela check** (M4-03/M4-04). Steps: run
   `python scripts/scripture-windows.py` (row 23 below) on the three-monitor
   setup and inspect its captures, including the per-slide reference strip
-  on the 1080p audience (not visible on the 351 px X11 window). Not run: no
-  Windows host on 2026-10-22.
+  on the 1080p audience (on Linux it is checked by
+  `scripture-x11.py --kind dual`; the 351 px xvfb window is too small for
+  it). Not run: no Windows host on 2026-10-22.
 - [ ] **PP-BIB-10 Bible import** (M4-03). Steps: in EW, import one
   public-domain OSIS/Zefania file if EW offers it; record the dialog and the
-  rights wording. Sela now: Import Bible… for OSIS/USFX/Zefania, imported
-  texts marked restricted. Re-run: `cargo test --bin sela tests::scripture::importing_a_user_file_adds_a_restricted_translation`.
+  rights wording, and whether the shown passage, selection or Preview change
+  when the import finishes. Sela now: Import Bible… for OSIS/USFX/Zefania
+  (one file, no folders), imported texts marked restricted, nothing else
+  changes. Re-run: `cargo test --bin sela tests::scripture::importing_a_user_file_adds_a_restricted_translation`,
+  `tests::scripture::a_catalog_refresh_after_an_import_leaves_preview_and_selection_alone`,
+  `python3 scripts/scripture-x11.py`.
 
 ## Stream: themes
 

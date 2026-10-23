@@ -16,7 +16,9 @@ focus:
 1. Click the reference box and type "John 3:16-18": three verse rows are
    selected and Preview shows them.
 2. Turn Live output on, then Go Live: the captured audience output changes
-   and shows text.
+   and shows text. On the `dual` display (a real 1920x1080 audience) the
+   per-slide reference strip is also checked: ink in the strip's band at
+   the bottom of the output, where slide text never goes.
 3. Type "b", "." and Page Down into the box (Black and Go Live outside text
    fields): the audience output does not change.
 4. Type the malformed "John 3:99": the note says "John 3 has 36 verses in
@@ -25,7 +27,11 @@ focus:
    translation, Go Live changes the audience output again.
 6. Keyword mode, "only begotten" in KJV: verse rows appear (search starts
    at two characters); a double-click on the first one goes live.
-7. Add to Schedule: the schedule gains the item (title "Untitled
+7. Import Bible… through the portal Open dialog (a small synthetic
+   Zefania file): the footer reports the import, the new restricted row
+   appears, the keyword hits keep their selection (the catalog refresh
+   changes nothing the operator chose) and the audience is unchanged.
+8. Add to Schedule: the schedule gains the item (title "Untitled
    schedule*"), so Ctrl+Q asks first; Don't Save quits.
 
 X11 differences: on the default xvfb display the audience is the 624x351
@@ -33,8 +39,9 @@ development window beside the operator, not a monitor-covering window; the
 fonts are DejaVu (no Arial). Text in the audience capture is checked as
 present (ink box) and changed (digest), not read back. The 351-px-high
 development window is below the 360 px the reference strip needs
-(`slides::FOOTER_MIN_HEIGHT`), so the per-slide reference footer is covered
-by GPUI tests only here.
+(`slides::FOOTER_MIN_HEIGHT`), so on xvfb the strip is not drawn and not
+checked; run `--kind dual` for the native strip check. File dialogs are the
+GTK chooser of xdg-desktop-portal-gtk (docs/e2e-linux.md).
 """
 
 from __future__ import annotations
@@ -47,6 +54,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import native_x11 as nx
 
 APPLICATION_ID = 0x53424942  # "SBIB", src/scripture/store.rs
+# The reference strip's band at the bottom of the output: two lines at
+# 3.2 % of the height with line height 1.3 (src/slides.rs FOOTER_EM,
+# LINE_HEIGHT), so about 8.6 % of a 1080-px output. Slide text is fitted
+# above it, so ink in this band is the strip.
+STRIP_BAND = 0.085
+SYNTHETIC_ZEFANIA = """<XMLBIBLE biblename="Synthetic Zefania"><INFORMATION>
+<identifier>SZEF</identifier><language>IND</language>
+<rights>Synthetic rights</rights></INFORMATION>
+<BIBLEBOOK bnumber="43"><CHAPTER cnumber="3">
+<VERS vnumber="16">Teks sintetis enam belas</VERS>
+<VERS vnumber="17">Teks sintetis tujuh belas</VERS>
+</CHAPTER></BIBLEBOOK></XMLBIBLE>
+"""
+
+
+def strip_box(image: nx.Image) -> tuple[int, int, int, int] | None:
+    top = int(image.height * (1 - STRIP_BAND))
+    return image.ink_box(region=(0, top, image.width, image.height))
 
 
 def body(session: nx.Session) -> str:
@@ -122,6 +147,18 @@ def body(session: nx.Session) -> str:
         raise nx.Failure("the live scripture slide shows no text")
     session.save(image, "audience-john-3-16-18-kjv")
     live = image.digest()
+    summary["audience_size"] = [image.width, image.height]
+    if session.display.kind == "dual":
+        # A real-size output draws the per-slide reference under the text.
+        image = nx.capture_stable(screen)
+        strip = strip_box(image)
+        summary["reference_strip_box"] = strip
+        if strip is None:
+            raise nx.Failure(
+                f"no reference strip in the bottom {STRIP_BAND:.1%} of the "
+                f"{image.width}x{image.height} audience output"
+            )
+        live = image.digest()
 
     # Typing never triggers live shortcuts: B, period, Page Down in the box.
     click("scripture-reference")
@@ -176,6 +213,39 @@ def body(session: nx.Session) -> str:
         screen, web, 5.0, "keyword hit live"
     )
     session.save(image, "audience-keyword-hit")
+    keyword_live = nx.capture_stable(screen).digest()
+
+    # Import Bible… through the portal Open dialog. The catalog refresh
+    # after it must leave the hit list and its selection alone.
+    count_before = control("scripture-selection-count").name
+    bible = data / "synthetic-zefania.xml"
+    bible.write_text(SYNTHETIC_ZEFANIA, encoding="utf-8")
+    click("scripture-import")
+    time.sleep(0.8)
+    session.save(nx.capture_stable(app.file_dialog()), "import-dialog")
+    app.drive_file_dialog(bible, owner=operator)
+    row = control("translation-SZEF")
+    summary["imported_row"] = row.name
+
+    def message() -> str | None:
+        found = app.controls(operator).get("scripture-message")
+        return found.name if found and found.name.startswith("Imported") else None
+
+    summary["import_message"] = nx.wait_until(message, 15, "the import message")
+    if "SZEF" not in summary["import_message"]:
+        raise nx.Failure(f"unexpected import message {summary['import_message']!r}")
+    if not (folder / "SZEF.selabible").is_file():
+        raise nx.Failure("the imported translation file was not written")
+    time.sleep(1.0)
+    if nx.digest(screen) != keyword_live:
+        raise nx.Failure("importing a Bible changed the audience output")
+    count_after = control("scripture-selection-count").name
+    summary["selection_after_import"] = count_after
+    if count_after != count_before:
+        raise nx.Failure(
+            f"the import changed the selection: {count_before!r} -> {count_after!r}"
+        )
+    session.save(operator, "operator-imported")
 
     # Add to Schedule pins the selected verse as a schedule item: the
     # schedule becomes unsaved (window title) and Ctrl+Q asks first. The
@@ -202,7 +272,13 @@ def body(session: nx.Session) -> str:
         "B/./PageDown in the box left the output; "
         "'John 3:99' noted without changing Preview or Live; WEB switch went live; "
         "keyword 'only begotten' found and went live by double-click; "
-        "Add to Schedule made the schedule unsaved (guarded quit)"
+        "Import Bible… through the portal dialog added SZEF; "
+        + (
+            "reference strip drawn on the 1080p output; "
+            if "reference_strip_box" in summary
+            else ""
+        )
+        + "Add to Schedule made the schedule unsaved (guarded quit)"
     )
 
 

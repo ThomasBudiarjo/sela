@@ -33,8 +33,30 @@ pub enum State {
         inventory: Arc<Inventory>,
         verses: usize,
     },
-    /// Present but unusable; the string says why.
-    Damaged(String),
+    /// Present but unusable, and why.
+    Damaged(Damage),
+}
+
+/// Why a translation file is unusable, for the UI to phrase in its own
+/// language (the strings inside are technical detail only).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Damage {
+    /// The installed file fails to open or a check.
+    Store(store::Error),
+    /// The bundled copy shipped with Sela cannot be installed.
+    Bundle(bundled::Error),
+    /// The file's name does not match the translation inside it.
+    FileName,
+}
+
+impl std::fmt::Display for Damage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Damage::Store(error) => write!(f, "{error}"),
+            Damage::Bundle(error) => write!(f, "{error}"),
+            Damage::FileName => write!(f, "file name"),
+        }
+    }
 }
 
 /// One installed translation as listed in the Scriptures tab.
@@ -66,7 +88,7 @@ pub enum Command {
 pub enum Error {
     /// No translation with that id is installed.
     Unknown(String),
-    Unavailable(String),
+    Unavailable(Damage),
     /// More than `MAX_PASSAGE` verses.
     TooLong,
     Store(store::Error),
@@ -104,8 +126,8 @@ pub enum CatalogNote {
     /// A bundled translation file was missing its checks and was rebuilt.
     Rebuilt(String),
     /// A bundled translation could not be installed: id and reason.
-    Failed(String, String),
-    /// The Scripture folder could not be created.
+    Failed(String, Damage),
+    /// The Scripture folder could not be created: the system's reason.
     Folder(String),
 }
 
@@ -214,7 +236,7 @@ struct Provider {
     dir: PathBuf,
     bundles: Vec<Bundle>,
     open: BTreeMap<String, Translation>,
-    damaged: BTreeMap<String, (TranslationInfo, String)>,
+    damaged: BTreeMap<String, (TranslationInfo, Damage)>,
 }
 
 impl Provider {
@@ -334,11 +356,11 @@ impl Provider {
                 }
                 Ok(_) => {
                     self.damaged
-                        .insert(id.clone(), (placeholder(&id, false), "file name".into()));
+                        .insert(id.clone(), (placeholder(&id, false), Damage::FileName));
                 }
                 Err(error) => {
                     self.damaged
-                        .insert(id.clone(), (placeholder(&id, false), error.to_string()));
+                        .insert(id.clone(), (placeholder(&id, false), Damage::Store(error)));
                 }
             }
         }
@@ -415,8 +437,10 @@ impl Provider {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            // Rights of an imported file are unknown to Sela: its text stays
-            // on this computer (schedule files keep only the reference).
+            // Rights of an imported file are unknown to Sela, so it is marked
+            // restricted. The flag is recorded, not enforced: a schedule
+            // item pinned from it still carries its verse text into the
+            // .selaschedule file (stripping is open, M1-13).
             redistributable: false,
             bundled: false,
         };
@@ -459,10 +483,10 @@ fn language_code(text: &str) -> String {
     }
 }
 
-fn install(path: &Path, bundle: &Bundle) -> Result<Translation, String> {
-    let (info, verses) = bundled::decode(bundle).map_err(|e| e.to_string())?;
-    store::write(path, &info, &bundle.sha256, &verses).map_err(|e| e.to_string())?;
-    store::open(path).map_err(|e| e.to_string())
+fn install(path: &Path, bundle: &Bundle) -> Result<Translation, Damage> {
+    let (info, verses) = bundled::decode(bundle).map_err(Damage::Bundle)?;
+    store::write(path, &info, &bundle.sha256, &verses).map_err(Damage::Store)?;
+    store::open(path).map_err(Damage::Store)
 }
 
 fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
@@ -606,7 +630,12 @@ pub(crate) mod tests {
         assert_eq!(notes, [CatalogNote::Rebuilt("SYA".into())]);
         assert!(matches!(entries[0].state, State::Ready { .. }));
         let user = entries.iter().find(|e| e.info.id == "USER").unwrap();
-        assert!(matches!(&user.state, State::Damaged(why) if why.starts_with("damaged")));
+        assert!(matches!(
+            &user.state,
+            State::Damaged(Damage::Store(
+                store::Error::Corrupt(_) | store::Error::Unsupported
+            ))
+        ));
         assert!(matches!(
             passage(&worker, "USER", v(1, 1, 1), v(1, 1, 1)),
             Err(Error::Unavailable(_))
@@ -621,7 +650,7 @@ pub(crate) mod tests {
             notes,
             [CatalogNote::Failed(
                 "SYB".into(),
-                "checksum mismatch".into()
+                Damage::Bundle(bundled::Error::Checksum)
             )]
         );
         assert!(matches!(&entries[1].state, State::Damaged(_)));
