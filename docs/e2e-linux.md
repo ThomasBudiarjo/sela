@@ -31,7 +31,9 @@ Files:
   centers.
   Also new with their feature: `media-backend-x11.py` (media-core; needs
   `scripts/fetch-ffmpeg`). `scripture-x11.py` (M4-03/M4-04,
-  docs/scripture.md; Windows counterpart `scripture-windows.py`).
+  docs/scripture.md; Windows counterpart `scripture-windows.py`). `stage-display-x11.py`
+  (M3-01/M3-02, docs/stage-display.md; Windows counterpart
+  `stage-display-windows.py`).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
