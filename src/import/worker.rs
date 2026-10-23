@@ -7,6 +7,7 @@
 use super::batch::{self, FileError, MAX_FILES, MAX_STAGED_BYTES, Staged};
 use super::ew_library::{self, Library, LibraryError};
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{
         Arc,
@@ -56,7 +57,23 @@ pub enum Source {
     /// Chosen song files and folders (`batch::find`).
     Paths(Vec<PathBuf>),
     /// A folder holding an EasyWorship 6-8 library (`ew_library::locate`).
-    EasyWorship(PathBuf),
+    EasyWorship {
+        folder: PathBuf,
+        /// Titles of the songs already in Sela's library: when the EW
+        /// library is over `MAX_FILES`, songs with other titles are read
+        /// first (`ew_library::Library::song_ids`).
+        known_titles: Arc<[String]>,
+    },
+}
+
+impl Source {
+    /// An EasyWorship library import that knows no library titles.
+    pub fn easyworship(folder: PathBuf) -> Self {
+        Self::EasyWorship {
+            folder,
+            known_titles: Arc::from(Vec::new()),
+        }
+    }
 }
 
 struct Job {
@@ -176,7 +193,10 @@ fn run(
 ) -> Result<(), ()> {
     match &job.source {
         Source::Paths(paths) => run_paths(job, paths, events, pace),
-        Source::EasyWorship(folder) => run_library(job, folder, events, pace),
+        Source::EasyWorship {
+            folder,
+            known_titles,
+        } => run_library(job, folder, known_titles, events, pace),
     }
 }
 
@@ -226,19 +246,22 @@ fn run_paths(
 }
 
 /// One EasyWorship library: copies it, then stages its songs in title
-/// order, at most `MAX_FILES`. A library that cannot be read at all is one
+/// order, at most `MAX_FILES`, songs whose titles are not in
+/// `known_titles` first. A library that cannot be read at all is one
 /// failed row named after the chosen folder.
 fn run_library(
     job: &Job,
     folder: &std::path::Path,
+    known_titles: &[String],
     events: &mpsc::SyncSender<Event>,
     pace: Option<&(dyn Fn(usize) + Send + Sync)>,
 ) -> Result<(), ()> {
     let canceled = || job.cancel.load(Ordering::Acquire);
     let send = |event: Event| events.send(event).map_err(|_| ());
-    let opened = Library::open(folder, &job.cancel).and_then(|library| {
+    let opened = Library::open(folder, &job.cancel).and_then(|mut library| {
         let count = library.count()?;
-        let ids = library.song_ids(MAX_FILES)?;
+        let known: HashSet<String> = known_titles.iter().map(|t| batch::title_key(t)).collect();
+        let ids = library.song_ids(MAX_FILES, &known, &job.cancel)?;
         Ok((library, count, ids))
     });
     let (library, count, ids) = match opened {
@@ -431,7 +454,7 @@ mod tests {
         let before = hashes(dir.path());
         let mut importer = Importer::start().unwrap();
         importer
-            .submit_source(4, Source::EasyWorship(dir.path().to_path_buf()))
+            .submit_source(4, Source::easyworship(dir.path().to_path_buf()))
             .unwrap();
         let events = drain(&mut importer, 4);
         assert!(matches!(
@@ -466,7 +489,7 @@ mod tests {
         // A folder without a library is one failed row, then Done.
         let empty = tempfile::tempdir().unwrap();
         importer
-            .submit_source(5, Source::EasyWorship(empty.path().to_path_buf()))
+            .submit_source(5, Source::easyworship(empty.path().to_path_buf()))
             .unwrap();
         let events = drain(&mut importer, 5);
         assert!(matches!(events[0], Event::Found { total: 1, .. }));
@@ -507,7 +530,7 @@ mod tests {
         });
         let mut importer = Importer::start_paced(Some(pace)).unwrap();
         importer
-            .submit_source(6, Source::EasyWorship(dir.path().to_path_buf()))
+            .submit_source(6, Source::easyworship(dir.path().to_path_buf()))
             .unwrap();
         assert_eq!(reached.recv_timeout(Duration::from_secs(20)).unwrap(), 1);
         importer.cancel();
@@ -533,6 +556,79 @@ mod tests {
                 canceled: true
             })
         ));
+    }
+
+    #[test]
+    fn importing_a_large_library_again_continues_with_the_songs_not_imported() {
+        use crate::import::ew_library::fixture::{FixtureSong, write_library};
+        let dir = tempfile::tempdir().unwrap();
+        let titles: Vec<String> = (0..MAX_FILES + 3).map(|n| format!("Song {n:04}")).collect();
+        let songs: Vec<FixtureSong> = titles
+            .iter()
+            .map(|title| FixtureSong {
+                title: Box::leak(title.clone().into_boxed_str()),
+                words: Some("{\\rtf1 Line\\par}"),
+                ..FixtureSong::default()
+            })
+            .collect();
+        write_library(dir.path(), &songs);
+        let staged_titles = |events: &[Event]| -> Vec<String> {
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::File {
+                        result: Ok(staged), ..
+                    } => Some(staged.song.title.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut importer = Importer::start().unwrap();
+        importer
+            .submit_source(9, Source::easyworship(dir.path().to_path_buf()))
+            .unwrap();
+        let first = drain(&mut importer, 9);
+        assert!(matches!(
+            first[0],
+            Event::Found {
+                total: MAX_FILES,
+                over_limit: 3,
+                ..
+            }
+        ));
+        assert_eq!(staged_titles(&first), titles[..MAX_FILES]);
+        // The library now holds those 500 (a title may be listed in any
+        // case and spacing): the next import reads the other 3 first and
+        // fills the rest with songs the library has, in title order.
+        let known: Vec<String> = titles[..MAX_FILES]
+            .iter()
+            .map(|t| t.to_uppercase())
+            .collect();
+        importer
+            .submit_source(
+                10,
+                Source::EasyWorship {
+                    folder: dir.path().to_path_buf(),
+                    known_titles: known.into(),
+                },
+            )
+            .unwrap();
+        let second = drain(&mut importer, 10);
+        assert!(matches!(
+            second[0],
+            Event::Found {
+                total: MAX_FILES,
+                over_limit: 3,
+                ..
+            }
+        ));
+        let read = staged_titles(&second);
+        assert_eq!(read.len(), MAX_FILES);
+        for new in &titles[MAX_FILES..] {
+            assert!(read.contains(new), "{new} is read in the second import");
+        }
+        assert_eq!(read[..MAX_FILES - 3], titles[..MAX_FILES - 3]);
+        assert_eq!(read[MAX_FILES - 3..], titles[MAX_FILES..]);
     }
 
     #[test]

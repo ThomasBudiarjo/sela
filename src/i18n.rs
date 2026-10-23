@@ -626,6 +626,7 @@ pub enum Msg {
     ImportEwTooLarge,
     ImportEwChanged,
     ImportEwNotLibrary,
+    ImportEwCopyFailed,
     LiveItemNotShown,
     WindowTitleIdle,
     WindowTitleUntitledDirty,
@@ -1381,6 +1382,7 @@ impl Msg {
         Msg::ImportEwTooLarge,
         Msg::ImportEwChanged,
         Msg::ImportEwNotLibrary,
+        Msg::ImportEwCopyFailed,
         Msg::LiveItemNotShown,
         Msg::WindowTitleIdle,
         Msg::WindowTitleUntitledDirty,
@@ -2215,11 +2217,11 @@ impl Msg {
             }
             Self::BarImportEasyWorship => "EasyWorship Library…",
             Self::ImportSongsOverLimit => {
-                "Songs not read, over the limit of {max} per import: {count}"
+                "Songs not read, over the limit of {max} per import: {count}. Songs whose titles are not in the library yet are read first, so importing this library again continues with the rest."
             }
             Self::ImportErrMissingWords => "No words for this song in SongWords.db",
             Self::ImportEwNoSongs => {
-                "No EasyWorship library here: Songs.db was not found in this folder or its Databases\\Data folder"
+                "No EasyWorship library here: Songs.db was not found in this folder or in its Data, Databases\\Data, v6.1\\Databases\\Data or Default\\v6.1\\Databases\\Data folder. Choose the EasyWorship folder, its Default profile folder or the folder that holds Songs.db."
             }
             Self::ImportEwNoWords => "Songs.db was found, but SongWords.db is missing beside it",
             Self::ImportEwTooLarge => "The EasyWorship library is larger than {max} MiB",
@@ -2227,6 +2229,9 @@ impl Msg {
                 "The library changed while it was copied. Close EasyWorship and import again."
             }
             Self::ImportEwNotLibrary => "Not an EasyWorship library: {error}",
+            Self::ImportEwCopyFailed => {
+                "The library could not be copied to Sela's temporary folder (check free disk space): {error}"
+            }
             Self::LiveItemNotShown => "{title} is not on screen yet; use Go Live first",
             Self::WindowTitleIdle => "Sela — Technical preview",
             Self::WindowTitleUntitledDirty => "Untitled schedule* — Sela",
@@ -3141,11 +3146,11 @@ impl Msg {
             }
             Self::BarImportEasyWorship => "Pustaka EasyWorship…",
             Self::ImportSongsOverLimit => {
-                "Lagu tidak dibaca, melebihi batas {max} per impor: {count}"
+                "Lagu tidak dibaca, melebihi batas {max} per impor: {count}. Lagu yang judulnya belum ada di pustaka dibaca lebih dulu, jadi mengimpor pustaka ini lagi melanjutkan sisanya."
             }
             Self::ImportErrMissingWords => "Tidak ada lirik lagu ini di SongWords.db",
             Self::ImportEwNoSongs => {
-                "Tidak ada pustaka EasyWorship di sini: Songs.db tidak ditemukan di folder ini atau folder Databases\\Data-nya"
+                "Tidak ada pustaka EasyWorship di sini: Songs.db tidak ditemukan di folder ini atau di folder Data, Databases\\Data, v6.1\\Databases\\Data, atau Default\\v6.1\\Databases\\Data di dalamnya. Pilih folder EasyWorship, folder profil Default-nya, atau folder yang berisi Songs.db."
             }
             Self::ImportEwNoWords => {
                 "Songs.db ditemukan, tetapi SongWords.db tidak ada di sampingnya"
@@ -3155,6 +3160,9 @@ impl Msg {
                 "Pustaka berubah saat disalin. Tutup EasyWorship lalu impor lagi."
             }
             Self::ImportEwNotLibrary => "Bukan pustaka EasyWorship: {error}",
+            Self::ImportEwCopyFailed => {
+                "Pustaka tidak dapat disalin ke folder sementara Sela (periksa ruang disk kosong): {error}"
+            }
             Self::LiveItemNotShown => "{title} belum tampil; gunakan Tayangkan dulu",
             Self::WindowTitleIdle => "Sela — Pratinjau teknis",
             Self::WindowTitleUntitledDirty => "Jadwal tanpa judul* — Sela",
@@ -3496,7 +3504,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 748);
+        assert_eq!(Msg::ALL.len(), 749);
     }
 
     #[test]

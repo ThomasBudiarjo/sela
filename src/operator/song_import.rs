@@ -333,6 +333,7 @@ pub(crate) fn library_error_text(error: &LibraryError) -> String {
         ),
         LibraryError::Changed => t!(Msg::ImportEwChanged).into(),
         LibraryError::Unreadable(error) => t!(Msg::ImportErrUnreadable, error = error),
+        LibraryError::CopyFailed(error) => t!(Msg::ImportEwCopyFailed, error = error),
         LibraryError::NotLibrary(error) => t!(Msg::ImportEwNotLibrary, error = error),
         // The worker ends a cancelled job with Done; no row says this.
         LibraryError::Canceled => t!(Msg::ImportCancelled).into(),
@@ -420,7 +421,15 @@ impl Operator {
                 }
                 match picked {
                     Ok(Ok(Some(mut paths))) if !paths.is_empty() => {
-                        this.start_song_import_from(Source::EasyWorship(paths.swap_remove(0)))
+                        let source = Source::EasyWorship {
+                            folder: paths.swap_remove(0),
+                            known_titles: this
+                                .catalog
+                                .iter()
+                                .map(|(_, title)| title.clone())
+                                .collect(),
+                        };
+                        this.start_song_import_from(source)
                     }
                     Ok(Err(error)) => {
                         this.song_import.phase = Phase::Idle;
@@ -453,7 +462,7 @@ impl Operator {
             }
         }
         self.song_import.reset();
-        self.song_import.library = matches!(source, Source::EasyWorship(_));
+        self.song_import.library = matches!(source, Source::EasyWorship { .. });
         self.song_import.job += 1;
         let job = self.song_import.job;
         let importer = self.song_import.importer.as_mut().expect("started above");

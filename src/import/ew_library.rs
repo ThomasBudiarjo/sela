@@ -17,6 +17,7 @@ use super::{MAX_FILE_BYTES, ParsedSong, Rejected, Warning, ew_rtf, song};
 use crate::storage::{MAX_ADMINISTRATOR, MAX_SONG_NUMBER};
 use rusqlite::{Connection, OpenFlags, limits::Limit, types::ValueRef};
 use std::{
+    collections::{HashMap, HashSet},
     ffi::OsString,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -56,6 +57,8 @@ const SIDECARS: [&str; 2] = ["-wal", "-journal"];
 const MAX_LISTING: usize = 4096;
 /// Copy buffer; the cancel flag is checked between chunks.
 const CHUNK: usize = 1024 * 1024;
+/// Rows between cancel checks while a table is read.
+const SCAN_CHECK: usize = 4096;
 /// Longest title, field limits as `Song::validate` checks them.
 const MAX_TITLE: usize = 1024;
 const MAX_TEXT_FIELD: usize = 4096;
@@ -75,6 +78,10 @@ pub enum LibraryError {
     Changed,
     /// The operating system's message for a file that could not be read.
     Unreadable(String),
+    /// The private copy could not be made (the temporary folder is full or
+    /// not writable): the operating system's message. Not the library's
+    /// fault.
+    CopyFailed(String),
     /// Not a database, or not the tables and columns of an EW library; the
     /// string names the problem.
     NotLibrary(String),
@@ -125,6 +132,14 @@ pub struct Library {
     source: PathBuf,
     /// `OPTIONAL` columns present in `song`.
     present: Vec<&'static str>,
+    /// `word` rows of the songs `song_ids` chose: song rowid → (row count,
+    /// newest word rowid), from one pass over the table.
+    word_rows: HashMap<i64, (usize, i64)>,
+    /// The songs `word_rows` covers (a song without words is absent there).
+    indexed: HashSet<i64>,
+    /// Full-scan steps of every `word` query (tests check there is one pass).
+    #[cfg(test)]
+    scan_steps: std::cell::Cell<i64>,
     // Last, so the connections close before the folder is removed.
     _copy: tempfile::TempDir,
 }
@@ -183,16 +198,23 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+type Stamp = Option<(u64, Option<SystemTime>)>;
+
+/// One database copied: its source, and each source file (the database and
+/// the journals beside it) with its stamp from before the copy.
+struct Copied {
+    source: PathBuf,
+    files: Vec<(PathBuf, Stamp)>,
+}
+
 /// Copies `source` (and its journals) to `dir/name`, reading the source
-/// only. `between` runs after the bytes are copied and before the source is
-/// checked again (a test hook).
+/// only. `unchanged` checks the sources afterwards.
 fn copy_db(
     source: &Path,
     dir: &Path,
     name: &str,
     cancel: &AtomicBool,
-    between: &dyn Fn(),
-) -> Result<PathBuf, LibraryError> {
+) -> Result<(PathBuf, Copied), LibraryError> {
     let target = dir.join(name);
     let mut files = vec![(source.to_path_buf(), target.clone())];
     for suffix in SIDECARS {
@@ -201,30 +223,45 @@ fn copy_db(
             files.push((journal, with_suffix(&target, suffix)));
         }
     }
-    let mut before = Vec::new();
-    for (from, to) in &files {
-        let stamped = stamp(from)?;
-        before.push(stamped);
-        copy_file(from, to, cancel)?;
+    let mut copied = Copied {
+        source: source.to_path_buf(),
+        files: Vec::new(),
+    };
+    for (from, to) in files {
+        let stamped = stamp(&from)?;
+        copy_file(&from, &to, cancel)?;
+        copied.files.push((from, stamped));
     }
-    between();
-    for ((from, _), stamped) in files.iter().zip(before) {
-        if stamp(from)? != stamped {
-            return Err(LibraryError::Changed);
+    Ok((target, copied))
+}
+
+/// Refuses copies whose sources changed since they were stamped, checked
+/// once every database is copied, so `Songs.db` and `SongWords.db` are
+/// copies of the same moment: a save EasyWorship makes to either one while
+/// the other is copied is caught too.
+fn unchanged(copies: &[&Copied]) -> Result<(), LibraryError> {
+    for copied in copies {
+        for (from, stamped) in &copied.files {
+            if stamp(from)? != *stamped {
+                return Err(LibraryError::Changed);
+            }
+        }
+        // A journal that appeared during the copy belongs to a write in
+        // progress.
+        for suffix in SIDECARS {
+            let journal = with_suffix(&copied.source, suffix);
+            if !copied.files.iter().any(|(from, _)| *from == journal) && stamp(&journal)?.is_some()
+            {
+                return Err(LibraryError::Changed);
+            }
         }
     }
-    // A journal that appeared during the copy belongs to a write in progress.
-    for suffix in SIDECARS {
-        let journal = with_suffix(source, suffix);
-        if !files.iter().any(|(from, _)| *from == journal) && stamp(&journal)?.is_some() {
-            return Err(LibraryError::Changed);
-        }
-    }
-    Ok(target)
+    Ok(())
 }
 
 fn copy_file(from: &Path, to: &Path, cancel: &AtomicBool) -> Result<(), LibraryError> {
     let unreadable = |e: std::io::Error| LibraryError::Unreadable(e.to_string());
+    let unwritable = |e: std::io::Error| LibraryError::CopyFailed(e.to_string());
     let (file, meta) = batch::open_regular(from).map_err(|error| match error {
         FileError::Unreadable(message) => LibraryError::Unreadable(message),
         _ => LibraryError::NotLibrary(format!("{} is not a regular file", from.display())),
@@ -233,7 +270,7 @@ fn copy_file(from: &Path, to: &Path, cancel: &AtomicBool) -> Result<(), LibraryE
         return Err(LibraryError::TooLarge);
     }
     let mut reader = file.take(MAX_DB_BYTES + 1);
-    let mut out = std::fs::File::create(to).map_err(unreadable)?;
+    let mut out = std::fs::File::create(to).map_err(unwritable)?;
     let mut buffer = vec![0u8; CHUNK];
     let mut total = 0u64;
     loop {
@@ -248,9 +285,9 @@ fn copy_file(from: &Path, to: &Path, cancel: &AtomicBool) -> Result<(), LibraryE
         if total > MAX_DB_BYTES {
             return Err(LibraryError::TooLarge);
         }
-        out.write_all(&buffer[..read]).map_err(unreadable)?;
+        out.write_all(&buffer[..read]).map_err(unwritable)?;
     }
-    out.flush().map_err(unreadable)
+    out.flush().map_err(unwritable)
 }
 
 /// The `UTF8_U_CI` collation as Sela defines it: Unicode lower case, then
@@ -308,21 +345,26 @@ fn columns(db: &Connection, table: &str) -> Result<Vec<String>, LibraryError> {
 impl Library {
     /// Finds the databases under `folder`, copies them and opens the copies.
     pub fn open(folder: &Path, cancel: &AtomicBool) -> Result<Self, LibraryError> {
-        Self::open_with(folder, cancel, &|| {})
+        Self::open_with(folder, cancel, &|_| {})
     }
 
+    /// `between` runs after each database is copied, with its name, before
+    /// the sources are checked again (a test hook).
     fn open_with(
         folder: &Path,
         cancel: &AtomicBool,
-        between: &dyn Fn(),
+        between: &dyn Fn(&str),
     ) -> Result<Self, LibraryError> {
         let (songs_path, words_path) = locate(folder)?;
         let copy = tempfile::Builder::new()
             .prefix("sela-ew-library-")
             .tempdir()
-            .map_err(|e| LibraryError::Unreadable(e.to_string()))?;
-        let songs_copy = copy_db(&songs_path, copy.path(), SONGS_DB, cancel, between)?;
-        let words_copy = copy_db(&words_path, copy.path(), WORDS_DB, cancel, between)?;
+            .map_err(|e| LibraryError::CopyFailed(e.to_string()))?;
+        let (songs_copy, songs_copied) = copy_db(&songs_path, copy.path(), SONGS_DB, cancel)?;
+        between(SONGS_DB);
+        let (words_copy, words_copied) = copy_db(&words_path, copy.path(), WORDS_DB, cancel)?;
+        between(WORDS_DB);
+        unchanged(&[&songs_copied, &words_copied])?;
         let songs = connect(&songs_copy)?;
         let words = connect(&words_copy)?;
         let song_columns = columns(&songs, "song")?;
@@ -356,6 +398,10 @@ impl Library {
                 .map(Path::to_path_buf)
                 .unwrap_or_default(),
             present,
+            word_rows: HashMap::new(),
+            indexed: HashSet::new(),
+            #[cfg(test)]
+            scan_steps: std::cell::Cell::new(0),
             _copy: copy,
         })
     }
@@ -378,20 +424,114 @@ impl Library {
             .map_err(not_library)
     }
 
-    /// The first `limit` song rowids by title in `UTF8_U_CI` order, then
-    /// rowid (EW lists songs by title; its exact order is UNOBSERVED).
-    pub fn song_ids(&self, limit: usize) -> Result<Vec<i64>, LibraryError> {
+    /// At most `limit` song rowids, listed by title in `UTF8_U_CI` order,
+    /// then rowid (EW lists songs by title; its exact order is UNOBSERVED).
+    /// When the library holds more than `limit`, songs whose title (as
+    /// `batch::title_key` folds it) is not in `known` are chosen first, so
+    /// importing a large library again continues with the songs not yet
+    /// imported instead of listing the same first `limit` as duplicates.
+    /// Also reads which `word` rows the chosen songs have, in one pass.
+    pub fn song_ids(
+        &mut self,
+        limit: usize,
+        known: &HashSet<String>,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<i64>, LibraryError> {
         let mut statement = self
             .songs
             .prepare(&format!(
-                "SELECT rowid FROM song ORDER BY title COLLATE {COLLATION}, rowid LIMIT ?1"
+                "SELECT rowid, title FROM song ORDER BY title COLLATE {COLLATION}, rowid"
             ))
             .map_err(not_library)?;
-        statement
-            .query_map([limit as i64], |row| row.get(0))
-            .map_err(not_library)?
-            .collect::<Result<Vec<i64>, _>>()
-            .map_err(not_library)
+        let mut rows = statement.query([]).map_err(not_library)?;
+        // (position in title order, rowid)
+        let mut fresh = Vec::new();
+        let mut seen = Vec::new();
+        let mut position = 0usize;
+        while fresh.len() < limit {
+            if position.is_multiple_of(SCAN_CHECK) && cancel.load(Ordering::Acquire) {
+                return Err(LibraryError::Canceled);
+            }
+            let Some(row) = rows.next().map_err(not_library)? else {
+                break;
+            };
+            let rowid: i64 = row.get(0).map_err(not_library)?;
+            let title = one_line(&text_of(row.get_ref(1).map_err(not_library)?).0);
+            let title = if title.is_empty() { UNTITLED } else { &title };
+            if known.contains(&batch::title_key(title)) {
+                if seen.len() < limit {
+                    seen.push((position, rowid));
+                }
+            } else {
+                fresh.push((position, rowid));
+            }
+            position += 1;
+        }
+        drop(rows);
+        drop(statement);
+        let room = limit - fresh.len();
+        fresh.extend(seen.into_iter().take(room));
+        fresh.sort_unstable();
+        let ids: Vec<i64> = fresh.into_iter().map(|(_, rowid)| rowid).collect();
+        self.indexed = ids.iter().copied().collect();
+        self.word_rows = self.scan_words(&self.indexed, cancel)?;
+        Ok(ids)
+    }
+
+    /// For each song in `ids`, its `word` row count and newest word rowid,
+    /// from one pass over `word`: two lookups per song by `song_id` would
+    /// each scan the table if EW's `SongWords.db` has no index on it (its
+    /// indexes are UNOBSERVED, PP-EWL-04).
+    fn scan_words(
+        &self,
+        ids: &HashSet<i64>,
+        cancel: &AtomicBool,
+    ) -> Result<HashMap<i64, (usize, i64)>, LibraryError> {
+        let mut found: HashMap<i64, (usize, i64)> = HashMap::new();
+        if ids.is_empty() {
+            return Ok(found);
+        }
+        let mut statement = self
+            .words
+            .prepare("SELECT rowid, song_id FROM word")
+            .map_err(not_library)?;
+        let mut rows = statement.query([]).map_err(not_library)?;
+        let mut position = 0usize;
+        loop {
+            if position.is_multiple_of(SCAN_CHECK) && cancel.load(Ordering::Acquire) {
+                return Err(LibraryError::Canceled);
+            }
+            position += 1;
+            let Some(row) = rows.next().map_err(not_library)? else {
+                break;
+            };
+            // What `song_id = ?` with an integer matches.
+            let song = match row.get_ref(1).map_err(not_library)? {
+                ValueRef::Integer(n) => n,
+                ValueRef::Real(x) if x.fract() == 0.0 && x.abs() < 9.0e18 => x as i64,
+                _ => continue,
+            };
+            if !ids.contains(&song) {
+                continue;
+            }
+            let rowid: i64 = row.get(0).map_err(not_library)?;
+            let entry = found.entry(song).or_insert((0, rowid));
+            entry.0 += 1;
+            entry.1 = entry.1.max(rowid);
+        }
+        drop(rows);
+        #[cfg(test)]
+        self.scan_steps.set(
+            self.scan_steps.get()
+                + i64::from(statement.get_status(rusqlite::StatementStatus::FullscanStep)),
+        );
+        Ok(found)
+    }
+
+    /// Full-scan steps of the `word` queries so far.
+    #[cfg(test)]
+    fn word_scan_steps(&self) -> i64 {
+        self.scan_steps.get()
     }
 
     /// One song row and its newest `word` row.
@@ -437,26 +577,33 @@ impl Library {
                 Ok(())
             })
             .map_err(row_error)?;
-        let rows: i64 = self
-            .words
-            .query_row(
-                "SELECT count(*) FROM word WHERE song_id = ?1",
-                [rowid],
-                |row| row.get(0),
-            )
-            .map_err(row_error)?;
-        song.extra_word_rows = (rows.max(1) - 1) as usize;
-        if rows > 0 {
-            let words = self.words.query_row(
-                "SELECT words FROM word WHERE song_id = ?1 ORDER BY rowid DESC LIMIT 1",
-                [rowid],
-                |row| {
-                    Ok(match row.get_ref(0)? {
-                        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => Some(bytes.to_vec()),
-                        ValueRef::Null => None,
-                        other => Some(text_of(other).0.into_bytes()),
-                    })
-                },
+        // A song `song_ids` did not choose (tests) gets a pass of its own.
+        let words_row = if self.indexed.contains(&rowid) {
+            self.word_rows.get(&rowid).copied()
+        } else {
+            let one = HashSet::from([rowid]);
+            self.scan_words(&one, &AtomicBool::new(false))
+                .map_err(FileError::Library)?
+                .get(&rowid)
+                .copied()
+        };
+        if let Some((rows, newest)) = words_row {
+            song.extra_word_rows = rows - 1;
+            let mut statement = self
+                .words
+                .prepare_cached("SELECT words FROM word WHERE rowid = ?1")
+                .map_err(row_error)?;
+            let words = statement.query_row([newest], |row| {
+                Ok(match row.get_ref(0)? {
+                    ValueRef::Text(bytes) | ValueRef::Blob(bytes) => Some(bytes.to_vec()),
+                    ValueRef::Null => None,
+                    other => Some(text_of(other).0.into_bytes()),
+                })
+            });
+            #[cfg(test)]
+            self.scan_steps.set(
+                self.scan_steps.get()
+                    + i64::from(statement.get_status(rusqlite::StatementStatus::FullscanStep)),
             );
             match words {
                 Ok(words) => song.words = words,
@@ -646,10 +793,15 @@ mod tests {
         Library::open(root, &AtomicBool::new(false)).unwrap()
     }
 
-    fn staged_all(library: &Library) -> Vec<(i64, Result<Staged, FileError>)> {
+    fn ids(library: &mut Library, limit: usize, known: &[&str]) -> Vec<i64> {
+        let known = known.iter().map(|t| batch::title_key(t)).collect();
         library
-            .song_ids(1000)
+            .song_ids(limit, &known, &AtomicBool::new(false))
             .unwrap()
+    }
+
+    fn staged_all(library: &mut Library) -> Vec<(i64, Result<Staged, FileError>)> {
+        ids(library, 1000, &[])
             .into_iter()
             .map(|id| (id, library.song(id).and_then(|row| stage(&row))))
             .collect()
@@ -700,8 +852,8 @@ mod tests {
         write_library(dir.path(), &[morning()]);
         let before = hashes(dir.path());
         let copy = {
-            let library = open(dir.path());
-            assert_eq!(staged_all(&library).len(), 1);
+            let mut library = open(dir.path());
+            assert_eq!(staged_all(&mut library).len(), 1);
             let copy = library.copy_dir();
             assert!(copy.join(SONGS_DB).is_file());
             assert!(!copy.starts_with(dir.path()));
@@ -719,8 +871,8 @@ mod tests {
         let writers = write_databases(&data, &[morning()], true);
         assert!(data.join("Songs.db-wal").is_file());
         let before = hashes(dir.path());
-        let library = open(dir.path());
-        let staged = staged_all(&library);
+        let mut library = open(dir.path());
+        let staged = staged_all(&mut library);
         assert_eq!(staged.len(), 1, "the row lives only in the -wal");
         assert!(staged[0].1.is_ok());
         drop(library);
@@ -740,9 +892,9 @@ mod tests {
             dir.path(),
             &[song("cedar"), song("Banyan"), song("apple"), song("Apple")],
         );
-        let library = open(dir.path());
-        assert_eq!(library.song_ids(10).unwrap(), [3, 4, 2, 1]);
-        assert_eq!(library.song_ids(2).unwrap(), [3, 4], "bounded");
+        let mut library = open(dir.path());
+        assert_eq!(ids(&mut library, 10, &[]), [3, 4, 2, 1]);
+        assert_eq!(ids(&mut library, 2, &[]), [3, 4], "bounded");
         // Without the collation SQLite cannot run the query at all.
         let raw =
             Connection::open_with_flags(data.join(SONGS_DB), OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -1003,7 +1155,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let data = write_library(dir.path(), &[morning()]);
         let songs = data.join(SONGS_DB);
-        let append = || {
+        let append = |_: &str| {
             let mut file = std::fs::OpenOptions::new()
                 .append(true)
                 .open(&songs)
@@ -1017,12 +1169,166 @@ mod tests {
         let fresh = tempfile::tempdir().unwrap();
         let data = write_library(fresh.path(), &[morning()]);
         let journal = with_suffix(&data.join(SONGS_DB), "-journal");
-        let start_write = || std::fs::write(&journal, b"").unwrap();
+        let start_write = |_: &str| std::fs::write(&journal, b"").unwrap();
         assert_eq!(
             Library::open_with(fresh.path(), &AtomicBool::new(false), &start_write).err(),
             Some(LibraryError::Changed),
             "a journal that appears during the copy"
         );
+    }
+
+    #[test]
+    fn a_save_to_songs_db_while_songwords_db_is_copied_is_refused() {
+        // Songs.db is copied and unchanged; EasyWorship then saves to it
+        // while SongWords.db is copied, whose own stamps stay the same.
+        let dir = tempfile::tempdir().unwrap();
+        let data = write_library(dir.path(), &[morning()]);
+        let songs = data.join(SONGS_DB);
+        let save_during_words = |name: &str| {
+            if name == WORDS_DB {
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&songs)
+                    .unwrap();
+                file.write_all(b"\0").unwrap();
+            }
+        };
+        assert_eq!(
+            Library::open_with(dir.path(), &AtomicBool::new(false), &save_during_words).err(),
+            Some(LibraryError::Changed)
+        );
+        let fresh = tempfile::tempdir().unwrap();
+        let data = write_library(fresh.path(), &[morning()]);
+        let journal = with_suffix(&data.join(SONGS_DB), "-journal");
+        let start_write = |name: &str| {
+            if name == WORDS_DB {
+                std::fs::write(&journal, b"").unwrap();
+            }
+        };
+        assert_eq!(
+            Library::open_with(fresh.path(), &AtomicBool::new(false), &start_write).err(),
+            Some(LibraryError::Changed),
+            "a Songs.db journal that appears while SongWords.db is copied"
+        );
+        let calm = tempfile::tempdir().unwrap();
+        write_library(calm.path(), &[morning()]);
+        assert!(Library::open_with(calm.path(), &AtomicBool::new(false), &|_| {}).is_ok());
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_written_is_not_called_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = write_library(dir.path(), &[morning()]);
+        let gone = dir.path().join("no such temp folder");
+        let error = copy_db(
+            &data.join(SONGS_DB),
+            &gone,
+            SONGS_DB,
+            &AtomicBool::new(false),
+        )
+        .err();
+        assert!(
+            matches!(error, Some(LibraryError::CopyFailed(_))),
+            "{error:?}"
+        );
+        // A source that cannot be read stays Unreadable.
+        #[cfg(unix)]
+        {
+            let missing = copy_file(
+                &dir.path().join("missing.db"),
+                &dir.path().join("out.db"),
+                &AtomicBool::new(false),
+            )
+            .err();
+            assert!(
+                matches!(missing, Some(LibraryError::Unreadable(_))),
+                "{missing:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn songs_not_yet_in_the_library_are_chosen_first_over_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let song = |title| FixtureSong {
+            title,
+            song_uid: "",
+            ..morning()
+        };
+        // Rowids 1..=5.
+        write_library(
+            dir.path(),
+            &[
+                song("dune"),
+                song("Banyan"),
+                song("apple"),
+                song("cedar"),
+                song(""),
+            ],
+        );
+        let mut library = open(dir.path());
+        assert_eq!(ids(&mut library, 10, &[]), [5, 3, 2, 4, 1], "title order");
+        // The first import took apple and Banyan: the next one starts
+        // with the songs the library does not have, still in title order.
+        assert_eq!(
+            ids(&mut library, 2, &["Apple!", "banyan"]),
+            [5, 4],
+            "known titles are folded like duplicate keys"
+        );
+        assert_eq!(ids(&mut library, 3, &["apple"]), [5, 2, 4]);
+        // Known songs fill the room left, in title order; under the limit
+        // every song is listed as before.
+        assert_eq!(
+            ids(&mut library, 4, &["apple", "banyan", "cedar"]),
+            [5, 3, 2, 1]
+        );
+        assert_eq!(
+            ids(&mut library, 10, &["apple", "banyan", "cedar", "dune"]),
+            [5, 3, 2, 4, 1]
+        );
+        assert_eq!(ids(&mut library, 1, &[UNTITLED]), [3], "untitled rows");
+        assert_eq!(ids(&mut library, 0, &[]), Vec::<i64>::new());
+        assert_eq!(
+            library
+                .song_ids(10, &HashSet::new(), &AtomicBool::new(true))
+                .err(),
+            Some(LibraryError::Canceled)
+        );
+    }
+
+    #[test]
+    fn word_rows_are_read_in_one_pass_without_a_song_id_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let songs: Vec<FixtureSong> = (0..40).map(|_| morning()).collect();
+        let data = write_library(dir.path(), &songs);
+        // EW's own indexes are UNOBSERVED (PP-EWL-04): assume none, and
+        // give song 7 an older second row.
+        let words = Connection::open(data.join(WORDS_DB)).unwrap();
+        words
+            .execute_batch(
+                "DROP INDEX word_song_id;
+                 INSERT INTO word (song_id, words) SELECT 7, words FROM word WHERE song_id = 7;
+                 UPDATE word SET words = NULL WHERE rowid = 7;",
+            )
+            .unwrap();
+        drop(words);
+        let mut library = open(dir.path());
+        let staged = staged_all(&mut library);
+        assert_eq!(staged.len(), 40);
+        assert!(staged.iter().all(|(_, result)| result.is_ok()));
+        let seven = staged.iter().find(|(id, _)| *id == 7).unwrap();
+        assert!(
+            seven
+                .1
+                .as_ref()
+                .unwrap()
+                .warnings
+                .contains(&Warning::IgnoredAttribute("word (older rows)".into())),
+            "the newest row is used and the older one reported"
+        );
+        // 41 word rows: one pass, not two per song (2 x 40 x 41 steps).
+        let steps = library.word_scan_steps();
+        assert!(steps <= 41, "{steps} full-scan steps over 41 word rows");
     }
 
     #[test]

@@ -1655,9 +1655,14 @@ Depends on: M1-13, M1-14, M4-06. Tests: U, I, N, L.
   to check on a copy of the owner's EW 8.0.49 library (PP-EWL-01..08),
   Windows `ew-import-windows.py` (NOT RUN, PP-EWL-07), EW8 non-ASCII words
   (PP-IMP-01/PP-EWL-08).
-  - [ ] Libraries over 500 songs: only the first 500 by title are staged
-    and the rest counted; importing the remainder (paging or a larger
-    virtualized preview) is open.
+  - [ ] Libraries over 500 songs: implemented-unqualified (review round
+    2026-10-23). At most 500 songs per import, songs whose titles are not
+    in Sela's library first, so importing again continues with the rest
+    (tested on a synthetic 503-song library); word rows read in one pass
+    (no `word.song_id` index assumed; 500 of 20,000 songs staged in 0.88 s,
+    Linux dev profile). Open: a run on the owner's real library over 500
+    songs (PP-EWL-08); a single preview of more than 500 rows (a larger
+    virtualized preview and commit) is not offered.
   - [ ] Song description and tags/keywords: Sela songs have no fields for
     them, so they are reported, not imported.
 

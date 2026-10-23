@@ -435,10 +435,16 @@ The user's library is never handed to SQLite. On the `sela-import` thread
    sources through the same regular-file open as song files (`O_NONBLOCK` on
    Unix); at most 256 MiB per file (`MAX_DB_BYTES`, checked from the size
    and while copying); the cancel flag is checked between 1 MiB chunks;
-3. compares each source's size and modification time before and after the
-   copy, and fails with "The library changed while it was copied. Close
-   EasyWorship and import again." when one changed or a journal appeared
-   (EasyWorship saving while Sela copies);
+3. compares each source's size and modification time from before its copy
+   with the values once *both* databases are copied, and fails with "The
+   library changed while it was copied. Close EasyWorship and import
+   again." when one changed or a journal appeared beside either database
+   (EasyWorship saving while Sela copies). Checking only after both copies
+   makes the two copies one moment: a save to `Songs.db` while
+   `SongWords.db` is copied is refused too (tested). A copy that cannot be
+   written (the temporary folder full or not writable) is its own error,
+   "The library could not be copied to Sela's temporary folder (check free
+   disk space): ..." (`LibraryError::CopyFailed`), not "Not read";
 4. opens the copies read-write (so SQLite can replay a copied `-wal` or roll
    back a copied hot journal in the copy only) with `trusted_schema = OFF`,
    a 2 MiB value limit (`SQLITE_LIMIT_LENGTH`), the `UTF8_U_CI` collation
@@ -481,6 +487,16 @@ that is not valid UTF-8 is decoded with replacement characters and gives
 `InvalidField(<column>)`. Words: the newest `word` row (highest rowid) for the
 song's rowid, parsed by `ew_rtf::parse` ("EasyWorship song words" above);
 older rows for the same song give `IgnoredAttribute("word (older rows)")`.
+Which `word` rows the chosen songs have is read in one pass over the table
+(`Library::scan_words`, rowid and `song_id` only), then each song's newest
+row by rowid, so the preview does not depend on an index on
+`word.song_id` (EW's indexes are UNOBSERVED, PP-EWL-04). Two lookups per
+song by `song_id` would each scan the whole table without one. Measured
+(Linux dev profile, this container): a synthetic library of 20,000 songs
+with a 164 MB `SongWords.db` of 20,000 word rows and no `song_id` index
+copied in 0.32 s, chose 500 songs and read their word rows in 0.23 s, and
+staged all 500 in 0.88 s in total. A test checks that the `word` queries
+take at most one full-scan step per word row.
 
 ### Failures
 
@@ -496,9 +512,23 @@ older rows for the same song give `IgnoredAttribute("word (older rows)")`.
   the copy, unreadable, not a database or not the expected tables ("Not an
   EasyWorship library: ..."). Import stays disabled.
 - At most 500 songs per import (`batch::MAX_FILES`); the rest are counted
-  ("Songs not read, over the limit of 500 per import: N") and are not
-  staged. The 32 MiB staged-text budget applies as for files. Importing the
-  remainder of a larger library is open (backlog M4-07).
+  ("Songs not read, over the limit of 500 per import: N. Songs whose
+  titles are not in the library yet are read first, so importing this
+  library again continues with the rest.") and are not staged. The 32 MiB
+  staged-text budget applies as for files.
+- A library over the limit is imported in turns: `Library::song_ids` reads
+  the songs in title order and takes first those whose title
+  (`batch::title_key`, case, spacing and punctuation folded) is not among
+  the titles of Sela's library (the operator's Songs list, passed as
+  `Source::EasyWorship { known_titles }`), then fills the room left with
+  songs the library already has, still listed in title order. So a 1,800
+  song library stages songs 1-500 the first time and, once those are
+  imported, the next 500 the next time, and so on; under the limit every
+  song is listed as before (tested in `import::worker` and
+  `import::ew_library`). Only the selection uses titles; the duplicate
+  policy below is unchanged. A song the operator chose to skip keeps a
+  title the library does not have and is offered again first. UNOBSERVED
+  best guess (EW8-OBS-EWL-8, PP-EWL-08).
 
 ### Duplicates and re-import
 
@@ -510,7 +540,7 @@ differ (`batch_duplicates`, tested). Importing the same library again finds
 every song in the library with the same words, so each defaults to Skip and
 Import shows (0). Sela does not store the `song_uid`, so an EW song edited
 after an import is matched by title (Import as copy by default, or Replace).
-How EW itself treats a re-import is UNOBSERVED (PP-EWL-05).
+How EW itself treats a re-import is UNOBSERVED (PP-EWL-06).
 
 ### Tests
 
@@ -520,11 +550,15 @@ How EW itself treats a re-import is UNOBSERVED (PP-EWL-05).
   and SQLite's refusal without it; missing word row and NULL words; older
   word rows; truncation, invalid CCLI, missing title, invalid UTF-8; words
   over the parser and value limits; folder search and case-insensitive
-  names; not-a-library refusals; a source changing during the copy;
-  cancel; an oversized database.
+  names; not-a-library refusals; a source changing during the copy,
+  including `Songs.db` saved while `SongWords.db` is copied; a copy that
+  cannot be written (`CopyFailed`, not `Unreadable`); songs not in the
+  library chosen first over the limit; word rows read in one pass without
+  a `song_id` index; cancel; an oversized database.
 - I (`src/import/worker.rs`): a library job staged in title order with a
   missing-words row and sources unchanged; a folder without a library is
-  one failed row; the 500-song limit and cancel.
+  one failed row; the 500-song limit and cancel; a 503-song library
+  imported again continues with the 3 songs not yet in the library.
 - `operator::song_import::tests`: `song_uid` duplicates inside an import;
   every new error has EN text.
 - GPUI (`src/tests/ew_library_import.rs`): menu, folder chooser options,

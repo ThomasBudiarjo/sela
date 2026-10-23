@@ -498,7 +498,8 @@ structure and counts only.
   folder while EW is closed, and once with EW open on the copy. Sela now:
   looks in the chosen folder and `Data`, `Databases/Data`,
   `v6.1/Databases/Data`, `Default/v6.1/Databases/Data`; copies `-wal` and
-  `-journal`; refuses a source that changes during the copy. Re-run:
+  `-journal`; refuses the import when either source changes before both
+  copies are done. Re-run:
   `cargo test --lib import::ew_library`, `ew-import-windows.py`.
 - [ ] **PP-EWL-03 `UTF8_U_CI` collation** (EW8-OBS-EWL-3). Steps: on the
   copy, `SELECT sql FROM sqlite_master` (record which columns and indexes
@@ -513,8 +514,11 @@ structure and counts only.
   every Song Properties field filled (title, author(s), copyright,
   administrator, CCLI number, description, tags/keywords) and find which
   column holds each; check whether `word.song_id` is the song's rowid.
+  Also record the indexes (`SELECT name, tbl_name, sql FROM sqlite_master
+  WHERE type = 'index'`), in particular whether one covers `word.song_id`.
   Sela now: the mapping table in docs/import.md; description and tags are
-  reported as not imported. Re-run: `cargo test --lib import::ew_library`,
+  reported as not imported; word rows are found in one pass over `word`,
+  so no index is assumed (EW8-OBS-EWL-8). Re-run: `cargo test --lib import::ew_library`,
   `ew-import-windows.py`; update `src/import/ew_fixture.rs` and
   `scripts/ew_library_fixture.py` to the observed schema.
 - [ ] **PP-EWL-05 Missing and repeated `word` rows** (EW8-OBS-EWL-5). Steps:
@@ -543,13 +547,18 @@ structure and counts only.
   before and after. Sela now: the Linux counterpart `ew-import-x11.py`
   passes. Re-run: the script itself.
 - [ ] **PP-EWL-08 Non-ASCII songs and large libraries** (EW8-OBS-EWL-7,
-  PP-IMP-01). Steps: in a disposable profile save a song with Indonesian
-  and accented title, author and lyrics; import a copy and compare in
-  Sela's preview and editor. Record the owner's library song count: over
-  500 means Sela stages only the first 500 by title (backlog M4-07 open
-  item). Sela now: words per docs/import.md, metadata as UTF-8 with
-  invalid bytes reported; 500 songs per import. Re-run:
-  `ew-import-windows.py`, `cargo test --lib import::ew_rtf`.
+  EW8-OBS-EWL-8, PP-IMP-01). Steps: in a disposable profile save a song
+  with Indonesian and accented title, author and lyrics; import a copy and
+  compare in Sela's preview and editor. Record the owner's library song
+  count; if it is over 500, import the copy into an empty Sela library
+  repeatedly (Import each time) and record, per run, songs staged, new
+  songs, duplicates and the time from choosing the folder to the preview,
+  until a run stages no new song; then compare Sela's song count with
+  EW's. Sela now: words per docs/import.md, metadata as UTF-8 with
+  invalid bytes reported; 500 songs per import, songs whose titles are not
+  in Sela's library first, so each import continues with the rest. Re-run:
+  `ew-import-windows.py`, `cargo test --lib import::ew_rtf`,
+  `cargo test --lib import::worker::tests::importing_a_large_library_again_continues_with_the_songs_not_imported`.
 
 ## Stream: autosave-recovery
 
