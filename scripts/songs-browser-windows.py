@@ -12,8 +12,8 @@ label "Etsaer", another the title "Etsaer Praise"):
    menu (mouse): the expected order, songs without the key last, and the
    choice ticked (UIA Toggle On) when the menu is reopened (EW8-OBS-064).
 3. Sort by > Song Number and Descending by keyboard only (Shift+F10 on the
-   focused row, Down x3, Right, Down, Enter): numeric order, then reversed
-   with songs without a number still last.
+   focused row, Down x3, Right, Down x4, Enter; Descending is Down x7):
+   numeric order, then reversed with songs without a number still last.
 4. settings.txt holds `song_sort=song_number` and `song_sort_descending=1`;
    a restart lists in that order again.
 5. Typing "etsa" in the Songs search box lists the title match first and the
@@ -21,8 +21,12 @@ label "Etsaer", another the title "Etsaer Praise"):
 6. Edit > Options > Song tab: tick "Show on first displayed slide only", OK
    (settings.txt `copyright_first_slide=1`). With Live output on the
    secondary monitor, "Echo Hymn" (copyright text) goes Live: slide 1 shows
-   the copyright strip at the bottom of the audience frame, slide 2 does not,
-   and OK in Options never changes the frame that is already live.
+   the copyright strip at the bottom of the audience frame, slide 2 does not.
+   Then, with slide 2 live, Options › Song: untick "Show on first displayed
+   slide only" and type "CCLI b." into License Info with real keys (B and
+   "." are the plain Black keys), OK: settings.txt has the change, and
+   neither the typing nor OK changes the frame that is already live
+   (settings apply to the next cue, PP-SB-07).
 
 Takes over the real keyboard and mouse; never run with EasyWorship open.
 
@@ -194,16 +198,28 @@ def browser_run(args, summary: dict, check) -> None:
         check.expect(
             second < 20, f"slide 2 draws no strip with first-slide-only ({second})"
         )
+        # A real change: apply_options returns early when nothing changed.
         changes = audience.changes(
             1.5,
             lambda: (
                 session.press("alt+e"),
                 session.press("enter", pause=0.6),
+                session.click_aid("options-tab-song"),
+                session.click_aid("options-copyright-first-slide"),
+                session.click_aid("options-license-info"),
+                nw.type_text(session.hwnd, "CCLI b."),
                 session.click_aid("dialog-confirm"),
             ),
         )
+        text = settings.read_text()
         check.expect(
-            changes == 0, f"Options OK leaves the live frame alone ({changes})"
+            "copyright_first_slide=1\n" not in text
+            and "license_info=CCLI b.\n" in text,
+            f"OK saved the changed options: {text.splitlines()}",
+        )
+        check.expect(
+            changes == 0,
+            f"typing B/. in License Info and OK leave the live frame alone ({changes})",
         )
         session.quit()
 

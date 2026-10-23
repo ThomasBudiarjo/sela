@@ -714,9 +714,12 @@ is a reversible best guess; the steps to observe them are in
 - **Search results and Sort by:** while a query is active the results stay
   in relevance order (title, then lyrics, metadata and labels); Sort by
   applies to the unfiltered list. EW showed no ranking for one song only.
-- **Label ranking (EW8-OBS-046):** labels weigh 0.5 in bm25 against title 10,
-  lyrics 1 and metadata 2, so a label-only hit ranks below a title or lyric
-  hit for the same word. Each distinct label is indexed once per song.
+- **Label ranking (EW8-OBS-046):** songs whose only hits are in their
+  section labels rank after every song with a title, lyric or metadata hit
+  (a separate first sort key, so song length cannot reverse it); within each
+  group bm25 weighs title 10, lyrics 1, metadata 2 and labels 0.5. Each
+  distinct label is indexed once per song. EW's order is UNOBSERVED
+  (PP-SB-04).
 - **Options › Main Output › Song › Copyright Info (EW8-OBS-055/056):** Sela
   builds the observed "Display Copyright Information" (default on), "Show on
   first displayed slide only" (default off) and License Info (empty).

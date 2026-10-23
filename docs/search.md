@@ -69,14 +69,26 @@ Tokenizer: `unicode61 remove_diacritics 2`.
 
 ## Ranking
 
-`ORDER BY bm25(song_search, 10.0, 1.0, 2.0, 0.5), title COLLATE NOCASE, title,
-song id`.
+`ORDER BY bm25(song_search, 10.0, 1.0, 2.0, 0.0) = 0, bm25(song_search,
+10.0, 1.0, 2.0, 0.5), title COLLATE NOCASE, title, song id`.
 
-- Column weights are title 10, lyrics 1, metadata 2, labels 0.5, so a title
-  match ranks above a lyric-only match and a label-only match ranks below
-  both for the same word. bm25 scores each column separately and sums them,
-  so a query that matches no label ranks exactly as before schema 7 (the
-  existing ranking tests pass unchanged).
+- Label-only songs come last. The first key is true only for a song whose
+  every hit is in its section labels: with the labels weight at 0 its bm25
+  is exactly 0, while any title, lyric or metadata hit gives a negative
+  score (FTS5's idf is clamped positive). So every song with a hit outside
+  its labels ranks above every label-only song, however long either song
+  is. The low label weight alone did not guarantee this: FTS5's bm25
+  normalizes each hit by the length of the whole row, so a short song's
+  label hit outscored a 400-word song's lyric hit (review finding,
+  2026-10-23; test
+  `a_label_only_hit_ranks_below_a_lyric_hit_in_a_much_longer_song`).
+- Within each group, column weights are title 10, lyrics 1, metadata 2,
+  labels 0.5, so a title match ranks above a lyric-only match for the same
+  word in songs of similar length. Because bm25 divides by the whole row's
+  token count, the labels column added in schema 7 also makes every row a
+  little longer, so a query that matches no label can order songs slightly
+  differently than at schema 6 when their label counts differ; the existing
+  ranking tests pass unchanged.
 - Ties break deterministically by title ignoring ASCII case (SQLite `NOCASE`
   folds ASCII only), then exact title, then the stable song id. Duplicate
   titles therefore keep a fixed order. Since M1-07b the ranking and `LIMIT`
@@ -235,6 +247,24 @@ schema 7 run): Title p50 73 / p95 86 ms, Date modified 72 / 80 ms, Author
 worker (no index: the empty-last expression comes first); the UI thread
 only receives the result. Measuring on the reference laptop stays open
 (parity-pending PP-SB-10).
+
+Label-only-last ranking (review fix, 2026-10-23, same VM, build command and
+corpus as above): the extra `bm25(..., 0.0) = 0` key is computed per matched
+row inside the FTS scan. A/B in one session, old SQL vs new SQL, two runs of
+the new SQL:
+
+| Query | Old p50 / p95 | New p50 / p95 (run 1, run 2) |
+| --- | ---: | ---: |
+| section label `verse` (20,000 matches) | 35.2 / 43.3 ms | 37.9 / 45.0, 39.4 / 49.7 ms |
+| `verse 3` | 38.3 / 50.7 ms | 42.0 / 53.6, 41.1 / 55.6 ms |
+| most common word | 35.5 / 52.2 ms | 37.7 / 58.7, 37.1 / 54.7 ms |
+| two-letter prefix | 32.5 / 40.8 ms | 34.0 / 39.9, 34.1 / 40.1 ms |
+| one-letter prefix | 72.1 / 91.3 ms | 75.0 / 88.0, 75.9 / 91.6 ms |
+| all 1,600 samples | 16.6 / 70.3 ms | 17.4 / 73.6, 17.1 / 74.5 ms |
+
+Queries that match many songs cost about 2-4 ms more at p50 (5-10%); rare
+and title queries are unchanged within noise. All stay under the 100 ms p95
+ceiling on this VM. Not a qualification (PP-SB-10).
 
 ## Operator search box (M1-07b)
 

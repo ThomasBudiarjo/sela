@@ -22,18 +22,26 @@ Songs rows through AT-SPI (AccessKit ids `song-0`..`song-4` and their names):
    (10 < 0042 < 77 < 900), then Descending by keyboard.
 4. settings.txt in the profile holds `song_sort=song_number` and
    `song_sort_descending=1`; a second launch lists in that order again.
-5. Typing "etsa" in the Songs search box lists the title match first and the
-   label-only match ("Echo Hymn", label "Etsaer") second (EW8-OBS-045/046,
-   schema 7 label index); typing never sends anything Live.
+5. Live output on and the first listed song Live, so a leaked show-control
+   key would change the captured audience frame. Typing "etsa" in the Songs
+   search box lists the title match first and the label-only match ("Echo
+   Hymn", label "Etsaer") second (EW8-OBS-045/046, schema 7 label index);
+   typing "bravo." (the plain Black keys B and ".") lists Bravo Hymn (title)
+   then Delta Hymn (author "bravo writer"); the audience frame never changes.
 6. Edit › Options › Song tab: "Show on first displayed slide only" is ticked
-   with the mouse and OK writes `copyright_first_slide=1`.
+   with the mouse, "CCLI b." is typed into License Info with real keys, and
+   OK writes `copyright_first_slide=1` and `license_info=CCLI b.`; neither
+   the typing nor OK changes the live audience frame (settings apply to the
+   next cue).
 
-Captures: operator after each sort, the search result, the Options Song tab.
+Captures: operator after each sort, the search result, the Options Song tab,
+the live audience frame.
 
-X11 differences: the audience output is not started (the strip itself is
-covered by GPUI tests and needs a 360 px tall output; the xvfb audience
-window is 351 px). The Songs menu is driven by AT-SPI positions for the
-mouse path; the keyboard path uses Shift+F10 like the Windows script.
+X11 differences: the audience runs in its xvfb development window (624x351);
+the copyright strip itself needs a 360 px tall output, so its drawing is
+covered by GPUI tests and the Windows script, and here the audience frame is
+only compared for change. The Songs menu is driven by AT-SPI positions for
+the mouse path; the keyboard path uses Shift+F10 like the Windows script.
 """
 
 from __future__ import annotations
@@ -145,6 +153,34 @@ def body(session: nx.Session) -> str:
     )
     summary["settings_after_sort"] = stored.splitlines()
 
+    # Live output on with the first listed song Live: a show-control key
+    # leaking from a text field would change this frame.
+    nx.click(operator, *app.control("song-0", operator).center)
+    time.sleep(0.8)  # the song loads into Preview off the UI thread
+    nx.click(operator, *app.control("live-output", operator).center)
+    found = app.audience(15)
+    if not found:
+        raise nx.Failure(f"no audience window within 15s: {app.log()}")
+    _, screen = found
+    time.sleep(1.5)
+    if nx.focused() != operator:
+        nx.activate(operator)
+    blank = nx.capture_stable(screen).digest()
+    nx.click(operator, *app.control("go-live", operator).center)
+    live, _ = nx.wait_for_change(screen, blank, 5, "Go Live")
+    if live.ink_box() is None:
+        raise nx.Failure("the live slide shows no text")
+    live_frame = live.digest()
+    session.save(live, "audience-live")
+
+    def unchanged(what: str, seconds: float = 1.0) -> None:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if nx.digest(screen) != live_frame:
+                session.save(nx.capture_stable(screen), "audience-changed")
+                raise nx.Failure(f"{what} changed the live audience frame")
+            time.sleep(0.1)
+
     # Slide label search: the title match first, the label-only match next.
     nx.click(operator, *app.control("song-search", operator).center)
     time.sleep(0.3)
@@ -154,8 +190,15 @@ def body(session: nx.Session) -> str:
     )
     time.sleep(0.3)
     session.save(operator, "operator-label-search")
-    if "live-slide-0" in app.controls(operator):
-        raise nx.Failure("typing in the search box sent something Live")
+    unchanged("typing 'etsa' in the search box")
+    nx.press(operator, "escape")
+    wait_rows(app, operator, NUMBER_DESC, "Esc clears the search")
+    nx.type_text(operator, "bravo.")
+    summary["black_keys_search"] = wait_rows(
+        app, operator, ["Bravo Hymn", "Delta Hymn"], "search 'bravo.'"
+    )
+    unchanged("typing B and '.' in the search box")
+    summary["search_left_live_frame"] = True
 
     # Options › Song: first displayed slide only.
     nx.press(operator, "escape")  # clear the search; focus stays in the box
@@ -177,18 +220,26 @@ def body(session: nx.Session) -> str:
             raise nx.Failure(f"the Options Song tab lacks {needed}")
     nx.click(operator, *controls["options-copyright-first-slide"].center)
     time.sleep(0.3)
+    nx.click(operator, *controls["options-license-info"].center)
+    time.sleep(0.3)
+    nx.type_text(operator, "CCLI b.")
+    unchanged("typing B and '.' in License Info")
     session.save(nx.capture_stable(operator), "options-song-tab")
     nx.click(operator, *app.control("dialog-confirm", operator).center)
     stored = nx.wait_until(
         lambda: (
-            "copyright_first_slide=1\n" in settings.read_text() and settings.read_text()
+            "copyright_first_slide=1\n" in settings.read_text()
+            and "license_info=CCLI b.\n" in settings.read_text()
+            and settings.read_text()
         ),
         5,
-        "copyright_first_slide=1 in settings.txt",
+        "copyright_first_slide=1 and license_info in settings.txt",
     )
     summary["settings_after_options"] = stored.splitlines()
     if "copyright_display=0" in stored:
         raise nx.Failure("Display Copyright Information was turned off")
+    unchanged("Options OK with changed copyright settings", 1.5)
+    summary["options_left_live_frame"] = True
 
     nx.press(operator, "ctrl+q")
     summary["exit"] = app.wait_exit()
@@ -212,7 +263,8 @@ def body(session: nx.Session) -> str:
     return (
         "Sort by Author/Copyright/Administrator (mouse) and Song Number + Descending (keyboard) "
         "order the Songs rows as expected and persist across a restart; 'etsa' finds the title "
-        "match then the slide-label match; Options › Song first-slide-only is saved"
+        "match then the slide-label match; Options › Song first-slide-only and License Info are "
+        "saved; typing in both fields and OK leave the live audience frame unchanged"
     )
 
 

@@ -346,8 +346,11 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
   Sela now: titles only. Re-run: `songs-browser-windows.py`.
 - [ ] **PP-SB-04 Label search ranking** (EW8-OBS-046). Steps: with one song
   titled "Glory Road" and another whose slide label is "Glory", type "glo";
-  record the result order; then type a label number ("verse 2"). Sela now:
-  title match first, label-only match after it; "verse 2" needs both words.
+  record the result order; then type a label number ("verse 2"). Also add a
+  long song (many slides) with "glory" once in its lyrics and record whether
+  it lists above or below the label-only song. Sela now: title match first,
+  then songs with a lyric or metadata hit, and label-only matches after all
+  of them whatever the song lengths; "verse 2" needs both words.
   Re-run: `songs-browser-windows.py`, `search-windows.py`.
 - [ ] **PP-SB-05 "Show on first displayed slide only"** (EW8-OBS-055/056).
   Steps: tick it in Options › Main Output › Song; send a song with copyright
@@ -363,7 +366,8 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
 - [ ] **PP-SB-07 Options change while a song is Live** (EW8-OBS-055). Steps:
   with a copyright song Live, untick Display Copyright Information and OK;
   record whether the live slide redraws at once or only on the next slide.
-  Sela now: only the next cue changes; the live slide stays. Re-run:
+  Sela now: only the next cue changes; the live slide stays (GPUI test, and
+  the Linux script with first-slide-only and License Info changed). Re-run:
   `songs-browser-windows.py`.
 - [ ] **PP-SB-08 Copyright Font, Song Font and Show Verse/Chorus Label**
   (EW8-OBS-056). Steps: open each menu in Options › Main Output › Song and
@@ -373,9 +377,13 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
   Windows host on 2026-10-22). Steps: seed with
   `seed_library.exe --sort-songs`, run the script with the audience on the
   secondary monitor; it covers mouse and keyboard Sort by with UIA ticks,
-  label search, the Options Song tab and the strip ink on slides 1 and 2
-  with first-slide-only. Sela now: the Linux script PASSES (no audience
-  strip check there, the xvfb output is 351 px tall). Re-run: itself.
+  label search, the Options Song tab, the strip ink on slides 1 and 2 with
+  first-slide-only, and (since 2026-10-23) a real Options change typed with
+  B and "." into License Info while slide 2 is Live (zero frame changes
+  expected). Sela now: the Linux script PASSES; since 2026-10-23 it also
+  keeps a song Live and checks that typing in the search box and License
+  Info and OK leave the audience frame unchanged (no strip ink check there,
+  the xvfb output is 351 px tall). Re-run: itself.
 - [ ] **PP-SB-10 20k search and sort timings on the reference laptop**
   (M1-07, M1-04). Steps: `cargo run --locked --release --example search_bench`
   and `search-windows.py --latency-library` on the Windows machine of the

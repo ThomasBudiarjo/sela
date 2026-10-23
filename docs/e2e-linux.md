@@ -243,7 +243,7 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `live-output-x11.py --kind dual --tolerate-audience-focus` | private dual, audience `secondary` 1920x1080 | PASS, four tolerated focus thefts |
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
-| `songs-browser-x11.py --display :114` (songs-browser, 2026-10-22) | xvfb (`serve --display :114`), operator only | PASS (Sort by keys mouse + keyboard, restart, label search, Options Song tab) |
+| `songs-browser-x11.py --display :114` (songs-browser, 2026-10-22; re-run 2026-10-23 after review) | xvfb (`serve --display :114`), audience `window` 624x351 | PASS (Sort by keys mouse + keyboard, restart, label search, Options Song tab; since 2026-10-23 a song is Live and typing "bravo." in the search box, "CCLI b." in License Info and OK with changed options leave the audience frame unchanged) |
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live

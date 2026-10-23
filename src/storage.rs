@@ -281,12 +281,17 @@ PRAGMA user_version=6;";
 const SCHEMA7: &str = "PRAGMA user_version=7;";
 const SCHEMA_VERSIONS: [i64; 7] = [1, 2, 3, 4, 5, 6, 7];
 const CURRENT: i64 = 7;
-// bm25 column weights: title, lyrics, metadata, labels. Labels weigh less than
-// lyrics, so a label-only match ranks below title and lyric matches, and a
-// query that matches no label ranks exactly as before schema 7.
+// bm25 column weights: title, lyrics, metadata, labels. FTS5's bm25
+// normalizes by the length of the whole row, so a low label weight alone does
+// not keep a short song's label hit below a long song's lyric hit. `l` sorts
+// first instead: with the labels weight at 0 a row scores exactly 0 only when
+// every hit is in its labels (each term's idf is positive), so label-only
+// rows always follow the rows with a title, lyric or metadata hit, and bm25
+// with labels at 0.5 orders within each group. A query that matches no label
+// puts every row in the first group.
 /// Ranks and limits inside the FTS scan, so only the kept rows are joined to
 /// song heads (about 20% faster on 20k songs than joining every match first).
-const SEARCH_SQL: &str = "SELECT m.song,s.head,t.title FROM (SELECT f.rowid AS row,f.title AS title,bm25(song_search,10.0,1.0,2.0,0.5) AS r FROM song_search f WHERE song_search MATCH ?1 ORDER BY r,f.title COLLATE NOCASE,f.title,f.rowid LIMIT ?2) t JOIN search_rows m ON m.row=t.row JOIN songs s ON s.id=m.song WHERE s.deleted=0 ORDER BY t.r,t.title COLLATE NOCASE,t.title,m.song";
+const SEARCH_SQL: &str = "SELECT m.song,s.head,t.title FROM (SELECT f.rowid AS row,f.title AS title,bm25(song_search,10.0,1.0,2.0,0.0)=0 AS l,bm25(song_search,10.0,1.0,2.0,0.5) AS r FROM song_search f WHERE song_search MATCH ?1 ORDER BY l,r,f.title COLLATE NOCASE,f.title,f.rowid LIMIT ?2) t JOIN search_rows m ON m.row=t.row JOIN songs s ON s.id=m.song WHERE s.deleted=0 ORDER BY t.l,t.r,t.title COLLATE NOCASE,t.title,m.song";
 
 impl SectionId {
     /// CPU-only allocation with a process-local counter; no random-device I/O.
@@ -627,18 +632,31 @@ impl Repository {
             return Err(Error::Unsupported);
         }
         // quick_check also runs the FTS5 index check. When dropping the derived
-        // index makes the file pass, only the index was damaged and it is
-        // rebuilt; otherwise the transaction rolls the drop back.
+        // index makes the file pass, only the index was damaged: a current
+        // file rebuilds it, an older one (schema 5 and 6 hold the index too)
+        // leaves the rebuild to the schema 7 migration step. Opening an older
+        // file without upgrading (verifying its backup copy) keeps the copy as
+        // it was and skips the index shape check. Otherwise the transaction
+        // rolls the drop back.
+        let mut damaged_index = false;
         if !quick_check(&tx)? {
-            if version != CURRENT {
+            if version < 5 {
                 return Err(Error::Corrupt);
             }
-            tx.execute_batch("DROP TABLE IF EXISTS song_search")
+            tx.execute_batch("SAVEPOINT index_check; DROP TABLE IF EXISTS song_search")
                 .map_err(|_| Error::Corrupt)?;
             if !quick_check(&tx)? {
                 return Err(Error::Corrupt);
             }
-            rebuild_search(&tx)?;
+            if version == CURRENT {
+                tx.execute_batch("RELEASE index_check")?;
+                rebuild_search(&tx)?;
+            } else if upgrade {
+                tx.execute_batch("RELEASE index_check")?;
+            } else {
+                tx.execute_batch("ROLLBACK TO index_check; RELEASE index_check")?;
+                damaged_index = true;
+            }
         } else if version == CURRENT && !search_consistent(&tx)? {
             rebuild_search(&tx)?;
         }
@@ -747,7 +765,9 @@ impl Repository {
         }
         if version >= 5 || upgrade {
             tx.prepare("SELECT row,song FROM search_rows")?;
-            tx.prepare("SELECT title,lyrics,metadata FROM song_search")?;
+            if !damaged_index {
+                tx.prepare("SELECT title,lyrics,metadata FROM song_search")?;
+            }
         }
         if version >= 6 || upgrade {
             tx.prepare("SELECT id,modified FROM songs")?;
@@ -4096,6 +4116,91 @@ CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='u
             .unwrap();
         assert_eq!(labels, "Etsaer\nSadsdasd");
         assert!(repo.check_search().unwrap());
+    }
+    #[test]
+    fn a_label_only_hit_ranks_below_a_lyric_hit_in_a_much_longer_song() {
+        // bm25 normalizes by row length, so a 0.5 label weight alone let the
+        // short song's label hit outrank the long song's lyric hit.
+        let (_d, _p, mut repo) = fixture();
+        let long: Vec<String> = (0..400).map(|i| format!("word{}", i % 50)).collect();
+        let mut lyric = lyric_song("Long Lyric Song", &format!("{} etsaer", long.join(" ")));
+        lyric.sections[0].label = "Verse 1".into();
+        for label in ["Chorus", "Bridge"] {
+            let mut section = lyric.sections[0].clone();
+            section.id = SectionId::allocate();
+            section.label = label.into();
+            section.lyrics = "more lines".into();
+            lyric.sections.push(section);
+        }
+        repo.save_song(None, lyric).unwrap();
+        let mut label = lyric_song("Label Song", "short words here");
+        label.sections[0].label = "Etsaer".into();
+        repo.save_song(None, label).unwrap();
+        for i in 0..20 {
+            repo.save_song(
+                None,
+                lyric_song(&format!("Filler {i}"), "some filler lyric text"),
+            )
+            .unwrap();
+        }
+        assert_eq!(titles(&repo, "ets"), ["Long Lyric Song", "Label Song"]);
+        // A query with a hit outside the labels keeps its bm25 place even
+        // when another of its words is only in a label.
+        assert_eq!(titles(&repo, "etsaer short"), ["Label Song"]);
+        assert_eq!(titles(&repo, "filler 7"), ["Filler 7"]);
+    }
+    #[test]
+    fn schema5_and_6_libraries_with_only_a_damaged_index_still_migrate() {
+        for version in [5, 6] {
+            let d = tempfile::tempdir().unwrap();
+            let path = d.path().join("library");
+            let v = if version == 5 {
+                schema5(&path)
+            } else {
+                schema6(&path)
+            };
+            Connection::open(&path)
+                .unwrap()
+                .execute_batch("DELETE FROM song_search_data WHERE id>10")
+                .unwrap();
+            assert!(!quick_check(&Connection::open(&path).unwrap()).unwrap());
+            let repo = Repository::open(&path).unwrap_or_else(|e| panic!("{version}: {e:?}"));
+            assert_eq!(schema_of(&path), CURRENT);
+            assert!(repo.check_search().unwrap(), "{version}");
+            let head = Version { revision: 2, ..v };
+            let current = repo.song(head).unwrap();
+            assert_eq!(
+                titles(&repo, "vers"),
+                std::slice::from_ref(&current.title),
+                "{version}: rebuilt with labels"
+            );
+            // The verified backup is the file as it was, damaged index included.
+            let backup = d.path().join(format!("library.schema{version}-backup"));
+            assert_eq!(schema_of(&backup), version);
+            assert!(!quick_check(&Connection::open(&backup).unwrap()).unwrap());
+            let old = Repository::open_internal(&backup, false).unwrap();
+            old.verify_history(&AtomicBool::new(false), std::time::Instant::now())
+                .unwrap();
+            assert_eq!(old.song(head).unwrap(), current, "{version}");
+        }
+        // Damage outside the index is still refused, unchanged and unbacked.
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        schema6(&path);
+        let (root, page_size): (i64, i64) = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT rootpage,(SELECT page_size FROM pragma_page_size) FROM sqlite_schema WHERE name='song_revisions'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[((root - 1) * page_size) as usize] = 0x07;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(matches!(Repository::open(&path), Err(Error::Corrupt)));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(!d.path().join("library.schema6-backup").exists());
     }
     #[test]
     fn stale_labels_or_sort_keys_fail_the_check_and_are_repaired() {

@@ -505,7 +505,25 @@ tables are only read; `songs.modified` stamps are untouched, so Date
 modified keeps its order). A schema 1 to 4 file gets the new shape directly
 in its schema 5 step. `check_search` compares labels and sort keys with the
 head revision as well, so stale keys are found and `repair_search` rebuilds
-them. Tests: `schema6_migration_indexes_labels_and_sort_keys_and_keeps_the_stamps`,
+them.
+
+Open-time integrity for older files (review fix, 2026-10-23): schema 5 and 6
+files hold the derived index too, so a `quick_check` failure there drops
+`song_search` and rechecks exactly like a schema 7 file. When only the index
+was damaged, the upgrade continues: the verified `.schema{N}-backup` is taken
+from the committed file as it was (damaged index included) and the schema 7
+step rebuilds the index. Verifying that backup copy (an open without upgrade)
+rolls the drop back, so the copy keeps the original bytes, and it skips the
+`song_search` shape check. Schema 1 to 4 files have no index to blame and a
+`quick_check` failure stays `Corrupt`, as does any damage outside the index
+(nothing is backed up or changed). The drop happens while the migration's
+write transaction is open, before the backup reads the committed file; if a
+cache spill made the reader wait, the backup fails as `Locked` and the open
+is rolled back (not observed; the drop frees pages to the freelist and
+dirties only a few). Test:
+`schema5_and_6_libraries_with_only_a_damaged_index_still_migrate`.
+
+Tests: `schema6_migration_indexes_labels_and_sort_keys_and_keeps_the_stamps`,
 `schema6_migration_abort_keeps_schema6_and_the_verified_backup` (child
 process aborts after the rebuild, before commit: the file stays schema 6
 without the new columns and the verified backup opens),

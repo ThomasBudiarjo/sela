@@ -516,15 +516,22 @@ B/C/L-in-search best guess), 061, 064, 065 (context menu, sort, delete confirm).
   stale queries; implement empty/loading/error states without list selection drift.
 - [ ] Virtualize large lists and bound thumbnail requests/cache ownership.
   (Songs list virtualized and measured on 20k; Media and other lists and thumbnails remain.)
-- [x] Test a slow earlier query completing after a newer one, deletion of selected
+- [ ] Test a slow earlier query completing after a newer one, deletion of selected
   resource, large libraries and keyboard navigation through virtualized rows.
-  (songs-browser 2026-10-22, `src/tests/songs_browser.rs`: a reply for an
-  earlier query taken after a newer one was typed, and an even later stale
-  generation, are dropped without touching rows or selection; deleting the
-  selected search hit selects the neighbour hit and keeps focus in the list;
-  Down/Up/Page Up/End through a 300-row virtual list sorted by Song Number
-  keep the cursor row built and focused. Large libraries: 400-row GPUI test,
-  20k Windows run of focus-scopes-resource-browser and the 20k benchmark.)
+  (Done by songs-browser 2026-10-22, `src/tests/songs_browser.rs`: deleting
+  the selected search hit selects the neighbour hit and keeps focus in the
+  list; Down/Up/Page Up/End through a 300-row virtual list sorted by Song
+  Number keep the cursor row built and focused; the generation guard drops
+  a reply for an earlier query that is taken after a newer one was typed
+  (on a 4-song library the worker answers fast, so the late reply comes from
+  the poll timing, not a slow query) and a synthetic later generation-1
+  `Results` handed to `Operator::search_results`. Open: no query was
+  actually slow: a real slow storage-worker query raced against a newer one
+  on a large library needs a delay hook or a 20k library in the GPUI test.
+  Large libraries rely on earlier evidence not re-run here: the 400-row GPUI
+  test, the focus-scopes-resource-browser 20k Windows run and the 20k
+  database benchmark; songs-browser repeated only the benchmark, on this
+  Linux VM.)
 - [ ] Defer decoder-specific thumbnail production to M2-05, not browser behavior.
 
 Acceptance: resource browsing remains responsive and cannot act on stale results.
@@ -744,7 +751,7 @@ painted list p95 81.5-83.8 ms (three runs of 30 two-letter queries, release).
 Truncation hint added in focus-scopes-resource-browser. Open: slide-label search (documented deviation from EW8-OBS-045, see below), Narrator and older-hardware runs.
 
 <a id="m1-07-search-label-matching"></a>Backlog (M1-07 search label matching): EW8-OBS-045 matches slide/section text labels; Sela indexes only title, lyrics and metadata. Index the labels (extra FTS column, schema bump, index rebuild) and add a native check that a label-only query finds the song. Not done because it changes the schema; the two-character minimum is a separate owner-approved deviation.
-**Done, implemented-unqualified (songs-browser, 2026-10-22):** schema 7 adds the `labels` FTS column (distinct labels per song, bm25 weight 0.5 below lyrics), migrated by a rebuild behind the verified `.schema6-backup`; storage and GPUI tests plus `scripts/songs-browser-x11.py` (label-only "etsa" hit) pass on Linux. Open: EW ranking observation (PP-SB-04), the Windows script and the reference-laptop timings (PP-SB-09/10).
+**Done, implemented-unqualified (songs-browser, 2026-10-22):** schema 7 adds the `labels` FTS column (distinct labels per song, label-only hits sorted after every other hit, bm25 weight 0.5), migrated by a rebuild behind the verified `.schema6-backup`; storage and GPUI tests plus `scripts/songs-browser-x11.py` (label-only "etsa" hit) pass on Linux. Open: EW ranking observation (PP-SB-04), the Windows script and the reference-laptop timings (PP-SB-09/10).
 
 - [x] Add indexed/FTS search for observed title/lyrics/metadata queries and filters.
   (Index in M1-07a, Songs search box in M1-07b; EW also matches slide labels,

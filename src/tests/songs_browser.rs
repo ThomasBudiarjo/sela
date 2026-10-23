@@ -546,3 +546,42 @@ fn options_song_tab_is_reachable_by_keyboard_and_escape_discards(cx: &mut TestAp
         );
     });
 }
+
+#[gpui::test]
+fn typing_in_license_info_never_toggles_masks_or_cues_live(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = open(cx, metadata_library(&dir), 1);
+    settle(&mut cx, &operator, "settings", |o| o.settings_loaded());
+    click(&mut cx, "song-0");
+    settle(&mut cx, &operator, "preview", |o| {
+        o.preview.as_ref().is_some_and(|p| p.slides.len() == 3)
+    });
+    click(&mut cx, "live-output");
+    settle(&mut cx, &operator, "output connection", connected);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "first slide", |o| {
+        o.live_slide == Some(0) && !o.presented_footers.is_empty()
+    });
+    open_song_tab(&mut cx, &operator);
+    click(&mut cx, "options-license-info");
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+    // Real key events into the field: the plain Black key and its "."
+    // alternative, Clear/Logo letters, Shift+B, Page Down (Go Live) and Right.
+    cx.simulate_keystrokes("b c l . shift-b pagedown right");
+    cx.run_until_parked();
+    operator.read_with(&cx, |o, cx| {
+        assert_eq!(o.settings.song.license.read(cx).text(), "bcl.B");
+        assert!(!o.masks.is_on(Mask::Black));
+        assert!(!o.masks.is_on(Mask::Clear));
+        assert!(!o.masks.is_on(Mask::Logo));
+        assert_eq!(o.live_slide, Some(0));
+        assert_eq!(submitted(o), sent, "no new renderer cue");
+        assert!(o.dialog.is_some(), "the Options dialog stays open");
+    });
+    click(&mut cx, "dialog-confirm");
+    cx.run_until_parked();
+    assert_eq!(operator.read_with(&cx, |o, _| submitted(o)), sent);
+    settle(&mut cx, &operator, "settings written", |_| {
+        settings_file(&dir).contains("license_info=bcl.B\n")
+    });
+}
