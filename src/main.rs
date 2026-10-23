@@ -422,6 +422,7 @@ fn main() {
                 loader: sela::settings::default_loader(),
                 schedule_writer: sela::schedule_file::default_writer(),
                 initial_layout: layout,
+                media_locator: Some(std::sync::Arc::new(sela::media::ffmpeg::locate)),
             };
             let operator =
                 cx.new(|cx| Operator::with_settings(library, audience_launcher(slot), config, cx));

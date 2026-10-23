@@ -720,6 +720,11 @@ pub enum Msg {
     MarginsDefault,
     MarginsUseDefault,
     ThemeUsing,
+    // Media backend (M2-01).
+    MediaUnavailableMissing,
+    MediaUnavailableGpl,
+    MediaUnavailableNonfree,
+    MediaUnavailableBroken,
 }
 
 impl Msg {
@@ -1361,6 +1366,10 @@ impl Msg {
         Msg::MarginsDefault,
         Msg::MarginsUseDefault,
         Msg::ThemeUsing,
+        Msg::MediaUnavailableMissing,
+        Msg::MediaUnavailableGpl,
+        Msg::MediaUnavailableNonfree,
+        Msg::MediaUnavailableBroken,
     ];
 
     pub fn english(self) -> &'static str {
@@ -2128,6 +2137,15 @@ impl Msg {
             Self::MarginsDefault => "Default inset (32)",
             Self::MarginsUseDefault => "Use default",
             Self::ThemeUsing => "Theme: {name}",
+            // Media backend (M2-01).
+            Self::MediaUnavailableMissing => "Video and audio unavailable: FFmpeg was not found",
+            Self::MediaUnavailableGpl => {
+                "Video and audio unavailable: the FFmpeg found is a GPL build"
+            }
+            Self::MediaUnavailableNonfree => {
+                "Video and audio unavailable: the FFmpeg found is a nonfree build"
+            }
+            Self::MediaUnavailableBroken => "Video and audio unavailable: FFmpeg did not start",
         }
     }
 
@@ -2924,6 +2942,19 @@ impl Msg {
             Self::MarginsDefault => "Jarak bawaan (32)",
             Self::MarginsUseDefault => "Pakai bawaan",
             Self::ThemeUsing => "Tema: {name}",
+            // Media backend (M2-01).
+            Self::MediaUnavailableMissing => {
+                "Video dan audio tidak tersedia: FFmpeg tidak ditemukan"
+            }
+            Self::MediaUnavailableGpl => {
+                "Video dan audio tidak tersedia: FFmpeg yang ditemukan berlisensi GPL"
+            }
+            Self::MediaUnavailableNonfree => {
+                "Video dan audio tidak tersedia: FFmpeg yang ditemukan bukan perangkat lunak bebas"
+            }
+            Self::MediaUnavailableBroken => {
+                "Video dan audio tidak tersedia: FFmpeg gagal dijalankan"
+            }
         }
     }
 }
@@ -2993,7 +3024,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 637);
+        assert_eq!(Msg::ALL.len(), 641);
     }
 
     #[test]

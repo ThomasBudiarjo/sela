@@ -7,7 +7,8 @@ impl Operator {
             | self.poll_preflight()
             | self.poll_settings(cx)
             | self.poll_schedule_files()
-            | self.poll_song_import();
+            | self.poll_song_import()
+            | self.poll_media_backend();
         changed |= self.poll_autosave(cx);
         changed |= self.poll_cues();
         if let Some(output) = &mut self.output {

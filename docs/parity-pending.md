@@ -657,6 +657,54 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
 
 ## Stream: media-core
 
+- [ ] **PP-MC-01 Undecodable and damaged video in EasyWorship** (M2-02;
+  best guess in reference-observations "Media decoding best guesses").
+  Steps: in a disposable profile, import into Media › Videos (a) a text file
+  renamed `broken.mp4`, (b) an original FFV1-in-AVI clip whose codec tag was
+  renamed (make it with the fetched FFmpeg as `tests/media_decode.rs` does),
+  (c) an original clip cut in half; note any import message, the thumbnail,
+  and what Preview and Go Live do with each (does Live keep the previous
+  item?). Sela now: the decoder fails with `Corrupt`/`UnsupportedCodec`
+  before any frame (a half clip delivers what decodes, then ends); there is
+  no video UI yet. Re-run: `cargo test --locked --test media_decode`, then
+  the video-playback stream's script.
+- [ ] **PP-MC-02 Variable frame rate timing** (M2-02). Steps: play an
+  original clip whose frames 0-9 run at 30 fps followed by a 0.5 s gap (the
+  `setpts` recipe in `tests/media_decode.rs`) with an audible tick per frame
+  as a video background; film or capture the audience and note whether EW
+  holds the frame for the gap or plays at a constant rate. Sela now: every
+  frame keeps its source timestamp (`variable_frame_rate_keeps_each_frames_own_timestamp`).
+  Re-run: that test and the video-playback script.
+- [ ] **PP-MC-03 Windows run of the FFmpeg base** (VAL-MEDIA-004/030/031).
+  Steps: `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts\fetch-ffmpeg.ps1` (expect "size and SHA-256 verified", then
+  "already holds" on a second run), `cargo build --locked` and `cargo build
+  --locked --examples`, then `python scripts\media-backend-windows.py
+  --gpl-dir <a GPL ffmpeg bin folder, e.g. a gyan.dev full build>`. It checks
+  the accepted dev copy and its log line, no console window during the
+  probe, the GPL and missing warnings with Live output/Go Live/Black still
+  working, and runs `cargo test --locked --test media_decode` with
+  `SELA_REQUIRE_FFMPEG=1` (the drop and outside-kill tests exercise the Job
+  Object). Not covered by that Windows run: the stall-watchdog, hanging-probe
+  and `first_frame` timeout tests and the `fetch-ffmpeg` usage test use
+  `cfg(unix)` shell fakes, and the GPL half of the locator test needs
+  `/usr/bin`; check those paths on Windows by hand (a `.cmd` ffprobe that
+  runs `timeout /t 30` must end in `ProbeTimedOut`) or port the fakes.
+  `fetch_ffmpeg_ps1_reports_usage_mistakes_as_exit_2` runs the PowerShell
+  usage checks (exit 2 for `-Platform` without a value, `-Dest -Force`,
+  `-Platform bogus`, `-Bogus x`) under `powershell` on Windows; confirm it
+  ran rather than printed `SKIPPED`, and also run it with
+  `SELA_PWSH=powershell.exe` if `pwsh` is installed, so Windows PowerShell
+  5.1 is covered. Sela now: Linux only (`scripts/media-backend-x11.py`
+  PASS; `fetch-ffmpeg.ps1` ran under PowerShell 7.4.6 on Linux only).
+  Re-run: the same commands.
+- [ ] **PP-MC-04 Mapped network and subst drives** (docs/media.md "Decoder
+  input arguments" known gap). Steps: map a share as `Z:` and `subst Y:` a
+  local folder; start a decode of a clip on each from a worker (or the
+  video-playback UI once it exists) and note that both are accepted today.
+  Decide whether `GetDriveTypeW` should refuse `DRIVE_REMOTE`. Re-run:
+  `cargo test --locked --lib media` after the change.
+
 ## Stream: video-playback
 
 ## Stream: scripture
@@ -798,6 +846,7 @@ timing):
 | 25 | `scenario-s02-windows.py` | seed (`--second-song`); secondary monitor |
 | 26 | `autosave-windows.py` | seed (`--second-song`); secondary monitor; no other Sela instance (it starts a second one on purpose) |
 | 27 | `themes-windows.py` | seed (`--themes`); secondary monitor; native Save dialog (themes stream, PP-TH-07) |
+| 28 | `media-backend-windows.py` | `scripts\fetch-ffmpeg.ps1` first; optional `--gpl-dir` (a GPL FFmpeg bin folder); runs `cargo test --test media_decode` unless `--skip-cargo` (PP-MC-03) |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

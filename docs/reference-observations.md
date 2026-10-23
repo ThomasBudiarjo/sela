@@ -813,3 +813,15 @@ Copy to Theme and "Set As Default Song Theme" re-render the song preview
 | TH-BG-11 | UNOBSERVED (Sela safety rule) | A theme load that fails on a lock held by another connection, or a full storage queue, is retried after 2 s with the status "Themes could not be loaded (Locked) · retrying"; until then TH-BG-10 applies. A corrupt theme row is not retried (it would fail again) and waits for the next library change. |
 | TH-BG-12 | UNOBSERVED | A theme deleted in the Themes tab while its editor is open: OK/Apply reports the failure (failure styling), keeps the edits, and the next OK/Apply saves them as a new theme under a fresh id (never re-inserting the deleted id that songs may still name). EW's behavior is unobserved. |
 | TH-BG-10 | UNOBSERVED (Sela safety rule) | A substitute theme is shown with a Preview note and never captured into a schedule item or saved in a `.selaschedule`: a song naming a deleted theme, or themes not loaded / failed to load, leave the item without a snapshot until the theme resolves or one is applied. |
+
+## Media decoding best guesses (media-core, 2026-10-22)
+
+EasyWorship 8.0.49 was not run for media-core. Each item is a reversible
+best guess; the observations to make are PP-MC-01 and PP-MC-02 in
+[parity-pending.md](parity-pending.md).
+
+- UNOBSERVED best guess: a video file EasyWorship cannot decode (unknown codec, damaged or not media). Sela's decoder reports `UnsupportedCodec` or `Corrupt` before any frame and never replaces what is live; the operator-facing wording and where it shows belong to the video-playback stream.
+- UNOBSERVED best guess: variable frame rate clips. Sela keeps each frame's own timestamp (no resampling to a constant rate), so playback follows the source timing.
+- UNOBSERVED best guess: a local playlist or reference file that points at a network URL. Sela refuses it with a protocol error and makes no network request (offline-first; VAL-MEDIA-038).
+- Sela-only, not a parity item: the "Video and audio unavailable" status when Sela's bundled FFmpeg is missing or is a GPL/nonfree build. EasyWorship has no separate decoder to report. When the narrow Resources header truncates it (or the Live output line), hovering shows the full text in a hint (review round 2); also Sela-only.
+- Not decided here: how a video background is fitted. The decoder can letterbox to the cue extent (`Fit::Exact`); EW8-OBS-032 shows Aspect Ratio Auto/Stretch for slide media, which the video-playback stream maps.

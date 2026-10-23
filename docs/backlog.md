@@ -1174,6 +1174,22 @@ folder, never PATH) and the `-buildconf` refusal of `--enable-gpl` and
 the app: discovery off the UI thread, logging the accepted version and the
 missing-FFmpeg warning stay open. No checkbox below is satisfied yet.
 
+Progress (media-core, 2026-10-22; implemented-unqualified): pinned
+`linux64` and `win64` LGPL builds with `scripts/fetch-ffmpeg` and
+`scripts/fetch-ffmpeg.ps1` (size and SHA-256 checked, nothing unpacked on a
+mismatch); the operator locates FFmpeg once on its own thread at startup,
+logs the accepted version or every refusal, and shows a non-blocking
+"Video and audio unavailable" status for a missing, GPL or nonfree build
+(Ubuntu's GPL `/usr/bin/ffmpeg` is the negative case). Process isolation is
+decided (FFmpeg as supervised children: process group on Unix, Job Object on
+Windows; the Job Object and, on Linux, `PR_SET_PDEATHSIG` also end children
+when Sela itself dies; macOS has no such mechanism yet) and
+the CPU frames a decoder holds are bounded by count and by `frame_budget`
+bytes (enforced; review round 1 fixed a reported-only bound); a
+provisional software-decode matrix is in [media](media.md). Checkboxes stay
+open: no hardware decode, GPU/audio budgets or Windows evidence yet.
+Windows runs: parity-pending PP-MC-03.
+
 - [ ] Use the M0 interop findings to compare native/software decode options,
   codec/container coverage, GPU transfer paths and distribution obligations.
 - [ ] Pin a supported format matrix, hardware/software fallback and failure policy.
@@ -1194,6 +1210,20 @@ and accepts only absolute local file paths ([media](media.md)). The
 crafted-playlist runtime check (VAL-MEDIA-038), the Job Object supervisor and
 all decoding stay open.
 
+Progress (media-core, 2026-10-22; implemented-unqualified): framework-free
+`media::decode::Decoder` (ffprobe metadata, then `ffmpeg` to raw RGBA over a
+pipe with per-frame `showinfo` timestamps) delivers `Opened`, frames and one
+terminal event through a bounded queue with backpressure, never blocking the
+caller (`try_next`), with cancellation by drop, a stall watchdog, crash and
+corrupt/unsupported/no-video classification, timestamp repair and
+`VideoFrame::background()` as a `PreparedBackground` for cues
+(`first_frame` for posters). `tests/media_decode.rs` decodes generated clips
+(VFR, odd and 1x1 sizes, short clips, unknown codec, truncated and garbage
+files) and checks VAL-MEDIA-038 (a crafted HLS/ffconcat playlist naming
+`http://` fails with a protocol error and nothing connects). Not done: frames
+are not presented anywhere, so the scene-stability, stale-frame, seek and
+text-over-video items stay open for the video-playback stream.
+
 - [ ] Implement open/probe/preload/decode/frame delivery outside UI/render paths.
 - [ ] Bound packet/frame queues and decide drop/backpressure behavior by timestamps.
 - [ ] Handle cancellation, end-of-stream, bad timestamps, corrupt media and decoder
@@ -1204,6 +1234,12 @@ all decoding stay open.
 - [ ] Video slide backgrounds: a Media Fill video per slide or song master
   (EW8-OBS-032 Volume and Media Usage, EW8-OBS-039 Videos category), with
   the M1-05h resolution, gate and missing-file substitution.
+- [ ] FFmpeg children end when Sela itself crashes or is killed, on every
+  platform (media-core review rounds 1-2). Linux: `PR_SET_PDEATHSIG(SIGKILL)`
+  on the spawning thread, tested (`a_child_dies_when_its_parent_is_sigkilled`).
+  Windows: Job Object `KILL_ON_JOB_CLOSE`, written, not run (PP-MC-03).
+  macOS: open, no parent-death signal (needs a watchdog pipe or kqueue
+  `NOTE_EXIT` helper); only matters if macOS becomes a target.
 
 Acceptance: ready video is cue-addressable and failure leaves live stable.
 

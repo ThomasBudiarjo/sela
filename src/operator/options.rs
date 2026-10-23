@@ -43,6 +43,8 @@ pub(crate) struct SettingsConfig {
     pub(crate) schedule_writer: sela::schedule_file::Writer,
     /// Layout read before the window opened, so the first frame already uses it.
     pub(crate) initial_layout: Option<sela::pane_layout::Layout>,
+    /// Finds FFmpeg once at startup on its own thread; `None` skips it.
+    pub(crate) media_locator: Option<super::MediaLocator>,
 }
 
 pub(crate) enum RecentChange {
@@ -70,6 +72,7 @@ impl Default for SettingsConfig {
             loader: settings::default_loader(),
             schedule_writer: sela::schedule_file::default_writer(),
             initial_layout: None,
+            media_locator: None,
         }
     }
 }

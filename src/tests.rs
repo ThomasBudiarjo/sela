@@ -22,6 +22,7 @@ mod arrangement_rendering;
 mod autosave_recovery;
 mod focus_modality;
 mod layout_startup;
+mod media_backend;
 mod navigation;
 mod resource_browser;
 mod scrutiny_r2;
@@ -2410,6 +2411,7 @@ mod settings_ui {
             loader: settings::default_loader(),
             schedule_writer: sela::schedule_file::default_writer(),
             initial_layout: None,
+            media_locator: None,
         };
         (config, slot)
     }
