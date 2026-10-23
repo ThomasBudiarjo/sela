@@ -877,3 +877,24 @@ Steps and re-runs are the PP-STG items in [parity-pending.md](parity-pending.md#
 | EW8-OBS-STG-5 | UNOBSERVED | Foldback lifecycle and menu. Sela: with Foldback enabled the stage starts and stops with Live › Show Live Output; Sela adds Live › Show Stage Output (stop a running stage, restart a lost one in one activation, start one while Live output is on; inert while Live output is off) and Live › Stage Message… (EW8-OBS-053 lists neither). |
 | EW8-OBS-STG-6 | UNOBSERVED | Stage-only message. Sela: one line (≤ 160 characters) typed privately in a dialog and sent only on Show on Stage; never drawn on the audience. EW's Alerts (EW8-OBS-056 Main Output › Alerts) are M3-04 and may own this. |
 | EW8-OBS-STG-7 | UNOBSERVED | Foldback monitor default with no free monitor. Sela: "Automatic" picks a monitor that is neither primary nor the audience's; with none, the stage is not started and the Live pane says so; an explicit choice (even the audience or primary monitor) is honoured. Only Foldback › General is built; Song, Scripture and Alerts and Clocks tabs show "not available". |
+
+### Portable bundles, backup and restore — UNOBSERVED best guesses (2026-10-23, bundle-backup-restore)
+
+EasyWorship 8.0.49 was not run for M1-13 (no Windows host). The only observed
+fact is EW8-OBS-053: the File menu has an **Export Standalone Schedule...**
+row between Save Schedule As... and Close Schedule. Nothing in this ledger
+covers what it writes, how such a file opens, or EW's profile backups
+(EW8-OBS-075 is also unobserved). Each row below is a reversible Sela best
+guess; IDs are stream-scoped (the integrator may renumber). Steps and re-runs
+are the PP-BUN items in [parity-pending.md](parity-pending.md#stream-bundle-backup-restore).
+Format and policy: [bundle.md](bundle.md).
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-BUN-1 | UNOBSERVED | What Export Standalone Schedule writes: file type/extension, whether media (images, videos, audio), themes, fonts and scripture text are included, and any options dialog. Sela writes a `.selapackage` (strict ZIP + manifest) with the schedule snapshots and the profile images it uses; fonts are listed, never copied; restricted scripture is left out and listed; no options dialog. |
+| EW8-OBS-BUN-2 | UNOBSERVED | How a standalone schedule opens in EW (Open Schedule, double-click, a separate import), where its media goes and what happens when a file of the same name exists. Sela opens it through File › Open Schedule: images go to the profile's Resources/Images without replacing another image (a different one keeps its name, the copy gets "name (2).png"), the schedule becomes a new file in Schedules and opens as saved. |
+| EW8-OBS-BUN-3 | UNOBSERVED | EW's report of missing fonts or media after opening a schedule from another machine. Sela shows the M1-11b preflight report with the package notes on top and Locate… for each missing image; missing fonts are named with "DejaVu Sans is used instead". |
+| EW8-OBS-BUN-4 | UNOBSERVED | Whether EW's standalone schedule export saves the schedule itself (title bar, unsaved marker afterwards). Sela's export is not a Save As: the schedule keeps its file and unsaved state. |
+| EW8-OBS-BUN-5 | UNOBSERVED | EW profile/library backup and restore: menu placement (Profiles menu, Profiles Manager, Utilities ▸, File), file type, what is included (songs, media, schedules, settings, scripture, themes), and whether restore replaces the current profile or creates another. Sela adds Profiles › Back Up Profile… and Restore Profile… after Profiles Manager…; restore always creates a new profile folder and never replaces one. |
+| EW8-OBS-BUN-6 | UNOBSERVED | EW's progress and cancel behavior for exports, backups and restores. Sela shows a modal progress dialog with Cancel (Esc) and blocks Quit while a job runs. |
+| EW8-OBS-BUN-7 | UNOBSERVED | EW's reaction to a damaged, foreign or newer package/backup. Sela refuses it before changing anything and says why (damaged, unsafe, newer Sela, wrong kind), adding "Nothing was changed." |

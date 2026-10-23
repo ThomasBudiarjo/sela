@@ -1023,15 +1023,42 @@ without losing the current schedule or another profile's data.
 
 Depends on: M1-09, M1-11, M1-12. Tests: U, I, N; S04.
 
-- [ ] Specify versioned manifest, snapshots, asset hashes, relative references,
+Progress (bundle-backup-restore, 2026-10-23): **implemented-unqualified**;
+see [bundle](bundle.md). Standalone schedules (`.selapackage`, File › Export
+Standalone Schedule…, opened through File › Open Schedule) and profile
+backups (`.selabackup`, Profiles › Back Up Profile… / Restore Profile…) as a
+strict ZIP subset with a version-1 manifest, on the `sela-bundle` worker.
+Linux U/I/fuzz/GPUI tests and `scripts/bundle-x11.py` PASS;
+`scripts/bundle-windows.py` NOT RUN (no Windows host); EW behavior
+unobserved (EW8-OBS-BUN-1..7, PP-BUN-01..08). Restore creates a new profile
+folder; switching to it from the menu waits for M1-12b.
+
+- [x] Specify versioned manifest, snapshots, asset hashes, relative references,
   optional embedded assets and permitted font/content redistribution.
-- [ ] Implement export/import/backup/restore with atomic publication and validation
+  (docs/bundle.md: manifest v1, schedule snapshots, SHA-256 per file and
+  image, profile-relative paths and recent schedules, images embedded by
+  default or listed; fonts never embedded (license unknowable), restricted
+  scripture left out and listed.)
+- [x] Implement export/import/backup/restore with atomic publication and validation
   before mutation; explain missing/licensed assets and version incompatibility.
-- [ ] Reject traversal, absolute paths, symlink escape, duplicate/conflicting names,
+  (Temporary + rename for exports and backups, private staging + one rename
+  for restore, whole-bundle validation before any profile change; preflight
+  report with package notes; newer manifest/library/schedule refused with
+  "update Sela".)
+- [x] Reject traversal, absolute paths, symlink escape, duplicate/conflicting names,
   oversized/expanding archives, checksum mismatches and malformed manifests.
+  (`src/bundle/tests.rs` hostile archives built byte by byte, fuzz
+  `portable`, `bundle-x11.py` "../" package; backups never follow links.)
 - [ ] Test round-trip on a fresh offline profile and transfer between machines with
   different paths, fonts and case-sensitivity; test interrupted restore.
-- [ ] Document format and recovery steps; never overwrite original data on failure.
+  (Done on Linux: two profiles at different paths with different font
+  catalogs (`tests/bundle_s04.rs`, `bundle-x11.py`), names that differ only
+  in case never replace each other (platform-independent rule), aborted
+  restore child process after 1 and 4 files. Open: a real second machine and
+  a case-insensitive NTFS volume (`bundle-windows.py`, PP-BUN-08).)
+- [x] Document format and recovery steps; never overwrite original data on failure.
+  (docs/bundle.md "Recovery steps"; exports replace only when complete,
+  restore never writes into an existing place.)
 
 Acceptance: S04 passes; portability does not imply permission to redistribute assets.
 
@@ -1078,7 +1105,10 @@ Tests: I, N, E if viable, H, P; S01–S04.
   `scripts/scenario-s0{1,2}-x11.py` (PASS on Xvfb with the real audience
   process; themes do not exist yet, so S01 uses a slide Color Fill) and
   `scripts/scenario-s0{1,2}-windows.py` (NOT RUN: no Windows host). S03/S04
-  wait for M1-12/M1-13; load and hardware parts are open.
+  wait for M1-12/M1-13; load and hardware parts are open. bundle-backup-restore
+  (2026-10-23): S04 is automated as `tests/bundle_s04.rs` and
+  `scripts/bundle-x11.py` (PASS on Xvfb) with `scripts/bundle-windows.py`
+  NOT RUN.
 - [ ] Run a 90-minute rehearsal on an older Windows integrated-GPU laptop with
   independent projector output while searching, editing and autosaving.
 - [ ] Record frame/control timings, memory trend, recovery outcomes, manual visual
@@ -1535,8 +1565,8 @@ Depends on: M1-01, M1-13. Tests: U, I, L.
   damaged bundled files rebuilt from the bundle; worker thread.)
 - [x] Test missing books, differing versification, Unicode, corrupt provider files
   and restricted export/redistribution flags. (Unit and GPUI tests; the
-  restricted flag travels with schedule snapshots; stripping restricted text
-  from portable exports belongs to M1-13 and is open.)
+  restricted flag travels with schedule snapshots; M1-13 (2026-10-23) leaves
+  restricted items out of standalone schedules and lists them.)
 - [x] Document translation availability and permissions independently from UI parity.
   (docs/scripture.md "Bundled translations and provenance".) State:
   implemented-unqualified (no Windows run; work-log record "scripture").

@@ -319,6 +319,7 @@ struct Staging {
 impl Staging {
     fn create(parent: &Path, prefix: &str) -> Result<Self, Error> {
         let path = parent.join(format!("{prefix}{}", nonce()));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         {

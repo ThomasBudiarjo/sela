@@ -572,8 +572,9 @@ impl Archive {
             check_extra(&record[CENTRAL_LEN + name_len..CENTRAL_LEN + name_len + extra_len])?;
             // A Unix mode, when given, must be a regular file: no links,
             // folders or devices. The MS-DOS folder bit is refused too.
-            let unix_mode = external >> 16;
-            if made_by >> 8 == 3 && unix_mode != 0 && unix_mode & 0o170_000 != 0o100_000 {
+            // Permission bits alone (as Python's zipfile writes) are fine.
+            let file_type = (external >> 16) & 0o170_000;
+            if made_by >> 8 == 3 && file_type != 0 && file_type != 0o100_000 {
                 return Err(ArchiveError::Unsupported("links, folders or special files"));
             }
             if external & 0x10 != 0 {

@@ -387,6 +387,10 @@ fn hostile_names_links_and_folders_are_refused() {
         open_raw(&build(&[link], &[]), LIMITS),
         Err(ArchiveError::Unsupported(_))
     ));
+    // Permission bits without a file type (Python's zipfile) are a file.
+    let mut plain = raw("plain", b"x");
+    plain.external = 0o600 << 16;
+    assert!(open_raw(&build(&[plain], &[]), LIMITS).is_ok());
     let mut folder = raw("folder", b"");
     folder.external = 0x10;
     folder.made_by = 20;
@@ -977,7 +981,10 @@ fn exporting_without_images_lists_them_and_a_relink_repairs_after_import() {
 
 /// Rebuilds `package` at `out` with `change` applied to each entry's bytes
 /// (`None` drops the entry).
-fn rewrite(package: &Path, out: &Path, change: &dyn Fn(&str, Vec<u8>) -> Option<Vec<u8>>) {
+/// Maps an entry's name and bytes to its new bytes (`None` drops it).
+type Change<'a> = &'a dyn Fn(&str, Vec<u8>) -> Option<Vec<u8>>;
+
+fn rewrite(package: &Path, out: &Path, change: Change) {
     let mut archive = Archive::open(File::open(package).unwrap(), PROFILE_LIMITS).unwrap();
     let mut writer = Writer::new(File::create(out).unwrap());
     for i in 0..archive.entries().len() {
@@ -1011,7 +1018,7 @@ fn tampered_or_inconsistent_packages_change_nothing() {
     put_image(&target.profile, "Mine.png", &png([5, 5, 5]));
     let before = snapshot(&target.profile);
     let bad = source.profile.join("bad.selapackage");
-    let try_import = |change: &dyn Fn(&str, Vec<u8>) -> Option<Vec<u8>>| {
+    let try_import = |change: Change| {
         rewrite(&package, &bad, change);
         let result = import_schedule(&target.profile, &bad, &no());
         assert_eq!(snapshot(&target.profile), before, "{result:?}");
@@ -1432,7 +1439,7 @@ fn a_damaged_or_newer_backup_restores_nothing() {
     backup_profile(&source.profile, &backup, &no()).unwrap();
     let target = machine(&["t"]);
     let bad = source.profile.parent().unwrap().join("bad.selabackup");
-    let attempt = |change: &dyn Fn(&str, Vec<u8>) -> Option<Vec<u8>>| {
+    let attempt = |change: Change| {
         rewrite(&backup, &bad, change);
         let destination = target.profile.join("R");
         let result = restore_profile(&bad, &destination, &no());

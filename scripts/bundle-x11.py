@@ -24,10 +24,12 @@ kind profile, library.sqlite and harbor.png inside, no sela.lock or
 Recovery/). Ctrl+Q, Don't Save quits A.
 
 Machine B: a fresh library at another folder depth. Ctrl+O and the portal
-Open dialog pick the package: Sela unpacks it (harbor.png copied byte for
-byte into B's Resources/Images, Schedules/Sunday.selaschedule written) and
-the preflight dialog opens with the package notes ("Images added ...",
-"does not carry ...", the font) and a Missing row for lantern.png.
+Open dialog pick the package. B already has a different HARBOR.png (a name
+that differs only in case), so Sela stores the carried image byte for byte
+as "harbor (2).png", leaves HARBOR.png alone, writes
+Schedules/Sunday.selaschedule, and the preflight dialog opens with the
+package notes ("harbor.png → harbor (2).png", "does not carry ...", the
+font) and a Missing row for lantern.png.
 Locate... with the original repairs it (lantern.png appears in B with the
 pinned SHA-256 and the row goes away). A hostile package (a "../" entry,
 written by zipfile) is refused with "Nothing was changed." and nothing is
@@ -77,9 +79,7 @@ def names_in(path: Path) -> list[str]:
 
 
 def click_id(app: nx.App, window: int, aid: str) -> None:
-    control = nx.wait_until(
-        lambda: app.controls(window).get(aid), 10, f"control {aid}"
-    )
+    control = nx.wait_until(lambda: app.controls(window).get(aid), 10, f"control {aid}")
     nx.click(window, *control.center)
     # Park the pointer away from where a portal dialog may open: a GTK
     # tooltip under it would be the dialog's first visible window.
@@ -116,7 +116,9 @@ def machine_a(session: nx.Session, data: Path) -> tuple[Path, Path, Path]:
     summary = session.summary
     profile = data / "home" / "ana" / "sela"
     profile.mkdir(parents=True)
-    library = nx.seed_library(profile / "library.sqlite", "--portable-song", seed=session.args.seed)
+    library = nx.seed_library(
+        profile / "library.sqlite", "--portable-song", seed=session.args.seed
+    )
     usb = data / "usb"
     usb.mkdir()
     app = session.app(["--operator-library", library], name="machine-a")
@@ -130,15 +132,15 @@ def machine_a(session: nx.Session, data: Path) -> tuple[Path, Path, Path]:
     menu(app, operator, "alt+f", "bar-file-export")
     app.drive_file_dialog(usb / "Sunday", owner=operator)
     package = usb / "Sunday.selapackage"
-    lines = dialog_lines(
-        app, operator, "bundle-result", lambda ls: has(ls, "Saved")
-    )
+    lines = dialog_lines(app, operator, "bundle-result", lambda ls: has(ls, "Saved"))
     summary["export_lines"] = lines
     session.save(operator, "a-export-result")
     if not has(lines, "Saved “Sunday.selapackage”: 1 items"):
         raise nx.Failure(f"unexpected export result {lines}")
     if not has(lines, "lantern.png") or not has(lines, FONT):
-        raise nx.Failure(f"the result must name the missing image and the font: {lines}")
+        raise nx.Failure(
+            f"the result must name the missing image and the font: {lines}"
+        )
     nx.press(operator, "enter")
     manifest = manifest_of(package)
     summary["package_entries"] = names_in(package)
@@ -189,7 +191,9 @@ def machine_a(session: nx.Session, data: Path) -> tuple[Path, Path, Path]:
 
 
 def hostile_package(path: Path) -> None:
-    schedule = json.dumps({"format": "sela-schedule", "version": 4, "title": "x", "items": []})
+    schedule = json.dumps(
+        {"format": "sela-schedule", "version": 4, "title": "x", "items": []}
+    )
     image = b"\x89PNG not really"
     digest = hashlib.sha256(image).hexdigest()
     manifest = {
@@ -205,7 +209,12 @@ def hostile_package(path: Path) -> None:
                 "sha256": hashlib.sha256(schedule.encode()).hexdigest(),
                 "role": "schedule",
             },
-            {"path": "../evil.png", "size": len(image), "sha256": digest, "role": "image"},
+            {
+                "path": "../evil.png",
+                "size": len(image),
+                "sha256": digest,
+                "role": "image",
+            },
         ],
         "images": [{"name": "evil.png", "sha256": digest, "embedded": True}],
     }
@@ -215,11 +224,18 @@ def hostile_package(path: Path) -> None:
         archive.writestr("manifest.json", json.dumps(manifest))
 
 
-def machine_b(session: nx.Session, data: Path, package: Path, backup: Path, original: Path) -> Path:
+def machine_b(
+    session: nx.Session, data: Path, package: Path, backup: Path, original: Path
+) -> Path:
     summary = session.summary
     profile = data / "D" / "Church Data" / "Profiles" / "sela"
     profile.mkdir(parents=True)
     library = nx.seed_library(profile / "library.sqlite", seed=session.args.seed)
+    # A different image whose name differs only in case: the same file on
+    # Windows and macOS volumes, so Sela never reuses or replaces it.
+    images = profile / "Resources" / "Images"
+    images.mkdir(parents=True)
+    (images / "HARBOR.png").write_bytes(original.read_bytes())
     app = session.app(["--operator-library", library], name="machine-b")
     operator = app.window()
     nx.activate(operator)
@@ -233,7 +249,7 @@ def machine_b(session: nx.Session, data: Path, package: Path, backup: Path, orig
         app, operator, "preflight-package", lambda ls: has(ls, "Opened")
     )
     summary["open_lines"] = lines
-    for text in ("Images added to this profile: harbor.png", "does not carry", FONT):
+    for text in ("harbor.png → harbor (2).png", "does not carry", FONT):
         if not has(lines, text):
             raise nx.Failure(f"package notes lack {text!r}: {lines}")
     rows = nx.wait_until(
@@ -245,18 +261,22 @@ def machine_b(session: nx.Session, data: Path, package: Path, backup: Path, orig
     if "lantern.png" not in rows["preflight-row-0"].name:
         raise nx.Failure(f"unexpected preflight row {rows['preflight-row-0'].name}")
     session.save(operator, "b-preflight")
-    images = profile / "Resources" / "Images"
     unpacked = profile / "Schedules" / "Sunday.selaschedule"
     if not unpacked.is_file():
         raise nx.Failure(f"no unpacked schedule in {profile / 'Schedules'}")
-    if sha256(images / "harbor.png") != sha256(data / "home" / "ana" / "sela" / "Resources" / "Images" / "harbor.png"):
+    harbor_a = data / "home" / "ana" / "sela" / "Resources" / "Images" / "harbor.png"
+    if sha256(images / "harbor (2).png") != sha256(harbor_a):
         raise nx.Failure("harbor.png differs after the transfer")
+    if sha256(images / "HARBOR.png") != sha256(original):
+        raise nx.Failure("the existing HARBOR.png was replaced")
 
     click_id(app, operator, "locate-0")
     app.drive_file_dialog(original, owner=operator)
     nx.wait_until(
-        lambda: (images / "lantern.png").is_file()
-        and sha256(images / "lantern.png") == sha256(original),
+        lambda: (
+            (images / "lantern.png").is_file()
+            and sha256(images / "lantern.png") == sha256(original)
+        ),
         10,
         "Locate... to restore lantern.png",
     )
@@ -282,13 +302,17 @@ def machine_b(session: nx.Session, data: Path, package: Path, backup: Path, orig
         app, operator, "bundle-result", lambda ls: has(ls, "Nothing was changed.")
     )
     summary["hostile_lines"] = lines
-    if not has(lines, "was refused"):
+    if not has(lines, "was refused") or not has(lines, "../evil.png"):
         raise nx.Failure(f"the hostile package was not refused: {lines}")
     session.save(operator, "b-hostile-refused")
     nx.press(operator, "enter")
     after = sorted(p.relative_to(data).as_posix() for p in data.rglob("*"))
     added = [p for p in after if p not in before and "/Recovery/" not in p]
-    if added or (data / "usb" / "evil.png").exists() or (profile.parent / "evil.png").exists():
+    if (
+        added
+        or (data / "usb" / "evil.png").exists()
+        or (profile.parent / "evil.png").exists()
+    ):
         raise nx.Failure(f"the hostile package wrote files: {added}")
 
     library_before = (profile / "library.sqlite").read_bytes()
@@ -297,9 +321,7 @@ def machine_b(session: nx.Session, data: Path, package: Path, backup: Path, orig
     time.sleep(0.6)
     destination = profile.parent / "Ana restored"
     app.drive_file_dialog(destination, owner=operator)
-    lines = dialog_lines(
-        app, operator, "bundle-result", lambda ls: has(ls, "Restored")
-    )
+    lines = dialog_lines(app, operator, "bundle-result", lambda ls: has(ls, "Restored"))
     summary["restore_lines"] = lines
     session.save(operator, "b-restore-result")
     if not has(lines, "--operator-library"):
@@ -311,7 +333,9 @@ def machine_b(session: nx.Session, data: Path, package: Path, backup: Path, orig
     summary["restored_titles"] = titles
     if titles != ["Harbor Light"]:
         raise nx.Failure(f"unexpected restored songs {titles}")
-    leftovers = [p.name for p in profile.parent.iterdir() if p.name.startswith(".sela-")]
+    leftovers = [
+        p.name for p in profile.parent.iterdir() if p.name.startswith(".sela-")
+    ]
     if leftovers:
         raise nx.Failure(f"staging left behind: {leftovers}")
 
@@ -331,7 +355,9 @@ def body(session: nx.Session) -> str:
     original = profile_a / "originals" / "lantern.png"
     destination = machine_b(session, data, package, backup, original)
 
-    app = session.app(["--operator-library", destination / "library.sqlite"], name="restored")
+    app = session.app(
+        ["--operator-library", destination / "library.sqlite"], name="restored"
+    )
     operator = app.window()
     nx.activate(operator)
     song = nx.wait_until(
@@ -344,7 +370,9 @@ def body(session: nx.Session) -> str:
     nx.press(operator, "ctrl+q")
     session.summary["restored_exit"] = app.wait_exit()
     if session.summary["restored_exit"] != 0:
-        raise nx.Failure(f"restored operator exit status {session.summary['restored_exit']}")
+        raise nx.Failure(
+            f"restored operator exit status {session.summary['restored_exit']}"
+        )
     return (
         "Export Standalone Schedule writes a ZIP that Python's zipfile verifies (manifest v1, image byte for "
         "byte, missing image and font listed); Back Up Profile writes a profile backup without lock or "
