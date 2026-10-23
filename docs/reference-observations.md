@@ -765,8 +765,9 @@ is a reversible best guess; the steps to observe them are in
   the field text with runs of whitespace collapsed, ignoring ASCII case
   (SQLite `NOCASE`; accented letters compare by code point); Song Number
   compares numerically (`0042` sorts as 42). Songs whose key is empty sort
-  **last in both directions**; equal keys fall back to Title ascending, then
-  the song id. Copyright is compared as typed, so "(c) 1999" sorts before
+  **last in both directions**; equal keys (including keys that differ only
+  in ASCII case, and Song Numbers that differ only in leading zeros, such as
+  `7` and `007`) fall back to Title ascending, then the song id. Copyright is compared as typed, so "(c) 1999" sorts before
   "© 2001". The list keeps showing titles only; whether EW shows the key or
   a column is unobserved.
 - **Search results and Sort by:** while a query is active the results stay

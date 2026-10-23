@@ -547,13 +547,14 @@ impl Repository {
     /// Author, Copyright, Administrator and Song Number (schema 7 sort keys)
     /// put songs with an empty key last in either direction, order the rest
     /// by the key (ignoring ASCII case; Song Number numerically) and break
-    /// ties by title ascending, then id. These rules are UNOBSERVED best
+    /// ties by title ascending, then id: keys that differ only in case, or
+    /// numbers that differ only in leading zeros, are ties. These rules are UNOBSERVED best
     /// guesses (docs/reference-observations.md, EW8-OBS-064).
     pub fn library(&self, order: SongOrder) -> Result<Vec<(Version, String)>> {
         let direction = if order.descending { "DESC" } else { "ASC" };
         let keyed = |key: &str| {
             format!(
-                "m.{key}='',m.{key} COLLATE NOCASE {direction},m.{key} {direction},f.title COLLATE NOCASE,f.title,s.id"
+                "m.{key}='',m.{key} COLLATE NOCASE {direction},f.title COLLATE NOCASE,f.title,s.id"
             )
         };
         let ordering = match order.sort {
@@ -566,7 +567,7 @@ impl Repository {
             SongSort::Administrator => keyed("administrator"),
             // Digits only (`song_number_ok`, at most 12, so it fits i64).
             SongSort::SongNumber => format!(
-                "m.song_number='',CAST(m.song_number AS INTEGER) {direction},m.song_number {direction},f.title COLLATE NOCASE,f.title,s.id"
+                "m.song_number='',CAST(m.song_number AS INTEGER) {direction},f.title COLLATE NOCASE,f.title,s.id"
             ),
         };
         let sql = format!(
@@ -4367,6 +4368,21 @@ CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='u
             listed(&repo, SongSort::SongNumber, true),
             ["Delta", "Bravo", "Echo", "Charlie", "Alpha"]
         );
+        // Case-only and leading-zero differences are ties: title decides.
+        for (title, authors, number) in [("Zulu", "Smith", "007"), ("Yankee", "smith", "7")] {
+            repo.save_song(None, keyed(title, authors, "", "", number))
+                .unwrap();
+        }
+        let tied = |sort, descending| -> Vec<String> {
+            listed(&repo, sort, descending)
+                .into_iter()
+                .filter(|t| t == "Yankee" || t == "Zulu")
+                .collect()
+        };
+        for descending in [false, true] {
+            assert_eq!(tied(SongSort::Author, descending), ["Yankee", "Zulu"]);
+            assert_eq!(tied(SongSort::SongNumber, descending), ["Yankee", "Zulu"]);
+        }
         // A key follows the head revision and a deleted song is gone.
         let alpha = repo
             .library(SongOrder::default())
@@ -4381,7 +4397,7 @@ CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='u
         assert_eq!(listed(&repo, SongSort::Author, false)[0], "Alpha");
         assert_eq!(listed(&repo, SongSort::SongNumber, false)[0], "Alpha");
         repo.delete_song(alpha).unwrap();
-        assert_eq!(listed(&repo, SongSort::Author, false).len(), 4);
+        assert_eq!(listed(&repo, SongSort::Author, false).len(), 6);
         assert!(repo.check_search().unwrap());
     }
     #[test]
