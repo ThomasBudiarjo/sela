@@ -401,6 +401,21 @@ reference-observations.md, "Themes — UNOBSERVED best guesses".
   text format, whether it is selected or set as default, and where it
   appears. Sela now: missing; an image background is set in the theme
   editor's Background controls. Re-run: none yet (M1-08b planned).
+- [ ] **PP-TH-10 A theme deleted while its editor is open; a theme busy or
+  deleted elsewhere** (TH-BG-11, TH-BG-12). Steps: in 8.0.49 open a theme's
+  editor, delete that theme from Resources › Themes (if EW allows it while
+  the editor is open), then press OK in the editor; record the message, its
+  styling, and whether EW re-creates the theme, saves a copy, or discards the
+  edits. Separately, with two EW instances or a remote profile on the same
+  library, delete a theme in one and apply it to a song in the other; record
+  the message. Sela now: the editor shows "This theme was deleted in the
+  Themes tab · it was not saved · OK saves it as a new theme" as a failure
+  and the next OK saves a new theme under a fresh id; Apply to Song says
+  "“name” no longer exists · no song was restyled" and drops the theme; a
+  theme load blocked by another connection retries after 2 s. Re-run: GPUI
+  `tests::themes::a_theme_editor_save_never_resurrects_a_deleted_theme`,
+  `apply_to_song_reports_a_theme_deleted_meanwhile_and_drops_it`,
+  `a_theme_load_blocked_by_another_connection_is_retried`; `themes-windows.py`.
 
 ## Stream: stage-display
 

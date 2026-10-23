@@ -1249,10 +1249,16 @@ impl Library {
             }
             (Some(Pending::SaveTheme(_)), Err(Error::Missing)) => {
                 // Deleted in the operator while this editor was open: not
-                // re-inserted (`Repository::update_theme`).
+                // re-inserted (`Repository::update_theme`). The edits stay
+                // and the next OK saves them as a new theme under a fresh
+                // id, so songs that named the deleted theme are not
+                // silently restyled by it.
                 self.close_after_save = false;
-                self.status_is_rejection = false;
-                self.status = t!(Msg::ThemeDeletedElsewhere).into();
+                if let Some(edit) = &mut self.theme {
+                    edit.id = sela::theme::ThemeId::allocate();
+                    edit.stored = false;
+                }
+                self.reject_status(t!(Msg::ThemeDeletedElsewhere));
             }
             (_, Err(e)) => {
                 self.close_after_save = false;

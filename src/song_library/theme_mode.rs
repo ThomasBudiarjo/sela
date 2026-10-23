@@ -736,6 +736,10 @@ impl Library {
     pub(crate) fn probe_status(&self) -> String {
         self.status.clone()
     }
+    /// The status is styled as a failure, not a neutral note.
+    pub(crate) fn probe_status_is_rejection(&self) -> bool {
+        self.status_is_rejection
+    }
     /// The margin fields' accessibility ids and names (left .. bottom).
     pub(crate) fn probe_margin_fields(
         &self,

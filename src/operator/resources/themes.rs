@@ -14,6 +14,9 @@ use sela::theme::{self, Theme, ThemeId, ThemeSet};
 const THEME_TAB_INDEX: isize = 2400;
 const ROW_TAB_INDEX: isize = 2500;
 /// Thumbnail size shown in a row (the render is 160x90).
+/// How long a theme load that failed on a lock held by another connection
+/// (or a full worker queue) waits before it is tried again.
+pub(crate) const THEME_RETRY: Duration = Duration::from_secs(2);
 const THUMB_W: f32 = 96.;
 const THUMB_H: f32 = 54.;
 
@@ -192,11 +195,7 @@ impl Operator {
         if let Some((command, job)) = self.themes.job.take() {
             return Some((command, Request::Themes(job)));
         }
-        if self
-            .themes
-            .retry_at
-            .is_some_and(|at| Instant::now() >= at)
-        {
+        if self.themes.retry_at.is_some_and(|at| Instant::now() >= at) {
             self.themes.retry_at = None;
             self.themes.stale = true;
         }
@@ -571,6 +570,12 @@ impl Operator {
         }
         let _ = window;
         cx.notify();
+    }
+
+    /// Test hook: Apply to Song, as its button runs it.
+    #[cfg(test)]
+    pub(crate) fn probe_apply_to_song(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.theme_action(ThemeAction::ApplySong, window, cx);
     }
 
     /// `stored`: `theme` is a library theme (Edit), not a new one.

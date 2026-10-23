@@ -296,6 +296,9 @@ impl Operator {
                 (Some(Request::Themes(job)), Ok(Reply::Themes(set))) => {
                     self.themes_replied(job, Ok(set));
                 }
+                (Some(Request::Themes(job)), Ok(Reply::ThemeGone(set))) => {
+                    self.theme_gone(job, set);
+                }
                 (Some(Request::Themes(job)), Err(error)) => self.themes_replied(job, Err(error)),
                 (Some(Request::SaveSchedule(job)), Ok(Reply::ThemedSongs(songs))) => {
                     to_write = Some((job, songs));
@@ -375,6 +378,10 @@ impl Operator {
                     Err(error) if schedule => {
                         self.schedule_message =
                             Some(t!(Msg::ScheduleStorageFailed, error = format!("{error:?}")));
+                        changed = true;
+                    }
+                    Err(error) if matches!(request, Request::Themes(resources::ThemeJob::Load)) => {
+                        self.theme_load_failed(error);
                         changed = true;
                     }
                     Err(error) if theme => {

@@ -32,7 +32,12 @@ setting: only "bottom, shown or hidden" is observed (EW8-OBS-032, -063).
    the default and the Preview pane says so ("This song's theme is missing"),
    for a library song and for a schedule item alike. Until the library's
    themes have loaded, or when loading them failed, every item shows the
-   default look with the note "Themes are not loaded" (TH-BG-10).
+   default look with the note "Themes are not loaded" (TH-BG-10). A load
+   that failed on a lock held by another connection (an editor window's
+   write, another instance; `storage::Error::Locked`) or a full worker queue
+   is retried after 2 s (`THEME_RETRY`, "Themes could not be loaded (Locked)
+   · retrying"); other failures (a corrupt theme row) wait for the next
+   library change (TH-BG-11).
 2. **Text format**: each `SlideFormat` field of the slide wins; every unset
    field takes the theme's value (`SlideFormat::over`); unset in both keeps
    the built-in default. An explicit "off" on the slide (outline disabled)
@@ -53,7 +58,14 @@ preparation, preflight-style substitution and cues use the existing paths.
   default restyle the *Preview* of a library song on its next load (the
   preview reloads when its theme's whole-value stamp or its notes change, so
   a rename, or another theme of the same look, also updates the "Theme:"
-  label and the In Preview badge).
+  label and the In Preview badge). After Apply to Song, a previewed
+  schedule item of a restyled song that has no snapshot (for example one
+  whose song named a deleted theme) follows the new theme at once and
+  captures it; items with a snapshot keep it. Apply to Song naming a theme
+  deleted through another connection restyles nothing, says "“name” no
+  longer exists · no song was restyled" and drops the theme from the list
+  (`storage::Reply::ThemeGone`); a deleted song says "A selected song no
+  longer exists".
 - **Schedule items snapshot** their theme (`schedule::ItemTheme`): the first
   time an item is shown (or saved) it captures its song's library theme;
   Apply to Item stores an *explicit* snapshot. Later library edits never
@@ -121,8 +133,12 @@ library themes by name; each row has a 160x90 thumbnail (sample lyrics over
 the theme background, rendered off the UI thread by the editor's audience
 raster twin, one at a time, cached by theme stamp and output size; before
 each render the cache is pruned to the listed themes at the current output
-size and every dropped image is released with `cx.drop_image`, so it holds
-at most one thumbnail per row) and badges (Default, In Preview) and warnings. The
+size and every dropped image is released with `cx.drop_image(image,
+Some(window))`: the prune runs while the operator window renders, when GPUI
+has leased that window out of `App` (`App::update_window_erased`), so
+`drop_image(.., None)` would skip the one window whose sprite atlas holds the
+thumbnails; the cache holds at most one thumbnail per row and the atlas
+releases each dropped one) and badges (Default, In Preview) and warnings. The
 accessible name of a row is "name · badges · warnings". Footer (one line,
 stable positions): New Theme, Edit…, Duplicate, Delete (press twice:
 Confirm Delete), Set as Default, Apply to Song (selected Songs rows or the
@@ -159,8 +175,11 @@ Arrangement, +/−, Edit Slide Layouts) are hidden. OK/Apply store the theme
 and notify the operator, which reloads its themes: a new theme with
 `Command::SaveTheme`, a library theme (opened by Edit…, or a new one after
 its first save) with `Command::UpdateTheme`, so a theme deleted in the
-Themes tab while its editor is open is not re-inserted (the editor says
-"This theme was deleted in the Themes tab · it was not saved"). Cancel with
+Themes tab while its editor is open is not re-inserted (the editor says, as
+a failure, "This theme was deleted in the Themes tab · it was not saved · OK
+saves it as a new theme"). The edits stay; the next OK or Apply saves them
+as a new theme under a fresh id, so songs that named the deleted theme are
+not restyled by it (TH-BG-12). Cancel with
 changes asks Yes/No/Cancel. The sample lyrics can be edited to try long or short text and
 are not saved. Window title: "Theme Editor - <name>".
 
@@ -186,8 +205,10 @@ are not saved. Window title: "Theme Editor - <name>".
 No new GPUI pattern: list rows with `track_focus`/`ActivateControl` and
 AccessKit `role`/`aria_label`/`accessibility_id` as the image list
 (zed `a846890`, `crates/gpui/src/elements/div.rs`), thumbnails as
-`img(Arc<RenderImage>)` released with `cx.drop_image`
-(`crates/gpui/src/elements/img.rs`), off-thread work with
+`img(Arc<RenderImage>)` released with `cx.drop_image(image, Some(window))`
+(`crates/gpui/src/elements/img.rs`; `App::drop_image` in
+`crates/gpui/src/app.rs` visits only windows in `App.windows`, and
+`update_window_erased` takes the rendering window out of it), off-thread work with
 `cx.background_executor().spawn` (`crates/gpui/src/executor.rs`), all as the
 song editor already does.
 
@@ -204,8 +225,9 @@ song editor already does.
 - I: `storage::tests` (schema 6→7 migration with verified backup, abort
   keeps schema 6, CRUD, default, song themes, bounds, corruption).
 - I: `storage::tests::song_themes_apply_to_every_song_or_to_none`,
-  `a_theme_update_never_resurrects_a_deleted_theme`.
-- GPUI: `tests::themes` (13 tests: tab rows/thumbnails/warnings/default;
+  `a_theme_update_never_resurrects_a_deleted_theme`,
+  `apply_to_song_tells_a_deleted_theme_from_a_deleted_song`.
+- GPUI: `tests::themes` (16 tests: tab rows/thumbnails/warnings/default;
   apply to song restyles Preview while Live waits for Go Live; a theme edit
   while live reaches Live only when re-cued; item snapshots and schedule
   files; editor preview/undo/reset/cancel/OK; missing font and missing theme
@@ -213,8 +235,13 @@ song editor already does.
   frozen or saved; a failed theme load is noted and captures nothing; Apply
   to Song with a song deleted meanwhile changes nothing; another theme of
   the same look relabels Preview; thumbnails keep one per row at the current
-  output size; an editor save never resurrects a deleted theme; margin
-  fields are named and Use default works from the keyboard).
+  output size, and the operator window's sprite atlas releases the dropped
+  ones; an editor save never resurrects a deleted theme, is shown as a
+  failure and the next OK saves the edits as a new theme; Apply to Song
+  reaches a previewed schedule item without a snapshot; Apply to Song with a
+  theme deleted meanwhile names the theme and drops it; a theme load blocked
+  by another connection is retried; margin fields are named and Use default
+  works from the keyboard).
 - R: none. Long/short text and landscape sizes are covered by raster/fit
   unit tests only; no golden image and no physical display run.
 - N: `scripts/themes-x11.py` (PASS on Xvfb; step 6 puts Evening Navy itself

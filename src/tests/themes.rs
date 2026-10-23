@@ -657,6 +657,59 @@ fn a_schedule_item_whose_song_theme_is_missing_is_noted_and_never_frozen(cx: &mu
 }
 
 #[gpui::test]
+fn apply_to_song_reaches_a_previewed_schedule_item_without_a_snapshot(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_themes(&dir);
+    let gone = Theme::new("Gone");
+    {
+        let mut repository = Repository::open(&path).unwrap();
+        let song = repository
+            .catalog(None)
+            .unwrap()
+            .into_iter()
+            .find(|(_, t)| t == "Signal Hymn")
+            .unwrap()
+            .0;
+        repository.save_theme(&gone).unwrap();
+        repository.set_song_theme(song.id, Some(gone.id)).unwrap();
+        repository.delete_theme(gone.id).unwrap();
+    }
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    open_themes(&mut cx, &operator, 3);
+    select_theme(&mut cx, &operator, "Evening Navy");
+    // Apply to Song on the library song, then the schedule item is
+    // selected before the write runs: the item's preview loads first (its
+    // song still names the deleted theme) and the write lands after it.
+    let entry = operator.read_with(&cx, |o, _| o.schedule.entries()[0].id);
+    cx.update(|window, cx| {
+        operator.update(cx, |o, cx| {
+            o.probe_apply_to_song(window, cx);
+            o.select_entry(entry);
+        })
+    });
+    settle(&mut cx, &operator, "applied", |o| {
+        o.themes
+            .message
+            .as_ref()
+            .is_some_and(|m| m.0.starts_with("Applied “Evening Navy” to 1 song") && !m.1)
+            && o.preview.as_ref().is_some_and(|p| p.entry == Some(entry))
+    });
+    // The item has no snapshot, so it follows its song's new theme: the
+    // missing note goes and the item captures Evening Navy.
+    settle(&mut cx, &operator, "item restyled, note gone", |o| {
+        preview_key(o) == Some(navy().key()) && o.theme_notes().is_empty()
+    });
+    operator.read_with(&cx, |o, _| {
+        let snapshot = o.schedule.entries()[0].theme.clone().unwrap();
+        assert_eq!(snapshot.theme, navy());
+        assert!(!snapshot.explicit);
+    });
+}
+
+#[gpui::test]
 fn a_failed_theme_load_is_noted_and_captures_nothing(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = library_with_themes(&dir);
@@ -720,6 +773,83 @@ fn apply_to_song_reports_a_song_deleted_meanwhile_and_changes_nothing(cx: &mut T
     });
     let repository = Repository::open(&path).unwrap();
     assert_eq!(repository.song_theme(version.id).unwrap(), None);
+}
+
+#[gpui::test]
+fn apply_to_song_reports_a_theme_deleted_meanwhile_and_drops_it(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_themes(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    let row = song_row(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, row);
+    let version = operator.read_with(&cx, |o, _| version_of(o, "Signal Hymn"));
+    open_themes(&mut cx, &operator, 3);
+    select_theme(&mut cx, &operator, "Evening Navy");
+    // Deleted through another connection before Apply to Song runs.
+    Repository::open(&path)
+        .unwrap()
+        .delete_theme(navy().id)
+        .unwrap();
+    click(&mut cx, "theme-apply-song");
+    settle(
+        &mut cx,
+        &operator,
+        "the theme, not a song, is reported",
+        |o| {
+            o.themes.message.as_ref().map(|m| (m.0.as_str(), m.1))
+                == Some((
+                    "“Evening Navy” no longer exists · no song was restyled",
+                    true,
+                ))
+        },
+    );
+    operator.read_with(&cx, |o, _| {
+        assert!(
+            o.themes.set.get(navy().id).is_none(),
+            "dropped from the list"
+        );
+        assert_eq!(o.themes.set.themes.len(), 2);
+        assert_eq!(o.themes.selected, ThemeId::BUILT_IN);
+    });
+    let repository = Repository::open(&path).unwrap();
+    assert_eq!(repository.song_theme(version.id).unwrap(), None);
+}
+
+#[gpui::test]
+fn a_theme_load_blocked_by_another_connection_is_retried(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_themes(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog and themes", |o| {
+        o.catalog.len() == 2 && o.themes.loaded && !o.themes.failed
+    });
+    // Another connection (an editor window, another instance) holds the
+    // library longer than the busy timeout while the themes reload.
+    let blocker = rusqlite::Connection::open(&path).unwrap();
+    blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    operator.update(&mut cx, |o, _| o.themes.stale = true);
+    settle(&mut cx, &operator, "load failed, retry pending", |o| {
+        o.themes.failed && o.themes.retry_at.is_some()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(
+            o.themes.message.as_ref().map(|m| (m.0.as_str(), m.1)),
+            Some(("Themes could not be loaded (Locked) · retrying", true))
+        );
+    });
+    // The lock passes: the themes load again without a library change.
+    blocker.execute_batch("COMMIT").unwrap();
+    drop(blocker);
+    settle(&mut cx, &operator, "reloaded by the retry", |o| {
+        o.themes.loaded && !o.themes.failed && o.themes.retry_at.is_none()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert!(o.themes.trusted());
+        assert_eq!(o.themes.set.themes.len(), 3);
+    });
 }
 
 #[gpui::test]
@@ -866,11 +996,31 @@ fn a_theme_editor_save_never_resurrects_a_deleted_theme(cx: &mut TestAppContext)
     settle_editor(&mut editor_cx, &editor, |(_, _, busy)| !busy);
     assert_eq!(
         editor.read_with(&editor_cx, |e, _| e.probe_status()),
-        "This theme was deleted in the Themes tab · it was not saved"
+        "This theme was deleted in the Themes tab · it was not saved · OK saves it as a new theme"
+    );
+    assert!(
+        editor.read_with(&editor_cx, |e, _| e.probe_status_is_rejection()),
+        "shown as a failure, not a neutral status"
     );
     let stored = Repository::open(&path).unwrap().themes().unwrap();
     assert!(stored.get(navy().id).is_none(), "not re-inserted");
     assert_eq!(stored.themes.len(), 2);
+    // The edits are kept: the next OK saves them as a new theme under a
+    // fresh id (songs that named the deleted theme stay unstyled by it).
+    editor_cx.update(|window, cx| editor.update(cx, |e, cx| e.probe_action(15, window, cx)));
+    settle_editor(&mut editor_cx, &editor, |(_, _, busy)| !busy);
+    let stored = Repository::open(&path).unwrap().themes().unwrap();
+    assert_eq!(stored.themes.len(), 3, "saved as a new theme");
+    assert!(stored.get(navy().id).is_none(), "under a fresh id");
+    let saved = stored
+        .themes
+        .iter()
+        .find(|t| t.name == "Evening Navy")
+        .expect("the edited theme, under its name");
+    assert_eq!(saved.key(), Theme::built_in().key(), "with the reset look");
+    settle(&mut cx, &operator, "listed in the Themes tab", |o| {
+        o.themes.set.themes.len() == 3
+    });
 }
 
 #[gpui::test]

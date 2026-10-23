@@ -769,7 +769,11 @@ Themes tab observation and screen-reader checks are open
 ([parity pending](parity-pending.md#stream-themes)). Review round 1
 (2026-10-23): substitutes are never frozen into schedule items, Apply to Song
 is atomic, the native live-edit step edits the live theme; follow-ups M1-08a
-and M1-08b below.
+and M1-08b below. Review round 2 (2026-10-23): thumbnails are released from
+the operator window's sprite atlas, Apply to Song reaches a previewed
+schedule item, a theme deleted elsewhere is named, a lock-blocked theme load
+is retried, and a theme editor keeps its edits for a theme deleted meanwhile
+(PP-TH-10).
 
 - [x] Implement font, size, color, alignment, margins, shadow/outline, background
   color/image and copyright position where confirmed by the reference.
