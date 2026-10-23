@@ -25,6 +25,9 @@ const SURFACE: u8 = 4;
 const MASK: u8 = 5;
 /// Version 2 only: same body as an owned-resource COMMAND, aimed at the logo.
 const LOGO: u8 = 6;
+/// Version 2 only: owned-resource metadata and background, then a stage panel
+/// (M3-02). Decodes to a stage cue, which only a stage renderer accepts.
+const STAGE: u8 = 7;
 const MAX_BODY: usize = 65;
 pub const MAX_RESOURCE_BODY: usize = crate::scene::MAX_SCENE_BYTES + 160;
 
@@ -72,7 +75,7 @@ impl Frame {
             return Err(invalid());
         }
         if bytes[4] == 2 {
-            if !matches!(bytes[5], COMMAND | LOGO) || bytes[6..8] != [0, 0] {
+            if !matches!(bytes[5], COMMAND | LOGO | STAGE) || bytes[6..8] != [0, 0] {
                 return Err(invalid());
             }
             let received_at = Instant::now();
@@ -117,6 +120,9 @@ impl Frame {
         let cue = match command.payload() {
             Payload::Mask(layer) => return Self::mask(command, *layer, now),
             Payload::Logo(cue) => return Self::resource_command(command, cue, LOGO, now),
+            Payload::Scene(cue) if cue.stage().is_some() => {
+                return Self::resource_command(command, cue, STAGE, now);
+            }
             Payload::Scene(cue) => cue,
         };
         if cue.text().is_some()
@@ -205,14 +211,21 @@ impl Frame {
                 put_blob(&mut f.bytes, rgba);
             }
         }
-        // The lyrics text, then the copyright strip, each tag 0 (absent) or 2
-        // (styled owned text; tag 1 was removed in M1-05g2).
-        put_text(&mut f.bytes, cue.text());
-        put_text(&mut f.bytes, cue.footer());
-        if let Some(insets) = cue.insets() {
-            f.bytes.push(1);
-            for side in [insets.left, insets.right, insets.top, insets.bottom] {
-                f.bytes.extend_from_slice(&side.to_le_bytes());
+        if kind == STAGE {
+            let Some(stage) = cue.stage() else {
+                return Err(invalid());
+            };
+            put_stage(&mut f.bytes, stage);
+        } else {
+            // The lyrics text, then the copyright strip, each tag 0 (absent) or 2
+            // (styled owned text; tag 1 was removed in M1-05g2).
+            put_text(&mut f.bytes, cue.text());
+            put_text(&mut f.bytes, cue.footer());
+            if let Some(insets) = cue.insets() {
+                f.bytes.push(1);
+                for side in [insets.left, insets.right, insets.top, insets.bottom] {
+                    f.bytes.extend_from_slice(&side.to_le_bytes());
+                }
             }
         }
         f.len = f.bytes.len();
@@ -222,7 +235,7 @@ impl Frame {
         Ok(f)
     }
     fn is_command_kind(&self) -> bool {
-        matches!(self.bytes[5], COMMAND | MASK | LOGO)
+        matches!(self.bytes[5], COMMAND | MASK | LOGO | STAGE)
     }
     pub fn command_stamp(&self) -> io::Result<Stamp> {
         if !self.is_command_kind() {
@@ -307,34 +320,45 @@ impl Frame {
                 },
                 _ => return Err(invalid()),
             };
-            let text = payload.text()?;
-            let footer = payload.text()?;
-            // Optional trailing lyrics box (M1-08 margins): tag 1 then the
-            // four insets; absent for the fixed inset.
-            let insets = if payload.0.is_empty() {
-                None
-            } else {
-                if payload.byte()? != 1 {
+            if self.bytes[5] == STAGE {
+                let PreparedBackground::Color([r, g, b, _]) = background else {
+                    return Err(invalid());
+                };
+                let (panel, font) = payload.stage()?;
+                if !payload.0.is_empty() {
                     return Err(invalid());
                 }
-                Some(crate::scene::Insets {
-                    left: payload.u32()?,
-                    right: payload.u32()?,
-                    top: payload.u32()?,
-                    bottom: payload.u32()?,
-                })
-            };
-            if !payload.0.is_empty() {
-                return Err(invalid());
-            }
-            let cue = PreparedCue::from_owned(version, extent, background, text, caps);
-            let cue = match footer {
-                Some(footer) => cue.and_then(|cue| cue.with_footer(footer)),
-                None => cue,
-            };
-            match insets {
-                Some(insets) => cue.and_then(|cue| cue.with_insets(insets)),
-                None => cue,
+                PreparedCue::for_stage(version, extent, [r, g, b], panel, font, caps)
+            } else {
+                let text = payload.text()?;
+                let footer = payload.text()?;
+                // Optional trailing lyrics box (M1-08 margins): tag 1 then the
+                // four insets; absent for the fixed inset.
+                let insets = if payload.0.is_empty() {
+                    None
+                } else {
+                    if payload.byte()? != 1 {
+                        return Err(invalid());
+                    }
+                    Some(crate::scene::Insets {
+                        left: payload.u32()?,
+                        right: payload.u32()?,
+                        top: payload.u32()?,
+                        bottom: payload.u32()?,
+                    })
+                };
+                if !payload.0.is_empty() {
+                    return Err(invalid());
+                }
+                let cue = PreparedCue::from_owned(version, extent, background, text, caps);
+                let cue = match footer {
+                    Some(footer) => cue.and_then(|cue| cue.with_footer(footer)),
+                    None => cue,
+                };
+                match insets {
+                    Some(insets) => cue.and_then(|cue| cue.with_insets(insets)),
+                    None => cue,
+                }
             }
         } else {
             PreparedCue::diagnostic_color(version, extent, b[61..65].try_into().unwrap(), caps)
@@ -493,6 +517,36 @@ impl<'a> Reader<'a> {
         }
         self.take(size)
     }
+    /// A UTF-8 field of at most `limit` bytes.
+    fn string(&mut self, limit: usize) -> io::Result<String> {
+        std::str::from_utf8(self.blob(limit)?)
+            .map(str::to_owned)
+            .map_err(|_| invalid())
+    }
+    /// A stage panel and its face; see `put_stage`.
+    #[allow(clippy::type_complexity)]
+    fn stage(
+        &mut self,
+    ) -> io::Result<(crate::stage::StagePanel, (ContentVersion, Arc<[u8]>, u32))> {
+        let flags = self.byte()?;
+        if flags > 0b11 {
+            return Err(invalid());
+        }
+        let version = self.version()?;
+        let face_index = self.u32()?;
+        let font: Arc<[u8]> = self.blob(crate::scene::MAX_SOURCE_BYTES)?.into();
+        let limit = crate::stage::MAX_FIELD_BYTES;
+        let panel = crate::stage::StagePanel {
+            current_label: self.string(limit)?,
+            current: self.string(limit)?,
+            next_label: self.string(limit)?,
+            next: self.string(limit)?,
+            message: self.string(limit)?,
+            show_clock: flags & 1 != 0,
+            show_next: flags & 2 != 0,
+        };
+        Ok((panel, (version, font, face_index)))
+    }
     /// One optional styled text; see `put_text`.
     fn text(&mut self) -> io::Result<Option<crate::scene::OwnedText>> {
         match self.byte()? {
@@ -565,6 +619,24 @@ impl<'a> Reader<'a> {
             }
             _ => Err(invalid()),
         }
+    }
+}
+/// Flags (bit 0 clock, bit 1 next area), the face (version, index, bytes),
+/// then the five panel fields as length-prefixed UTF-8.
+fn put_stage(bytes: &mut Vec<u8>, stage: &crate::scene::PreparedStage) {
+    let panel = stage.panel();
+    bytes.push(u8::from(panel.show_clock) | u8::from(panel.show_next) << 1);
+    put_version(bytes, stage.font_version());
+    bytes.extend_from_slice(&stage.face_index().to_le_bytes());
+    put_blob(bytes, stage.font());
+    for field in [
+        &panel.current_label,
+        &panel.current,
+        &panel.next_label,
+        &panel.next,
+        &panel.message,
+    ] {
+        put_blob(bytes, field.as_bytes());
     }
 }
 /// Tag 0 for no text, else tag 2 and the styled text.
@@ -1312,6 +1384,113 @@ mod tests {
             )
             .err(),
             Some(PrepareError::TooLarge)
+        );
+    }
+
+    fn stage_wire(panel: crate::stage::StagePanel) -> io::Result<Vec<u8>> {
+        let now = Instant::now();
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        let cue = PreparedCue::for_stage(
+            ContentVersion { id: 7, revision: 3 },
+            Extent {
+                width: 640,
+                height: 360,
+            },
+            crate::stage::BACKGROUND,
+            panel,
+            (
+                ContentVersion { id: 8, revision: 1 },
+                Arc::from(crate::fonts::BUNDLED),
+                0,
+            ),
+            caps,
+        )
+        .map_err(|_| invalid())?;
+        let mut d = Delivery::new(Epoch(42));
+        d.submit(Arc::new(cue), Lane::Cue, now, now + Duration::from_secs(2))
+            .unwrap();
+        let mut wire = Vec::new();
+        Frame::command(&d.take_next().unwrap(), now)?.write(&mut wire)?;
+        Ok(wire)
+    }
+
+    #[test]
+    fn stage_panels_round_trip_as_their_own_kind() {
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        let panel = crate::stage::StagePanel {
+            current_label: "Hymn · Verse 1".into(),
+            current: "Line one\nLine two".into(),
+            next_label: "Next · Chorus".into(),
+            next: "Refrain".into(),
+            message: "Two minutes".into(),
+            show_clock: false,
+            show_next: true,
+        };
+        let wire = stage_wire(panel.clone()).unwrap();
+        assert_eq!((wire[4], wire[5]), (2, STAGE));
+        let decoded = Frame::read(wire.as_slice())
+            .unwrap()
+            .into_command(Instant::now(), caps)
+            .unwrap();
+        let cue = decoded.cue().unwrap();
+        assert!(matches!(decoded.payload(), Payload::Scene(_)));
+        assert!(cue.text().is_none() && cue.footer().is_none());
+        let stage = cue.stage().unwrap();
+        assert_eq!(stage.panel(), &panel);
+        assert_eq!(stage.font(), crate::fonts::BUNDLED);
+        assert_eq!(cue.version(), ContentVersion { id: 7, revision: 3 });
+        // A plain slide never uses the stage kind.
+        let mut plain = Vec::new();
+        Frame::command(&command(), Instant::now())
+            .unwrap()
+            .write(&mut plain)
+            .unwrap();
+        assert_ne!(plain[5], STAGE);
+    }
+
+    #[test]
+    fn malformed_stage_frames_fail_before_becoming_cues() {
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        let decode = |wire: &[u8]| {
+            Frame::read(wire).and_then(|frame| frame.into_command(Instant::now(), caps))
+        };
+        let wire = stage_wire(Default::default()).unwrap();
+        assert!(decode(&wire).is_ok());
+        // Body: 8 header + 4 length + 61 metadata + background tag and RGBA.
+        let flags = 8 + 4 + 61 + 5;
+        let mut bad = wire.clone();
+        bad[flags] = 0b100;
+        assert!(decode(&bad).is_err(), "unknown flag bits");
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        let size = u32::from_le_bytes(trailing[8..12].try_into().unwrap()) + 1;
+        trailing[8..12].copy_from_slice(&size.to_le_bytes());
+        assert!(decode(&trailing).is_err(), "trailing bytes");
+        let mut cut = wire.clone();
+        cut.truncate(wire.len() - 1);
+        let size = u32::from_le_bytes(cut[8..12].try_into().unwrap()) - 1;
+        cut[8..12].copy_from_slice(&size.to_le_bytes());
+        assert!(decode(&cut).is_err(), "truncated message field");
+        // Panels outside the renderer's text bounds are refused at build time.
+        assert!(
+            stage_wire(crate::stage::StagePanel {
+                message: "x\ny".into(),
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            stage_wire(crate::stage::StagePanel {
+                current: "x".repeat(crate::stage::MAX_FIELD_BYTES + 1),
+                ..Default::default()
+            })
+            .is_err()
         );
     }
 

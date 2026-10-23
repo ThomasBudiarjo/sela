@@ -685,12 +685,14 @@ impl Operator {
         // A new session never replays earlier intent; Go Live must be repeated.
         self.output_extent = None;
         self.live_slide = None;
+        self.on_air = None;
         // Masks do carry over (EW8-OBS-017); a fresh renderer starts unmasked.
         self.sent_mask = self.output.as_ref().map(|_| Layer::None);
         self.unmask.cancel();
         self.logo_requested = None;
         self.logo_sent = None;
         self.sync_show(Instant::now());
+        self.follow_live_output();
     }
 
     pub(crate) fn go_live(&mut self) {
@@ -937,6 +939,12 @@ impl Operator {
                                 self.labels.push_back((version, pending.label));
                             }
                             self.live_slide = Some(pending.index);
+                            // Cancelled on every item change, so a cue in
+                            // flight always belongs to `live`.
+                            self.on_air = self
+                                .live
+                                .clone()
+                                .filter(|live| live.version == pending.item);
                             let clean = pending.warning.is_none();
                             self.presented = Some((pending.generation, pending.index, clean));
                             if !clean {
@@ -1222,6 +1230,7 @@ impl Operator {
         if let Some((_, error)) = output.and_then(|o| o.logo_rejected()) {
             lines.push((t!(Msg::LogoNotShown, error = error), DARK_ERROR));
         }
+        lines.extend(self.stage_lines());
         if let Some(message) = &self.live_message {
             lines.push((message.clone(), DARK_ERROR));
         }

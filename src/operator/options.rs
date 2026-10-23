@@ -1,8 +1,10 @@
 //! Options dialog and the operator's view of the settings store. The sections
 //! follow the observed EW Options inventory (EW8-OBS-054); Main Output ›
-//! General (language, output monitor) and Main Output › Song (Copyright Info,
-//! `song.rs`) exist so far, the rest are marked unavailable.
+//! General (language, output monitor), Main Output › Song (Copyright Info,
+//! `song.rs`) and Foldback › General (stage output, M3-01/02, drawn by
+//! `stage::foldback_page`) exist so far, the rest are marked unavailable.
 
+use super::stage::OptionsSection;
 use super::*;
 use sela::settings::{self, MonitorInfo, Settings};
 use std::sync::Mutex;
@@ -136,8 +138,7 @@ impl SettingsState {
         let monitor_scan = cx.spawn(async move |this, cx| {
             let monitors = scan.await;
             let _ = this.update(cx, |this, cx| {
-                this.settings.monitors = Some(monitors);
-                this.settings.sync_slot();
+                this.monitors_scanned(monitors);
                 cx.notify();
             });
         });
@@ -210,7 +211,7 @@ impl SettingsState {
 const SECTIONS: [(Msg, &str, bool); 6] = [
     (Msg::SectionMainOutput, "main-output", true),
     (Msg::SectionAlternateOutput, "alternate-output", false),
-    (Msg::SectionFoldback, "foldback", false),
+    (Msg::SectionFoldback, "foldback", true),
     (Msg::SectionServiceIntervals, "service-intervals", false),
     (Msg::SectionSlideLabels, "slide-labels", false),
     (Msg::SectionAdvanced, "advanced", false),
@@ -223,6 +224,15 @@ const MAIN_OUTPUT_TABS: [(Msg, &str, bool); 6] = [
     (Msg::TabPresentations, "presentations", false),
     (Msg::OptionsTabTransitions, "transitions", false),
     (Msg::ToolbarAlerts, "alerts", false),
+];
+
+/// Foldback tabs (EW8-OBS-056: General, Song, Scripture, Alerts and Clocks);
+/// only General is built.
+const FOLDBACK_TABS: [(Msg, &str, bool); 4] = [
+    (Msg::OptionsTabGeneral, "general", true),
+    (Msg::OptionsTabSong, "song", false),
+    (Msg::OptionsTabScripture, "scripture", false),
+    (Msg::OptionsTabAlertsClocks, "alerts-clocks", false),
 ];
 
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
@@ -258,6 +268,7 @@ impl Operator {
                             self.settings.language_draft = Some(self.settings.current.language);
                             let copyright = self.settings.current.copyright.clone();
                             self.reset_song_options(copyright, cx);
+                            self.stage.draft = Some(self.settings.current.stage.clone());
                         }
                     } else {
                         self.settings.current.recent_schedules = loaded.settings.recent_schedules;
@@ -274,6 +285,8 @@ impl Operator {
                         self.song_order = self.settings.current.song_order;
                         self.catalog_stale = true;
                     }
+                    // Live output may have come on before Foldback was known.
+                    self.stage_inputs_landed();
                 }
                 settings::Reply::Saved(Ok(())) => {
                     self.settings.pending_saves = self.settings.pending_saves.saturating_sub(1);
@@ -343,6 +356,19 @@ impl Operator {
         }
     }
 
+    /// The startup monitor scan answered. A stage start that waited for the
+    /// list is decided again.
+    pub(crate) fn monitors_scanned(&mut self, monitors: Vec<MonitorInfo>) {
+        self.settings.monitors = Some(monitors);
+        self.settings.sync_slot();
+        self.stage_inputs_landed();
+    }
+
+    /// The initial settings load replied; Options edits wait for it.
+    pub(crate) fn settings_loaded_for_options(&self) -> bool {
+        self.settings.loaded
+    }
+
     #[cfg(test)]
     pub(crate) fn settings_idle(&self) -> bool {
         self.settings.pending_saves == 0
@@ -384,6 +410,7 @@ impl Operator {
         self.settings.draft = Some(self.settings.current.output_monitor.clone());
         self.settings.language_draft = Some(self.settings.current.language);
         self.begin_song_options(cx);
+        self.open_stage_options();
         self.open_dialog(Dialog::Options, window, cx);
     }
 
@@ -398,6 +425,7 @@ impl Operator {
         self.settings.song.draft = None;
         if !self.settings.loaded {
             self.settings.language_draft = None;
+            self.stage.draft = None;
             return;
         }
         let language = self
@@ -410,7 +438,8 @@ impl Operator {
         let language_changed = language != self.settings.current.language;
         // Reaches the next cue built for Live; the live scene is not redrawn.
         let copyright_changed = copyright != self.settings.current.copyright;
-        if !monitor_changed && !language_changed && !copyright_changed {
+        let stage_changed = self.apply_stage_options();
+        if !monitor_changed && !language_changed && !copyright_changed && !stage_changed {
             return;
         }
         self.settings.applied = true;
@@ -672,8 +701,24 @@ impl Operator {
                     .child(div().flex_1().truncate().child(label))
             })
             .collect::<Vec<_>>();
+        let foldback = self.stage.section == OptionsSection::Foldback;
+        let shown = if foldback {
+            Msg::SectionFoldback
+        } else {
+            Msg::SectionMainOutput
+        };
+        let section_focus = [
+            self.options_section_focus(OptionsSection::MainOutput, cx),
+            self.options_section_focus(OptionsSection::Foldback, cx),
+        ];
         let sections = SECTIONS.map(|(msg, slug, available)| {
+            let section = match msg {
+                Msg::SectionMainOutput => Some(OptionsSection::MainOutput),
+                Msg::SectionFoldback => Some(OptionsSection::Foldback),
+                _ => None,
+            };
             div()
+                .id(slug)
                 .debug_selector(move || format!("options-section-{slug}"))
                 .min_h(px(CONTROL_H + 2.))
                 .px(px(PANE_PAD_X))
@@ -681,8 +726,34 @@ impl Operator {
                 .flex_col()
                 .justify_center()
                 .when(!available, |d| d.py_1())
-                .when(msg == Msg::SectionMainOutput, |d| {
+                .when(msg == shown, |d| {
                     d.bg(rgb(SELECTED_ROW)).font_weight(FontWeight::MEDIUM)
+                })
+                .when_some(section, |d, section| {
+                    let focus = section_focus[section as usize].clone();
+                    d.role(Role::Tab)
+                        .aria_label(t!(msg))
+                        .accessibility_id(format!("options-section-{slug}"))
+                        .aria_selected(msg == shown)
+                        .track_focus(&focus)
+                        .key_context("SelaControl")
+                        .cursor_pointer()
+                        .hover(|d| d.bg(rgb(HOVER)))
+                        .focus(|d| d.bg(rgb(FOCUS_BG)))
+                        .on_action(cx.listener(move |this, _: &ActivateControl, window, cx| {
+                            if focus.is_focused(window) {
+                                window.prevent_default();
+                                this.select_options_section(section);
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                            if matches!(event, gpui::ClickEvent::Keyboard(_)) {
+                                return;
+                            }
+                            this.select_options_section(section);
+                            cx.notify();
+                        }))
                 })
                 .when(!available, |d| d.text_color(rgb(DISABLED)))
                 .child(div().child(t!(msg)))
@@ -690,11 +761,36 @@ impl Operator {
                     d.child(div().text_size(px(TEXT_TILE)).child(t!(Msg::NotAvailable)))
                 })
         });
-        let tabs = self.options_tabs(&MAIN_OUTPUT_TABS, cx);
-        let song_tab = self.settings.song.tab == OptionsTab::Song;
+        let tabs: Vec<gpui::AnyElement> = if foldback {
+            FOLDBACK_TABS
+                .iter()
+                .copied()
+                .map(|(msg, slug, available)| {
+                    div()
+                        .debug_selector(move || format!("options-tab-{slug}"))
+                        .h_full()
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .border_b_2()
+                        .border_color(rgb(if available { ACCENT } else { SURFACE }))
+                        .when(available, |d| {
+                            d.font_weight(FontWeight::MEDIUM).text_color(rgb(TEXT))
+                        })
+                        .when(!available, |d| d.text_color(rgb(DISABLED)))
+                        .child(t!(msg))
+                        .into_any_element()
+                })
+                .collect()
+        } else {
+            self.options_tabs(&MAIN_OUTPUT_TABS, cx)
+        };
+        // The Song tab belongs to Main Output; Foldback shows its own page.
+        let song_tab = !foldback && self.settings.song.tab == OptionsTab::Song;
         let song_page = song_tab.then(|| self.song_options_page(cx));
         let loading = monitors.is_none();
         let settings_loaded = self.settings.loaded;
+        let foldback_page = foldback.then(|| self.foldback_page(cx));
         let dialog = {
             div()
                 .id("options-dialog")
@@ -764,7 +860,18 @@ impl Operator {
                                 .children(song_page.map(|page| {
                                     div().flex_1().min_h_0().p(px(DIALOG_PAD)).child(page)
                                 }))
-                                .when(!song_tab, |d| {
+                                .children(foldback_page.map(|page| {
+                                    div()
+                                        .debug_selector(|| "options-foldback-page".into())
+                                        .flex_1()
+                                        .min_h_0()
+                                        .p(px(DIALOG_PAD))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(DIALOG_GAP))
+                                        .children(page)
+                                }))
+                                .when(!foldback && !song_tab, |d| {
                                     d.child(
                                         div()
                                             .flex_1()

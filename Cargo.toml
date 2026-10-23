@@ -25,6 +25,9 @@ cosmic-text = { version = "=0.19.0", default-features = false, features = ["std"
 winit = "=0.30.12"
 wgpu = "=29.0.4"
 pollster = "=0.4.0"
+# Stage clock (M3-02): local time of day in the stage renderer. Already in the
+# graph through gpui with the same version and a superset of these features.
+chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
 
 # O_NONBLOCK for opening import files: a named pipe swapped in must not
 # block the `sela-import` thread (already in the tree through gpui).

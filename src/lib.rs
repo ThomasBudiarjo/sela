@@ -25,6 +25,7 @@ pub mod search;
 pub mod settings;
 pub mod slides;
 pub mod song_order;
+pub mod stage;
 pub mod storage;
 pub mod theme;
 pub mod timer;

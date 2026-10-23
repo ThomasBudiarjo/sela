@@ -749,6 +749,11 @@ pub(crate) enum BarItem {
     BlackOnLive,
     ClearOnLive,
     ShowLiveOutput,
+    /// Sela addition (UNOBSERVED in EW8-OBS-053): restarts or stops only the
+    /// stage output.
+    ShowStageOutput,
+    /// Sela addition (UNOBSERVED): the stage-only message line.
+    StageMessage,
     ProfileDefault,
     ProfilesManager,
     DemoData,
@@ -794,6 +799,8 @@ impl BarItem {
             BarItem::BlackOnLive => Msg::BarBlackOnLive,
             BarItem::ClearOnLive => Msg::BarClearOnLive,
             BarItem::ShowLiveOutput => Msg::BarShowLiveOutput,
+            BarItem::ShowStageOutput => Msg::BarShowStageOutput,
+            BarItem::StageMessage => Msg::BarStageMessage,
             BarItem::ProfileDefault => Msg::BarDefault,
             BarItem::ProfilesManager => Msg::BarProfilesManager,
             BarItem::DemoData => Msg::BarDemoData,
@@ -854,6 +861,8 @@ impl BarItem {
             BarItem::BlackOnLive => "bar-live-black",
             BarItem::ClearOnLive => "bar-live-clear",
             BarItem::ShowLiveOutput => "bar-live-show",
+            BarItem::ShowStageOutput => "bar-live-stage",
+            BarItem::StageMessage => "bar-live-stage-message",
             BarItem::ProfileDefault => "bar-profiles-default",
             BarItem::ProfilesManager => "bar-profiles-manager",
             BarItem::DemoData => "bar-profiles-demo-data",
@@ -891,6 +900,15 @@ impl BarItem {
             // chosen or already showing.
             BarItem::LogoOnLive => !(operator.logo.is_none() && !operator.masks.is_on(Mask::Logo)),
             BarItem::ImportSongs | BarItem::ImportFolder => !operator.song_import.active(),
+            // Foldback must be enabled in Options (EW8-OBS-056), a stage
+            // child must exist and Live output must be on (the stage starts
+            // and stops with it); a running stage can always be stopped. The
+            // message can be prepared before Live.
+            BarItem::ShowStageOutput => {
+                operator.stage_enabled() && operator.stage_available() && operator.output.is_some()
+                    || operator.stage.output.is_some()
+            }
+            BarItem::StageMessage => operator.stage_enabled() || operator.stage.output.is_some(),
             BarItem::OpenRecent => !operator.recent_schedules().is_empty(),
             BarItem::Recent(index) => (index as usize) < operator.recent_schedules().len(),
             _ => false,
@@ -900,6 +918,7 @@ impl BarItem {
     fn checked(self, operator: &Operator) -> bool {
         match self {
             BarItem::ShowLiveOutput => operator.output.is_some(),
+            BarItem::ShowStageOutput => operator.stage.output.is_some(),
             BarItem::ProfileDefault | BarItem::ViewPreviewLive => true,
             _ => false,
         }
@@ -911,6 +930,7 @@ impl BarItem {
         matches!(
             self,
             BarItem::ShowLiveOutput
+                | BarItem::ShowStageOutput
                 | BarItem::ProfileDefault
                 | BarItem::ViewPreviewLive
                 | BarItem::ViewCombined
@@ -972,6 +992,8 @@ const LIVE_MENU: &[BarEntry] = &[
     BarEntry::Item(BarItem::ClearOnLive),
     BarEntry::Separator,
     BarEntry::Item(BarItem::ShowLiveOutput),
+    BarEntry::Item(BarItem::ShowStageOutput),
+    BarEntry::Item(BarItem::StageMessage),
 ];
 const PROFILES_MENU: &[BarEntry] = &[
     BarEntry::Item(BarItem::ProfileDefault),
@@ -1182,6 +1204,8 @@ impl Operator {
             BarItem::ShowLiveOutput => self.toggle_output(),
             BarItem::ImportSongs => self.begin_song_import(false, cx),
             BarItem::ImportFolder => self.begin_song_import(true, cx),
+            BarItem::ShowStageOutput => self.toggle_stage_output(),
+            BarItem::StageMessage => self.open_stage_message(window, cx),
             _ => unreachable!("enabled() gates unbuilt items"),
         }
         cx.notify();

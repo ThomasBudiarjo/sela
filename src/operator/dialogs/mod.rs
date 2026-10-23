@@ -39,6 +39,8 @@ pub(crate) enum Dialog {
     ImportSongs,
     /// The previous run ended uncleanly: restore its autosave (M1-12).
     Recovery,
+    /// Live › Stage Message…; drawn by `stage_message_overlay`.
+    StageMessage,
 }
 
 impl Operator {
@@ -72,6 +74,8 @@ impl Operator {
         self.settings.draft = None;
         self.settings.language_draft = None;
         self.settings.song.draft = None;
+        self.stage.draft = None;
+        self.stage.message_input = None;
         match self.dialog_return.take() {
             Some(handle) => handle.focus(window, cx),
             None => self.focus.focus(window, cx),
@@ -187,7 +191,7 @@ impl Operator {
                 Some(entry) => t!(Msg::DialogRemoveTitled, title = entry.title),
                 None => t!(Msg::DialogRemoveGeneric).into(),
             },
-            Dialog::Options | Dialog::ImportSongs => return None,
+            Dialog::Options | Dialog::ImportSongs | Dialog::StageMessage => return None,
             Dialog::Preflight => t!(Msg::PreflightHeading).into(),
             Dialog::GoLiveMissing => t!(Msg::GoLiveMissingHeading).into(),
             Dialog::UpdateItems => t!(Msg::MenuUpdateSchedule).into(),
@@ -202,7 +206,11 @@ impl Operator {
             Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDontSave)),
             Dialog::Remove(_) => Some(t!(Msg::ConfirmRemove)),
             Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmYes)),
-            Dialog::Options | Dialog::Preflight | Dialog::FileError | Dialog::ImportSongs => None,
+            Dialog::Options
+            | Dialog::StageMessage
+            | Dialog::Preflight
+            | Dialog::FileError
+            | Dialog::ImportSongs => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
             Dialog::UpdateItems => Some(t!(Msg::UpdateItemsConfirm)),
             Dialog::Recovery => self.recovery_restorable().then(|| t!(Msg::RecoveryRestore)),

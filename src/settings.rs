@@ -47,6 +47,36 @@ pub struct Settings {
     /// `copyright_first_slide`, `license_info`; keys added within version 1,
     /// written only when not the default).
     pub copyright: CopyrightOptions,
+    /// Stage (Foldback) output, Options › Foldback (M3-01/M3-02). Keys
+    /// `stage_*` were added within version 1 and are written only when not
+    /// the default, so older builds ignore them.
+    pub stage: StageSettings,
+}
+
+/// Options › Foldback › General (EW8-OBS-056: "Enable support for Foldback
+/// Output" plus its own monitor) and Sela's stage content switches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StageSettings {
+    /// Start the stage output together with Live output (EW default: off).
+    pub enabled: bool,
+    /// Device name of the stage monitor; `None` means the first monitor that
+    /// is neither primary nor the audience monitor.
+    pub monitor: Option<String>,
+    /// Time of day in the stage header (default on).
+    pub clock: bool,
+    /// Next slide area (default on).
+    pub next: bool,
+}
+
+impl Default for StageSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            monitor: None,
+            clock: true,
+            next: true,
+        }
+    }
 }
 
 /// The saved layout of `path`, read without side effects. Unreadable or
@@ -113,6 +143,14 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
             settings.copyright.first_slide_only = value == "1";
         } else if key == "license_info" {
             settings.copyright.license_info = CopyrightOptions::clean_license(value);
+        } else if key == "stage_enabled" {
+            settings.stage.enabled = value == "1";
+        } else if key == "stage_monitor" && !value.is_empty() {
+            settings.stage.monitor = Some(value.to_owned());
+        } else if key == "stage_clock" {
+            settings.stage.clock = value != "0";
+        } else if key == "stage_next" {
+            settings.stage.next = value != "0";
         } else if key == "recent" && !value.is_empty() {
             // Lines are newest first; keep the first occurrence of a path.
             let path = PathBuf::from(value);
@@ -152,6 +190,19 @@ pub fn render(settings: &Settings) -> String {
     let license = CopyrightOptions::clean_license(&settings.copyright.license_info);
     if !license.is_empty() {
         text.push_str(&format!("license_info={license}\n"));
+    }
+    if settings.stage.enabled {
+        text.push_str("stage_enabled=1\n");
+    }
+    if let Some(name) = &settings.stage.monitor {
+        let name: String = name.chars().filter(|c| !c.is_control()).collect();
+        text.push_str(&format!("stage_monitor={name}\n"));
+    }
+    if !settings.stage.clock {
+        text.push_str("stage_clock=0\n");
+    }
+    if !settings.stage.next {
+        text.push_str("stage_next=0\n");
     }
     for path in settings.recent_schedules.iter().take(MAX_RECENT) {
         let path: String = path
@@ -307,6 +358,34 @@ pub fn monitor_arg(saved: Option<&str>, monitors: Option<&[MonitorInfo]>) -> Str
         (Some(name), _) => format!("name:{name}"),
         (None, _) => "secondary".into(),
     }
+}
+
+/// The `--stage` monitor argument: the saved stage monitor while it is
+/// connected (or the list is unknown), else the first monitor that is neither
+/// primary nor the audience's. `None` when there is no such monitor (or the
+/// list is still unknown and nothing was chosen): the stage is then not
+/// started, so a stage feed is never silently mapped over the audience
+/// (M3-01). Choosing the audience or primary monitor explicitly is allowed.
+pub fn stage_monitor_arg(
+    saved: Option<&str>,
+    audience: Option<&str>,
+    monitors: Option<&[MonitorInfo]>,
+) -> Option<String> {
+    let Some(list) = monitors else {
+        return saved.map(|name| format!("name:{name}"));
+    };
+    if let Some(name) = saved
+        && list.iter().any(|m| m.name == name)
+    {
+        return Some(format!("name:{name}"));
+    }
+    // The audience monitor as `monitor_arg` resolves it.
+    let audience = audience
+        .filter(|name| list.iter().any(|m| m.name == *name))
+        .or_else(|| list.iter().find(|m| !m.primary).map(|m| m.name.as_str()));
+    list.iter()
+        .find(|m| !m.primary && Some(m.name.as_str()) != audience)
+        .map(|free| format!("name:{}", free.name))
 }
 
 /// True when a saved choice is known to name no connected monitor.
@@ -762,6 +841,68 @@ mod tests {
         assert_eq!(MonitorInfo::from_line(&info.to_line()), Some(info.clone()));
         assert_eq!(info.short_name(), "DISPLAY6");
         assert_eq!(MonitorInfo::from_line("junk"), None);
+    }
+
+    #[test]
+    fn stage_settings_round_trip_and_defaults_are_not_written() {
+        let mut settings = Settings::default();
+        assert!(settings.stage.clock && settings.stage.next && !settings.stage.enabled);
+        assert!(!render(&settings).contains("stage_"));
+        settings.stage = StageSettings {
+            enabled: true,
+            monitor: Some(r"\\.\DISPLAY7".into()),
+            clock: false,
+            next: false,
+        };
+        let text = render(&settings);
+        assert!(text.contains("stage_enabled=1\n") && text.contains("stage_clock=0\n"));
+        assert_eq!(parse(&text), Ok(settings));
+        // A file from before the stage keys loads with the defaults.
+        assert_eq!(
+            parse("sela-settings 1\noutput_monitor=X\n").unwrap().stage,
+            StageSettings::default()
+        );
+    }
+
+    #[test]
+    fn stage_monitor_never_defaults_onto_the_audience_monitor() {
+        let info = |name: &str, primary| MonitorInfo {
+            name: name.into(),
+            width: 1920,
+            height: 1080,
+            x: 0,
+            y: 0,
+            primary,
+        };
+        let three = [info("P", true), info("A", false), info("S", false)];
+        // Default audience is the first non-primary monitor (A); the stage
+        // takes the next free one.
+        let arg = |saved, audience, list| stage_monitor_arg(saved, audience, list);
+        assert_eq!(arg(None, None, Some(&three[..])).as_deref(), Some("name:S"));
+        assert_eq!(
+            arg(None, Some("S"), Some(&three[..])).as_deref(),
+            Some("name:A")
+        );
+        assert_eq!(
+            arg(Some("P"), None, Some(&three[..])).as_deref(),
+            Some("name:P")
+        );
+        // A saved stage monitor that is gone falls back to a free one.
+        assert_eq!(
+            arg(Some("Z"), Some("A"), Some(&three[..])).as_deref(),
+            Some("name:S")
+        );
+        // Two monitors: no free one, so no stage rather than the audience's.
+        let two = [info("P", true), info("A", false)];
+        assert_eq!(arg(None, None, Some(&two[..])), None);
+        assert_eq!(arg(Some("Z"), None, Some(&two[..])), None);
+        // An explicit choice of the audience monitor is honoured.
+        assert_eq!(
+            arg(Some("A"), None, Some(&two[..])).as_deref(),
+            Some("name:A")
+        );
+        assert_eq!(arg(Some("Q"), None, None).as_deref(), Some("name:Q"));
+        assert_eq!(arg(None, None, None), None);
     }
 
     #[test]

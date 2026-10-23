@@ -199,7 +199,7 @@ pub fn fill(
 /// Glyph and underline coverage in an exact box, aligned and vertically placed
 /// by the style. Overflow rules are identical in every placement, so no
 /// alignment can hide oversized text.
-fn glyph_coverage(
+pub fn glyph_coverage(
     font: &[u8],
     face_index: u32,
     text: &str,

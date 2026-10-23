@@ -888,6 +888,80 @@ reference-observations.md, "Themes — UNOBSERVED best guesses".
 
 ## Stream: stage-display
 
+Design note: [stage-display.md](stage-display.md). Linux evidence (GPUI tests,
+`stage-display-x11.py`) closes none of these.
+
+- [ ] **PP-STG-01 Foldback Options pages** (EW8-OBS-054/056, EW8-OBS-STG-7).
+  Steps: Edit › Options › Foldback; read every control on General, Song,
+  Scripture and Alerts and Clocks (scroll each page); note the default of
+  "Enable support for Foldback Output", whether the monitor list offers the
+  Main Output monitor, and what happens with only two monitors. Cancel.
+  Sela now: General only (enable, Automatic or a named monitor, Show clock,
+  Show next slide); no free monitor means no stage. Re-run:
+  `stage-display-windows.py`, GPUI `options_foldback_enables_routes_and_persists_the_stage`.
+- [ ] **PP-STG-02 Foldback content and layout** (EW8-OBS-STG-1). Steps: enable
+  Foldback on a third monitor, put song A (three sections) live, photograph
+  or capture the foldback for slide 1, 2 and 3: what is current, what is
+  "next" (whole next slide or its first line), labels, colours, font sizes,
+  margins, and how long text is fitted. Sela now: header label + clock,
+  current slide large white, "Next · name" and next slide in sky blue; the
+  slides in the live slide's own face, the label, clock, "Next ·" label and
+  message in bundled DejaVu Sans unless only the song face draws them
+  (stand-ins for characters the chosen face lacks); also check which font
+  EW's foldback uses for the slide and for its clock/labels (song font or
+  the Foldback Default Font) with a CJK song and with a symbol/script song.
+  Re-run: `stage-display-x11.py`, `stage-display-windows.py`, unit
+  `a_glyph_the_face_lacks_never_costs_the_current_slide`,
+  `chrome_stays_in_the_bundled_face_whatever_the_song_face`.
+- [ ] **PP-STG-03 Next at the end of an item and of the schedule**
+  (EW8-OBS-STG-2). Steps: schedule A then B; show A's last slide; then B's
+  last slide; then a library song not in the schedule; also an arrangement
+  with a repeated chorus. Sela now: "Next item · <title>", "End of
+  schedule", next follows the arrangement order of the live snapshot.
+  Re-run: GPUI `the_last_slide_points_at_the_next_schedule_item`,
+  `arrangement_changes_and_repeated_choruses_keep_next_deterministic`.
+- [ ] **PP-STG-04 Foldback clock** (EW8-OBS-STG-3). Steps: read the clock's
+  format (12/24 h, seconds), position, whether it is time of day or a
+  service timer, and the Alerts and Clocks settings that change it; change
+  the PC clock's minute boundary and watch it update. Sela now: 24-hour
+  "HH:MM" local time, updated on the minute by the stage process. Re-run:
+  `stage-display-windows.py` (clock region inked), unit `local_clock_has_the_hh_mm_shape`.
+- [ ] **PP-STG-05 Masks and the foldback** (EW8-OBS-STG-4; PP-MASK-05). Steps:
+  with a slide live and Foldback on, press Black, Clear and Logo; capture the
+  foldback each time. Sela now: masks never touch the stage. Re-run:
+  `stage-display-windows.py` (extend with mask captures if EW differs).
+- [ ] **PP-STG-06 Foldback lifecycle and menus** (EW8-OBS-STG-5). Steps:
+  toggle Live › Show Live Output with Foldback enabled and watch the
+  foldback; look for any foldback-only toggle in the menus and toolbar;
+  close the foldback window or unplug its monitor during Live. Sela now:
+  follows Live output (also when settings or the monitor list land after
+  Live output came on); Live › Show Stage Output is inert while Live output
+  is off, stops a running stage, and restarts a lost one in one activation;
+  it touches only the stage. Re-run: `stage-display-windows.py` steps 1, 5,
+  6; GPUI `a_lost_stage_never_touches_the_audience_and_restarts_alone`,
+  `the_stage_never_starts_without_live_output`,
+  `a_late_monitor_list_still_starts_the_stage`.
+- [ ] **PP-STG-07 Stage-only messages** (EW8-OBS-STG-6; M3-04). Steps: in
+  Alerts, check whether a message can target the foldback only and how it
+  looks there; confirm the audience never shows it. Sela now: Live › Stage
+  Message…, one line, private until Show on Stage. Re-run: GPUI
+  `the_stage_message_is_private_until_ok_and_never_reaches_the_audience`,
+  `stage-display-windows.py` step 4.
+- [ ] **PP-STG-08 Windows stage run** (NOT RUN: no Windows host on
+  2026-10-22). Steps: three monitors (primary operator plus two others),
+  `cargo build --locked` and `cargo build --locked --example seed_library`,
+  then `python scripts\stage-display-windows.py` (optionally `--stage
+  \\.\DISPLAYn`); record PASS/FAIL, placement and captures in the work log.
+  Checks the production borderless placement on a free monitor, both
+  receipts, the message, stage termination isolation, the stage-only
+  restart, Options › Foldback disable and settings.txt.
+- [ ] **PP-STG-09 Physical stage monitor** (M3-01/M3-02 hardware). Steps: a
+  real stage/confidence monitor at performer distance (3–6 m): readability
+  of current/next/clock/message; mixed DPI and refresh between audience and
+  stage; unplug/replug the stage monitor during Live (the audience must not
+  change); sleep/resume. Sela now: untested on hardware. Re-run:
+  `stage-display-windows.py`, then a manual rehearsal.
+
 ## Stream: fuzz-audit
 
 ## Windows script run order
@@ -936,6 +1010,7 @@ timing):
 | 27 | `themes-windows.py` | seed (`--themes`); secondary monitor; native Save dialog (themes stream, PP-TH-07) |
 | 28 | `media-backend-windows.py` | `scripts\fetch-ffmpeg.ps1` first; optional `--gpl-dir` (a GPL FFmpeg bin folder); runs `cargo test --test media_decode` unless `--skip-cargo` (PP-MC-03) |
 | 29 | `scripture-windows.py` | seed only (the script seeds); secondary monitor; first run installs the bundled KJV/WEB |
+| 30 | `stage-display-windows.py` | seed; three monitors (primary plus two non-primary); optional `--stage \\.\DISPLAYn` |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

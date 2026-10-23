@@ -29,6 +29,7 @@ mod scripture;
 mod scrutiny_r2;
 mod song_import;
 mod songs_browser;
+mod stage_display;
 mod themes;
 
 const FAKE_EXTENT: Extent = Extent {
@@ -3163,6 +3164,8 @@ mod menu_bar {
                     "bar-live-black",
                     "bar-live-clear",
                     "bar-live-show",
+                    "bar-live-stage",
+                    "bar-live-stage-message",
                 ],
             ),
             (

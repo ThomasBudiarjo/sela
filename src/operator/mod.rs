@@ -53,6 +53,7 @@ mod resources;
 mod schedule;
 mod schedule_files;
 pub(super) mod song_import;
+mod stage;
 mod update_items;
 
 use assets::{Assets, PREFLIGHT_DIALOG_W};
@@ -85,6 +86,7 @@ use resources::{
     ExtendPreviousSongRow, FirstSongRow, LastSongRow, NextSongRow, PageDownSongRow, PageUpSongRow,
     PreviousSongRow, SelectAllSongRows, SongSearch, SongSelection, TAB_IDS, TABS,
 };
+pub(super) use stage::StageLauncher;
 
 const POLL: Duration = Duration::from_millis(16);
 const LABELS: usize = 8;
@@ -326,6 +328,11 @@ pub(super) struct Operator {
     pub(super) preview_slide: usize,
     pub(super) live: Option<Item>,
     pub(super) live_slide: Option<usize>,
+    /// The item `live_slide` belongs to: replaced only when one of its cues
+    /// is handed to the audience supervisor. `live` already names a newly
+    /// requested item while its cue is still preparing (or failed), so the
+    /// stage panel is built from this, never from `live` (M3-02).
+    pub(super) on_air: Option<Item>,
     launcher: Launcher,
     pub(super) output: Option<Supervisor>,
     output_extent: Option<Extent>,
@@ -462,6 +469,8 @@ pub(super) struct Operator {
     pub(super) autosave: autosave::AutosaveState,
     /// Scriptures tab state and its provider worker (M4-03/M4-04).
     pub(super) scripture: resources::ScriptureTab,
+    /// Stage (Foldback) output session, message and Options draft (M3-01/02).
+    pub(super) stage: stage::StageState,
 }
 
 impl Operator {
@@ -642,6 +651,7 @@ impl Operator {
             preview_slide: 0,
             live: None,
             live_slide: None,
+            on_air: None,
             launcher,
             output: None,
             output_extent: None,
@@ -721,6 +731,7 @@ impl Operator {
             _receipt_waker: Some(receipt_waker),
             autosave,
             scripture,
+            stage: Default::default(),
         }
     }
 }
