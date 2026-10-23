@@ -1596,6 +1596,9 @@ pub enum Reply {
     ThemedSong(Song, Option<ThemeId>),
     ThemedSongs(Vec<(Song, Option<ThemeId>)>),
     Themes(ThemeSet),
+    /// `SetSongTheme` named a theme the library no longer has (deleted
+    /// through another connection): no song changed; the current set.
+    ThemeGone(ThemeSet),
 }
 struct Request {
     command: Command,
@@ -1652,10 +1655,21 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::UpdateTheme(theme) => repo.update_theme(&theme).map(Reply::Themes),
         Command::DeleteTheme(id) => repo.delete_theme(id).map(Reply::Themes),
         Command::SetDefaultTheme(id) => repo.set_default_theme(id).map(Reply::Themes),
-        Command::SetSongTheme(songs, theme) => {
-            repo.set_song_themes(&songs, theme)?;
-            repo.themes().map(Reply::Themes)
-        }
+        Command::SetSongTheme(songs, theme) => match repo.set_song_themes(&songs, theme) {
+            Ok(()) => repo.themes().map(Reply::Themes),
+            // `Missing` is a deleted song or a deleted theme; the operator
+            // words and refreshes them differently.
+            Err(Error::Missing) => {
+                let set = repo.themes()?;
+                match theme {
+                    Some(id) if id != ThemeId::BUILT_IN && set.get(id).is_none() => {
+                        Ok(Reply::ThemeGone(set))
+                    }
+                    _ => Err(Error::Missing),
+                }
+            }
+            Err(error) => Err(error),
+        },
     }
 }
 /// Cancellation only wins before the worker starts a command. Always poll its result.
@@ -4332,6 +4346,42 @@ mod tests {
             repo.set_song_themes(&vec![a.id; MAX_SONG_THEME_BATCH + 1], None),
             Err(Error::Invalid)
         );
+    }
+    #[test]
+    fn apply_to_song_tells_a_deleted_theme_from_a_deleted_song() {
+        let (_d, _p, mut repo) = fixture();
+        let a = repo.save_song(None, titled("A")).unwrap();
+        let b = repo.save_song(None, titled("B")).unwrap();
+        let navy = crate::theme::tests::styled();
+        repo.save_theme(&navy).unwrap();
+        let apply = |repo: &mut Repository, songs: Vec<Id>, theme| {
+            execute(
+                repo,
+                Request {
+                    command: Command::SetSongTheme(songs, theme),
+                    canceled: Arc::default(),
+                },
+            )
+        };
+        repo.delete_song(b).unwrap();
+        // A deleted song: `Missing`, nothing changed.
+        assert!(matches!(
+            apply(&mut repo, vec![a.id, b.id], Some(navy.id)),
+            Err(Error::Missing)
+        ));
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        // A deleted theme: the current set without it, nothing changed.
+        repo.delete_theme(navy.id).unwrap();
+        assert!(matches!(
+            apply(&mut repo, vec![a.id], Some(navy.id)),
+            Ok(Reply::ThemeGone(set)) if set.get(navy.id).is_none()
+        ));
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        // The built-in theme always exists.
+        assert!(matches!(
+            apply(&mut repo, vec![a.id], Some(ThemeId::BUILT_IN)),
+            Ok(Reply::Themes(_))
+        ));
     }
     #[test]
     fn a_theme_update_never_resurrects_a_deleted_theme() {

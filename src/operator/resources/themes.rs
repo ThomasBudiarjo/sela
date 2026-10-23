@@ -101,6 +101,9 @@ pub(crate) struct ThemeState {
     pub(crate) failed: bool,
     /// The library may have changed: reload when the worker is free.
     pub(crate) stale: bool,
+    /// A load failed on a transient lock or a full queue: reload at this
+    /// time (one retry pending at a time, see `THEME_RETRY`).
+    pub(crate) retry_at: Option<Instant>,
     /// One write waiting for the storage worker.
     job: Option<(storage::Command, ThemeJob)>,
     /// Highlighted row; `ThemeId::BUILT_IN` is the built-in row.
@@ -125,6 +128,7 @@ impl ThemeState {
             loaded: false,
             failed: false,
             stale: true,
+            retry_at: None,
             job: None,
             selected: ThemeId::BUILT_IN,
             message: None,
@@ -188,6 +192,14 @@ impl Operator {
         if let Some((command, job)) = self.themes.job.take() {
             return Some((command, Request::Themes(job)));
         }
+        if self
+            .themes
+            .retry_at
+            .is_some_and(|at| Instant::now() >= at)
+        {
+            self.themes.retry_at = None;
+            self.themes.stale = true;
+        }
         if self.themes.stale {
             self.themes.stale = false;
             return Some((storage::Command::Themes, Request::Themes(ThemeJob::Load)));
@@ -207,6 +219,7 @@ impl Operator {
                 self.themes.set = set;
                 self.themes.loaded = true;
                 self.themes.failed = false;
+                self.themes.retry_at = None;
                 if self.themes.selected != ThemeId::BUILT_IN
                     && self.themes.set.get(self.themes.selected).is_none()
                 {
@@ -223,13 +236,16 @@ impl Operator {
                         songs,
                         theme,
                     } => {
-                        // A library preview of a restyled song reloads with
-                        // its new theme; schedule entries keep snapshots
-                        // and Live keeps its scene.
+                        // A preview of a restyled song follows its new
+                        // theme: a library song reloads with it, and so does
+                        // a schedule entry without a snapshot (which then
+                        // captures it). Entries with snapshots keep them
+                        // (`wanted_theme` ignores `song_theme` for them) and
+                        // Live keeps its scene.
                         if let Some(item) = self
                             .preview
                             .as_mut()
-                            .filter(|item| item.entry.is_none() && songs.contains(&item.version.id))
+                            .filter(|item| songs.contains(&item.version.id))
                         {
                             item.song_theme = Some(theme);
                         }
@@ -238,19 +254,12 @@ impl Operator {
                 };
             }
             Err(storage::Error::Missing) if matches!(job, ThemeJob::AppliedSong { .. }) => {
-                // A selected song was deleted meanwhile: nothing changed.
+                // A selected song was deleted meanwhile: nothing changed. (A
+                // deleted theme is `Reply::ThemeGone`, see `theme_gone`.)
                 self.catalog_stale = true;
                 self.themes.message = Some((t!(Msg::ThemeSongGone).into(), true));
             }
-            Err(error) if job == ThemeJob::Load => {
-                // Without the library's themes, entries show the default
-                // look with a note and capture nothing (see `themed_item`).
-                self.themes.failed = true;
-                self.themes.message = Some((
-                    t!(Msg::ThemeStorageFailed, error = format!("{error:?}")),
-                    true,
-                ));
-            }
+            Err(error) if job == ThemeJob::Load => self.theme_load_failed(error),
             Err(storage::Error::Budget) => {
                 self.themes.message = Some((t!(Msg::ThemeLimit, max = theme::MAX_THEMES), true));
             }
@@ -261,6 +270,46 @@ impl Operator {
                 ));
             }
         }
+    }
+
+    /// A theme load failed. Without the library's themes, entries show the
+    /// default look with a note and capture nothing (see `themed_item`). A
+    /// lock held by another connection (an editor window's write, another
+    /// instance) or a full worker queue passes, so the load is retried
+    /// after `THEME_RETRY`; corrupt or unreadable themes wait for the next
+    /// library change.
+    pub(crate) fn theme_load_failed(&mut self, error: storage::Error) {
+        self.themes.failed = true;
+        let transient = matches!(error, storage::Error::Locked | storage::Error::Busy);
+        if transient {
+            self.themes.retry_at = Some(Instant::now() + THEME_RETRY);
+        }
+        let error = format!("{error:?}");
+        self.themes.message = Some((
+            if transient {
+                t!(Msg::ThemeLoadRetrying, error = error)
+            } else {
+                t!(Msg::ThemeStorageFailed, error = error)
+            },
+            true,
+        ));
+    }
+
+    /// Apply to Song named a theme deleted through another connection: no
+    /// song changed. The list drops the theme and the operator is told.
+    pub(crate) fn theme_gone(&mut self, job: ThemeJob, set: ThemeSet) {
+        let name = match &job {
+            ThemeJob::AppliedSong { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        self.themes_replied(ThemeJob::Load, Ok(set));
+        self.themes.message = Some((
+            match name {
+                Some(name) => t!(Msg::ThemeGoneApply, name = name),
+                None => t!(Msg::ThemeSongGone).into(),
+            },
+            true,
+        ));
     }
 
     fn queue_theme(&mut self, command: storage::Command, job: ThemeJob) {
@@ -539,12 +588,15 @@ impl Operator {
 
     /// Renders the next missing row thumbnail off the UI thread, one at a
     /// time, at the current output size (aspect warnings depend on it).
-    pub(crate) fn ensure_theme_thumbs(&mut self, cx: &mut Context<Self>) {
+    /// `window` is the operator window, which paints the thumbnails: GPUI
+    /// leases it out of `App` while it renders, so only `window` can release
+    /// its atlas sprites (`App::drop_image` skips the window being updated).
+    pub(crate) fn ensure_theme_thumbs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.themes.thumb_task.is_some() || self.tab != 4 || self.collapsed {
             return;
         }
         let extent = self.background_extent();
-        self.prune_theme_thumbs(extent, cx);
+        self.prune_theme_thumbs(extent, window, cx);
         let Some(theme) = self.themes.rows().into_iter().find(|t| {
             !self
                 .themes
@@ -562,6 +614,7 @@ impl Operator {
             let (image, warnings) = render.await;
             let _ = this.update(cx, |this, cx| {
                 this.themes.thumb_task = None;
+                // Outside any window update: `None` reaches every window.
                 if let Some(old) = this
                     .themes
                     .thumbs
@@ -577,8 +630,8 @@ impl Operator {
 
     /// Keeps only the listed themes' thumbnails at the current output size,
     /// so the cache holds at most one per row, and releases each dropped
-    /// image's atlas sprite.
-    fn prune_theme_thumbs(&mut self, extent: Extent, cx: &mut Context<Self>) {
+    /// image's atlas sprite in every window, the operator window included.
+    fn prune_theme_thumbs(&mut self, extent: Extent, window: &mut Window, cx: &mut Context<Self>) {
         let stamps: HashSet<u64> = self.themes.rows().iter().map(Theme::stamp).collect();
         let stale: Vec<_> = self
             .themes
@@ -591,14 +644,18 @@ impl Operator {
             .collect();
         for key in stale {
             if let Some(image) = self.themes.thumbs.remove(&key).and_then(|t| t.image) {
-                cx.drop_image(image, None);
+                cx.drop_image(image, Some(window));
             }
         }
     }
 
     /// The Themes tab list: one row per theme with its thumbnail, name,
     /// badges and warnings.
-    pub(crate) fn theme_list(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn theme_list(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let rows = self.themes.rows();
         while self.themes.rows.len() < rows.len() {
             let index = self.themes.rows.len() as isize;
@@ -608,7 +665,7 @@ impl Operator {
                     .tab_stop(true),
             );
         }
-        self.ensure_theme_thumbs(cx);
+        self.ensure_theme_thumbs(window, cx);
         let extent = self.background_extent();
         let default = self.themes.default_id();
         let previewed = self.preview.as_ref().map(|item| item.theme_stamp);

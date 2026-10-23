@@ -767,7 +767,35 @@ fn theme_thumbnails_keep_one_per_row_at_the_current_output_size(cx: &mut TestApp
                 .all(|((stamp, _, _), t)| stamps.contains(stamp) && t.image.is_some())
     };
     settle(&mut cx, &operator, "every thumbnail", rendered);
-    // Another output size: the old size's thumbnails are released.
+    // The operator window paints each thumbnail into its sprite atlas.
+    let images = |cx: &mut VisualTestContext| -> Vec<(String, Arc<gpui::RenderImage>)> {
+        operator.read_with(cx, |o, _| {
+            o.themes
+                .rows()
+                .iter()
+                .map(|theme| {
+                    let thumb = o
+                        .themes
+                        .thumbs
+                        .iter()
+                        .find(|((stamp, _, _), _)| *stamp == theme.stamp())
+                        .and_then(|(_, t)| t.image.clone())
+                        .expect("thumbnail");
+                    (theme.name.clone(), thumb)
+                })
+                .collect()
+        })
+    };
+    let in_atlas = |cx: &mut VisualTestContext, image: &gpui::RenderImage| {
+        cx.update(|window, _| window.has_image_atlas_entry(image))
+    };
+    let first = images(&mut cx);
+    cx.run_until_parked();
+    for (name, image) in &first {
+        assert!(in_atlas(&mut cx, image), "{name} thumbnail painted");
+    }
+    // Another output size: the old size's thumbnails are released, from
+    // the HashMap and from the operator window's atlas.
     operator.update(&mut cx, |o, cx| {
         o.probe_output_extent(sela::scene::Extent {
             width: 1280,
@@ -782,7 +810,21 @@ fn theme_thumbnails_keep_one_per_row_at_the_current_output_size(cx: &mut TestApp
                 .keys()
                 .all(|(_, w, h)| (*w, *h) == (1280, 1024))
     });
-    // An edited theme's old thumbnail goes too.
+    for (name, image) in &first {
+        assert!(
+            !in_atlas(&mut cx, image),
+            "{name} thumbnail at the old size released from the atlas"
+        );
+    }
+    let second = images(&mut cx);
+    cx.run_until_parked();
+    let navy_thumb = second
+        .iter()
+        .find(|(name, _)| name == "Evening Navy")
+        .map(|(_, image)| image.clone())
+        .unwrap();
+    assert!(in_atlas(&mut cx, &navy_thumb));
+    // A deleted theme's thumbnail goes too.
     select_theme(&mut cx, &operator, "Evening Navy");
     click(&mut cx, "theme-delete");
     click(&mut cx, "theme-delete");
@@ -790,6 +832,11 @@ fn theme_thumbnails_keep_one_per_row_at_the_current_output_size(cx: &mut TestApp
         o.themes.set.themes.len() == 2
     });
     settle(&mut cx, &operator, "pruned to the rows", rendered);
+    cx.run_until_parked();
+    assert!(
+        !in_atlas(&mut cx, &navy_thumb),
+        "the deleted theme's thumbnail is released from the atlas"
+    );
 }
 
 #[gpui::test]

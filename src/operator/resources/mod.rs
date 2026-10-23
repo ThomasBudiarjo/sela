@@ -52,13 +52,17 @@ pub(crate) fn empty_detail(title: impl Into<SharedString>, text: &'static str) -
 
 impl Operator {
     /// The detail area of the selected resource tab.
-    pub(crate) fn resource_detail(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn resource_detail(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         match self.tab {
             0 => self.song_list(cx),
             1 => scriptures::detail(),
             2 => self.image_list(cx),
             3 => presentations::detail(),
-            _ => self.theme_list(cx),
+            _ => self.theme_list(window, cx),
         }
     }
 }

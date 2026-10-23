@@ -432,7 +432,7 @@ impl Render for Operator {
                     })),
             )
             .when(!self.collapsed, |d| {
-                let detail = self.resource_detail(cx);
+                let detail = self.resource_detail(window, cx);
                 d.child(
                     div()
                         .flex_1()

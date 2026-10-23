@@ -576,6 +576,8 @@ pub enum Msg {
     ThemeMissing,
     ThemeUnavailable,
     ThemeSongGone,
+    ThemeGoneApply,
+    ThemeLoadRetrying,
     ThemeTooManySongs,
     ThemeDeletedElsewhere,
     MarginLeftField,
@@ -1111,6 +1113,8 @@ impl Msg {
         Msg::ThemeMissing,
         Msg::ThemeUnavailable,
         Msg::ThemeSongGone,
+        Msg::ThemeGoneApply,
+        Msg::ThemeLoadRetrying,
         Msg::ThemeTooManySongs,
         Msg::ThemeDeletedElsewhere,
         Msg::MarginLeftField,
@@ -1724,9 +1728,11 @@ impl Msg {
                 "Themes are not loaded · showing the default look; nothing is captured until they load"
             }
             Self::ThemeSongGone => "A selected song no longer exists · no song was restyled",
+            Self::ThemeGoneApply => "“{name}” no longer exists · no song was restyled",
+            Self::ThemeLoadRetrying => "Themes could not be loaded ({error}) · retrying",
             Self::ThemeTooManySongs => "Select at most {max} songs to restyle at once.",
             Self::ThemeDeletedElsewhere => {
-                "This theme was deleted in the Themes tab · it was not saved"
+                "This theme was deleted in the Themes tab · it was not saved · OK saves it as a new theme"
             }
             Self::MarginLeftField => "Left margin",
             Self::MarginRightField => "Right margin",
@@ -2370,8 +2376,12 @@ impl Msg {
                 "Tema belum dimuat · menampilkan tampilan bawaan; tidak ada yang disimpan sampai tema dimuat"
             }
             Self::ThemeSongGone => "Lagu yang dipilih sudah tidak ada · tidak ada lagu yang diubah",
+            Self::ThemeGoneApply => "“{name}” sudah tidak ada · tidak ada lagu yang diubah",
+            Self::ThemeLoadRetrying => "Tema tidak dapat dimuat ({error}) · mencoba lagi",
             Self::ThemeTooManySongs => "Pilih paling banyak {max} lagu untuk diubah sekaligus.",
-            Self::ThemeDeletedElsewhere => "Tema ini sudah dihapus di tab Tema · tidak disimpan",
+            Self::ThemeDeletedElsewhere => {
+                "Tema ini sudah dihapus di tab Tema · tidak disimpan · OK menyimpannya sebagai tema baru"
+            }
             Self::MarginLeftField => "Margin kiri",
             Self::MarginRightField => "Margin kanan",
             Self::MarginTopField => "Margin atas",
