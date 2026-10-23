@@ -23,10 +23,17 @@ label "Etsaer", another the title "Etsaer Praise"):
    secondary monitor, "Echo Hymn" (copyright text) goes Live: slide 1 shows
    the copyright strip at the bottom of the audience frame, slide 2 does not.
    Then, with slide 2 live, Options › Song: untick "Show on first displayed
-   slide only" and type "CCLI b." into License Info with real keys (B and
-   "." are the plain Black keys), OK: settings.txt has the change, and
+   slide only" and type "CCLI b." into License Info one virtual-key press
+   per character (Shift+C, Shift+C, Shift+L, Shift+I, Space, B, VK_OEM_PERIOD;
+   B and "." are the plain Black keys), OK: settings.txt has the change, and
    neither the typing nor OK changes the frame that is already live
-   (settings apply to the next cue, PP-SB-07).
+   (settings apply to the next cue, PP-SB-07). Virtual-key presses, not
+   nw.type_text: KEYEVENTF_UNICODE input arrives as VK_PACKET, which GPUI's
+   Windows backend (zed a846890, crates/gpui_windows/src/events.rs
+   `VK_PACKET => None`) never turns into a KeyDown, so it would skip the
+   keymap and a leaked Black binding could not fail the check. A wrongful
+   re-cue on OK is visible here: slide 2 would gain the strip once
+   first-slide-only is unticked.
 
 Takes over the real keyboard and mouse; never run with EasyWorship open.
 
@@ -75,6 +82,26 @@ LABEL_HITS = ["Etsaer Praise", "Echo Hymn"]
 DOWNS_TO_SORT_BY = 3
 DOWNS_TO_SONG_NUMBER = 4
 DOWNS_TO_DESCENDING = 7
+# VK_OEM_PERIOD (US layout); native_win.VK has no "." entry.
+nw.VK.setdefault("period", 0xBE)
+
+
+def press_keys(session, text: str) -> None:
+    """Type text as one virtual-key press per character so GPUI's keymap sees
+    every keystroke (WM_KEYDOWN, then WM_CHAR inserts the text). Covers the
+    letters, digits, space and "." this script needs; uppercase uses Shift."""
+    for char in text:
+        if char == " ":
+            key = "space"
+        elif char == ".":
+            key = "period"
+        elif char.isupper():
+            key = f"shift+{char.lower()}"
+        elif char.isalnum():
+            key = char
+        else:
+            raise ValueError(f"press_keys has no key for {char!r}")
+        session.press(key, pause=0.1)
 
 
 def browser_run(args, summary: dict, check) -> None:
@@ -207,7 +234,7 @@ def browser_run(args, summary: dict, check) -> None:
                 session.click_aid("options-tab-song"),
                 session.click_aid("options-copyright-first-slide"),
                 session.click_aid("options-license-info"),
-                nw.type_text(session.hwnd, "CCLI b."),
+                press_keys(session, "CCLI b."),
                 session.click_aid("dialog-confirm"),
             ),
         )

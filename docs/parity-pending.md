@@ -366,9 +366,12 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
 - [ ] **PP-SB-07 Options change while a song is Live** (EW8-OBS-055). Steps:
   with a copyright song Live, untick Display Copyright Information and OK;
   record whether the live slide redraws at once or only on the next slide.
-  Sela now: only the next cue changes; the live slide stays (GPUI test, and
-  the Linux script with first-slide-only and License Info changed). Re-run:
-  `songs-browser-windows.py`.
+  Sela now: only the next cue changes; OK sends no renderer cue (GPUI test
+  `typing_in_license_info_never_toggles_masks_or_cues_live`, submission
+  count). The Linux script only shows the frame stays the same, which cannot
+  reveal a re-cue there (no strip on the 351 px xvfb output, so a re-sent
+  slide is identical); the Windows script would see slide 2 gain the strip.
+  Re-run: `songs-browser-windows.py`.
 - [ ] **PP-SB-08 Copyright Font, Song Font and Show Verse/Chorus Label**
   (EW8-OBS-056). Steps: open each menu in Options › Main Output › Song and
   record the choices and their effect on output. Sela now: not built (the
@@ -378,12 +381,17 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
   `seed_library.exe --sort-songs`, run the script with the audience on the
   secondary monitor; it covers mouse and keyboard Sort by with UIA ticks,
   label search, the Options Song tab, the strip ink on slides 1 and 2 with
-  first-slide-only, and (since 2026-10-23) a real Options change typed with
-  B and "." into License Info while slide 2 is Live (zero frame changes
-  expected). Sela now: the Linux script PASSES; since 2026-10-23 it also
-  keeps a song Live and checks that typing in the search box and License
-  Info and OK leave the audience frame unchanged (no strip ink check there,
-  the xvfb output is 351 px tall). Re-run: itself.
+  first-slide-only, and (since 2026-10-23) a real Options change typed into
+  License Info while slide 2 is Live (zero frame changes expected; a re-cue
+  on OK would add the strip to slide 2). Since review round 2 the License
+  Info text is typed as one virtual-key press per character (B and "." as
+  VK_B and VK_OEM_PERIOD), because `KEYEVENTF_UNICODE` input reaches GPUI
+  (zed a846890 `crates/gpui_windows/src/events.rs`, `VK_PACKET => None`)
+  only as WM_CHAR text and never runs the keymap. Sela now: the Linux script
+  PASSES; since 2026-10-23 it also keeps a song Live and checks that typing
+  in the search box and License Info and OK leave the audience frame
+  unchanged (no strip ink check there, the xvfb output is 351 px tall, so it
+  cannot see a re-cue on OK; the GPUI test counts cues). Re-run: itself.
 - [ ] **PP-SB-10 20k search and sort timings on the reference laptop**
   (M1-07, M1-04). Steps: `cargo run --locked --release --example search_bench`
   and `search-windows.py --latency-library` on the Windows machine of the

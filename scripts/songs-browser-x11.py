@@ -31,8 +31,14 @@ Songs rows through AT-SPI (AccessKit ids `song-0`..`song-4` and their names):
 6. Edit › Options › Song tab: "Show on first displayed slide only" is ticked
    with the mouse, "CCLI b." is typed into License Info with real keys, and
    OK writes `copyright_first_slide=1` and `license_info=CCLI b.`; neither
-   the typing nor OK changes the live audience frame (settings apply to the
-   next cue).
+   the typing nor OK changes the live audience frame. This catches a leaked
+   Black/Clear/Logo key, but NOT a wrongful re-cue of the live slide on OK:
+   the xvfb audience draws no copyright strip (below), so a re-sent Delta
+   Hymn slide is pixel-identical. "Settings apply to the next cue, OK never
+   re-cues" is checked by the GPUI test
+   `typing_in_license_info_never_toggles_masks_or_cues_live` (renderer
+   submission count) and, visibly, by the Windows script (slide 2 gains the
+   strip if OK re-cues).
 
 Captures: operator after each sort, the search result, the Options Song tab,
 the live audience frame.
@@ -264,7 +270,8 @@ def body(session: nx.Session) -> str:
         "Sort by Author/Copyright/Administrator (mouse) and Song Number + Descending (keyboard) "
         "order the Songs rows as expected and persist across a restart; 'etsa' finds the title "
         "match then the slide-label match; Options › Song first-slide-only and License Info are "
-        "saved; typing in both fields and OK leave the live audience frame unchanged"
+        "saved; typing in both fields and OK leave the live audience frame unchanged (a re-cue "
+        "on OK is not detectable here; see the GPUI test)"
     )
 
 
