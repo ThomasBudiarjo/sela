@@ -48,8 +48,8 @@ pub(crate) struct AutosaveState {
     pub(crate) offer: Option<Offer>,
     /// The offer still has to be shown (another dialog was open).
     prompt_pending: bool,
-    /// The close flush ended and the window is being removed: no prompt
-    /// may open in it any more, even if a poll runs before it goes.
+    /// The close flush ended and the window is being removed: the Recovery
+    /// prompt may not open in it, even if a poll runs before it goes.
     window_closing: bool,
     pub(crate) last: Option<save::Committed>,
     /// A commit stands but old copies could not be removed.
