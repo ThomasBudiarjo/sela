@@ -9,12 +9,16 @@ repository = "https://github.com/thomasbudiarjo/sela"
 
 [dependencies]
 unicode-segmentation = "=1.13.3"
-rusqlite = { version = "=0.40.2", features = ["bundled", "limits", "backup"] }
+rusqlite = { version = "=0.40.2", features = ["bundled", "limits", "backup", "collation"] }
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 sha2 = "=0.10.9"
 serde_json = "=1.0.151"
 ttf-parser = "=0.25.1"
 roxmltree = "=0.21.1"
+# CRC-32 of bundle (ZIP) entries, M1-13 (already a transitive dependency of png).
+crc32fast = "=1.5.2"
+# Inflates the bundled public-domain Bible texts (already a transitive dependency of png).
+miniz_oxide = "=0.8.9"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false }
 zlog = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
@@ -23,14 +27,36 @@ cosmic-text = { version = "=0.19.0", default-features = false, features = ["std"
 winit = "=0.30.12"
 wgpu = "=29.0.4"
 pollster = "=0.4.0"
+# Stage clock (M3-02): local time of day in the stage renderer. Already in the
+# graph through gpui with the same version and a superset of these features.
+chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
+# Private copies of an EasyWorship library (M4-07), deleted when the import
+# worker drops them. Already pinned for the tests.
+tempfile = "=3.27.0"
+
+# O_NONBLOCK for opening import files: a named pipe swapped in must not
+# block the `sela-import` thread (already in the tree through gpui).
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.190"
+
+# Audio of video backgrounds (M2-04, owner decision: audio through cpal).
+# Windows only: Windows is the release platform and cpal there reuses the
+# `windows` 0.62 crate GPUI already pulls; on other platforms the renderer
+# plays audio into its null output (no ALSA build dependency).
+[target.'cfg(windows)'.dependencies]
+cpal = { version = "=0.18.2", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["wayland", "x11"] }
 
 [dev-dependencies]
-tempfile = "=3.27.0"
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["test-support"] }
+
+# Every target (lib, bin, examples, integration tests) denies unsafe code;
+# the inventoried sites in docs/security.md (U-01..U-04) allow it locally.
+[lints.rust]
+unsafe_code = "deny"
 
 [profile.dev]
 debug = 0

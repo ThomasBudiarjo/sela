@@ -8,7 +8,25 @@
 //! four slides exercise M1-05h backgrounds: a 4:1 profile image (red, green,
 //! blue bands) with Zoom, the same image with Maintain, a missing image, and
 //! the song master's color; `--metadata-songs` seeds "Metadata Hymn" (author,
-//! copyright, administrator, song number) and "Plain Hymn" (none); --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
+//! copyright, administrator, song number) and "Plain Hymn" (none);
+//! `--sort-songs` seeds five songs whose Author, Copyright, Administrator
+//! and Song Number orders all differ, one with the slide label "Etsaer"
+//! (`scripts/songs-browser-x11.py`); `--themes`
+//! adds four library themes to the default library (M1-08,
+//! `scripts/themes-x11.py`): "Evening Navy" (gold bold left text on navy with
+//! margins, copyright hidden), "Low Contrast" (white on near white), "Missing
+//! Face" (a family no system has) and "Wide Picture" (a 4:1 image, Stretch);
+//! --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py); `--portable-song` seeds
+//! "Harbor Light" for `scripts/bundle-x11.py` (M1-13): slide 1 shows the
+//! profile image `harbor.png`, slide 2 the image `lantern.png`, whose
+//! original is written to `<database folder>/originals/lantern.png` but
+//! not into the profile, and slide 3 names the font "Sela Missing Serif",
+//! which no system has.
+//! `--video-song CLIP` copies the original clip CLIP into the profile's
+//! Resources/Videos as `sela-motion.<ext>` and seeds "Motion Hymn" (three
+//! slides over that video as the song master, then one slide whose own
+//! background names a missing video) and "Still Hymn" (one slide on the
+//! master color), for `scripts/video-x11.py` (M2-02/M2-03).
 use image::ImageEncoder;
 use sela::{
     arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId},
@@ -18,7 +36,11 @@ use sela::{
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs] [--sort-songs] [--themes] [--portable-song] [--video-song CLIP]";
+
+/// `scripts/themes-x11.py` samples these.
+const NAVY: [u8; 3] = [20, 30, 90];
+const GOLD: [u8; 3] = [255, 214, 90];
 
 /// `scripts/live-output-windows.py` samples these.
 const BANDS: [[u8; 3]; 3] = [[200, 40, 40], [40, 160, 60], [40, 60, 200]];
@@ -66,6 +88,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut second, mut formatted, mut background, mut heavy, mut vanished, mut arranged) =
         (false, false, false, false, false, false);
     let mut metadata = false;
+    let mut sort = false;
+    let mut themes = false;
+    let mut portable = false;
+    let mut video_clip: Option<std::path::PathBuf> = None;
     let mut extra = 0usize;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -83,6 +109,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             flag if flag == "--vanished-schedule" => vanished = true,
             flag if flag == "--arranged-song" => arranged = true,
             flag if flag == "--metadata-songs" => metadata = true,
+            flag if flag == "--sort-songs" => sort = true,
+            flag if flag == "--themes" => themes = true,
+            flag if flag == "--portable-song" => portable = true,
+            flag if flag == "--video-song" => {
+                video_clip = Some(args.next().ok_or(USAGE)?.into());
+            }
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -109,6 +141,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format,
         background: None,
     };
+    if sort {
+        /// Title, authors, copyright, administrator, song number, labels.
+        type Keyed = (
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static [&'static str],
+        );
+        let songs: [Keyed; 5] = [
+            (
+                "Delta Hymn",
+                "bravo writer",
+                "© 2001 Zeta",
+                "Northwind",
+                "900",
+                &["Verse 1"],
+            ),
+            ("Alpha Hymn", "", "", "", "", &["Verse 1"]),
+            (
+                "Echo Hymn",
+                "Alpha Writer",
+                "(c) 1999 Omega",
+                "acme",
+                "10",
+                &["Verse 1", "Etsaer"],
+            ),
+            (
+                "Bravo Hymn",
+                "Charlie Writer",
+                "© 2001 Zeta",
+                "",
+                "0042",
+                &["Verse 1"],
+            ),
+            (
+                "Etsaer Praise",
+                "Delta Writer",
+                "© 2010 Kappa",
+                "Bureau",
+                "77",
+                &["Verse 1"],
+            ),
+        ];
+        for (title, authors, copyright, admin, number, labels) in songs {
+            let song = Song {
+                title: title.into(),
+                authors: authors.into(),
+                copyright: copyright.into(),
+                license: String::new(),
+                administrator: admin.into(),
+                song_number: number.into(),
+                variants: Vec::new(),
+                sections: labels
+                    .iter()
+                    .map(|label| section(label, &format!("{title} original line")))
+                    .collect(),
+                master: None,
+            };
+            repository
+                .save_song(None, song)
+                .map_err(|e| format!("{e:?}"))?;
+        }
+        return Ok(());
+    }
     if metadata {
         // "Metadata Hymn" carries every song property; "Plain Hymn" has no
         // copyright text, so it must show no strip (VAL-SONG-002).
@@ -245,14 +343,137 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let song = repository.song(version).map_err(|e| format!("{e:?}"))?;
         let document = sela::schedule_file::ScheduleFile {
             title: "Sunday".into(),
+            scripture: Vec::new(),
             items: vec![sela::schedule_file::Item {
                 source: version,
                 song,
                 arrangement: None,
+                theme: None,
             }],
         };
         let bytes = sela::schedule_file::encode(&document).map_err(|e| format!("{e:?}"))?;
         std::fs::write(folder.join("Sunday.selaschedule"), bytes)?;
+        return Ok(());
+    }
+    if portable {
+        let folder = path.parent().ok_or("database has no folder")?;
+        let solid = |rgb: [u8; 3]| -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+            let (width, height) = (320u32, 180u32);
+            let pixels: Vec<u8> = (0..width * height)
+                .flat_map(|_| [rgb[0], rgb[1], rgb[2], 255])
+                .collect();
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png).write_image(
+                &pixels,
+                width,
+                height,
+                image::ExtendedColorType::Rgba8,
+            )?;
+            Ok(png)
+        };
+        let images = sela::images::images_dir(folder);
+        std::fs::create_dir_all(&images)?;
+        let harbor = solid([20, 120, 160])?;
+        std::fs::write(images.join("harbor.png"), &harbor)?;
+        let lantern = solid([200, 150, 30])?;
+        let originals = folder.join("originals");
+        std::fs::create_dir_all(&originals)?;
+        std::fs::write(originals.join("lantern.png"), &lantern)?;
+        let pin = |name: &str, bytes: &[u8]| {
+            Some(Background::image(ImageRef {
+                name: name.into(),
+                sha256: sha2::Sha256::digest(bytes).into(),
+            }))
+        };
+        repository
+            .save_song(
+                None,
+                Song {
+                    title: "Harbor Light".into(),
+                    authors: "Original fixture".into(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    administrator: String::new(),
+                    song_number: String::new(),
+                    variants: Vec::new(),
+                    sections: vec![
+                        Section {
+                            background: pin("harbor.png", &harbor),
+                            ..section("Verse 1", "Harbor original line")
+                        },
+                        Section {
+                            background: pin("lantern.png", &lantern),
+                            ..section("Chorus", "Lantern original line")
+                        },
+                        formatted_section(
+                            "Bridge",
+                            "Serif original line",
+                            SlideFormat {
+                                font: Some("Sela Missing Serif".into()),
+                                ..SlideFormat::default()
+                            },
+                        ),
+                    ],
+                    master: Some(Background::color(MASTER)),
+                },
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        return Ok(());
+    }
+    if let Some(clip) = video_clip {
+        let profile = path.parent().ok_or("database has no folder")?;
+        let dir = sela::videos::videos_dir(profile);
+        std::fs::create_dir_all(&dir)?;
+        let ext = clip
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or("the clip needs an extension")?;
+        let name = format!("sela-motion.{ext}");
+        if dir.join(&name).exists() {
+            return Err(format!("{name} already exists").into());
+        }
+        std::fs::copy(&clip, dir.join(&name))?;
+        let video = sela::videos::video_ref(profile, &name).map_err(|e| e.to_string())?;
+        let with = |label: &str, background: Option<Background>| Section {
+            background,
+            ..section(label, &format!("{label} motion line"))
+        };
+        let missing = sela::background::VideoRef {
+            name: "sela-missing.mp4".into(),
+            ..video.clone()
+        };
+        let plain = |title: &str, sections: Vec<Section>, master: Option<Background>| Song {
+            title: title.into(),
+            authors: String::new(),
+            copyright: String::new(),
+            license: String::new(),
+            administrator: String::new(),
+            song_number: String::new(),
+            variants: Vec::new(),
+            sections,
+            master,
+        };
+        for song in [
+            plain(
+                "Motion Hymn",
+                vec![
+                    with("Verse 1", None),
+                    with("Chorus", None),
+                    with("Verse 2", None),
+                    with("Bridge", Some(Background::video(missing))),
+                ],
+                Some(Background::video(video)),
+            ),
+            plain(
+                "Still Hymn",
+                vec![with("Verse 1", None)],
+                Some(Background::color(MASTER)),
+            ),
+        ] {
+            repository
+                .save_song(None, song)
+                .map_err(|e| format!("{e:?}"))?;
+        }
         return Ok(());
     }
     if background {
@@ -383,6 +604,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )
         .map_err(|e| format!("{e:?}"))?;
+    if themes {
+        use sela::theme::Theme;
+        let image = backdrop(path)?;
+        for theme in [
+            Theme {
+                format: SlideFormat {
+                    bold: Some(true),
+                    color: Some(GOLD),
+                    align: Some(Align::Left),
+                    margins: Some(sela::format::Margins {
+                        left: 160,
+                        right: 160,
+                        top: 90,
+                        bottom: 90,
+                    }),
+                    ..Default::default()
+                },
+                background: Some(Background::color(NAVY)),
+                show_copyright: false,
+                ..Theme::new("Evening Navy")
+            },
+            Theme {
+                format: SlideFormat {
+                    color: Some([255, 255, 255]),
+                    ..Default::default()
+                },
+                background: Some(Background::color([240, 240, 236])),
+                ..Theme::new("Low Contrast")
+            },
+            Theme {
+                format: SlideFormat {
+                    font: Some("Sela Missing Face".into()),
+                    ..Default::default()
+                },
+                ..Theme::new("Missing Face")
+            },
+            Theme {
+                background: Some(Background {
+                    aspect: Aspect::Stretch,
+                    ..Background::image(image)
+                }),
+                ..Theme::new("Wide Picture")
+            },
+        ] {
+            repository
+                .save_theme(&theme)
+                .map_err(|e| format!("{e:?}"))?;
+        }
+    }
     if second {
         repository
             .save_song(

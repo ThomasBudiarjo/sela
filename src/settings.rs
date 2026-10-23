@@ -7,6 +7,7 @@
 
 use crate::i18n::Language;
 use crate::pane_layout::{self, Layout};
+use crate::slides::CopyrightOptions;
 use crate::song_order::{SongOrder, SongSort};
 use std::{
     io::Write,
@@ -42,13 +43,73 @@ pub struct Settings {
     /// Splitters, Resources collapsed state and window placement saved at the
     /// last normal close; `None` means the default layout.
     pub layout: Option<Layout>,
+    /// Options › Main Output › Song › Copyright Info (`copyright_display`,
+    /// `copyright_first_slide`, `license_info`; keys added within version 1,
+    /// written only when not the default).
+    pub copyright: CopyrightOptions,
+    /// Stage (Foldback) output, Options › Foldback (M3-01/M3-02). Keys
+    /// `stage_*` were added within version 1 and are written only when not
+    /// the default, so older builds ignore them.
+    pub stage: StageSettings,
+}
+
+/// Options › Foldback › General (EW8-OBS-056: "Enable support for Foldback
+/// Output" plus its own monitor) and Sela's stage content switches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StageSettings {
+    /// Start the stage output together with Live output (EW default: off).
+    pub enabled: bool,
+    /// Device name of the stage monitor; `None` means the first monitor that
+    /// is neither primary nor the audience monitor.
+    pub monitor: Option<String>,
+    /// Time of day in the stage header (default on).
+    pub clock: bool,
+    /// Next slide area (default on).
+    pub next: bool,
+}
+
+impl Default for StageSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            monitor: None,
+            clock: true,
+            next: true,
+        }
+    }
 }
 
 /// The saved layout of `path`, read without side effects. Unreadable or
 /// corrupt files give `None` here; `load` handles the backup and note.
 pub fn peek_layout(path: &Path) -> Option<Layout> {
-    let text = String::from_utf8(std::fs::read(path).ok()?).ok()?;
-    parse(&text).ok()?.layout
+    peek(path)?.layout
+}
+
+/// The saved settings of `path`, read without side effects and within
+/// `MAX_FILE_BYTES`; `None` when unreadable or corrupt.
+pub fn peek(path: &Path) -> Option<Settings> {
+    let text = String::from_utf8(read_bounded(path).ok()?).ok()?;
+    parse(&text).ok()
+}
+
+/// Largest settings file read. A real one is a few hundred bytes; ten recent
+/// paths of the longest Windows length still fit. A larger file is damaged
+/// and is treated as unreadable instead of being read into memory.
+pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "settings file is too large",
+        ));
+    }
+    Ok(bytes)
 }
 
 impl Settings {
@@ -73,7 +134,13 @@ pub enum ParseError {
 }
 
 pub fn parse(text: &str) -> Result<Settings, ParseError> {
-    let mut lines = text.lines();
+    if text.is_empty() {
+        return Err(ParseError::Empty);
+    }
+    // LF, CRLF and a bare CR (old Mac line ends, a stray CR from an editor)
+    // all end a line, so a CR never becomes part of a path or name.
+    let text = text.replace("\r\n", "\n");
+    let mut lines = text.split(['\n', '\r']);
     let header = lines.next().ok_or(ParseError::Empty)?;
     let version = header
         .strip_prefix(HEADER)
@@ -92,7 +159,10 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
         if layout.accept(key, value) {
             continue;
         }
-        if key == "output_monitor" && !value.is_empty() {
+        // A name or path with control characters cannot be saved faithfully
+        // (`render` leaves it out), so it is ignored like an unknown value.
+        let usable = !value.is_empty() && !value.chars().any(char::is_control);
+        if key == "output_monitor" && usable {
             settings.output_monitor = Some(value.to_owned());
         } else if key == "language" {
             // Unknown codes are ignored like unknown keys: English applies.
@@ -101,7 +171,22 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
             settings.song_order.sort = SongSort::from_code(value).unwrap_or_default();
         } else if key == "song_sort_descending" {
             settings.song_order.descending = value == "1";
-        } else if key == "recent" && !value.is_empty() {
+        } else if key == "copyright_display" {
+            // Only an explicit 0 turns the observed default (on) off.
+            settings.copyright.display = value != "0";
+        } else if key == "copyright_first_slide" {
+            settings.copyright.first_slide_only = value == "1";
+        } else if key == "license_info" {
+            settings.copyright.license_info = CopyrightOptions::clean_license(value);
+        } else if key == "stage_enabled" {
+            settings.stage.enabled = value == "1";
+        } else if key == "stage_monitor" && usable {
+            settings.stage.monitor = Some(value.to_owned());
+        } else if key == "stage_clock" {
+            settings.stage.clock = value != "0";
+        } else if key == "stage_next" {
+            settings.stage.next = value != "0";
+        } else if key == "recent" && usable {
             // Lines are newest first; keep the first occurrence of a path.
             let path = PathBuf::from(value);
             if settings.recent_schedules.len() < MAX_RECENT
@@ -117,9 +202,10 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
 
 pub fn render(settings: &Settings) -> String {
     let mut text = format!("{HEADER} {VERSION}\n");
-    if let Some(name) = &settings.output_monitor {
-        // Names never contain line breaks; strip them so one cannot corrupt the file.
-        let name: String = name.chars().filter(|c| !c.is_control()).collect();
+    // A value with a control character (a line break would corrupt the
+    // file) is left out rather than saved as a different name or path.
+    let writable = |value: &str| !value.is_empty() && !value.chars().any(char::is_control);
+    if let Some(name) = settings.output_monitor.as_deref().filter(|n| writable(n)) {
         text.push_str(&format!("output_monitor={name}\n"));
     }
     if settings.language != Language::default() {
@@ -131,13 +217,33 @@ pub fn render(settings: &Settings) -> String {
     if settings.song_order.descending {
         text.push_str("song_sort_descending=1\n");
     }
+    if !settings.copyright.display {
+        text.push_str("copyright_display=0\n");
+    }
+    if settings.copyright.first_slide_only {
+        text.push_str("copyright_first_slide=1\n");
+    }
+    let license = CopyrightOptions::clean_license(&settings.copyright.license_info);
+    if !license.is_empty() {
+        text.push_str(&format!("license_info={license}\n"));
+    }
+    if settings.stage.enabled {
+        text.push_str("stage_enabled=1\n");
+    }
+    if let Some(name) = settings.stage.monitor.as_deref().filter(|n| writable(n)) {
+        text.push_str(&format!("stage_monitor={name}\n"));
+    }
+    if !settings.stage.clock {
+        text.push_str("stage_clock=0\n");
+    }
+    if !settings.stage.next {
+        text.push_str("stage_next=0\n");
+    }
     for path in settings.recent_schedules.iter().take(MAX_RECENT) {
-        let path: String = path
-            .to_string_lossy()
-            .chars()
-            .filter(|c| !c.is_control())
-            .collect();
-        text.push_str(&format!("recent={path}\n"));
+        // A path that is not valid Unicode cannot be written back either.
+        if let Some(path) = path.to_str().filter(|p| writable(p)) {
+            text.push_str(&format!("recent={path}\n"));
+        }
     }
     if let Some(layout) = &settings.layout {
         text.push_str(&layout.render());
@@ -159,7 +265,7 @@ pub struct Loaded {
 /// Reads the settings. A missing file gives defaults silently; an unreadable
 /// one gives defaults plus a note, and is renamed aside (never deleted).
 pub fn load(path: &Path) -> Loaded {
-    let text = match std::fs::read(path) {
+    let text = match read_bounded(path) {
         Ok(bytes) => String::from_utf8(bytes).map_err(|_| ()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Loaded {
@@ -287,6 +393,34 @@ pub fn monitor_arg(saved: Option<&str>, monitors: Option<&[MonitorInfo]>) -> Str
     }
 }
 
+/// The `--stage` monitor argument: the saved stage monitor while it is
+/// connected (or the list is unknown), else the first monitor that is neither
+/// primary nor the audience's. `None` when there is no such monitor (or the
+/// list is still unknown and nothing was chosen): the stage is then not
+/// started, so a stage feed is never silently mapped over the audience
+/// (M3-01). Choosing the audience or primary monitor explicitly is allowed.
+pub fn stage_monitor_arg(
+    saved: Option<&str>,
+    audience: Option<&str>,
+    monitors: Option<&[MonitorInfo]>,
+) -> Option<String> {
+    let Some(list) = monitors else {
+        return saved.map(|name| format!("name:{name}"));
+    };
+    if let Some(name) = saved
+        && list.iter().any(|m| m.name == name)
+    {
+        return Some(format!("name:{name}"));
+    }
+    // The audience monitor as `monitor_arg` resolves it.
+    let audience = audience
+        .filter(|name| list.iter().any(|m| m.name == *name))
+        .or_else(|| list.iter().find(|m| !m.primary).map(|m| m.name.as_str()));
+    list.iter()
+        .find(|m| !m.primary && Some(m.name.as_str()) != audience)
+        .map(|free| format!("name:{}", free.name))
+}
+
 /// True when a saved choice is known to name no connected monitor.
 pub fn monitor_missing(saved: Option<&str>, monitors: Option<&[MonitorInfo]>) -> bool {
     match (saved, monitors) {
@@ -309,7 +443,9 @@ pub fn default_loader() -> Loader {
 
 enum Job {
     Load,
-    Save(Settings),
+    // Boxed: the settings grew past clippy's large-error bound once the
+    // copyright and stage options were both added (integration).
+    Save(Box<Settings>),
 }
 
 #[derive(Debug)]
@@ -361,7 +497,7 @@ impl Worker {
     }
 
     pub fn save(&self, settings: Settings) -> bool {
-        self.submit(Job::Save(settings))
+        self.submit(Job::Save(Box::new(settings)))
     }
 
     fn submit(&self, job: Job) -> bool {
@@ -488,11 +624,55 @@ mod tests {
         };
         let text = render(&settings);
         assert!(text.contains("song_sort=modified\n") && text.contains("song_sort_descending=1\n"));
-        assert_eq!(parse(&text), Ok(settings));
+        assert_eq!(parse(&text), Ok(settings.clone()));
         assert_eq!(
-            parse("sela-settings 1\nsong_sort=author\n"),
+            parse("sela-settings 1\nsong_sort=composer\n"),
             Ok(Settings::default())
         );
+        for sort in SongSort::ALL {
+            settings.song_order = SongOrder {
+                sort,
+                descending: false,
+            };
+            assert_eq!(parse(&render(&settings)), Ok(settings.clone()));
+        }
+        assert_eq!(
+            parse("sela-settings 1\nsong_sort=song_number\n")
+                .unwrap()
+                .song_order
+                .sort,
+            SongSort::SongNumber
+        );
+    }
+
+    #[test]
+    fn copyright_options_round_trip_and_defaults_are_not_written() {
+        let mut settings = Settings::default();
+        let text = render(&settings);
+        assert!(!text.contains("copyright") && !text.contains("license_info"));
+        settings.copyright = CopyrightOptions {
+            display: false,
+            first_slide_only: true,
+            license_info: "CCLI License # 11223344".into(),
+        };
+        let text = render(&settings);
+        assert!(text.contains("copyright_display=0\n"));
+        assert!(text.contains("copyright_first_slide=1\n"));
+        assert!(text.contains("license_info=CCLI License # 11223344\n"));
+        assert_eq!(parse(&text), Ok(settings.clone()));
+        // A line break cannot inject another key; overlong text is capped.
+        settings.copyright.license_info = "x\nlanguage=id".into();
+        let parsed = parse(&render(&settings)).unwrap();
+        assert_eq!(parsed.language, Language::English);
+        assert_eq!(parsed.copyright.license_info, "x language=id");
+        let long = format!("sela-settings 1\nlicense_info={}\n", "a".repeat(400));
+        assert_eq!(
+            parse(&long).unwrap().copyright.license_info.len(),
+            crate::slides::MAX_LICENSE_INFO
+        );
+        // Unknown values keep the default.
+        let odd = parse("sela-settings 1\ncopyright_display=maybe\ncopyright_first_slide=yes\n");
+        assert_eq!(odd.unwrap().copyright, CopyrightOptions::default());
     }
 
     #[test]
@@ -699,6 +879,68 @@ mod tests {
     }
 
     #[test]
+    fn stage_settings_round_trip_and_defaults_are_not_written() {
+        let mut settings = Settings::default();
+        assert!(settings.stage.clock && settings.stage.next && !settings.stage.enabled);
+        assert!(!render(&settings).contains("stage_"));
+        settings.stage = StageSettings {
+            enabled: true,
+            monitor: Some(r"\\.\DISPLAY7".into()),
+            clock: false,
+            next: false,
+        };
+        let text = render(&settings);
+        assert!(text.contains("stage_enabled=1\n") && text.contains("stage_clock=0\n"));
+        assert_eq!(parse(&text), Ok(settings));
+        // A file from before the stage keys loads with the defaults.
+        assert_eq!(
+            parse("sela-settings 1\noutput_monitor=X\n").unwrap().stage,
+            StageSettings::default()
+        );
+    }
+
+    #[test]
+    fn stage_monitor_never_defaults_onto_the_audience_monitor() {
+        let info = |name: &str, primary| MonitorInfo {
+            name: name.into(),
+            width: 1920,
+            height: 1080,
+            x: 0,
+            y: 0,
+            primary,
+        };
+        let three = [info("P", true), info("A", false), info("S", false)];
+        // Default audience is the first non-primary monitor (A); the stage
+        // takes the next free one.
+        let arg = |saved, audience, list| stage_monitor_arg(saved, audience, list);
+        assert_eq!(arg(None, None, Some(&three[..])).as_deref(), Some("name:S"));
+        assert_eq!(
+            arg(None, Some("S"), Some(&three[..])).as_deref(),
+            Some("name:A")
+        );
+        assert_eq!(
+            arg(Some("P"), None, Some(&three[..])).as_deref(),
+            Some("name:P")
+        );
+        // A saved stage monitor that is gone falls back to a free one.
+        assert_eq!(
+            arg(Some("Z"), Some("A"), Some(&three[..])).as_deref(),
+            Some("name:S")
+        );
+        // Two monitors: no free one, so no stage rather than the audience's.
+        let two = [info("P", true), info("A", false)];
+        assert_eq!(arg(None, None, Some(&two[..])), None);
+        assert_eq!(arg(Some("Z"), None, Some(&two[..])), None);
+        // An explicit choice of the audience monitor is honoured.
+        assert_eq!(
+            arg(Some("A"), None, Some(&two[..])).as_deref(),
+            Some("name:A")
+        );
+        assert_eq!(arg(Some("Q"), None, None).as_deref(), Some("name:Q"));
+        assert_eq!(arg(None, None, None), None);
+    }
+
+    #[test]
     fn monitor_arg_falls_back_to_secondary_when_saved_monitor_is_gone() {
         let list = [MonitorInfo {
             name: "A".into(),
@@ -715,5 +957,85 @@ mod tests {
         assert!(monitor_missing(Some("B"), Some(&list)));
         assert!(!monitor_missing(Some("B"), None));
         assert!(!monitor_missing(Some("A"), Some(&list)));
+    }
+
+    // M5-02 fuzz finding: a bare CR (old Mac line ends, an editor's stray
+    // CR) stayed inside a recent path, which then never opened, and saving
+    // silently rewrote it into another path.
+    #[test]
+    fn a_bare_cr_ends_a_line_and_never_joins_a_path() {
+        let parsed = parse("sela-settings 1\rlanguage=id\rrecent=C:/s/b.selaschedule\r").unwrap();
+        assert_eq!(parsed.language, Language::Indonesian);
+        assert_eq!(
+            parsed.recent_schedules,
+            [PathBuf::from("C:/s/b.selaschedule")]
+        );
+        let parsed = parse("sela-settings 1\r\nrecent=C:/a\rrecent=C:/b\r\n").unwrap();
+        assert_eq!(
+            parsed.recent_schedules,
+            [PathBuf::from("C:/a"), PathBuf::from("C:/b")]
+        );
+        assert_eq!(parse(&render(&parsed)), Ok(parsed));
+    }
+
+    // M5-02 fuzz finding: `render` stripped control characters, so loading
+    // and saving changed a path or monitor name into a different one.
+    #[test]
+    fn values_with_control_characters_are_left_out_not_rewritten() {
+        let mut settings = Settings {
+            output_monitor: Some("DISPLAY\u{1}6".into()),
+            ..Settings::default()
+        };
+        settings.remember_recent(PathBuf::from("C:/s/kept.selaschedule"));
+        settings.remember_recent(PathBuf::from("C:/s/a\tb.selaschedule"));
+        let text = render(&settings);
+        assert!(!text.contains("output_monitor"), "{text:?}");
+        assert!(!text.contains("ab.selaschedule"), "{text:?}");
+        let loaded = parse(&text).unwrap();
+        assert_eq!(loaded.output_monitor, None);
+        assert_eq!(
+            loaded.recent_schedules,
+            [PathBuf::from("C:/s/kept.selaschedule")]
+        );
+        assert_eq!(
+            parse("sela-settings 1\noutput_monitor=X\u{7f}\nrecent=a\u{85}b\n").unwrap(),
+            Settings::default()
+        );
+        // The stage monitor (stage-display, merged after SEC-05) follows the
+        // same rule instead of being saved with its controls stripped.
+        let stage = Settings {
+            stage: StageSettings {
+                monitor: Some("\\\\.\\DISPLAY\u{1}2".into()),
+                ..StageSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert!(!render(&stage).contains("stage_monitor"));
+        assert_eq!(
+            parse("sela-settings 1\nstage_monitor=D\u{1}2\n").unwrap(),
+            Settings::default()
+        );
+    }
+
+    // M5-02 audit finding: the whole file was read into memory, so a damaged
+    // multi-gigabyte settings.txt stalled or exhausted startup.
+    #[test]
+    fn an_oversized_file_is_unreadable_and_kept_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_in(dir.path());
+        let mut text = String::from("sela-settings 1\nlanguage=id\npane_ratios=2000,5000,7000\n");
+        text.push_str(&"\n".repeat(MAX_FILE_BYTES as usize));
+        std::fs::write(&path, &text).unwrap();
+        assert_eq!(peek_layout(&path), None);
+        assert_eq!(peek(&path), None);
+        let loaded = load(&path);
+        assert_eq!(loaded.settings, Settings::default());
+        assert!(loaded.note.is_some());
+        assert!(dir.path().join("settings.txt.bad").exists());
+        // Exactly at the bound still loads.
+        std::fs::write(&path, &text[..MAX_FILE_BYTES as usize]).unwrap();
+        assert!(peek_layout(&path).is_some());
+        assert_eq!(peek(&path).unwrap().language, Language::Indonesian);
+        assert_eq!(load(&path).settings.language, Language::Indonesian);
     }
 }

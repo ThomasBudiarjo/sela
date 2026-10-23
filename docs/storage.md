@@ -1,5 +1,8 @@
 # M1-01a durable storage contract
 
+Schedule autosave and crash recovery (M1-12) live outside SQLite, in the
+profile's `Recovery/` folder; see [autosave](autosave.md).
+
 Implemented-unqualified prerequisite under the approved UI-first exception;
 not completion of M1-01, M1-05, M1-09 or the physical-output gate.
 
@@ -46,7 +49,7 @@ neither paths nor SQLite messages nor lyric payloads; don't log Commands/Replies
 
 ## Schema and durable meaning
 
-Current schema 6 uses `application_id=0x53454c41`, `user_version=6`, foreign keys on,
+Current schema 8 uses `application_id=0x53454c41`, `user_version=8`, foreign keys on,
 default rollback journal and synchronous FULL. `songs` tracks head/tombstone;
 `song_revisions` stores immutable original UTF-8 payloads. Encoding is repeated
 little-endian u32 byte-length + UTF-8: title, authors, copyright, license, then
@@ -67,9 +70,9 @@ No automatic garbage collection, library-refresh or cascade deletion exists.
 Snapshot occurrence identity currently is `(schedule ID, revision, position)`;
 stable cross-edit/live selection identity belongs to M1-09, not this storage slice.
 
-Fresh schema 0 initializes schema 6. Existing schema 1, 2, 3 or 4 upgrades only after
-the verified backup gate documented below, straight to schema 5 behind exactly
-one `<profile>.schema{N}-backup` (`schema1-backup` to `schema4-backup`, N = the
+Fresh schema 0 initializes schema 8. Existing schema 1 to 7 upgrades only after
+the verified backup gate documented below, straight to schema 8 behind exactly
+one `<profile>.schema{N}-backup` (`schema1-backup` to `schema7-backup`, N = the
 version found on open). A schema-0 database
 with user objects is foreign and rejected. Migration and validation share one
 transaction; failed migration drops/rolls back it. Nonmatching application IDs,
@@ -77,7 +80,7 @@ newer/unsupported versions, SQLite quick-check/foreign-key failures and malforme
 payload reads are rejected. No reset, overwrite, rename or recovery mutation.
 Required column checks run at open; payload semantic validation runs on bounded
 reads. This is not an adversarial SQLite sandbox or exhaustive schema attestation.
-Backup verification never invokes upgrading open. Versions above 5 remain
+Backup verification never invokes upgrading open. Versions above 7 remain
 `Unsupported`; no migration resets, overwrites or replaces those profiles.
 
 ## Bounds and remaining parent work
@@ -165,6 +168,21 @@ CREATE/URI/migration. Missing/corrupt/foreign/newer inputs fail without reset;
 read-only SQLite may use/create WAL shared-memory auxiliary files, so this is
 not a promise of zero filesystem auxiliary activity. Unrecoverable hot-journal
 inputs fail; restore is not a repair engine.
+
+Hardening (M5-02, [security.md](security.md)): every connection Sela opens
+(the library, a restore input, the private copy a backup or restore writes,
+the library read again for its pre-migration backup, and each installed
+scripture translation) sets SQLite's
+`SQLITE_DBCONFIG_DEFENSIVE` and turns `SQLITE_DBCONFIG_TRUSTED_SCHEMA` off, so
+a hostile file cannot corrupt itself through schema tricks or run functions
+with side effects from its schema. A backup or restore whose copy contains any
+trigger or view (Sela creates none) fails as `Unsupported` before
+publication, because a foreign trigger would run on every later save
+(`restore_refuses_a_library_with_triggers_or_views`). The connection helpers
+are checked by `connections_to_untrusted_files_are_hardened`, and their use by
+backup, restore and the pre-migration backup (both the source and the private
+copy `copy_new` sees) by
+`every_copy_reads_and_writes_through_hardened_connections`.
 
 Private output is converted to rollback-journal mode, explicitly closed, reopened
 through existing supported-schema/quick-check/FK validation, then every historical
@@ -490,3 +508,67 @@ operator no longer writes them.
 ## M1-05 residual — schema 6 (song metadata, modified stamp)
 
 Schema 6 (backup schema5-backup, abort hook SELA_ABORT_MIGRATION_SCHEMA6) adds songs.modified INTEGER NOT NULL DEFAULT 0 with index songs_modified, filled from the search_rows.row order so existing libraries keep their Date modified order, and a song_metadata side table (administrator, song number) keyed by song revision. Saves stamp MAX(now_ms, MAX(modified)+1). Sort by Date modified uses the column and survives an FTS rebuild. Limits: administrator 256 chars, song number digits only, up to 12. Schedule files are v3 and carry the copyright footer on prepared cues.
+
+## songs-browser — schema 7 (label index, Sort by keys)
+
+Schema 7 (backup `schema6-backup` or the older `schema{N}-backup`, abort hook
+`SELA_ABORT_MIGRATION_SCHEMA7`) only reshapes the derived search index:
+`song_search` gains a fourth FTS5 column `labels` (each distinct section
+label of the head revision, in section order, newline separated) and
+`search_rows` gains `author`, `copyright`, `administrator` and `song_number`
+(the Sort by keys of EW8-OBS-064, whitespace collapsed). FTS5 has no ALTER
+for columns, so a schema 5 or 6 file is migrated by dropping and rebuilding
+both tables from the song payloads inside the migration transaction (song
+tables are only read; `songs.modified` stamps are untouched, so Date
+modified keeps its order). A schema 1 to 4 file gets the new shape directly
+in its schema 5 step. `check_search` compares labels and sort keys with the
+head revision as well, so stale keys are found and `repair_search` rebuilds
+them.
+
+Open-time integrity for older files (review fix, 2026-10-23): schema 5 and 6
+files hold the derived index too, so a `quick_check` failure there drops
+`song_search` and rechecks exactly like a schema 7 file. When only the index
+was damaged, the upgrade continues: the verified `.schema{N}-backup` is taken
+from the committed file as it was (damaged index included) and the schema 7
+step rebuilds the index. Verifying that backup copy (an open without upgrade)
+rolls the drop back, so the copy keeps the original bytes, and it skips the
+`song_search` shape check. Schema 1 to 4 files have no index to blame and a
+`quick_check` failure stays `Corrupt`, as does any damage outside the index
+(nothing is backed up or changed). The drop happens while the migration's
+write transaction is open, before the backup reads the committed file; if a
+cache spill made the reader wait, the backup fails as `Locked` and the open
+is rolled back (not observed; the drop frees pages to the freelist and
+dirties only a few). Test:
+`schema5_and_6_libraries_with_only_a_damaged_index_still_migrate`.
+
+Tests: `schema6_migration_indexes_labels_and_sort_keys_and_keeps_the_stamps`,
+`schema6_migration_abort_keeps_schema6_and_the_verified_backup` (child
+process aborts after the rebuild, before commit: the file stays schema 6
+without the new columns and the verified backup opens),
+`stale_labels_or_sort_keys_fail_the_check_and_are_repaired`,
+`library_sorts_by_author_copyright_administrator_and_song_number`.
+## M1-08 — schema 8 (themes)
+
+Schema 8 (backup `.schema7-backup` or the older `.schema{N}-backup`, abort
+hook `SELA_ABORT_MIGRATION_SCHEMA8`) adds three tables and changes no existing row: `themes` (id, save revision,
+`Theme::encode` payload of at most 1024 bytes), `song_themes` (a song's theme
+by song id, so applying a theme creates no song revision) and `theme_default`
+(one row: the default song theme). At most 256 themes; deleting the default
+returns to the built-in theme; a song naming a deleted theme falls back to the
+default with a visible note. Schedule files are version 4: each item carries
+its theme snapshot. Design and inheritance rules: [themes](themes.md).
+Version 5 (scripture integration, 2026-10-23) adds scripture items
+(`"kind":"scripture"` with the pinned verses; developed as version 4 on the
+scripture stream and renumbered because version 4 is the theme snapshot);
+a schedule without scripture items is still written as version 4. See
+[scripture](scripture.md).
+
+Integration note (2026-10-23): the themes stream developed this as schema 7;
+the integration branch already used schema 7 for the songs-browser search
+index reshape, so the themes tables were renumbered to schema 8 when
+`wave/themes` merged. Because no step after schema 7 rebuilds the search
+index, a schema 7 file being upgraded (like a current file) rebuilds a
+damaged or inconsistent index itself (`SEARCH_SHAPE`). Tests:
+`schema7_migration_adds_empty_themes_behind_a_verified_backup`,
+`schema7_migration_abort_keeps_schema7_and_the_verified_backup`; a schema 1
+to 6 file migrates through both steps behind one backup.

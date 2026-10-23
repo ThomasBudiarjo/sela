@@ -400,6 +400,73 @@ impl Compositor {
         })
     }
 
+    /// A background texture a video playback writes its frames into.
+    #[allow(dead_code)] // Native entry point, unused by offscreen examples.
+    pub fn video_texture(&self, size: Extent) -> wgpu::Texture {
+        self.texture(
+            size,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            // COPY_SRC: diagnostics read the presented frame back.
+            wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+        )
+    }
+
+    /// Writes one tightly packed RGBA frame into `texture` and flushes the
+    /// staging copy with an empty submit, so staged frames never pile up
+    /// while no redraw submits. Worker threads only (a video playback);
+    /// never the redraw.
+    #[allow(dead_code)] // Native entry point, unused by offscreen examples.
+    pub fn upload_frame(&self, texture: &wgpu::Texture, rgba: &[u8]) -> Result<()> {
+        let expected = texture.width() as usize * texture.height() as usize * 4;
+        if rgba.len() != expected {
+            return Err("video frame length does not match its texture".into());
+        }
+        self.upload(texture, rgba, texture.width() * 4);
+        self.queue.submit([]);
+        // Frees finished staging without waiting.
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        Ok(())
+    }
+
+    /// `prepare_native` for a video background: the text coverage is
+    /// uploaded here and the background samples `video`, a texture of
+    /// exactly `size` that a playback keeps writing. Worker only.
+    #[allow(dead_code)] // Native entry point, unused by offscreen examples.
+    pub fn prepare_native_video(
+        &self,
+        size: Extent,
+        video: &wgpu::Texture,
+        coverage: &[u8],
+        blend: &Blend,
+    ) -> Result<ReadyComposition> {
+        let bytes = byte_len(size, self.device.limits().max_texture_dimension_2d)?;
+        if coverage.len() != bytes || video.width() != size.width || video.height() != size.height {
+            return Err("video texture or text coverage does not match the cue".into());
+        }
+        let mask = self.texture(
+            size,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        self.upload(&mask, coverage, size.width * 4);
+        let image_view = video.create_view(&Default::default());
+        let mask_view = mask.create_view(&Default::default());
+        let rect = rectangle(size, size, Fit::Contain);
+        let bindings = self.bind(&image_view, &mask_view, rect, blend, 1.0);
+        let upload = self.queue.submit([]);
+        self.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(upload),
+            timeout: Some(Duration::from_secs(2)),
+        })?;
+        let background_only = self.bind(&image_view, &mask_view, rect, blend, 0.0);
+        Ok(ReadyComposition {
+            bindings,
+            background_only,
+        })
+    }
+
     fn bind(
         &self,
         image: &wgpu::TextureView,
@@ -488,6 +555,55 @@ impl Compositor {
             }
         }
         self.queue.submit([encoder.finish()]);
+    }
+
+    /// Blocking copy of a video texture's RGBA, for diagnostics and tests on
+    /// a worker only; never the redraw.
+    #[allow(dead_code)] // Tests and diagnostics only.
+    pub fn read_texture(&self, texture: &wgpu::Texture) -> Result<Vec<u8>> {
+        let size = Extent {
+            width: texture.width(),
+            height: texture.height(),
+        };
+        let stride = (size.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(stride) * u64::from(size.height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(size.height),
+                },
+            },
+            texture.size(),
+        );
+        let submission = self.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        readback.map_async(wgpu::MapMode::Read, .., move |result| {
+            let _ = tx.send(result);
+        });
+        self.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: Some(Duration::from_secs(10)),
+        })?;
+        rx.recv_timeout(Duration::from_secs(1))??;
+        let mapped = readback.get_mapped_range(..);
+        let mut rgba = Vec::with_capacity(size.width as usize * size.height as usize * 4);
+        for row in mapped.chunks_exact(stride as usize) {
+            rgba.extend_from_slice(&row[..size.width as usize * 4]);
+        }
+        drop(mapped);
+        readback.unmap();
+        Ok(rgba)
     }
 
     /// Blocking GPU completion/readback, for diagnostics on a worker only.

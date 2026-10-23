@@ -4,6 +4,7 @@ use sela::{
     delivery::{DeliveryError, Epoch, LiveState, Outcome, Payload, RendererSession},
     masks::Layer,
     output::{ACKNOWLEDGMENT, Launch, Loss, Refusal, STARTUP, Status, Stream, Supervisor},
+    playback::{MediaAction, MediaStatus, PlayState},
     scene::{ContentVersion, Extent, PreparedCue, RendererCapabilities},
     transport::Frame,
 };
@@ -61,6 +62,11 @@ fn fake_audience() {
         // Slow presentation lets the controller queue newer intent meanwhile.
         std::thread::sleep(Duration::from_millis(150));
         let has_logo = session.logo().is_some();
+        let has_scene = session.applied().is_some();
+        let media = matches!(
+            session.pending().map(|c| c.payload()),
+            Some(Payload::Media(_))
+        );
         let ack = session
             .present(Instant::now(), |payload| {
                 let reject = match payload {
@@ -74,6 +80,8 @@ fn fake_audience() {
                     }
                     // Mirrors the renderer: nothing to draw for a Logo mask.
                     Payload::Mask(layer) => *layer == Layer::Logo && !has_logo,
+                    // Mirrors the renderer: no applied video to control.
+                    Payload::Media(_) => !has_scene,
                 };
                 if reject {
                     Err(DeliveryError::RenderFailed)
@@ -83,6 +91,23 @@ fn fake_audience() {
             })
             .unwrap();
         Frame::acknowledgment(ack).write(out()).unwrap();
+        if media && ack.outcome == Outcome::Applied {
+            // The renderer's report follows a transport command.
+            let scene = session.applied().unwrap().version();
+            Frame::status(
+                epoch,
+                MediaStatus {
+                    scene,
+                    state: PlayState::Paused,
+                    position: Duration::from_millis(1500),
+                    duration: Some(Duration::from_secs(10)),
+                    audio: sela::playback::AudioState::None,
+                },
+            )
+            .write(out())
+            .unwrap();
+            continue;
+        }
         if ack.outcome == Outcome::Applied {
             applied += 1;
             if mode == "resize" && applied == 1 {
@@ -346,4 +371,45 @@ fn each_session_has_a_fresh_epoch() {
     let a = start("silent");
     let b = start("silent");
     assert_ne!(a.epoch(), b.epoch());
+}
+
+#[test]
+fn media_commands_need_a_scene_and_the_status_follows_the_live_scene() {
+    let mut output = connected("normal");
+    // Nothing applied: the renderer has no video to control.
+    output
+        .set_media(MediaAction::Pause, Instant::now())
+        .unwrap();
+    assert_eq!(output.media_pending(), Some(MediaAction::Pause));
+    until(&mut output, "media rejection", |o| {
+        o.media_rejected().is_some()
+    });
+    assert_eq!(
+        output.media_rejected(),
+        Some((MediaAction::Pause, DeliveryError::RenderFailed))
+    );
+    assert_eq!(output.media_status(), None);
+    output.present(cue(1, EXTENT), Instant::now()).unwrap();
+    until(&mut output, "scene", |o| {
+        o.live() == LiveState::Confirmed(cue(1, EXTENT).version())
+    });
+    // A transport command waits for a mask in flight on the Safety lane.
+    output.set_mask(Layer::Black, Instant::now()).unwrap();
+    output
+        .set_media(MediaAction::Pause, Instant::now())
+        .unwrap();
+    assert_eq!(output.media_rejected(), None, "a new command clears it");
+    assert_eq!(output.counters().submitted, 3, "only the mask was sent");
+    until(&mut output, "status", |o| o.media_status().is_some());
+    assert_eq!(output.mask(), Some(Layer::Black));
+    let status = output.media_status().unwrap();
+    assert_eq!(status.state, PlayState::Paused);
+    assert_eq!(status.position, Duration::from_millis(1500));
+    assert_eq!(output.media_pending(), None);
+    // The report is about scene 1; once scene 2 is live it is not shown.
+    output.present(cue(2, EXTENT), Instant::now()).unwrap();
+    until(&mut output, "scene 2", |o| {
+        o.live() == LiveState::Confirmed(cue(2, EXTENT).version())
+    });
+    assert_eq!(output.media_status(), None);
 }

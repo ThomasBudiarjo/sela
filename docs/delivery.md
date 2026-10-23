@@ -504,3 +504,35 @@ dispatcher.rs` (threadpool timers, `increase_timer_resolution`),
 blocking), `crates/gpui_windows/src/platform.rs` (`WM_GPUI_TASK_DISPATCHED_ON_
 MAIN_THREAD` wake), `crates/gpui/src/platform/test/platform.rs` (Noop text
 system; test scheduler panics on foreign-thread activity).
+
+## M3-01/M3-02 — Stage output on the same wire (stage-display, 2026-10-22)
+
+A second renderer session (`sela --stage`, its own supervisor and epoch)
+uses this protocol unchanged except for one new version-2 command kind:
+**7 STAGE**, the owned-resource command metadata and an opaque color
+background followed by a stage panel (flags, face, five bounded UTF-8
+fields). It decodes to `Payload::Scene` with `PreparedCue::stage()` set; an
+audience renderer rejects it (RenderFailed, scene kept) and a stage renderer
+rejects every non-stage scene and logo. Receipts, lanes, ordering, deadlines
+and loss handling are those above, per session. Field layout, bounds and the
+renderer-drawn clock: [stage-display.md](stage-display.md).
+
+## M2-02/M2-03 — Video cues, transport and reports (video-playback, 2026-10-23)
+
+Additions to the same protocol (receipts, lanes, ordering and loss handling
+unchanged; design in [media.md](media.md#video-backgrounds-and-playback-m2-02-m2-03-m2-05-basic)):
+
+| Addition | Version | Body | Meaning |
+| --- | --- | --- | --- |
+| Background tag 2 | 2 (COMMAND) | content version (u128, u64), aspect u8 (0 Maintain, 1 Stretch, 2 Zoom), flags u8 (bit 0 repeat), u32 length + UTF-8 absolute path (at most 4,096 bytes) | A video background. Both ends refuse a path `media::ffmpeg::input_args` refuses; the renderer decodes it in its own supervised FFmpeg child and accepts the cue only once its first frame is uploaded, so a video that fails to open is RenderFailed and the previous scene stays. |
+| Kind 8 MEDIA | 1 | 30 bytes: epoch, sequence, lane, budget, action u8 (0 Play, 1 Pause, 2 Restart) | `Payload::Media` on the Safety lane, like a mask: never prepared, applied to the applied scene's video; RenderFailed when no video is applied. The operator sends it after a wanted mask, never while a mask is in flight. |
+| Kind 9 STATUS | 1 | 50 bytes: renderer epoch u128, scene content version (u128, u64), state u8 (0 Primed, 1 Playing, 2 Paused, 3 Ended, 4 Failed), presented position ms u32, duration ms u32 (0 unknown), audio u8 (0 none, 1 playing to a device, 2 no device, 3 failed) | Renderer to operator only, never a receipt: offered on a change of state and every 250 ms while playing through `PipeWorkers::offer_status`, a one-slot latest-wins slot the writer drains between queued frames, so reports never take one of the four receipt slots. A wrong epoch is a protocol loss. |
+
+Masks bypass preparation for kind 8 as for kind 5 (`Frame::is_mask` covers
+both). A renderer refuses a STATUS frame as a command (protocol loss).
+Tests: `transport::tests::{video_backgrounds_round_trip_their_path_aspect_and_repeat,
+media_commands_bypass_preparation_and_round_trip,
+status_frames_round_trip_and_reject_unknown_states,
+a_status_offer_is_written_without_a_receipt_slot_and_latest_wins}`,
+`tests/output_process.rs::media_commands_need_a_scene_and_the_status_follows_the_live_scene`,
+and the fuzz seeds for the three additions.

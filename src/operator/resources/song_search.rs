@@ -22,6 +22,9 @@ pub(crate) struct SongSearch {
     truncated: bool,
     #[cfg(test)]
     submitted: u64,
+    /// Replies dropped as stale.
+    #[cfg(test)]
+    stale: u64,
 }
 
 impl SongSearch {
@@ -80,6 +83,10 @@ impl SongSearch {
     /// Shows `results` only while they answer the newest query.
     pub(crate) fn accept(&mut self, results: Results) -> bool {
         if !self.generations.is_current(results.generation) {
+            #[cfg(test)]
+            {
+                self.stale += 1;
+            }
             return false;
         }
         self.truncated = results.truncated;
@@ -134,6 +141,11 @@ impl SongSearch {
     #[cfg(test)]
     pub(crate) fn submitted(&self) -> u64 {
         self.submitted
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stale(&self) -> u64 {
+        self.stale
     }
 }
 

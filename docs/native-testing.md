@@ -30,7 +30,24 @@ future I/O failures need explicit bounded fake adapters, not production test fla
 Current failure injection is missing focus/wrong context/unbound input; preparation,
 storage and renderer failures are not implemented and therefore not tested here.
 
-## Reproduce
+## Linux E2E harness (2026-10-22)
+
+Feature-level Linux checks now use the shared X11 harness
+`scripts/native_x11.py` and `scripts/<feature>-x11.py` scripts (a private Xvfb
+or two-monitor Xorg display per run unless `--display` attaches to an existing
+one, private profile and D-Bus session, AT-SPI control ids, portal file
+dialogs, and cleanup on normal exit, exceptions, Ctrl+C and SIGTERM; a SIGKILL
+of the script itself leaves its children). See [e2e-linux.md](e2e-linux.md)
+for setup, the attach mode, the API, the conventions every feature script
+follows and the known limits. Note: at the current GPUI pin the operator
+renders through Vulkan, so `VK_DRIVER_FILES=/dev/null` below no longer works;
+the harness points `VK_DRIVER_FILES` at Mesa's lavapipe ICD when that file is
+installed, unless `SELA_E2E_KEEP_VULKAN=1` keeps the caller's drivers. The
+bootstrap commands below are kept as the M0-03 record and were not re-run.
+
+## Reproduce (M0-03 record, historical; not re-run)
+
+Current runs use the harness above, not these commands.
 
 On a fresh orb after `.agents/setup`, provision the virtual display once (only if
 `:99` is unused). These are supervised native services, not web UI substitutes:

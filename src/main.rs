@@ -1,3 +1,6 @@
+// Unsafe code is listed and justified in docs/security.md.
+#![deny(unsafe_code)]
+
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, KeyBinding, TitlebarOptions, Window,
     WindowBounds, WindowOptions, actions, div, point, prelude::*, px, rgb, size,
@@ -48,15 +51,15 @@ const LABEL_NUMBERS: u32 = 30;
 
 /// Show controls (EW8-OBS-018). `!SelaTextInput` is evaluated against the
 /// whole context stack, so a focused text field anywhere below keeps Ctrl+C
-/// and friends for editing; `!SelaMenuBar` keeps an open menu modal-ish, so
-/// show shortcuts stay inert until it closes.
-const SHOW: &str = "SelaShow && !SelaTextInput && !SelaMenuBar";
+/// and friends for editing; `!SelaMenuBar` and `!SelaSongMenu` keep an open
+/// menu modal-ish, so show shortcuts stay inert until it closes (SC2-FOCUS-01).
+const SHOW: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongMenu";
 /// Shift+Up/Down extend the Schedule selection, not a Songs row focus.
-const EXTEND: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongRow";
+const EXTEND: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongMenu && !SelaSongRow";
 /// Live navigation keys (EW8-OBS-014/050): Songs rows and Schedule rows keep
 /// Home/End and the arrows for their own selection (EW8-OBS-048).
-const NAVIGATE: &str =
-    "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongRow && !SelaScheduleRow";
+const NAVIGATE: &str = "SelaShow && !SelaTextInput && !SelaMenuBar && !SelaSongMenu \
+     && !SelaSongRow && !SelaScheduleRow";
 
 /// Label shortcuts as GPUI multi-keystroke bindings ("v 1 enter"): a pending
 /// prefix times out by itself, an unknown sequence replays as ordinary keys
@@ -144,15 +147,18 @@ fn bind_operator_keys(cx: &mut App) {
 }
 
 mod audience;
+mod instance;
 mod operator;
 mod song_library;
 mod text_input;
 mod ui;
 use operator::Operator;
 
-/// Internal child mode: `sela --audience EPOCH_HEX MONITOR [BACKEND]`, where
-/// MONITOR is a winit index, `secondary` or `window`. Spawned by the operator.
-fn audience_main(args: &[std::ffi::OsString]) -> ! {
+/// Internal child modes: `sela --audience EPOCH_HEX MONITOR [BACKEND]` and
+/// `sela --stage EPOCH_HEX MONITOR [BACKEND]` (the stage/confidence output,
+/// M3-01/M3-02), where MONITOR is a winit index, `secondary`, `window` or
+/// `name:DEVICE`. Spawned by the operator, one process per output.
+fn audience_main(args: &[std::ffi::OsString], stage: bool) -> ! {
     let parsed = (|| {
         let (epoch, monitor, backend) = match args {
             [epoch, monitor] => (epoch, monitor, audience::default_backend()),
@@ -175,7 +181,7 @@ fn audience_main(args: &[std::ffi::OsString]) -> ! {
     })();
     let Some((epoch, placement, backend)) = parsed else {
         eprintln!(
-            "usage: sela --audience EPOCH_HEX <INDEX|secondary|window|name:DEVICE> [dx12|vulkan|metal|gl]"
+            "usage: sela <--audience|--stage> EPOCH_HEX <INDEX|secondary|window|name:DEVICE> [dx12|vulkan|metal|gl]"
         );
         std::process::exit(2);
     };
@@ -183,19 +189,46 @@ fn audience_main(args: &[std::ffi::OsString]) -> ! {
     let result = audience::run(audience::Config {
         epoch: sela::delivery::Epoch(epoch),
         backend,
-        title: "Sela audience output",
+        title: if stage {
+            "Sela stage output"
+        } else {
+            "Sela audience output"
+        },
         placement,
         lifetime: None,
         report_surface: true,
         retain_on_disconnect: true,
+        stage,
     });
     match result {
         Ok(()) => std::process::exit(0),
         Err(error) => {
-            eprintln!("audience: {error}");
+            eprintln!("{}: {error}", if stage { "stage" } else { "audience" });
             std::process::exit(1);
         }
     }
+}
+
+/// Child command for one stage session on the monitor Options › Foldback
+/// resolves to (`monitor`). `SELA_STAGE_MONITOR` (a monitor index,
+/// `secondary`, `window` or `name:DEVICE`) overrides it for development and
+/// the X11 harness; `SELA_AUDIENCE_BACKEND` also picks the stage backend.
+fn stage_launcher() -> operator::StageLauncher {
+    std::sync::Arc::new(move |epoch, monitor| {
+        let program = std::env::current_exe().unwrap_or_default();
+        let mut command = std::process::Command::new(program);
+        command
+            .arg("--stage")
+            .arg(format!("{:x}", epoch.0))
+            .arg(std::env::var_os("SELA_STAGE_MONITOR").unwrap_or_else(|| monitor.into()));
+        if let Some(backend) = std::env::var_os("SELA_AUDIENCE_BACKEND") {
+            command.arg(backend);
+        }
+        sela::output::Launch {
+            command,
+            frames: sela::output::Stream::Stdout,
+        }
+    })
 }
 
 /// Child command for one audience session. The monitor comes from the saved
@@ -283,13 +316,18 @@ fn operator_window_options(
         window_bounds: Some(window_bounds),
         display_id,
         titlebar: Some(TitlebarOptions {
-            title: Some("Sela — Technical preview".into()),
+            title: Some(sela::t!(sela::i18n::Msg::WindowTitleIdle).into()),
             ..Default::default()
         }),
         window_min_size: Some(size(px(720.), px(440.))),
         ..Default::default()
     }
 }
+
+/// The operator's profile lock, held for the life of the process.
+struct HeldProfile(#[allow(dead_code)] sela::profile::ProfileLock);
+
+impl gpui::Global for HeldProfile {}
 
 enum Mode {
     Operator(Option<std::path::PathBuf>),
@@ -303,7 +341,10 @@ fn main() {
         return;
     }
     if args.first().is_some_and(|a| a == "--audience") {
-        audience_main(&args[1..]);
+        audience_main(&args[1..], false);
+    }
+    if args.first().is_some_and(|a| a == "--stage") {
+        audience_main(&args[1..], true);
     }
     if args.len() == 1 && args[0] == "--list-monitors" {
         match audience::list_monitors() {
@@ -322,7 +363,9 @@ fn main() {
     let mode = match args.as_slice() {
         [] => Mode::Operator(song_library::default_path()),
         [flag, path] if flag == "--library" => Mode::Editor(path.into()),
-        [flag, path] if flag == "--operator-library" => Mode::Operator(Some(path.into())),
+        [flag, path] if flag == "--operator-library" => {
+            Mode::Operator(Some(sela::profile::qualified_library(path.into())))
+        }
         _ => {
             eprintln!(
                 "usage: sela [--version | --library DATABASE_PATH | --operator-library DATABASE_PATH]"
@@ -353,6 +396,34 @@ fn main() {
             }
             Mode::Operator(library) => library,
         };
+        // One operator per profile (M1-12): a second one opens nothing but
+        // a notice. The OS lock dies with the process, however it ends.
+        let profile = library
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .filter(|p| !p.as_os_str().is_empty());
+        if let Some(profile) = profile {
+            match sela::profile::ProfileLock::acquire(profile) {
+                Ok(lock) => cx.set_global(HeldProfile(lock)),
+                Err(sela::profile::LockError::Held) => {
+                    instance::open(profile, cx);
+                    return;
+                }
+                // A read-only or lock-less folder: run, but without autosave,
+                // which says why (another operator may share the folder).
+                Err(sela::profile::LockError::Unavailable(error)) => {
+                    eprintln!("profile lock unavailable: {error}");
+                    let reason = match sela::autosave::Error::from_io(&error) {
+                        sela::autosave::Error::ReadOnly => sela::autosave::Error::ReadOnly,
+                        _ => sela::autosave::Error::Unlocked,
+                    };
+                    cx.set_global(operator::AutosaveRefused(reason));
+                }
+            }
+        }
+        if !cx.has_global::<operator::AutosaveRefused>() {
+            cx.set_global(operator::AutosaveSetup(sela::autosave::Config::system()));
+        }
         let layout = library
             .as_deref()
             .and_then(std::path::Path::parent)
@@ -395,13 +466,27 @@ fn main() {
                 loader: sela::settings::default_loader(),
                 schedule_writer: sela::schedule_file::default_writer(),
                 initial_layout: layout,
+                media_locator: Some(std::sync::Arc::new(sela::media::ffmpeg::locate)),
             };
-            let operator =
-                cx.new(|cx| Operator::with_settings(library, audience_launcher(slot), config, cx));
+            let operator = cx.new(|cx| {
+                let mut operator =
+                    Operator::with_settings(library, audience_launcher(slot), config, cx);
+                operator.set_stage_launcher(
+                    stage_launcher(),
+                    std::env::var_os("SELA_STAGE_MONITOR").is_some(),
+                );
+                operator
+            });
             let weak = operator.downgrade();
             window.on_window_should_close(cx, move |window, cx| {
-                weak.update(cx, |operator, cx| operator.may_close(window, cx))
-                    .unwrap_or(true)
+                weak.update(cx, |operator, cx| {
+                    let close = operator.may_close(window, cx);
+                    if close {
+                        operator.window_will_close();
+                    }
+                    close
+                })
+                .unwrap_or(true)
             });
             operator.read(cx).focus.clone().focus(window, cx);
             operator

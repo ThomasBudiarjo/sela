@@ -685,14 +685,267 @@ session (observe only; never save in EW; cancelling a Save dialog is fine).
 ## Owner-approved deviations from observations
 
 - **EW8-OBS-045, search minimum length:** EW filters from one character; Sela starts at two (owner decision, bounds the one-letter p95 of 109 ms measured in M1-07a). One character shows the full list and issues no query.
-- **EW8-OBS-045, label matching:** EW also matches slide/section text labels; Sela does not index them (recorded gap, docs/search.md and docs/backlog.md).
-- **EW8-OBS-064, Sort by:** Sela offers Title and Date modified with Ascending/Descending; Author, Copyright, Administrator and Song Number are backlog (docs/backlog.md M1-04). The checked direction in EW was unconfirmed, Sela defaults to Ascending. The choices open in place under Sort by instead of a flyout.
+- **EW8-OBS-045, label matching:** resolved by songs-browser (2026-10-22): schema 7 indexes the distinct section labels of each song, so a label-only query finds the song (word prefix like the other columns). Until then Sela did not index labels.
+- **EW8-OBS-064, Sort by:** Sela offers EW's Title, Author, Copyright, Administrator and Song Number (songs-browser, 2026-10-22) plus its own Date modified (last in the list), with Ascending/Descending. The checked direction in EW was unconfirmed, Sela defaults to Ascending. The choices open in place under Sort by instead of a flyout.
 - **EW8-OBS-065, Delete confirmation:** wording and Yes/No with default No follow EW; Esc closes the dialog as No in Sela (EW ignored Esc).
 
 ## Song metadata best guesses (song-metadata-fields)
 
-- Copyright footer is drawn on every slide (EW8-OBS-063, first-slide-only option unchecked).
+- Copyright footer is drawn on every slide (EW8-OBS-063, first-slide-only option unchecked); since songs-browser the Options › Song tab can switch it to the first slide or off (see below).
 - Administrator is stored and shown in the Inspector but not drawn in the footer (unobserved).
 - CCLI maps to the Song Number field.
 - Metadata search covers authors, copyright, license, administrator and song number.
 - Close prompt: Yes saves and closes, No discards, Cancel or Esc keeps editing; it is modal.
+
+## Song import — UNOBSERVED best guesses (2026-10-22, import-framework)
+
+EasyWorship 8.0.49 was not run for the import framework (M1-14, M4-07
+OpenSong/ChordPro). Nothing below is an observation; each row is a
+reversible best guess to check in the next EW session (observe only; never
+import into the reference profile unless it is a disposable one). IDs use an
+`IMP` suffix so parallel streams cannot collide on numbers.
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-IMP-1 | UNOBSERVED | Where library import lives. EW8-OBS-053 lists the File menu without an Import row and EW8-OBS-061 the Songs context menu without one; the Song Editor has an Import ▾ (EW8-OBS-021) for one open song. Sela adds File › Import ▸ Songs… / Song Folder… after Close Schedule. |
+| EW8-OBS-IMP-2 | UNOBSERVED | Which song formats EW8 imports and from which dialog (OpenLyrics, OpenSong, ChordPro, plain text, SongSelect, older EasyWorship). Sela imports OpenLyrics 0.8/0.9, OpenSong and ChordPro files; folders are walked three levels deep. |
+| EW8-OBS-IMP-3 | UNOBSERVED | Whether EW shows a preview or report before saving imported songs. Sela stages every file in a preview dialog with its warnings and errors and saves nothing until Import is pressed. |
+| EW8-OBS-IMP-4 | UNOBSERVED | Duplicate handling. Sela: same title (case, spacing and punctuation ignored) and same words → Skip by default; same title only → Import as copy; Replace saves a new revision of the library song; a bulk "All duplicates" choice. |
+| EW8-OBS-IMP-5 | UNOBSERVED | What follows an import: Sela selects the imported songs in the Songs list, previews the first, moves focus to its row and reports counts in the Songs footer; Live is untouched. |
+| EW8-OBS-IMP-6 | UNOBSERVED | Cancel during an import and partial failures. Sela commits all accepted songs in one transaction; cancel or any failure saves none of them. |
+| EW8-OBS-IMP-7 | UNOBSERVED | Quit (Ctrl+Q, File › Exit, window close) while EW's import dialog or progress is open. Sela refuses to close while its import preview is reading, checking, in review or committing, and says "Finish or cancel the import before quitting." in the dialog (its own line; an import error stays shown); any other dialog that would replace the preview cancels the import first. A quit resumed after Don't Save (settings write pending) or after Save is refused the same way when the preview opened meanwhile. |
+
+## EasyWorship library import — UNOBSERVED best guesses (2026-10-23, ew-library-import)
+
+EasyWorship 8.0.49 was not run for the EasyWorship library importer (M4-07,
+no Windows host). Nothing below is an observation except the `SongWords.db`
+words shape already recorded in docs/import.md ("Observed format",
+2026-10-22). Each row is a reversible best guess from public sources (the
+open-source OpenLP EasyWorship importer's description of the two
+databases). Check them only against a **copy** of the owner's real EW 8.0.49
+library (never the original; hash it before and after) in the next EW
+session; the steps are PP-EWL-01..08 in parity-pending.md.
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-EWL-1 | UNOBSERVED | Where an operator imports an EasyWorship library into another program, and whether EW offers its own export. Sela adds File › Import ▸ EasyWorship Library… after Song Folder…, opening a folder chooser. |
+| EW8-OBS-EWL-2 | UNOBSERVED | Where EW 8.0.49 keeps `Songs.db` and `SongWords.db` (EW 6/7 per public sources: `...\EasyWorship\Default\v6.1\Databases\Data`), and whether EW keeps them in WAL or rollback-journal mode. Sela accepts the profile folder or any folder down to `Data` and copies a `-wal`/`-journal` beside a database. |
+| EW8-OBS-EWL-3 | UNOBSERVED | The `UTF8_U_CI` collation's exact rules (case folding, accents, Indonesian/Unicode text). Sela: Unicode lower case, then code point order; it only sorts the preview. |
+| EW8-OBS-EWL-4 | UNOBSERVED | `song` table columns and meanings: `title`, `author`, `copyright`, `administrator`, `vendor_id` (CCLI number), `description`, `tags`, `song_uid`; `word` table `song_id` (the song's rowid) and `words`. Which EW editor field each column is, and whether several authors share one field. |
+| EW8-OBS-EWL-5 | UNOBSERVED | Whether one song can have several `word` rows (revisions) and which one EW shows; whether a song can have none. Sela uses the highest rowid and reports older rows; a song without words is a failed row. |
+| EW8-OBS-EWL-6 | UNOBSERVED | Whether two song rows can share a `song_uid` (copied or duplicated songs) and what EW does on a repeated import. Sela treats a repeated `song_uid` as the same song inside one import (Skip) and matches the library by title and words. |
+| EW8-OBS-EWL-7 | UNOBSERVED | How EW 8.0.49 stores non-ASCII lyrics and metadata (Indonesian text, `\uN` or code pages in words; UTF-8 in metadata columns). Sela decodes the words per docs/import.md and reports invalid UTF-8 in metadata. |
+| EW8-OBS-EWL-8 | UNOBSERVED | How many songs a real library holds and in which order EW lists them, and whether EW's `SongWords.db` has an index on `word.song_id`. Sela stages at most 500 songs per import: songs whose titles are not yet in Sela's library first, then songs it already has, listed by title, so importing a larger library again continues with the rest; word rows are read in one pass, needing no index. |
+
+## Scrutiny round 2 — UNOBSERVED best guesses (2026-10-22, scrutiny-r2)
+
+EasyWorship 8.0.49 was not run for scrutiny round 2 (no Windows host). The
+fixes below keep Sela's own rules consistent; none of them is an
+observation. Each has an item in [parity-pending.md](parity-pending.md)
+(Stream: scrutiny-r2).
+
+| Fix | Related record | Sela rule now (best guess) |
+|---|---|---|
+| SC2-FOCUS-01 | EW8-OBS-010 (menus, Esc), EW8-OBS-018 (show keys) | While the Songs row context menu is open, B, period, Ctrl+B/C/L, Page Down, arrows and label keys do nothing; Esc or a menu choice closes it first (PP-SC2-01). |
+| SC2-LIVE-01 | EW8-OBS-014, -050 | After Go Live on another item, Next/Previous step only from a slide of that item that was shown; if its Go Live failed they send nothing and say so, and the footer reads "<title> · not sent" (PP-SC2-02). |
+| SC2-LIVE-02 | EW8-OBS-013 | Go Live on a duplicate schedule entry drops the earlier entry's cues still being prepared (PP-SC2-03). |
+| SC2-LIVE-03 | EW8-OBS-050 | Picking a song in Songs cancels a Live-pane Page Down that is still waiting for its item to load (PP-SC2-04). |
+| SC2-I18N-01 | EW8-OBS-067 (unobserved title) | The idle and untitled window titles follow the UI language (PP-SC2-06). |
+| SC2-FOCUS-02 | EW8-OBS-010 (menus, Esc), EW8-OBS-018 (show keys) | The Schedule item and Media image right-click menus take the focus (Up/Down/Tab move inside, Esc closes back to the row), and while one of them or the toolbar New ▾ menu is open every show shortcut, the Schedule row keys and Ctrl+Delete are inert; a press outside closes the menu (PP-SC2-01). |
+| SC2-LIVE-04 | EW8-OBS-014 | Normalize text size re-sends the newest requested live slide, including a Go Live or step still being prepared, not only the acknowledged one (PP-SC2-08). |
+| SC2-LIVE-05 | EW8-OBS-014, -016 (double-click unmask) | Normalize text size rebuilds that newest request in place: the cue still being prepared with the old sizing is cancelled (never shown), and a double-click unmask intent armed for it still lifts the mask when it lands (PP-SC2-08). |
+| SC2-FOCUS-03 | EW8-OBS-010 (menus) | A press on New ▾ that closes its open menu only swallows the click that completes on New ▾; a press released elsewhere or a right press leaves nothing behind, so the next Enter or left click on New ▾ opens the menu (PP-SC2-01). |
+| SC2-I18N-02 | EW8-OBS-012 (observed wording) | Not a guess for the wording: the Song Editor close prompt asks "Save changes before closing?" to match its observed Yes = save, No = discard answers (it said "Close without saving?"). The shortened question and Sela's description line are Sela's own (PP-SC2-09). |
+
+### Autosave and recovery — UNOBSERVED best guesses (2026-10-22, autosave-recovery)
+
+EasyWorship 8.0.49 was not run for M1-12 (no Windows host). No earlier
+observation in this ledger covers autosave, crash recovery, backups or a
+second instance (searched: autosave, recover, crash, backup, instance,
+profile). Each row is a reversible best guess; the steps to observe them are
+PP-AUTO-01..05, -09 and -10 in [parity-pending.md](parity-pending.md#stream-autosave-recovery).
+IDs may be renumbered when parallel streams merge.
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-071 | UNOBSERVED | Whether EW autosaves an unsaved schedule at all, and where. Sela commits schedule revisions to `<profile>\Recovery\` 2 s after the last change (at most 10 s after the first), off the UI thread. |
+| EW8-OBS-072 | UNOBSERVED | EW after a forced termination with an unsaved schedule: any recovery prompt, its wording, buttons and default. Sela shows a modal "Recover the unsaved schedule?" with Restore (default) / Don't Restore and discloses lost newer edits, damaged and interrupted autosaves. |
+| EW8-OBS-073 | UNOBSERVED | What a restored schedule looks like in EW (title bar, unsaved marker, file association). Sela restores the entries with their original file and baseline, so only unsaved changes show as unsaved; Live is untouched. |
+| EW8-OBS-074 | UNOBSERVED | EW's behaviour on a second launch while running (focus the running window, a message, or a second window). Sela shows "Sela is already running" naming the profile and exits without touching it. |
+| EW8-OBS-075 | UNOBSERVED | EW schedule/profile backups and their retention (Profiles menu, backup folders). Sela keeps the newest 20 autosave revisions within 4 MiB, across sessions; declined copies stay. |
+| EW8-OBS-076 | UNOBSERVED | EW closed while its recovery prompt (if any) is unanswered, or before it appears: whether the next launch asks again and with what wording. Sela commits and acknowledges nothing, records the run as `offered`, and the next prompt starts "Sela was closed last time before this recovery question was answered." (PP-AUTO-09). |
+| EW8-OBS-077 | UNOBSERVED | EW Profiles menu and Profiles Manager… (create, switch, rename, delete; per-profile data; behaviour on switch). Sela has one implicit profile per library folder and renders the Profiles items inert; profile management is ticket M1-12b (PP-AUTO-10). |
+| EW8-OBS-078 | UNOBSERVED | EW recovery after the schedule file was saved later than its newest autosave (crash between a Save and the next autosave): whether EW offers the older autosave, prefers or compares the file, or warns. Sela offers the older revision and replaces "never saved to the schedule file" with "Its schedule file was saved again {ago}, after this autosave, so the file may hold newer work …" when the file's modification time is newer than the revision (PP-AUTO-11). |
+
+## Songs browser — UNOBSERVED best guesses (songs-browser, 2026-10-22)
+
+EasyWorship 8.0.49 was not run for this stream (no Windows host). Each item
+is a reversible best guess; the steps to observe them are in
+[parity-pending.md](parity-pending.md#stream-songs-browser).
+
+- **Sort by keys (EW8-OBS-064):** Author, Copyright and Administrator compare
+  the field text with runs of whitespace collapsed, ignoring ASCII case
+  (SQLite `NOCASE`; accented letters compare by code point); Song Number
+  compares numerically (`0042` sorts as 42). Songs whose key is empty sort
+  **last in both directions**; equal keys (including keys that differ only
+  in ASCII case, and Song Numbers that differ only in leading zeros, such as
+  `7` and `007`) fall back to Title ascending, then the song id. Copyright is compared as typed, so "(c) 1999" sorts before
+  "© 2001". The list keeps showing titles only; whether EW shows the key or
+  a column is unobserved.
+- **Search results and Sort by:** while a query is active the results stay
+  in relevance order (title, then lyrics, metadata and labels); Sort by
+  applies to the unfiltered list. EW showed no ranking for one song only.
+- **Label ranking (EW8-OBS-046):** songs whose only hits are in their
+  section labels rank after every song with a title, lyric or metadata hit
+  (a separate first sort key, so song length cannot reverse it); within each
+  group bm25 weighs title 10, lyrics 1, metadata 2 and labels 0.5. Each
+  distinct label is indexed once per song. EW's order is UNOBSERVED
+  (PP-SB-04).
+- **Options › Main Output › Song › Copyright Info (EW8-OBS-055/056):** Sela
+  builds the observed "Display Copyright Information" (default on), "Show on
+  first displayed slide only" (default off) and License Info (empty).
+  Best guesses: "first displayed slide" means slide 1 of the item in
+  presentation order (not whichever slide happens to go live first); a
+  non-empty License Info adds a third strip line "CCLI Song # N · License
+  Info" (just the License Info when the song has no Song Number); changes
+  apply to the next cue sent to Live and never redraw the live slide; a song
+  without copyright text shows no strip whatever License Info holds; a
+  licensing line wider than the strip never shrinks the title and copyright
+  lines but is cut with "…" (PP-SB-11; before pr1-review one long License
+  Info shrank the whole strip, to 12 px at 1080p, and hid it below 720p). The
+  Copyright Font menu, Song Font and "Show Verse/Chorus Label" controls of
+  the same tab are not built.
+## Themes — UNOBSERVED best guesses (themes, 2026-10-22)
+
+EasyWorship 8.0.49 was not run for M1-08. Observed inputs: the Themes tab
+exists (EW8-OBS-010); the Master is a layout of the song's theme
+(EW8-OBS-037, -043); Theme Elements song/scripture/copyright (EW8-OBS-032);
+Copy to Theme and "Set As Default Song Theme" re-render the song preview
+(EW8-OBS-019); format and margin controls (EW8-OBS-028..030); copyright strip
+(EW8-OBS-063). Everything below is a reversible Sela choice to check
+(docs/parity-pending.md, PP-TH-01..11; TH-BG-08 is PP-TH-11; design in docs/themes.md).
+
+| ID | State | Record |
+|---|---|---|
+| TH-BG-01 | UNOBSERVED | Themes tab content: Sela lists the built-in theme then library themes by name, each with a 160x90 rendered thumbnail, Default/In Preview badges and warnings, and a one-line footer of commands. |
+| TH-BG-02 | UNOBSERVED | Applying a theme to a library song changes that song for every later Preview (by song id, no new song revision); Live changes only on a new Go Live. |
+| TH-BG-03 | UNOBSERVED | Schedule items keep a theme snapshot: captured from the song's library theme when first shown or saved, explicit after Apply to Item; library edits never reach it; `.selaschedule` v4 stores it. |
+| TH-BG-04 | UNOBSERVED | Editing a theme while a song using it is live never changes the audience until a re-cue (consistent with EW8-OBS-057's song-local rule being unverified). |
+| TH-BG-05 | UNOBSERVED | Theme editor = Song Editor in theme mode over a one-slide sample (EW8-OBS-043 shows sample lyrics); margins under the Text tab (EW: Text › Layout); Copyright under Slide › Theme Elements; Reset Look returns to the built-in look as one undo step. |
+| TH-BG-06 | UNOBSERVED | Default song theme applies to songs without their own; deleting it returns to the built-in theme; a song naming a deleted theme shows the default with a Preview note. |
+| TH-BG-07 | UNOBSERVED (Sela addition) | Warnings for an uninstalled font, a missing/changed image, WCAG contrast below 3:1 (no separating outline) and an image aspect off the output by more than 2%; EW is not known to warn. |
+| TH-BG-08 | UNOBSERVED | Copyright position: only the bottom strip (shown/hidden) is built; EW's free element placement is unobserved. |
+| TH-BG-09 | UNOBSERVED (diverges from the EW8-OBS-057 implementation rule) | The song master (M1-05h) is a song-local layer above the theme (slide → song master → theme → black); a Song Editor Master edit never edits a theme, and there is no copy-on-write. EW8-OBS-057's rule (Master edit = edit of the theme named by the Layouts tab "Theme - name" selector, copied on first edit) is not implemented; the selector itself and image "Copy to Theme ▸ Song Theme" (EW8-OBS-019) are missing. Tracked: backlog M1-08a/M1-08b, PP-TH-08/09. |
+| TH-BG-11 | UNOBSERVED (Sela safety rule) | A theme load that fails on a lock held by another connection, or a full storage queue, is retried after 2 s with the status "Themes could not be loaded (Locked) · retrying"; until then TH-BG-10 applies. A corrupt theme row is not retried (it would fail again) and waits for the next library change. |
+| TH-BG-12 | UNOBSERVED | A theme deleted in the Themes tab while its editor is open: OK/Apply reports the failure (failure styling), keeps the edits, and the next OK/Apply saves them as a new theme under a fresh id (never re-inserting the deleted id that songs may still name). EW's behavior is unobserved. |
+| TH-BG-10 | UNOBSERVED (Sela safety rule) | A substitute theme is shown with a Preview note and never captured into a schedule item or saved in a `.selaschedule`: a song naming a deleted theme, or themes not loaded / failed to load, leave the item without a snapshot until the theme resolves or one is applied. |
+
+## Media decoding best guesses (media-core, 2026-10-22)
+
+EasyWorship 8.0.49 was not run for media-core. Each item is a reversible
+best guess; the observations to make are PP-MC-01, PP-MC-02 and PP-MC-05 in
+[parity-pending.md](parity-pending.md).
+
+- UNOBSERVED best guess: a video file EasyWorship cannot decode (unknown codec, damaged or not media). Sela's decoder reports `UnsupportedCodec` or `Corrupt` before any frame and never replaces what is live; the operator-facing wording and where it shows belong to the video-playback stream.
+- UNOBSERVED best guess: variable frame rate clips. Sela keeps each frame's own timestamp (no resampling to a constant rate), so playback follows the source timing.
+- UNOBSERVED best guess: a local playlist or reference file that points at a network URL. Sela refuses it with a protocol error and makes no network request (offline-first; VAL-MEDIA-038).
+- Sela-only, not a parity item: the "Video and audio unavailable" status when Sela's bundled FFmpeg is missing or is a GPL/nonfree build. EasyWorship has no separate decoder to report. When the narrow Resources header truncates it (or the Live output line), hovering shows the full text in a hint (review round 2); also Sela-only.
+- Not decided here: how a video background is fitted. The decoder can letterbox to the cue extent (`Fit::Exact`); EW8-OBS-032 shows Aspect Ratio Auto/Stretch for slide media, which the video-playback stream maps.
+
+## Scriptures — UNOBSERVED best guesses (2026-10-22, scripture)
+
+EasyWorship 8.0.49's Scriptures tab was not run for this change. Observed
+facts it builds on: the Resources tab row (EW8-OBS-010) and the Options ›
+Main Output › Scripture controls with their defaults (EW8-OBS-056: Show
+verse numbers on, Show Reference on, Reference Location "After Each Slide",
+Show Complete Passage off, Abbreviate Book Names off, Automatically Flow
+Scripture on Multiple Slides on, minimum font size 48). The historical 2020
+support article (SRC register) is not 8.0.49 evidence. Everything below is
+an UNOBSERVED best guess, each listed in docs/parity-pending.md (Stream:
+scripture) with the exact observation to make.
+
+| Topic | Sela now (best guess) |
+| --- | --- |
+| Tab layout | Translations listed in the left column (where Songs shows its tree); a Reference/Keyword switch and one box above the verse list; footer Import Bible…, Add to Schedule, status, selection count. |
+| Reference box | Parses as you type; on a malformed or missing reference the previous list, selection and Preview stay and a red note explains (VAL-BIBLE-009). `John 3 16` and `Jude 5` are malformed / chapter 5 (PP-BIB-01). |
+| Completion | Up to six books in canonical order (exact alias first) as buttons under the box; Tab or a click takes the first/that one and adds a space (VAL-BIBLE-010). |
+| Verse list | The whole chapters around the reference; referenced verses selected and scrolled near the top; Shift = consecutive range, Ctrl = toggle (nonconsecutive), double-click = Go Live. |
+| Keyword search | Separate Keyword mode, all words must match (last as prefix), canonical order, 200 hits; starts at two characters (owner decision, not EW behavior). |
+| Slides | 44-character lines, 6 lines per slide, breaks between verses (EW8-OBS-056 flow/minimum size semantics unobserved); verse numbers on. |
+| Reference on output | Every slide carries its own reference over the translation name as the footer strip ("After Each Slide", Show Complete Passage off); book names in the translation's language, not abbreviated. |
+| Translation switch | Keeps the selected verses; names those the new translation lacks; refuses the switch when the book or chapter is missing. With nothing selected it selects the referenced verses there; after a Reference/Keyword switch, or while a typed reference is still loading, it looks the box's text up in the new translation (PP-BIB-07). |
+| Bible import | Import Bible… adds the translation row and changes nothing else: the verse list, selection, Preview and schedule selection stay; only when no translation was usable before does the box's text fill the list (Preview still stays). One file dialog at a time (PP-BIB-10). |
+| Translation rows | "ID · Name", with "(damaged)" (also red) or "(restricted)" in words, visible and spoken, EN/ID; EW's marking is unobserved (PP-BIB-10). |
+| Schedule item | Add to Schedule pins the selected verse text (like a song revision); title "John 3:16-18 (KJV)". EW's own scripture schedule item and its update behavior are unobserved. |
+| Typing | Never triggers live shortcuts (same `SelaShow && !SelaTextInput` rule as the Songs search, EW8-OBS-047 best guess). |
+
+### Stage output (Foldback) — UNOBSERVED best guesses (2026-10-22, stage-display)
+
+EasyWorship 8.0.49 was not run for the stage-display stream (no Windows host).
+The only observed facts are EW8-OBS-054/056: Options has a **Foldback**
+section with tabs General, Song, Scripture and "Alerts and Clocks"; General
+shows "Enable support for Foldback Output" (off) and its own monitor, margins
+and Default Font controls; the preview thumbnail shows a clock ("02:35") and a
+"next line" strip. Everything below is a reversible Sela best guess; IDs are
+stream-scoped so parallel streams do not collide (the integrator may renumber).
+Steps and re-runs are the PP-STG items in [parity-pending.md](parity-pending.md#stream-stage-display).
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-STG-1 | UNOBSERVED | Foldback content and layout. Sela: header with "title · slide name" (left) and the clock (right), optional message band, current slide large, divider, "Next · <slide name>" and the next slide smaller; dark background (16,17,20), white current text and clock, sky-blue next, amber labels and message; current and next slides drawn in the live slide's resolved face (bundled DejaVu Sans while nothing is live); header label, clock, "Next ·" label and message drawn in the bundled DejaVu Sans unless only the live face draws them (`stage::chrome_face`); characters the chosen face lacks shown as U+FFFD stand-ins, fitted per region. EW's Foldback › General "Default Font" may own this instead. |
+| EW8-OBS-STG-2 | UNOBSERVED | What "next" is at the last slide. Sela: "Next item · <title>" of the following schedule entry (its text is not loaded), "End of schedule" after the last entry or for a library song outside the schedule; next is computed from the live item's own slide snapshot (repeated chorus = next where the arrangement repeats it). |
+| EW8-OBS-STG-3 | UNOBSERVED (format seen) | Clock: the preview showed "02:35". Sela: local time of day, 24-hour "HH:MM", no seconds, drawn by the stage process itself and updated on the minute; on by default with an Options switch. Countdowns/timers are out of scope (owner, Mission 2026-10). |
+| EW8-OBS-STG-4 | UNOBSERVED | Black/Clear/Logo and the foldback. Sela: masks target the Main Output only; the stage keeps showing the current and next slide so performers keep their place. |
+| EW8-OBS-STG-5 | UNOBSERVED | Foldback lifecycle and menu. Sela: with Foldback enabled the stage starts and stops with Live › Show Live Output; Sela adds Live › Show Stage Output (stop a running stage, restart a lost one in one activation, start one while Live output is on; inert while Live output is off) and Live › Stage Message… (EW8-OBS-053 lists neither). |
+| EW8-OBS-STG-6 | UNOBSERVED | Stage-only message. Sela: one line (≤ 160 characters) typed privately in a dialog and sent only on Show on Stage; never drawn on the audience. EW's Alerts (EW8-OBS-056 Main Output › Alerts) are M3-04 and may own this. |
+| EW8-OBS-STG-7 | UNOBSERVED | Foldback monitor default with no free monitor. Sela: "Automatic" picks a monitor that is neither primary nor the audience's; with none, the stage is not started and the Live pane says so; an explicit choice (even the audience or primary monitor) is honoured. Only Foldback › General is built; Song, Scripture and Alerts and Clocks tabs show "not available". |
+
+### Portable bundles, backup and restore — UNOBSERVED best guesses (2026-10-23, bundle-backup-restore)
+
+EasyWorship 8.0.49 was not run for M1-13 (no Windows host). The only observed
+fact is EW8-OBS-053: the File menu has an **Export Standalone Schedule...**
+row between Save Schedule As... and Close Schedule. Nothing in this ledger
+covers what it writes, how such a file opens, or EW's profile backups
+(EW8-OBS-075 is also unobserved). Each row below is a reversible Sela best
+guess; IDs are stream-scoped (the integrator may renumber). Steps and re-runs
+are the PP-BUN items in [parity-pending.md](parity-pending.md#stream-bundle-backup-restore).
+Format and policy: [bundle.md](bundle.md).
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-BUN-1 | UNOBSERVED | What Export Standalone Schedule writes: file type/extension, whether media (images, videos, audio), themes, fonts and scripture text are included, and any options dialog. Sela writes a `.selapackage` (strict ZIP + manifest) with the schedule snapshots and the profile images it uses; fonts are listed, never copied; restricted scripture is left out and listed; no options dialog. |
+| EW8-OBS-BUN-2 | UNOBSERVED | How a standalone schedule opens in EW (Open Schedule, double-click, a separate import), where its media goes and what happens when a file of the same name exists. Sela opens it through File › Open Schedule: images go to the profile's Resources/Images without replacing another image (a different one keeps its name, the copy gets "name (2).png"), the schedule becomes a new file in Schedules and opens as saved. |
+| EW8-OBS-BUN-3 | UNOBSERVED | EW's report of missing fonts or media after opening a schedule from another machine. Sela shows the M1-11b preflight report with the package notes on top and Locate… for each missing image; missing fonts are named with "DejaVu Sans is used instead". |
+| EW8-OBS-BUN-4 | UNOBSERVED | Whether EW's standalone schedule export saves the schedule itself (title bar, unsaved marker afterwards). Sela's export is not a Save As: the schedule keeps its file and unsaved state. |
+| EW8-OBS-BUN-5 | UNOBSERVED | EW profile/library backup and restore: menu placement (Profiles menu, Profiles Manager, Utilities ▸, File), file type, what is included (songs, media, schedules, settings, scripture, themes), and whether restore replaces the current profile or creates another. Sela adds Profiles › Back Up Profile… and Restore Profile… after Profiles Manager…; restore always creates a new profile folder and never replaces one. |
+| EW8-OBS-BUN-6 | UNOBSERVED | EW's progress and cancel behavior for exports, backups and restores. Sela shows a modal progress dialog with Cancel (Esc) and blocks Quit while a job runs; a standalone schedule whose import completed before it saw Cancel is kept in Schedules but not opened, with a note. |
+| EW8-OBS-BUN-7 | UNOBSERVED | EW's reaction to a damaged, foreign or newer package/backup. Sela refuses it before changing anything and says why (damaged, unsafe, newer Sela, wrong kind), adding "Nothing was changed." |
+
+### Video playback — UNOBSERVED best guesses (2026-10-23, video-playback)
+
+EasyWorship 8.0.49 was not run for the video-playback stream (no Windows
+host). Observed facts it builds on: EW8-OBS-032 (the Slide pane's Background
+has Media Fill, Select Media…, Media Usage, Aspect Ratio, Repeating Auto,
+Volume, disabled for an image), EW8-OBS-038 (Fill list), EW8-OBS-039 (Select
+Media… lists Videos first, thumbnails named without extensions) and SRC-10
+(Repeating loops "until you stop it or until you go live to something
+else"; "Set as Logo Background" for a video). Everything below is a
+reversible Sela best guess; steps and re-runs are the PP-VP items in
+[parity-pending.md](parity-pending.md#stream-video-playback). Design:
+[media.md](media.md#video-backgrounds-and-playback-m2-02-m2-03-m2-05-basic).
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-VP-1 | UNOBSERVED | Media tab: Sela has Videos and Images as two categories in the tab's left column (Images stays the tab's first view); EW's Media tab categories and their order are unobserved (EW8-OBS-019 saw Media › Images only). Rows show a poster and the name without its extension. |
+| EW8-OBS-VP-2 | UNOBSERVED | Video thumbnails and Preview tiles show the clip's first frame; which frame EW shows is unobserved. |
+| EW8-OBS-VP-3 | UNOBSERVED | A new video Media Fill repeats ("Repeating Auto" read as on for a background) and uses the aspect default (Zoom, like images); Repeating off plays once and holds the last frame. Volume is not built (audio plays at full level, EW8-OBS-VP-13). |
+| EW8-OBS-VP-4 | UNOBSERVED | Go Live on a slide with a video background starts the video at its first frame when the slide appears; the renderer prepares (primes) it before, and a video that does not open never replaces the live slide (Sela failure policy). |
+| EW8-OBS-VP-5 | UNOBSERVED | Next/Previous between slides that share the same background video keep it running (no restart); a slide with another background stops it. |
+| EW8-OBS-VP-6 | UNOBSERVED | Masks over a playing video (EW8-OBS-006): Black and Logo hide it while it keeps running; Clear shows it without the text; turning the mask off shows the current position. Masks never pause, restart or mute it. |
+| EW8-OBS-VP-7 | UNOBSERVED | Live transport: a row under the Live pane with Play/Pause, Restart and "state · position / length" while a video background is live; no keyboard shortcuts. EW's own media controls (placement, a seek bar, shortcuts) are unobserved. |
+| EW8-OBS-VP-8 | UNOBSERVED | Restart plays from the first frame, also from Paused or after the end; Play after the end replays. |
+| EW8-OBS-VP-9 | UNOBSERVED | A missing or replaced background video shows black behind the text with the warning "Background video ‘NAME’ is missing; showing black" (the image rule of M1-05h), checked again for every cue, also after the clip played earlier in the session (Sela best guess; review round 1); no Go Live dialog for videos yet. Select Media… › Import… in the Song Editor runs one import at a time with Cancel import (best guess; EW's import progress UI is unobserved). |
+| EW8-OBS-VP-10 | UNOBSERVED | Preview never plays a video (its tiles show the first frame); only Live does. |
+| EW8-OBS-VP-11 | UNOBSERVED | Importing a video copies it into the profile (like images); a file FFmpeg cannot play is refused with the reason; the same name with other bytes gets "name (2)". EW's copy-versus-reference choice is unobserved. |
+| EW8-OBS-VP-12 | UNOBSERVED (order seen) | Select Media… opens on Videos unless the current media is an image (EW8-OBS-039 showed Videos first and empty). |
+| EW8-OBS-VP-13 | UNOBSERVED | Audio of a background video (M2-04 slice): plays with the live video at full volume, follows its Pause/Play/Restart and loop, is silent after a play-once end, and keeps playing under Black, Clear and Logo (masks never mute it); the transport row notes "Sound on", "No sound output" or "Sound failed; the video plays on silently". EW's background-video audio default (Volume, mute, whether masks or the Audio mute affect it) is unobserved. |

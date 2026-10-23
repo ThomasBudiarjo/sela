@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<osis xmlns="http://www.bibletechnologies.net/2003/OSIS/namespace">
+ <osisText osisIDWork="Bible.en.syn" xml:lang="en">
+  <header><work osisWork="Bible.en.syn"><title>Synthetic Test Bible</title>
+   <rights type="x-copyright">Synthetic text for tests</rights></work></header>
+  <div type="book" osisID="John">
+   <title type="main">John</title>
+   <chapter osisRef="John.3" sID="John.3.s" n="3"/>
+   <title type="psalm">A heading that is not verse text</title>
+   <p><verse osisID="John.3.16" sID="v16" n="16"/>First <transChange type="added">added</transChange>
+   words.<note>a footnote</note><verse eID="v16"/>
+   <verse osisID="John.3.17" sID="v17"/><q who="x" sID="q1" marker=""/>Second
+   line<lb/>continues<verse eID="v17"/></p>
+   <chapter eID="John.3.s"/>
+   <chapter osisID="John.4">
+    <verse osisID="John.4.1">Container verse</verse>
+    <verse osisID="John.4.2 John.4.3">Merged verses</verse>
+   </chapter>
+  </div>
+  <div type="book" osisID="Tob"><chapter osisID="Tob.1"><verse osisID="Tob.1.1">skipped</verse></chapter></div>
+ </osisText>
+</osis>

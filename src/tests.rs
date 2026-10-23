@@ -19,10 +19,21 @@ use std::{
 };
 
 mod arrangement_rendering;
+mod autosave_recovery;
+mod bundle_transfer;
+mod ew_library_import;
 mod focus_modality;
 mod layout_startup;
+mod media_backend;
 mod navigation;
 mod resource_browser;
+mod scripture;
+mod scrutiny_r2;
+mod song_import;
+mod songs_browser;
+mod stage_display;
+mod themes;
+mod video_playback;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,
@@ -64,6 +75,8 @@ fn fake_audience_child() {
     }
     let mut session = RendererSession::new(epoch);
     let mut scenes = 0u64;
+    // The applied scene's video, as the renderer would report it.
+    let mut video: Option<(sela::scene::ContentVersion, sela::playback::PlayState)> = None;
     while let Ok(frame) = Frame::read(std::io::stdin()) {
         let now = Instant::now();
         let stamp = frame.command_stamp().unwrap();
@@ -75,11 +88,47 @@ fn fake_audience_child() {
         Frame::acknowledgment(ack).write(out()).unwrap();
         if ack.outcome == Outcome::Accepted {
             let has_logo = session.logo().is_some();
+            let mut report = None;
             let ack = session
                 .present(Instant::now(), |payload| match payload {
                     // Mirrors the renderer: a Logo mask needs a logo to draw.
                     Payload::Mask(Layer::Logo) if !has_logo => Err(DeliveryError::RenderFailed),
                     Payload::Mask(_) | Payload::Logo(_) => Ok(()),
+                    // Only an applied video can be controlled.
+                    Payload::Media(action) => {
+                        use sela::playback::{MediaAction, PlayState};
+                        let Some((scene, state)) = &mut video else {
+                            return Err(DeliveryError::RenderFailed);
+                        };
+                        *state = match action {
+                            MediaAction::Pause => PlayState::Paused,
+                            MediaAction::Play | MediaAction::Restart => PlayState::Playing,
+                        };
+                        report = Some((*scene, *state));
+                        Ok(())
+                    }
+                    // A video that cannot open never replaces the scene
+                    // (the renderer's first-frame gate).
+                    Payload::Scene(cue)
+                        if matches!(
+                            cue.background(),
+                            sela::scene::PreparedBackground::Video { source, .. }
+                                if !source.path.exists()
+                        ) =>
+                    {
+                        Err(DeliveryError::RenderFailed)
+                    }
+                    Payload::Scene(cue)
+                        if matches!(
+                            cue.background(),
+                            sela::scene::PreparedBackground::Video { .. }
+                        ) =>
+                    {
+                        scenes += 1;
+                        video = Some((cue.version(), sela::playback::PlayState::Playing));
+                        report = video;
+                        Ok(())
+                    }
                     Payload::Scene(_) if mode == "reject" => Err(DeliveryError::RenderFailed),
                     Payload::Scene(_) => {
                         scenes += 1;
@@ -99,6 +148,40 @@ fn fake_audience_child() {
                 })
                 .unwrap();
             Frame::acknowledgment(ack).write(out()).unwrap();
+            if ack.outcome == Outcome::Applied
+                && session.applied().is_some_and(|cue| {
+                    !matches!(
+                        cue.background(),
+                        sela::scene::PreparedBackground::Video { .. }
+                    )
+                })
+            {
+                video = None;
+            }
+            if ack.outcome == Outcome::Applied
+                && let Some((scene, state)) = report
+            {
+                Frame::status(
+                    epoch,
+                    sela::playback::MediaStatus {
+                        scene,
+                        state,
+                        position: Duration::from_millis(
+                            if state == sela::playback::PlayState::Paused {
+                                1500
+                            } else {
+                                0
+                            },
+                        ),
+                        duration: Some(Duration::from_secs(10)),
+                        // No device in the fake renderer, like a host
+                        // without sound output.
+                        audio: sela::playback::AudioState::NoDevice,
+                    },
+                )
+                .write(out())
+                .unwrap();
+            }
         }
     }
     std::process::exit(0);
@@ -559,6 +642,24 @@ fn settle(
         assert!(Instant::now() < end, "bounded wait for {what}");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// One step of a close that waits on real worker threads (the settings
+/// writer, the autosave worker) while its bound, `CLOSE_WAIT`, runs on the
+/// fake GPUI clock. While such work is outstanding the clock stands still
+/// and replies are polled in real time, so a slow disk (a loaded Windows CI
+/// runner) never runs out the bound; otherwise the clock moves on by `by`
+/// and the close waits run. Returns whether fake time advanced.
+fn close_step(cx: &mut VisualTestContext, operator: &Entity<Operator>, by: Duration) -> bool {
+    let outstanding = operator.read_with(cx, |o, _| o.close_work_outstanding());
+    if outstanding {
+        operator.update(cx, |o, cx| o.poll(cx));
+    } else {
+        cx.executor().advance_clock(by);
+    }
+    cx.run_until_parked();
+    std::thread::sleep(Duration::from_millis(5));
+    !outstanding
 }
 
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
@@ -2405,6 +2506,7 @@ mod settings_ui {
             loader: settings::default_loader(),
             schedule_writer: sela::schedule_file::default_writer(),
             initial_layout: None,
+            media_locator: None,
         };
         (config, slot)
     }
@@ -2729,16 +2831,23 @@ mod settings_ui {
             assert!(Instant::now() < end, "bounded wait for the write");
             std::thread::sleep(Duration::from_millis(5));
         }
-        // The close also writes the layout, a second 2 s write.
+        assert!(
+            !file(&dir).unwrap().contains("pane_ratios="),
+            "the layout comes with the close"
+        );
+        // The close also writes the layout, a second 2 s write; the fake
+        // clock waits for it in real time, so the bound is not run out.
         while windows(&mut vcx) > 0 {
             assert!(Instant::now() < end, "bounded wait for the layout write");
-            vcx.executor().advance_clock(Duration::from_millis(200));
-            vcx.run_until_parked();
-            std::thread::sleep(Duration::from_millis(5));
+            close_step(&mut vcx, &operator, Duration::from_millis(200));
         }
         assert_eq!(windows(&mut vcx), 0, "closed once the write landed");
         let text = file(&dir).unwrap();
         assert!(text.contains("DISPLAY6") && text.contains("language=id"));
+        assert!(
+            text.contains("pane_ratios="),
+            "the close waited for the layout write: {text}"
+        );
         i18n::set_language(Language::English);
     }
 
@@ -2800,9 +2909,7 @@ mod settings_ui {
         }
         while !operator.read_with(vcx, |o, _| o.settings_idle() && !o.close_pending()) {
             assert!(Instant::now() < end, "bounded wait for the reply");
-            vcx.executor().advance_clock(Duration::from_millis(200));
-            vcx.run_until_parked();
-            std::thread::sleep(Duration::from_millis(5));
+            close_step(vcx, operator, Duration::from_millis(200));
         }
         vcx.run_until_parked();
     }
@@ -2852,10 +2959,42 @@ mod settings_ui {
         let end = Instant::now() + Duration::from_secs(10);
         while windows(&mut vcx) > 0 {
             assert!(Instant::now() < end, "Don't Save closes the window");
-            vcx.executor().advance_clock(Duration::from_millis(200));
-            vcx.run_until_parked();
-            std::thread::sleep(Duration::from_millis(5));
+            close_step(&mut vcx, &operator, Duration::from_millis(200));
         }
+    }
+
+    /// Don't Save covers the schedule, not an import preview opened while
+    /// the settings write was still pending (PP-IMPF-09).
+    #[gpui::test]
+    fn an_import_opened_during_the_settings_wait_after_dont_save_keeps_the_window(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::operator::Dialog;
+        use crate::operator::song_import::Phase;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = super::song_import::batch_dir(&dir);
+        let (writer, release) = gated_writer();
+        let (mut vcx, operator, _slot) = start(cx, &dir, writer);
+        settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == 1);
+        add_song(&mut vcx, &operator, "Signal Hymn");
+        open_options(&mut vcx);
+        click(&mut vcx, "options-monitor-2");
+        click(&mut vcx, "dialog-confirm");
+        assert!(!quit(&mut vcx, &operator));
+        click(&mut vcx, "dialog-confirm");
+        assert_eq!(windows(&mut vcx), 1, "still waiting for the write");
+        super::song_import::import_folder(&mut vcx, &operator, folder);
+        super::song_import::settle_review(&mut vcx, &operator);
+        drain_writer(&mut vcx, &operator, &dir, &release);
+        assert_eq!(windows(&mut vcx), 1, "the open import is not lost");
+        operator.read_with(&vcx, |o, _| {
+            assert_eq!(o.dialog, Some(Dialog::ImportSongs));
+            assert_eq!(o.song_import.phase, Phase::Review);
+            assert_eq!(
+                o.song_import.quit_note.as_deref(),
+                Some("Finish or cancel the import before quitting.")
+            );
+        });
     }
 
     #[gpui::test]
@@ -2981,6 +3120,32 @@ mod settings_ui {
     }
 
     #[gpui::test]
+    fn the_song_tab_takes_no_input_until_settings_load(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (mut vcx, operator, _slot) =
+            start_loading(cx, &dir, settings::default_writer(), gate.clone());
+        open_options(&mut vcx);
+        click(&mut vcx, "options-tab-song");
+        assert!(vcx.debug_bounds("options-song-loading").is_some());
+        click(&mut vcx, "options-license-info");
+        vcx.simulate_input("CCLI 9");
+        let license = |vcx: &mut VisualTestContext| {
+            operator.read_with(vcx, |o, cx| {
+                o.settings.song.license.read(cx).text().to_owned()
+            })
+        };
+        assert_eq!(license(&mut vcx), "", "an edit OK would discard");
+        gate.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut vcx, &operator, "loaded", |o| o.settings_loaded());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("options-song-loading").is_none());
+        click(&mut vcx, "options-license-info");
+        vcx.simulate_input("CCLI 9");
+        assert_eq!(license(&mut vcx), "CCLI 9");
+    }
+
+    #[gpui::test]
     fn late_loaded_never_overwrites_an_applied_choice(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3032,28 +3197,50 @@ mod menu_bar {
     }
 
     #[gpui::test]
-    fn menu_contents_match_the_captures(cx: &mut TestAppContext) {
+    fn menu_contents_match_the_captures_plus_tracked_deviations(cx: &mut TestAppContext) {
         let (mut cx, _operator, _) = fixture(cx);
         cx.simulate_resize(size(px(1280.), px(800.)));
         // EW8-OBS-053 plus the menu-p/v/h.png captures; the New ▸ submenu is
         // flattened into a header row followed by Song.../Schedule.
+        const EW_FILE: [&str; 11] = [
+            "bar-file-new",
+            "bar-file-new-song",
+            "bar-file-new-schedule",
+            "bar-file-open",
+            "bar-file-open-recent",
+            "bar-file-save",
+            "bar-file-save-as",
+            "bar-file-export",
+            "bar-file-close",
+            "bar-file-reports",
+            "bar-file-exit",
+        ];
+        // Rows Sela adds that the captures do NOT show: a known deviation,
+        // not parity. Each names its docs/parity-pending.md check; it goes
+        // once EasyWorship's import entry point is observed.
+        // (after row, added rows, tracking id)
+        const DEVIATIONS: [(&str, &[&str], &str); 1] = [(
+            "bar-file-close",
+            &[
+                "bar-file-import",
+                "bar-file-import-songs",
+                "bar-file-import-folder",
+                "bar-file-import-easyworship",
+            ],
+            "PP-IMPF-01, PP-EWL-01 (UNOBSERVED, M1-14, M4-07)",
+        )];
+        let mut file: Vec<&str> = Vec::new();
+        for row in EW_FILE {
+            file.push(row);
+            for (after, added, tracking) in DEVIATIONS {
+                if after == row {
+                    assert!(!tracking.is_empty());
+                    file.extend_from_slice(added);
+                }
+            }
+        }
         let menus: [(&str, &[&str]); 6] = [
-            (
-                "alt-f",
-                &[
-                    "bar-file-new",
-                    "bar-file-new-song",
-                    "bar-file-new-schedule",
-                    "bar-file-open",
-                    "bar-file-open-recent",
-                    "bar-file-save",
-                    "bar-file-save-as",
-                    "bar-file-export",
-                    "bar-file-close",
-                    "bar-file-reports",
-                    "bar-file-exit",
-                ],
-            ),
+            ("alt-f", &file),
             (
                 "alt-e",
                 &[
@@ -3074,6 +3261,8 @@ mod menu_bar {
                     "bar-live-black",
                     "bar-live-clear",
                     "bar-live-show",
+                    "bar-live-stage",
+                    "bar-live-stage-message",
                 ],
             ),
             (
@@ -3081,6 +3270,10 @@ mod menu_bar {
                 &[
                     "bar-profiles-default",
                     "bar-profiles-manager",
+                    // Sela rows the captures do NOT show (known deviation,
+                    // PP-BUN-02, UNOBSERVED, M1-13).
+                    "bar-profiles-backup",
+                    "bar-profiles-restore",
                     "bar-profiles-demo-data",
                     "bar-profiles-utilities",
                 ],
@@ -3493,6 +3686,36 @@ fn failed_or_stale_preparation_never_replaces_the_current_scene(cx: &mut TestApp
         );
         assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
         assert_eq!(o.live_slide, Some(0));
+    });
+}
+
+#[gpui::test]
+fn normalize_after_a_failed_cue_clears_the_failed_indicator(cx: &mut TestAppContext) {
+    use sela::preparation::cue::{Built, CuePreparer};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = live_fixture(cx, &dir);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    let failing = CuePreparer::with_builder(|_, _| -> Result<Built, _> {
+        Err(sela::scene::PrepareError::InvalidScene)
+    })
+    .unwrap();
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(failing));
+    click(&mut cx, "live-next");
+    settle(&mut cx, &operator, "the failed cue", |o| o.cue_failed);
+    operator.update(&mut cx, |o, _| {
+        o.cue_preparer = Some(CuePreparer::new().unwrap());
+    });
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+    click(&mut cx, "normalize-text");
+    settle(&mut cx, &operator, "the re-sized cue presented", |o| {
+        submitted(o) > sent && o.pending_cues.is_empty()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
+        assert!(!o.cue_failed, "the re-sent slide prepared");
     });
 }
 
@@ -4698,10 +4921,12 @@ mod preflight_ui {
         let song = repository.song(version).unwrap();
         let file = sela::schedule_file::ScheduleFile {
             title: "Sunday".into(),
+            scripture: Vec::new(),
             items: vec![sela::schedule_file::Item {
                 source: version,
                 song,
                 arrangement: None,
+                theme: None,
             }],
         };
         std::fs::write(&schedule, sela::schedule_file::encode(&file).unwrap()).unwrap();
@@ -5257,7 +5482,7 @@ mod schedule_files_ui {
         save_new(&mut cx, &operator, good.clone());
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&good).unwrap()).unwrap();
-        value["version"] = 4.into();
+        value["version"] = (schedule_file::VERSION + 1).into();
         let cases = [
             ("garbage", b"not a schedule".to_vec()),
             ("truncated", std::fs::read(&good).unwrap()[..40].to_vec()),
@@ -5295,10 +5520,12 @@ mod schedule_files_ui {
         let file = dir.path().join("Sunday.selaschedule");
         let document = ScheduleFile {
             title: "Sunday".into(),
+            scripture: Vec::new(),
             items: vec![Item {
                 source: version,
                 song,
                 arrangement: None,
+                theme: None,
             }],
         };
         std::fs::write(&file, schedule_file::encode(&document).unwrap()).unwrap();
@@ -5474,6 +5701,45 @@ mod schedule_files_ui {
         operator.read_with(&cx, |o, _| {
             assert_eq!(entry_titles(o), ["Signal Hymn", SECOND_SONG]);
             assert!(o.schedule.is_dirty());
+        });
+    }
+
+    /// Save, then Quit: an import preview opened while the write ran still
+    /// holds the close back once the Save lands (PP-IMPF-09).
+    #[gpui::test]
+    fn an_import_opened_during_a_save_then_quit_keeps_the_window(cx: &mut TestAppContext) {
+        use crate::operator::Then;
+        use crate::operator::song_import::Phase;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = super::song_import::batch_dir(&dir);
+        let (mut cx, operator, release) = gated_loaded(cx, &dir);
+        add_song(&mut cx, &operator, "Signal Hymn");
+        assert!(!cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx))));
+        cx.run_until_parked();
+        assert_eq!(
+            operator.read_with(&cx, |o, _| o.dialog.clone()),
+            Some(Dialog::Unsaved(Then::Quit))
+        );
+        click(&mut cx, "dialog-save");
+        assert!(cx.did_prompt_for_new_path());
+        let file = dir.path().join("Quit.selaschedule");
+        cx.simulate_new_path_selection(move |_| Some(file));
+        settle(&mut cx, &operator, "save in flight", |o| o.saving_file());
+        super::song_import::import_folder(&mut cx, &operator, folder);
+        super::song_import::settle_review(&mut cx, &operator);
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut cx, &operator, "saved and quit refused", |o| {
+            !o.saving_file() && o.song_import.quit_note.is_some()
+        });
+        assert_eq!(
+            cx.read(|cx| cx.windows().len()),
+            1,
+            "the import is not lost"
+        );
+        operator.read_with(&cx, |o, _| {
+            assert_eq!(o.dialog, Some(Dialog::ImportSongs));
+            assert_eq!(o.song_import.phase, Phase::Review);
+            assert!(!o.schedule.is_dirty());
         });
     }
 

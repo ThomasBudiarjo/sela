@@ -46,6 +46,14 @@ pub(crate) enum Control {
     ReviewFiles,
     ItemMenuDuplicate,
     Arrangement,
+    /// Media tab categories (Videos, Images) and the video import.
+    MediaVideos,
+    MediaImages,
+    ImportVideo,
+    CancelVideoImport,
+    /// Live pane video transport (M2-03).
+    VideoPlayPause,
+    VideoRestart,
     /// The Songs list itself. Its rows are the tab stops; the list holds
     /// focus after a click below the rows or once the focused row is no
     /// longer rendered.
@@ -61,7 +69,7 @@ pub(crate) const SLIDE_TAB_INDEX: isize = 1000;
 pub(crate) const IMAGE_TAB_INDEX: isize = 2000;
 
 impl Control {
-    pub(crate) const ALL: [Control; 38] = [
+    pub(crate) const ALL: [Control; 44] = [
         Self::ResetLayout,
         Self::Quit,
         Self::CollapseResources,
@@ -99,6 +107,12 @@ impl Control {
         Self::ReviewFiles,
         Self::ItemMenuDuplicate,
         Self::Arrangement,
+        Self::MediaVideos,
+        Self::MediaImages,
+        Self::ImportVideo,
+        Self::CancelVideoImport,
+        Self::VideoPlayPause,
+        Self::VideoRestart,
         Self::SongList,
     ];
 
@@ -138,6 +152,10 @@ impl Control {
                 | Self::CancelImport
                 | Self::UseAsLogo
                 | Self::ImageMenuLogo
+                | Self::MediaVideos
+                | Self::MediaImages
+                | Self::ImportVideo
+                | Self::CancelVideoImport
                 | Self::Normalize
                 | Self::AddToSchedule
                 | Self::SongList
@@ -160,7 +178,7 @@ impl Control {
     /// AccessKit role exposed to UI Automation (zed rev a846890
     /// gpui/src/elements/div.rs `StatefulInteractiveElement::role`).
     pub(crate) fn role(self) -> Role {
-        if self.tab_number().is_some() {
+        if self.tab_number().is_some() || matches!(self, Self::MediaVideos | Self::MediaImages) {
             return Role::Tab;
         }
         match self {
@@ -253,10 +271,7 @@ impl Operator {
                 self.collapsed = false;
                 self.drag = None;
             }
-            Control::NewMenu => {
-                self.bar_menu = None;
-                self.new_menu = !self.new_menu;
-            }
+            Control::NewMenu => self.toggle_new_menu(),
             Control::Quit => window.dispatch_action(Box::new(Quit), cx),
             Control::CollapseResources => {
                 self.collapsed = !self.collapsed;
@@ -287,6 +302,20 @@ impl Operator {
             Control::Black => self.toggle_mask(Mask::Black),
             Control::Clear => self.toggle_mask(Mask::Clear),
             Control::ImportImage => self.prompt_import(cx),
+            Control::MediaVideos if !self.collapsed && self.tab == 2 => {
+                self.video.category = video::Category::Videos;
+                self.video.message = None;
+                // Videos imported elsewhere (the Song Editor's Select
+                // Media…) show up without a restart.
+                self.video.rescan();
+            }
+            Control::MediaImages if !self.collapsed && self.tab == 2 => {
+                self.video.category = video::Category::Images;
+            }
+            Control::ImportVideo => self.prompt_video_import(cx),
+            Control::CancelVideoImport => self.cancel_video_import(),
+            Control::VideoPlayPause => self.toggle_video_playback(),
+            Control::VideoRestart => self.restart_video(),
             Control::CancelImport => self.cancel_import(),
             Control::ReviewFiles => self.review_files(window, cx),
             Control::UseAsLogo => self.use_as_logo(),
@@ -301,14 +330,18 @@ impl Operator {
                     Sizing::Normalized => Sizing::PerSlide,
                 };
                 // Applies to the live slide now, so its size never changes
-                // only on the next navigation.
-                if let Some(index) = self.live_slide
-                    && matches!(
-                        self.output.as_ref().map(Supervisor::status),
-                        Some(Status::Connected { .. })
-                    )
-                {
-                    self.send(index);
+                // only on the next navigation. The newest request, not only
+                // the acknowledged slide: a cue still in preparation (a new
+                // item's Go Live, a step) was built with the old sizing
+                // (SC2-LIVE-04). It is rebuilt in place under its own
+                // generation, so the stale-sized cue never reaches the
+                // audience and a double-click unmask intent stays with it
+                // (SC2-LIVE-05).
+                if matches!(
+                    self.output.as_ref().map(Supervisor::status),
+                    Some(Status::Connected { .. })
+                ) {
+                    self.refresh_live_request();
                 }
             }
             Control::Arrangement => self.cycle_arrangement(),
@@ -344,12 +377,15 @@ impl Operator {
                 None => self.schedule_message = Some(t!(Msg::SelectScheduleItem).into()),
             },
             Control::ItemMenuRemove => {
-                if let Some((id, _)) = self.item_menu.take() {
+                if let Some((id, _)) = self.item_menu {
+                    // The dialog returns focus to the row, not the menu item.
+                    self.dismiss_popup_menus(true, window, cx);
                     self.open_dialog(Dialog::Remove(id), window, cx);
                 }
             }
             Control::ItemMenuDuplicate => {
-                if let Some((id, _)) = self.item_menu.take() {
+                if let Some((id, _)) = self.item_menu {
+                    self.dismiss_popup_menus(true, window, cx);
                     self.duplicate_entries(id);
                 }
             }
@@ -357,6 +393,12 @@ impl Operator {
                 self.new_menu = false;
                 self.controls[Control::NewMenu].focus(window, cx);
                 self.guard(Then::New, window, cx);
+            }
+            Control::DialogSave if self.dialog == Some(Dialog::StageMessage) => {
+                self.clear_stage_message(window, cx);
+            }
+            Control::DialogConfirm if self.dialog == Some(Dialog::StageMessage) => {
+                self.confirm_stage_message(window, cx);
             }
             Control::DialogSave => {
                 let Some(Dialog::Unsaved(then)) = self.dialog.clone() else {
@@ -393,7 +435,16 @@ impl Operator {
                     self.close_dialog(window, cx);
                     self.apply_update_review();
                 }
-                Some(Dialog::Preflight | Dialog::FileError) | None => return,
+                // Stays open until the commit lands (`song_import`).
+                Some(Dialog::ImportSongs) => self.confirm_song_import(),
+                Some(Dialog::Recovery) => {
+                    self.close_dialog(window, cx);
+                    self.restore_recovery();
+                }
+                Some(
+                    Dialog::Preflight | Dialog::FileError | Dialog::StageMessage | Dialog::Bundle,
+                )
+                | None => return,
             },
             Control::DialogCancel if self.dialog.is_some() => {
                 if self.dialog == Some(Dialog::UpdateItems) {
@@ -404,6 +455,17 @@ impl Operator {
                 }
                 if self.dialog == Some(Dialog::GoLiveMissing) {
                     self.hold_go_live_back();
+                }
+                if self.dialog == Some(Dialog::ImportSongs) {
+                    self.cancel_song_import();
+                }
+                if self.dialog == Some(Dialog::Recovery) {
+                    self.decline_recovery();
+                }
+                if self.dialog == Some(Dialog::Bundle)
+                    && self.bundles.view.as_ref().is_some_and(|v| v.working)
+                {
+                    self.cancel_bundle_job();
                 }
                 self.close_dialog(window, cx);
             }
@@ -441,6 +503,10 @@ impl Operator {
                     return;
                 }
                 this.controls[control].focus(window, cx);
+                if control == Control::NewMenu && this.swallow_new_menu_click() {
+                    cx.notify();
+                    return;
+                }
                 this.activate(control, window, cx);
             }))
     }

@@ -1,0 +1,109 @@
+# cargo-deny policy for Sela (M5-02). Run through `scripts/audit.sh`, which
+# pins the cargo-deny version and fails on any error below. Decisions and
+# accepted findings are recorded in docs/security.md ("Dependency audit").
+
+[graph]
+# Release platforms first (Windows), then the developer/portability targets.
+# Web (wasm32) code paths in GPUI are never built for Sela.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-pc-windows-gnu",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# The proxy in the agent container needs the git CLI for HTTPS fetches.
+git-fetch-with-cli = true
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+# Every ignore names the advisory, why it is accepted, and when it is
+# revisited. All are "unmaintained" notices (no known vulnerability) for
+# crates GPUI, cosmic-text or image pull in at their pinned versions; none has
+# a safe upgrade inside those pins. Revisit on every GPUI revision bump
+# (docs/security.md, "Dependency audit").
+ignore = [
+    # paste: proc-macro only (no runtime code); via image/exr/pulp and
+    # metal (macOS). Not shipped as code in the binary.
+    { id = "RUSTSEC-2024-0436", reason = "build-time proc-macro via image and metal; no runtime code" },
+    # rustybuzz: SVG text shaping inside GPUI's usvg/resvg. Sela renders no
+    # untrusted SVG.
+    { id = "RUSTSEC-2026-0206", reason = "GPUI usvg/resvg dependency; Sela renders no untrusted SVG" },
+    # ttf-parser: font parsing in GPUI, cosmic-text/fontdb and Sela's own font
+    # checks (src/fonts.rs). Replacing Sela's direct use alone would not
+    # remove it; fonts come from the system or the bundled DejaVu faces.
+    { id = "RUSTSEC-2026-0192", reason = "required by GPUI and cosmic-text; migrate with them (skrifa)" },
+    # zbus split crates: Linux desktop integration (AT-SPI, portals) only;
+    # not built for Windows.
+    { id = "RUSTSEC-2026-0370", reason = "Linux-only GPUI/AccessKit D-Bus dependency" },
+    { id = "RUSTSEC-2026-0371", reason = "Linux-only GPUI/AccessKit D-Bus dependency" },
+    { id = "RUSTSEC-2026-0372", reason = "Linux-only GPUI/AccessKit D-Bus dependency" },
+]
+
+[licenses]
+# Licenses whose terms allow distributing the combined work under
+# AGPL-3.0-or-later. GPL-2.0-only is not compatible and is not listed: a crate
+# offering it only as one OR alternative is used under the other license.
+allow = [
+    "0BSD",
+    "AGPL-3.0-or-later",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.93
+exceptions = [
+    # bzip2's own permissive (BSD-style) license, for the pure-Rust bzip2
+    # port under GPUI's http_client (async-compression). Compatible with
+    # AGPL distribution.
+    { allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys" },
+]
+
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "warn"
+# cargo-deny counts every git dependency as a wildcard, and GPUI only exists
+# as a git dependency. scripts/audit.sh enforces the stricter rule instead:
+# every registry dependency of Sela is an exact `=` pin and every git
+# dependency names a `rev`.
+wildcards = "allow"
+highlight = "all"
+# Sela is offline-first with no network listener (plan.md, Mission 2026-10).
+# A TLS or HTTP client stack arriving through a dependency update must be a
+# reviewed decision, not a side effect.
+deny = [
+    { crate = "openssl-sys", reason = "no network stack in Sela; review before adding" },
+    { crate = "native-tls", reason = "no network stack in Sela; review before adding" },
+    { crate = "reqwest", reason = "no network client in Sela; review before adding" },
+    { crate = "hyper", reason = "no network listener or client in Sela; review before adding" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# GPUI and its forks of font-kit, scap and xim-rs come from Zed at pinned
+# revisions (Cargo.lock); proptest comes from Zed's pinned proptest revision.
+allow-git = ["https://github.com/proptest-rs/proptest"]
+
+[sources.allow-org]
+github = ["zed-industries"]

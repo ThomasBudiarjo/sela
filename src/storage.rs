@@ -4,11 +4,14 @@ use crate::arrangement::{
 };
 use crate::background::Background;
 use crate::format::SlideFormat;
+use crate::import::batch::{self, DuplicateKey};
 use crate::search;
 use crate::song_order::{SongOrder, SongSort};
+use crate::theme::{MAX_THEMES, Theme, ThemeId, ThemeSet};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         Arc,
@@ -20,6 +23,24 @@ use std::{
 
 const APP: i64 = 0x53454c41;
 pub const MAX_SONG_BYTES: usize = 256 * 1024;
+/// Most songs one import commit or duplicate check carries.
+pub const MAX_IMPORT_SONGS: usize = batch::MAX_FILES;
+/// One song of an import commit: a new song, or a new revision of `replace`
+/// (the operator chose Replace for a library duplicate).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportWrite {
+    pub replace: Option<Version>,
+    /// Shared with the staged preview, so a retry after a failure needs no copy.
+    pub song: Arc<Song>,
+}
+/// A current library song an imported song duplicates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryMatch {
+    pub version: Version,
+    pub title: String,
+    /// The words match too, not only the title.
+    pub same_lyrics: bool,
+}
 pub const MAX_ITEMS: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Id(pub [u8; 16]);
@@ -99,6 +120,9 @@ pub const MAX_ADMINISTRATOR: usize = 256;
 /// Digit limit of the Song Number property (CCLI song numbers have at most
 /// eight digits today; the margin keeps the field from rejecting real ones).
 pub const MAX_SONG_NUMBER: usize = 12;
+/// Most songs one `Command::SetSongTheme` restyles (Select All in a large
+/// library); the operator refuses a bigger selection with its own message.
+pub const MAX_SONG_THEME_BATCH: usize = 10_000;
 /// Song Number is empty or ASCII digits only.
 pub fn song_number_ok(s: &str) -> bool {
     s.len() <= MAX_SONG_NUMBER && s.bytes().all(|b| b.is_ascii_digit())
@@ -170,7 +194,7 @@ impl Song {
         }
         Ok(())
     }
-    fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         for s in [&self.title, &self.authors, &self.copyright, &self.license]
             .into_iter()
@@ -181,7 +205,7 @@ impl Song {
         }
         out
     }
-    fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > MAX_SONG_BYTES {
             return Err(Error::Corrupt);
         }
@@ -258,8 +282,12 @@ PRAGMA user_version=4;";
 // song a stable INTEGER PRIMARY KEY, because VACUUM may renumber the implicit
 // rowids of `songs`. Diacritic folding mode 2 also folds letters that mode 1
 // leaves unchanged.
-const SEARCH: &str = "CREATE TABLE search_rows(row INTEGER PRIMARY KEY, song BLOB NOT NULL UNIQUE REFERENCES songs(id));
-CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='unicode61 remove_diacritics 2');";
+// Since schema 7 the index also holds the section labels (EW8-OBS-046 matches
+// them) and `search_rows` carries the derived Sort by keys of EW8-OBS-064
+// (Author, Copyright, Administrator, Song Number), so the Songs list sorts
+// without decoding a payload. Schema 5 and 6 files are rebuilt to this shape.
+const SEARCH: &str = "CREATE TABLE search_rows(row INTEGER PRIMARY KEY, song BLOB NOT NULL UNIQUE REFERENCES songs(id), author TEXT NOT NULL DEFAULT '', copyright TEXT NOT NULL DEFAULT '', administrator TEXT NOT NULL DEFAULT '', song_number TEXT NOT NULL DEFAULT '');
+CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, labels, tokenize='unicode61 remove_diacritics 2');";
 // A stored `modified` per song replaces the search index row order as the
 // Date modified key, so it survives an index rebuild. Existing songs take
 // their index row number, which keeps the order the list showed before the
@@ -272,12 +300,37 @@ CREATE INDEX songs_modified ON songs(modified);
 CREATE TABLE song_metadata(song BLOB NOT NULL, revision INTEGER NOT NULL, administrator TEXT NOT NULL CHECK(length(CAST(administrator AS BLOB))<=256), song_number TEXT NOT NULL CHECK(length(CAST(song_number AS BLOB))<=12), PRIMARY KEY(song,revision), FOREIGN KEY(song,revision) REFERENCES song_revisions(id,revision));
 UPDATE songs SET modified=COALESCE((SELECT m.row FROM search_rows m WHERE m.song=songs.id),0);
 PRAGMA user_version=6;";
-const SCHEMA_VERSIONS: [i64; 6] = [1, 2, 3, 4, 5, 6];
-const CURRENT: i64 = 6;
-// bm25 column weights: title, lyrics, metadata.
+// Schema 7 only reshapes the derived search index (labels column and sort
+// keys, see `SEARCH`); the migration rebuilds it from the song payloads.
+const SCHEMA7: &str = "PRAGMA user_version=7;";
+// Themes (M1-08). `themes` holds library themes (`theme::Theme::encode`,
+// revision counts saves); `song_themes` names a song's theme by song id, not
+// revision, so applying a theme never creates a song revision (schedule items
+// snapshot their theme instead); `theme_default` is the one default song theme.
+// A song naming a deleted theme falls back to the default, with a warning.
+// (Developed as schema 7 on the themes stream; renumbered to 8 at integration
+// because schema 7 is the search index reshape.)
+const SCHEMA8: &str = "CREATE TABLE themes(id BLOB PRIMARY KEY CHECK(length(id)=16), revision INTEGER NOT NULL CHECK(revision>0), payload BLOB NOT NULL CHECK(length(payload)<=1024));
+CREATE TABLE song_themes(song BLOB PRIMARY KEY REFERENCES songs(id), theme BLOB NOT NULL CHECK(length(theme)=16));
+CREATE TABLE theme_default(slot INTEGER PRIMARY KEY CHECK(slot=1), theme BLOB NOT NULL CHECK(length(theme)=16));
+PRAGMA user_version=8;";
+const SCHEMA_VERSIONS: [i64; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+const CURRENT: i64 = 8;
+// The first schema whose search index has the current shape (`SEARCH`); a
+// file at this schema or later rebuilds a damaged index itself, since no later
+// migration step rebuilds it.
+const SEARCH_SHAPE: i64 = 7;
+// bm25 column weights: title, lyrics, metadata, labels. FTS5's bm25
+// normalizes by the length of the whole row, so a low label weight alone does
+// not keep a short song's label hit below a long song's lyric hit. `l` sorts
+// first instead: with the labels weight at 0 a row scores exactly 0 only when
+// every hit is in its labels (each term's idf is positive), so label-only
+// rows always follow the rows with a title, lyric or metadata hit, and bm25
+// with labels at 0.5 orders within each group. A query that matches no label
+// puts every row in the first group.
 /// Ranks and limits inside the FTS scan, so only the kept rows are joined to
 /// song heads (about 20% faster on 20k songs than joining every match first).
-const SEARCH_SQL: &str = "SELECT m.song,s.head,t.title FROM (SELECT f.rowid AS row,f.title AS title,bm25(song_search,10.0,1.0,2.0) AS r FROM song_search f WHERE song_search MATCH ?1 ORDER BY r,f.title COLLATE NOCASE,f.title,f.rowid LIMIT ?2) t JOIN search_rows m ON m.row=t.row JOIN songs s ON s.id=m.song WHERE s.deleted=0 ORDER BY t.r,t.title COLLATE NOCASE,t.title,m.song";
+const SEARCH_SQL: &str = "SELECT m.song,s.head,t.title FROM (SELECT f.rowid AS row,f.title AS title,bm25(song_search,10.0,1.0,2.0,0.0)=0 AS l,bm25(song_search,10.0,1.0,2.0,0.5) AS r FROM song_search f WHERE song_search MATCH ?1 ORDER BY l,r,f.title COLLATE NOCASE,f.title,f.rowid LIMIT ?2) t JOIN search_rows m ON m.row=t.row JOIN songs s ON s.id=m.song WHERE s.deleted=0 ORDER BY t.l,t.r,t.title COLLATE NOCASE,t.title,m.song";
 
 impl SectionId {
     /// CPU-only allocation with a process-local counter; no random-device I/O.
@@ -312,6 +365,70 @@ impl Drop for Staging {
     }
 }
 const MAX_BACKUP_BYTES: i64 = 256 * 1024 * 1024;
+
+/// SQLite's settings for database files that may be hostile (a restored
+/// backup can come from anywhere): defensive mode refuses schema and
+/// page-level corruption tricks, and an untrusted schema may not run
+/// functions with side effects from views, triggers or defaults.
+pub(crate) fn harden(db: &Connection) -> rusqlite::Result<()> {
+    use rusqlite::config::DbConfig;
+    db.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+    db.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+    Ok(())
+}
+
+/// A hardened read-only connection to a database Sela did not just write:
+/// a restore input, or the library read again for its pre-migration backup.
+fn open_untrusted_read_only(path: &std::path::Path) -> Result<Connection> {
+    let db = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    harden(&db)?;
+    db.busy_timeout(Duration::from_millis(100))?;
+    Ok(db)
+}
+
+/// The private copy a backup or restore writes the source's pages into.
+/// The pages may be hostile until `copy_new` has verified them, so the
+/// connection is hardened like every other (review finding, fuzz-audit).
+fn open_private_copy(path: &std::path::Path) -> Result<Connection> {
+    let target = Connection::open(path)?;
+    harden(&target)?;
+    target.execute_batch("PRAGMA synchronous=FULL; PRAGMA cache_size=-2048;")?;
+    target.busy_timeout(Duration::from_millis(100))?;
+    Ok(target)
+}
+
+/// Sela never creates triggers or views. A library that has one was not
+/// written by Sela, and its trigger would run on every later save.
+fn check_schema_objects(db: &Connection) -> Result<()> {
+    let foreign = db
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type IN ('trigger','view')")?
+        .exists([])?;
+    if foreign {
+        return Err(Error::Unsupported);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// For each `copy_new` on this thread: whether its source and its private
+    /// copy were hardened (defensive, untrusted schema). Tests read it to
+    /// check the call sites, not only the helpers.
+    static COPY_CONNECTIONS: std::cell::RefCell<Vec<[(bool, bool); 2]>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
+fn hardening(db: &Connection) -> (bool, bool) {
+    use rusqlite::config::DbConfig;
+    (
+        db.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap(),
+        !db.db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
+            .unwrap(),
+    )
+}
 
 fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicBool) -> Result<()> {
     use rusqlite::backup::{Backup, StepResult};
@@ -361,9 +478,9 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
         options.mode(0o600);
     }
     options.open(&path).map_err(|_| Error::Io)?;
-    let mut target = Connection::open(&path)?;
-    target.execute_batch("PRAGMA synchronous=FULL; PRAGMA cache_size=-2048;")?;
-    target.busy_timeout(Duration::from_millis(100))?;
+    let mut target = open_private_copy(&path)?;
+    #[cfg(test)]
+    COPY_CONNECTIONS.with(|c| c.borrow_mut().push([hardening(source), hardening(&target)]));
     let start = std::time::Instant::now();
     {
         let backup = Backup::new(source, &mut target)?;
@@ -395,6 +512,7 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     target.execute_batch("PRAGMA journal_mode=DELETE;")?;
     target.close().map_err(|(_, e)| Error::from(e))?;
     let verified = Repository::open_internal(&path, false)?;
+    check_schema_objects(&verified.db)?;
     verified.verify_history(cancel, start)?;
     verified.db.close().map_err(|(_, e)| Error::from(e))?;
     // Windows FlushFileBuffers requires a handle with write access.
@@ -417,6 +535,21 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     })?;
     Ok(())
 }
+/// Newest library schema this Sela opens (`PRAGMA user_version`).
+pub fn newest_schema() -> i64 {
+    SCHEMA_VERSIONS[SCHEMA_VERSIONS.len() - 1]
+}
+/// `PRAGMA user_version` of a Sela library file, read through a hardened
+/// read-only connection (bundle manifests, M1-13). Not a validation: use
+/// `Repository::restore_new` for that. Blocking.
+pub fn library_schema(path: &std::path::Path) -> Result<i64> {
+    let db = open_untrusted_read_only(path)?;
+    let app: i64 = db.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+    if app != APP {
+        return Err(Error::Unsupported);
+    }
+    Ok(db.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+}
 impl Repository {
     /// Blocking, worker-only. Publishes a verified standalone database, never overwrites.
     pub fn backup_new(&self, destination: &std::path::Path, cancel: &AtomicBool) -> Result<()> {
@@ -431,11 +564,7 @@ impl Repository {
         if source.as_os_str().len() > 4096 {
             return Err(Error::Invalid);
         }
-        let db = Connection::open_with_flags(
-            source,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        db.busy_timeout(Duration::from_millis(100))?;
+        let db = open_untrusted_read_only(source)?;
         db.execute_batch("PRAGMA cache_size=-2048;")?;
         copy_new(&db, destination, cancel)
     }
@@ -509,16 +638,36 @@ impl Repository {
     /// Titles come from the search index, so no song payload is decoded.
     /// "Modified" is the stored `modified` stamp (schema 6), written by every
     /// save, so it is independent of the search index.
+    ///
+    /// Author, Copyright, Administrator and Song Number (schema 7 sort keys)
+    /// put songs with an empty key last in either direction, order the rest
+    /// by the key (ignoring ASCII case; Song Number numerically) and break
+    /// ties by title ascending, then id: keys that differ only in case, or
+    /// numbers that differ only in leading zeros, are ties. These rules are UNOBSERVED best
+    /// guesses (docs/reference-observations.md, EW8-OBS-064).
     pub fn library(&self, order: SongOrder) -> Result<Vec<(Version, String)>> {
         let direction = if order.descending { "DESC" } else { "ASC" };
-        let sql = match order.sort {
-            SongSort::Title => format!(
-                "SELECT s.id,s.head,f.title FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY f.title COLLATE NOCASE {direction},f.title {direction},s.id"
-            ),
-            SongSort::Modified => format!(
-                "SELECT s.id,s.head,f.title FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY s.modified {direction},s.id {direction}"
+        let keyed = |key: &str| {
+            format!(
+                "m.{key}='',m.{key} COLLATE NOCASE {direction},f.title COLLATE NOCASE,f.title,s.id"
+            )
+        };
+        let ordering = match order.sort {
+            SongSort::Title => {
+                format!("f.title COLLATE NOCASE {direction},f.title {direction},s.id")
+            }
+            SongSort::Modified => format!("s.modified {direction},s.id {direction}"),
+            SongSort::Author => keyed("author"),
+            SongSort::Copyright => keyed("copyright"),
+            SongSort::Administrator => keyed("administrator"),
+            // Digits only (`song_number_ok`, at most 12, so it fits i64).
+            SongSort::SongNumber => format!(
+                "m.song_number='',CAST(m.song_number AS INTEGER) {direction},f.title COLLATE NOCASE,f.title,s.id"
             ),
         };
+        let sql = format!(
+            "SELECT s.id,s.head,f.title FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY {ordering}"
+        );
         let mut statement = self.db.prepare_cached(&sql)?;
         let mut rows = statement.query([])?;
         let mut songs = Vec::new();
@@ -570,6 +719,7 @@ impl Repository {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        harden(&db)?;
         db.busy_timeout(Duration::from_millis(100))?;
         db.set_limit(Limit::SQLITE_LIMIT_LENGTH, (MAX_SONG_BYTES + 4096) as i32)?;
         db.execute_batch(
@@ -593,24 +743,42 @@ impl Repository {
             tx.execute_batch(SCHEMA4)?;
             tx.execute_batch(SEARCH)?;
             tx.execute_batch(SCHEMA6)?;
+            tx.execute_batch(SCHEMA7)?;
+            tx.execute_batch(SCHEMA8)?;
             version = CURRENT;
         } else if app != APP || !SCHEMA_VERSIONS.contains(&version) {
             return Err(Error::Unsupported);
         }
         // quick_check also runs the FTS5 index check. When dropping the derived
-        // index makes the file pass, only the index was damaged and it is
-        // rebuilt; otherwise the transaction rolls the drop back.
+        // index makes the file pass, only the index was damaged: a current
+        // file (or one being upgraded from schema 7) rebuilds it, an older one
+        // (schema 5 and 6 hold the index too) leaves the rebuild to the
+        // schema 7 migration step. Opening an older
+        // file without upgrading (verifying its backup copy) keeps the copy as
+        // it was and skips the index shape check. Otherwise the transaction
+        // rolls the drop back.
+        let mut damaged_index = false;
         if !quick_check(&tx)? {
-            if version != CURRENT {
+            if version < 5 {
                 return Err(Error::Corrupt);
             }
-            tx.execute_batch("DROP TABLE IF EXISTS song_search")
+            tx.execute_batch("SAVEPOINT index_check; DROP TABLE IF EXISTS song_search")
                 .map_err(|_| Error::Corrupt)?;
             if !quick_check(&tx)? {
                 return Err(Error::Corrupt);
             }
-            rebuild_search(&tx)?;
-        } else if version == CURRENT && !search_consistent(&tx)? {
+            if version == CURRENT || (upgrade && version >= SEARCH_SHAPE) {
+                tx.execute_batch("RELEASE index_check")?;
+                rebuild_search(&tx)?;
+            } else if upgrade {
+                tx.execute_batch("RELEASE index_check")?;
+            } else {
+                tx.execute_batch("ROLLBACK TO index_check; RELEASE index_check")?;
+                damaged_index = true;
+            }
+        } else if (version == CURRENT || (upgrade && version >= SEARCH_SHAPE))
+            && !search_consistent(&tx)?
+        {
             rebuild_search(&tx)?;
         }
         if tx.prepare("PRAGMA foreign_key_check")?.exists([])? {
@@ -623,11 +791,7 @@ impl Repository {
             // Hold the writer reservation across backup and migration. The separate
             // read connection copies the same committed state, without attempting
             // an online backup from a connection with an active write transaction.
-            let source = Connection::open_with_flags(
-                path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )?;
-            source.busy_timeout(Duration::from_millis(100))?;
+            let source = open_untrusted_read_only(path)?;
             let mut backup = path.as_os_str().to_owned();
             backup.push(format!(".schema{version}-backup"));
             copy_new(
@@ -692,6 +856,25 @@ impl Repository {
                 std::process::abort();
             }
         }
+        if version < 7 && upgrade {
+            // A schema 5 or 6 index lacks the labels column and the sort
+            // keys; an older file got the new shape in the schema 5 step.
+            if version >= 5 {
+                rebuild_search(&tx)?;
+            }
+            tx.execute_batch(SCHEMA7)?;
+            #[cfg(test)]
+            if std::env::var_os("SELA_ABORT_MIGRATION_SCHEMA7").is_some() {
+                std::process::abort();
+            }
+        }
+        if version < 8 && upgrade {
+            tx.execute_batch(SCHEMA8)?;
+            #[cfg(test)]
+            if std::env::var_os("SELA_ABORT_MIGRATION_SCHEMA8").is_some() {
+                std::process::abort();
+            }
+        }
         if version >= 2 || upgrade {
             tx.prepare("SELECT section FROM section_ids")?;
             tx.prepare("SELECT variant,name FROM variants")?;
@@ -706,11 +889,22 @@ impl Repository {
         }
         if version >= 5 || upgrade {
             tx.prepare("SELECT row,song FROM search_rows")?;
-            tx.prepare("SELECT title,lyrics,metadata FROM song_search")?;
+            if !damaged_index {
+                tx.prepare("SELECT title,lyrics,metadata FROM song_search")?;
+            }
         }
         if version >= 6 || upgrade {
             tx.prepare("SELECT id,modified FROM songs")?;
             tx.prepare("SELECT song,revision,administrator,song_number FROM song_metadata")?;
+        }
+        if version >= 7 || upgrade {
+            tx.prepare("SELECT author,copyright,administrator,song_number FROM search_rows")?;
+            tx.prepare("SELECT labels FROM song_search")?;
+        }
+        if version >= 8 || upgrade {
+            tx.prepare("SELECT id,revision,payload FROM themes")?;
+            tx.prepare("SELECT song,theme FROM song_themes")?;
+            tx.prepare("SELECT slot,theme FROM theme_default")?;
         }
         tx.commit()?;
         Ok(Self { db })
@@ -858,15 +1052,100 @@ impl Repository {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let v = advance(&tx, "songs", previous)?;
-        insert_revision(&tx, v, &song)?;
-        index_song(&tx, v.id, &song)?;
-        tx.execute(
-            "UPDATE songs SET modified=MAX(?1,(SELECT COALESCE(MAX(modified),0)+1 FROM songs)) WHERE id=?2",
-            params![now_millis(), &v.id.0[..]],
-        )?;
+        let v = write_song(&tx, previous, &song)?;
         tx.commit()?;
         Ok(v)
+    }
+    /// Saves every write of an import batch in ONE transaction through the
+    /// same path as `save_song`, so the search index follows (M1-07, M1-14).
+    /// Any failure, or `canceled` seen between songs or before the commit,
+    /// rolls the whole batch back: nothing of it is saved. A `replace`
+    /// whose song moved on since it was matched fails with `Conflict`.
+    pub fn commit_import(
+        &mut self,
+        writes: Vec<ImportWrite>,
+        canceled: &AtomicBool,
+    ) -> Result<Vec<Version>> {
+        self.commit_import_until(writes, &|| canceled.load(Ordering::Acquire))
+    }
+    /// `commit_import` with the cancel check as a function, so a test can
+    /// cancel between two songs or right before COMMIT.
+    fn commit_import_until(
+        &mut self,
+        writes: Vec<ImportWrite>,
+        canceled: &dyn Fn() -> bool,
+    ) -> Result<Vec<Version>> {
+        if writes.len() > MAX_IMPORT_SONGS {
+            return Err(Error::Invalid);
+        }
+        for write in &writes {
+            write.song.validate()?;
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut saved = Vec::with_capacity(writes.len());
+        for write in &writes {
+            if canceled() {
+                return Err(Error::Canceled);
+            }
+            saved.push(write_song(&tx, write.replace, &write.song)?);
+        }
+        if canceled() {
+            return Err(Error::Canceled);
+        }
+        tx.commit()?;
+        Ok(saved)
+    }
+    /// For each key, the current library song it duplicates: one with the
+    /// same title and words if any (`same_lyrics`), else the first with the
+    /// same title. Titles and words come from the search index, so only the
+    /// words of songs whose title matches are read. Ties go to the lowest id.
+    pub fn find_duplicates(&self, keys: &[DuplicateKey]) -> Result<Vec<Option<LibraryMatch>>> {
+        if keys.len() > MAX_IMPORT_SONGS {
+            return Err(Error::Invalid);
+        }
+        let mut by_title: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (index, key) in keys.iter().enumerate() {
+            by_title.entry(key.title.as_str()).or_default().push(index);
+        }
+        let mut found: Vec<Option<LibraryMatch>> = vec![None; keys.len()];
+        if by_title.is_empty() {
+            return Ok(found);
+        }
+        let mut statement = self.db.prepare_cached("SELECT s.id,s.head,f.title,m.row FROM songs s JOIN search_rows m ON m.song=s.id JOIN song_search f ON f.rowid=m.row WHERE s.deleted=0 ORDER BY s.id")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let title: String = row.get(2)?;
+            let Some(indices) = by_title.get(batch::title_key(&title).as_str()) else {
+                continue;
+            };
+            let version = Version {
+                id: read_id(row.get(0)?)?,
+                revision: row.get(1)?,
+            };
+            let lyrics: String = self.db.query_row(
+                "SELECT lyrics FROM song_search WHERE rowid=?",
+                params![row.get::<_, i64>(3)?],
+                |r| r.get(0),
+            )?;
+            let digest = batch::lyrics_key(&lyrics);
+            for &index in indices {
+                let same_lyrics = keys[index].lyrics == digest;
+                let better = match &found[index] {
+                    None => true,
+                    Some(current) => same_lyrics && !current.same_lyrics,
+                };
+                if better {
+                    found[index] = Some(LibraryMatch {
+                        version,
+                        title: title.clone(),
+                        same_lyrics,
+                    });
+                }
+            }
+        }
+        Ok(found)
     }
     /// The song at each version, in order, for a schedule file to embed.
     pub fn songs(&self, versions: &[Version]) -> Result<Vec<Song>> {
@@ -984,16 +1263,17 @@ impl Repository {
             "INSERT INTO song_search(song_search) VALUES('integrity-check')",
             [],
         )?;
-        let mut statement = self.db.prepare("SELECT r.payload,f.title,f.lyrics,f.metadata,s.id,s.head FROM search_rows m JOIN songs s ON s.id=m.song JOIN song_revisions r ON r.id=s.id AND r.revision=s.head JOIN song_search f ON f.rowid=m.row")?;
+        let mut statement = self.db.prepare("SELECT r.payload,f.title,f.lyrics,f.metadata,f.labels,s.id,s.head,m.author,m.copyright,m.administrator,m.song_number FROM search_rows m JOIN songs s ON s.id=m.song JOIN song_revisions r ON r.id=s.id AND r.revision=s.head JOIN song_search f ON f.rowid=m.row")?;
         let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
-            let indexed: [String; 3] = [row.get(1)?, row.get(2)?, row.get(3)?];
+            let indexed: [String; 4] = [row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?];
+            let keys: [String; 4] = [row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?];
             let mut song = Song::decode(&row.get::<_, Vec<u8>>(0)?)?;
             apply_metadata(
                 &mut song,
-                read_metadata(&self.db, &row.get::<_, Vec<u8>>(4)?, row.get(5)?)?,
+                read_metadata(&self.db, &row.get::<_, Vec<u8>>(5)?, row.get(6)?)?,
             );
-            if search_fields(&song) != indexed {
+            if search_fields(&song) != indexed || sort_keys(&song) != keys {
                 return Ok(false);
             }
         }
@@ -1176,8 +1456,9 @@ fn quick_check(db: &Connection) -> Result<bool> {
     let check: String = db.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
     Ok(check == "ok")
 }
-/// The indexed columns of a song: title, lyrics, metadata. Labels are not indexed.
-fn search_fields(song: &Song) -> [String; 3] {
+/// The indexed columns of a song: title, lyrics, metadata and its distinct
+/// section labels (schema 7, EW8-OBS-046), in section order.
+fn search_fields(song: &Song) -> [String; 4] {
     let lyrics = song
         .sections
         .iter()
@@ -1193,7 +1474,26 @@ fn search_fields(song: &Song) -> [String; 3] {
     ]
     .map(String::as_str)
     .join("\n");
-    [song.title.clone(), lyrics, metadata]
+    let mut labels: Vec<&str> = Vec::new();
+    for section in &song.sections {
+        let label = section.label.trim();
+        if !label.is_empty() && !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    [song.title.clone(), lyrics, metadata, labels.join("\n")]
+}
+/// The Sort by keys of a song (EW8-OBS-064): Author, Copyright,
+/// Administrator and Song Number, each on one line with runs of whitespace
+/// collapsed, so a line break or stray space does not change its place.
+fn sort_keys(song: &Song) -> [String; 4] {
+    [
+        &song.authors,
+        &song.copyright,
+        &song.administrator,
+        &song.song_number,
+    ]
+    .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 /// Replaces the song's index entry inside the caller's transaction.
 fn index_song(db: &Connection, id: Id, song: &Song) -> Result<()> {
@@ -1217,10 +1517,15 @@ fn index_song(db: &Connection, id: Id, song: &Song) -> Result<()> {
             db.last_insert_rowid()
         }
     };
-    let [title, lyrics, metadata] = search_fields(song);
+    let [author, copyright, administrator, song_number] = sort_keys(song);
     db.execute(
-        "INSERT INTO song_search(rowid,title,lyrics,metadata) VALUES(?,?,?,?)",
-        params![row, title, lyrics, metadata],
+        "UPDATE search_rows SET author=?,copyright=?,administrator=?,song_number=? WHERE row=?",
+        params![author, copyright, administrator, song_number, row],
+    )?;
+    let [title, lyrics, metadata, labels] = search_fields(song);
+    db.execute(
+        "INSERT INTO song_search(rowid,title,lyrics,metadata,labels) VALUES(?,?,?,?,?)",
+        params![row, title, lyrics, metadata, labels],
     )?;
     Ok(())
 }
@@ -1269,6 +1574,23 @@ fn search_consistent(db: &Connection) -> Result<bool> {
     }
     Ok(!db.prepare("SELECT 1 FROM songs s WHERE s.deleted=0 AND NOT EXISTS(SELECT 1 FROM search_rows m WHERE m.song=s.id) UNION ALL SELECT 1 FROM search_rows m LEFT JOIN songs s ON s.id=m.song WHERE s.id IS NULL OR s.deleted!=0 UNION ALL SELECT 1 FROM search_rows m WHERE NOT EXISTS(SELECT 1 FROM song_search f WHERE f.rowid=m.row) UNION ALL SELECT 1 FROM song_search f WHERE NOT EXISTS(SELECT 1 FROM search_rows m WHERE m.row=f.rowid) LIMIT 1")?.exists([])?)
 }
+/// The one song save path inside the caller's transaction: the next
+/// revision (or a new song), its payload and tables, its search index entry
+/// and the Date modified stamp. `song` is already validated.
+fn write_song(
+    tx: &rusqlite::Transaction<'_>,
+    previous: Option<Version>,
+    song: &Song,
+) -> Result<Version> {
+    let v = advance(tx, "songs", previous)?;
+    insert_revision(tx, v, song)?;
+    index_song(tx, v.id, song)?;
+    tx.execute(
+        "UPDATE songs SET modified=MAX(?1,(SELECT COALESCE(MAX(modified),0)+1 FROM songs)) WHERE id=?2",
+        params![now_millis(), &v.id.0[..]],
+    )?;
+    Ok(v)
+}
 fn advance(
     tx: &rusqlite::Transaction<'_>,
     table: &str,
@@ -1306,6 +1628,200 @@ fn advance(
         }
     }
 }
+/// Themes (schema 8, M1-08). Every write returns the whole new theme set so
+/// the caller never shows a half-applied state.
+impl Repository {
+    /// The library's themes, sorted by name, and its default song theme.
+    pub fn themes(&self) -> Result<ThemeSet> {
+        let mut statement = self
+            .db
+            .prepare("SELECT id,payload FROM themes ORDER BY id LIMIT ?")?;
+        let rows = statement
+            .query_map(params![(MAX_THEMES + 1) as i64], |r| {
+                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if rows.len() > MAX_THEMES {
+            return Err(Error::Corrupt);
+        }
+        let mut set = ThemeSet::default();
+        for (id, payload) in rows {
+            let theme = Theme::decode(&payload).ok_or(Error::Corrupt)?;
+            if theme.id.0[..] != id[..] || theme.is_built_in() {
+                return Err(Error::Corrupt);
+            }
+            set.themes.push(theme);
+        }
+        set.default = self
+            .db
+            .query_row("SELECT theme FROM theme_default WHERE slot=1", [], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
+            .optional()?
+            .map(read_theme_id)
+            .transpose()?;
+        set.sort();
+        Ok(set)
+    }
+    /// Creates or replaces a library theme. The built-in theme is not
+    /// stored; a new theme past `MAX_THEMES` is refused.
+    pub fn save_theme(&mut self, theme: &Theme) -> Result<ThemeSet> {
+        self.store_theme(theme, false)
+    }
+    /// `save_theme` for a theme that must still be in the library (a theme
+    /// editor saving a library theme): a theme deleted meanwhile is
+    /// `Missing` and is not re-inserted.
+    pub fn update_theme(&mut self, theme: &Theme) -> Result<ThemeSet> {
+        self.store_theme(theme, true)
+    }
+    fn store_theme(&mut self, theme: &Theme, existing: bool) -> Result<ThemeSet> {
+        if !theme.is_valid() || theme.is_built_in() || theme.encode().len() > THEME_ENCODED {
+            return Err(Error::Invalid);
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = &theme.id.0[..];
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM themes WHERE id=?)",
+            params![id],
+            |r| r.get(0),
+        )?;
+        if existing && !exists {
+            return Err(Error::Missing);
+        }
+        if exists {
+            tx.execute(
+                "UPDATE themes SET revision=revision+1,payload=? WHERE id=?",
+                params![theme.encode(), id],
+            )?;
+        } else {
+            let count: i64 = tx.query_row("SELECT count(*) FROM themes", [], |r| r.get(0))?;
+            if count >= MAX_THEMES as i64 {
+                return Err(Error::Budget);
+            }
+            tx.execute(
+                "INSERT INTO themes VALUES(?,1,?)",
+                params![id, theme.encode()],
+            )?;
+        }
+        tx.commit()?;
+        self.themes()
+    }
+    /// Removes a library theme. Songs naming it fall back to the default
+    /// (reported by `ThemeSet::resolve`); a removed default becomes built-in.
+    pub fn delete_theme(&mut self, id: ThemeId) -> Result<ThemeSet> {
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.execute("DELETE FROM themes WHERE id=?", params![&id.0[..]])? != 1 {
+            return Err(Error::Missing);
+        }
+        tx.execute(
+            "DELETE FROM theme_default WHERE theme=?",
+            params![&id.0[..]],
+        )?;
+        tx.commit()?;
+        self.themes()
+    }
+    /// The default song theme; `None` (or the built-in id) is the built-in.
+    pub fn set_default_theme(&mut self, id: Option<ThemeId>) -> Result<ThemeSet> {
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        match id.filter(|id| *id != ThemeId::BUILT_IN) {
+            Some(id) => {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM themes WHERE id=?)",
+                    params![&id.0[..]],
+                    |r| r.get(0),
+                )?;
+                if !exists {
+                    return Err(Error::Missing);
+                }
+                tx.execute(
+                    "INSERT OR REPLACE INTO theme_default VALUES(1,?)",
+                    params![&id.0[..]],
+                )?;
+            }
+            None => {
+                tx.execute("DELETE FROM theme_default", [])?;
+            }
+        }
+        tx.commit()?;
+        self.themes()
+    }
+    /// The theme a library song names, if any (by song id: every revision).
+    pub fn song_theme(&self, song: Id) -> Result<Option<ThemeId>> {
+        self.db
+            .query_row(
+                "SELECT theme FROM song_themes WHERE song=?",
+                params![&song.0[..]],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+            .map(read_theme_id)
+            .transpose()
+    }
+    /// Names `theme` as the song's theme (`None`: follow the default;
+    /// `ThemeId::BUILT_IN`: the built-in look whatever the default). The
+    /// song must exist and not be deleted; a library theme must exist.
+    pub fn set_song_theme(&mut self, song: Id, theme: Option<ThemeId>) -> Result<()> {
+        self.set_song_themes(&[song], theme)
+    }
+    /// `set_song_theme` for several songs in one transaction: every song
+    /// changes or none does. A deleted or unknown song, or a theme the
+    /// library no longer has, is `Missing` and leaves every song as it was.
+    pub fn set_song_themes(&mut self, songs: &[Id], theme: Option<ThemeId>) -> Result<()> {
+        if songs.len() > MAX_SONG_THEME_BATCH {
+            return Err(Error::Invalid);
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(id) = theme {
+            // The built-in theme is named explicitly, so a library default
+            // never overrides a song that chose it.
+            let exists: bool = id == ThemeId::BUILT_IN
+                || tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM themes WHERE id=?)",
+                    params![&id.0[..]],
+                    |r| r.get(0),
+                )?;
+            if !exists {
+                return Err(Error::Missing);
+            }
+        }
+        for song in songs {
+            let live: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM songs WHERE id=? AND deleted=0)",
+                params![&song.0[..]],
+                |r| r.get(0),
+            )?;
+            if !live {
+                return Err(Error::Missing);
+            }
+            match theme {
+                Some(id) => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO song_themes VALUES(?,?)",
+                        params![&song.0[..], &id.0[..]],
+                    )?;
+                }
+                None => {
+                    tx.execute("DELETE FROM song_themes WHERE song=?", params![&song.0[..]])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+const THEME_ENCODED: usize = crate::theme::MAX_ENCODED;
+fn read_theme_id(bytes: Vec<u8>) -> Result<ThemeId> {
+    Ok(ThemeId(bytes.try_into().map_err(|_| Error::Corrupt)?))
+}
+
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
@@ -1342,6 +1858,25 @@ pub enum Command {
     RepairSearch,
     /// Rebuilds the search index unconditionally.
     RebuildSearch,
+    /// Library duplicates of staged import songs (`Repository::find_duplicates`).
+    FindDuplicates(Vec<DuplicateKey>),
+    /// Saves an import batch in one transaction (`Repository::commit_import`);
+    /// cancelling the command rolls back whatever it has not committed.
+    CommitImport(Vec<ImportWrite>),
+    /// The song at a revision plus its library theme (M1-08).
+    ThemedSong(Version),
+    /// `Songs` plus each song's library theme, for a schedule file save.
+    ThemedSongs(Vec<Version>),
+    /// The library themes and default (M1-08).
+    Themes,
+    /// Inserts or replaces a theme.
+    SaveTheme(Theme),
+    /// Replaces a theme that must still exist (`Repository::update_theme`).
+    UpdateTheme(Theme),
+    DeleteTheme(ThemeId),
+    SetDefaultTheme(Option<ThemeId>),
+    /// Names a theme for these songs (by id); replies with the theme set.
+    SetSongTheme(Vec<Id>, Option<ThemeId>),
 }
 #[derive(Debug)]
 pub enum Reply {
@@ -1359,6 +1894,15 @@ pub enum Reply {
     Copied,
     Search(search::Results),
     SearchIndex(search::IndexState),
+    Duplicates(Vec<Option<LibraryMatch>>),
+    /// The saved version of each import write, in order.
+    Committed(Vec<Version>),
+    ThemedSong(Song, Option<ThemeId>),
+    ThemedSongs(Vec<(Song, Option<ThemeId>)>),
+    Themes(ThemeSet),
+    /// `SetSongTheme` named a theme the library no longer has (deleted
+    /// through another connection): no song changed; the current set.
+    ThemeGone(ThemeSet),
 }
 struct Request {
     command: Command,
@@ -1396,6 +1940,44 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::Search { query, generation } => repo.search(&query, generation).map(Reply::Search),
         Command::RepairSearch => repo.repair_search().map(Reply::SearchIndex),
         Command::RebuildSearch => repo.rebuild_search().map(Reply::SearchIndex),
+        Command::FindDuplicates(keys) => repo.find_duplicates(&keys).map(Reply::Duplicates),
+        Command::CommitImport(writes) => repo
+            .commit_import(writes, &request.canceled)
+            .map(Reply::Committed),
+        Command::ThemedSong(v) => {
+            let song = repo.song(v)?;
+            repo.song_theme(v.id)
+                .map(|theme| Reply::ThemedSong(song, theme))
+        }
+        Command::ThemedSongs(versions) => {
+            let songs = repo.songs(&versions)?;
+            versions
+                .iter()
+                .zip(songs)
+                .map(|(v, song)| Ok((song, repo.song_theme(v.id)?)))
+                .collect::<Result<Vec<_>>>()
+                .map(Reply::ThemedSongs)
+        }
+        Command::Themes => repo.themes().map(Reply::Themes),
+        Command::SaveTheme(theme) => repo.save_theme(&theme).map(Reply::Themes),
+        Command::UpdateTheme(theme) => repo.update_theme(&theme).map(Reply::Themes),
+        Command::DeleteTheme(id) => repo.delete_theme(id).map(Reply::Themes),
+        Command::SetDefaultTheme(id) => repo.set_default_theme(id).map(Reply::Themes),
+        Command::SetSongTheme(songs, theme) => match repo.set_song_themes(&songs, theme) {
+            Ok(()) => repo.themes().map(Reply::Themes),
+            // `Missing` is a deleted song or a deleted theme; the operator
+            // words and refreshes them differently.
+            Err(Error::Missing) => {
+                let set = repo.themes()?;
+                match theme {
+                    Some(id) if id != ThemeId::BUILT_IN && set.get(id).is_none() => {
+                        Ok(Reply::ThemeGone(set))
+                    }
+                    _ => Err(Error::Missing),
+                }
+            }
+            Err(error) => Err(error),
+        },
     }
 }
 /// Cancellation only wins before the worker starts a command. Always poll its result.
@@ -1470,8 +2052,17 @@ impl Worker {
             Command::SaveSchedule(_, s) if s.items.len() > MAX_ITEMS || s.title.len() > 1024 => {
                 return Err(Error::Invalid);
             }
-            Command::Songs(v) if v.len() > 2 * MAX_ITEMS => return Err(Error::Invalid),
+            Command::Songs(v) | Command::ThemedSongs(v) if v.len() > 2 * MAX_ITEMS => {
+                return Err(Error::Invalid);
+            }
             Command::ImportSongs(items) if items.len() > MAX_ITEMS => return Err(Error::Invalid),
+            // Songs are validated on the storage thread, not here on the UI's.
+            Command::CommitImport(writes) if writes.len() > MAX_IMPORT_SONGS => {
+                return Err(Error::Invalid);
+            }
+            Command::FindDuplicates(keys) if keys.len() > MAX_IMPORT_SONGS => {
+                return Err(Error::Invalid);
+            }
             Command::BackupNew(p) if p.as_os_str().len() > 4096 => return Err(Error::Invalid),
             Command::RestoreNew {
                 source,
@@ -1480,6 +2071,14 @@ impl Worker {
                 return Err(Error::Invalid);
             }
             Command::Search { query, .. } if query.len() > search::MAX_QUERY_BYTES => {
+                return Err(Error::Invalid);
+            }
+            Command::SaveTheme(theme) | Command::UpdateTheme(theme)
+                if !theme.is_valid() || theme.is_built_in() =>
+            {
+                return Err(Error::Invalid);
+            }
+            Command::SetSongTheme(songs, _) if songs.len() > MAX_SONG_THEME_BATCH => {
                 return Err(Error::Invalid);
             }
             _ => (),
@@ -1569,10 +2168,12 @@ mod tests {
             repo.db
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            6
+            CURRENT
         );
         // One verified backup of the original schema, not one per step.
+        assert!(!d.path().join("legacy.schema7-backup").exists());
         assert!(!d.path().join("legacy.schema5-backup").exists());
+        assert!(!d.path().join("legacy.schema6-backup").exists());
         assert!(!d.path().join("legacy.schema2-backup").exists());
         assert!(!d.path().join("legacy.schema3-backup").exists());
         assert!(!d.path().join("legacy.schema4-backup").exists());
@@ -1959,6 +2560,96 @@ mod tests {
             );
         }
     }
+    // M5-02 audit finding: a restored backup is an untrusted file. One that
+    // carries a trigger (or view) would run it on every later save of the
+    // restored library, for example deleting songs as they are written.
+    #[test]
+    fn restore_refuses_a_library_with_triggers_or_views() {
+        let (d, p, mut repo) = fixture();
+        repo.save_song(None, song()).unwrap();
+        drop(repo);
+        let cancel = AtomicBool::new(false);
+        for (name, sql) in [
+            (
+                "trigger",
+                "CREATE TRIGGER wipe AFTER INSERT ON song_revisions BEGIN DELETE FROM songs; END",
+            ),
+            ("view", "CREATE VIEW everything AS SELECT * FROM songs"),
+        ] {
+            let source = d.path().join(format!("{name}.sqlite"));
+            std::fs::copy(&p, &source).unwrap();
+            Connection::open(&source)
+                .unwrap()
+                .execute_batch(sql)
+                .unwrap();
+            let restored = d.path().join(format!("{name}-restored.sqlite"));
+            assert_eq!(
+                Repository::restore_new(&source, &restored, &cancel),
+                Err(Error::Unsupported),
+                "{name}"
+            );
+            assert!(!restored.exists(), "{name}");
+        }
+        // The untouched library still restores.
+        let restored = d.path().join("clean-restored.sqlite");
+        Repository::restore_new(&p, &restored, &cancel).unwrap();
+        assert_eq!(
+            Repository::open(&restored)
+                .unwrap()
+                .heads(false, None)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    // Review finding (fuzz-audit): the private copy a backup or restore
+    // writes, and the library read again for its pre-migration backup, were
+    // plain connections, though docs/storage.md says every connection is
+    // hardened.
+    #[test]
+    fn connections_to_untrusted_files_are_hardened() {
+        use rusqlite::config::DbConfig;
+        let (d, p, repo) = fixture();
+        drop(repo);
+        let hardened = |db: &Connection| {
+            (
+                db.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap(),
+                db.db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
+                    .unwrap(),
+            )
+        };
+        assert_eq!(
+            hardened(&open_untrusted_read_only(&p).unwrap()),
+            (true, false)
+        );
+        let copy = d.path().join("copy.sqlite");
+        assert_eq!(hardened(&open_private_copy(&copy).unwrap()), (true, false));
+        assert_eq!(hardened(&Repository::open(&p).unwrap().db), (true, false));
+    }
+
+    // Review round 2 (fuzz-audit): the test above checks the helpers only;
+    // this one fails if a backup, a restore or the pre-migration backup goes
+    // back to a plain connection at its call site.
+    #[test]
+    fn every_copy_reads_and_writes_through_hardened_connections() {
+        let take = || COPY_CONNECTIONS.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        let cancel = AtomicBool::new(false);
+        let (d, p, repo) = fixture();
+        take();
+        repo.backup_new(&d.path().join("backup.sqlite"), &cancel)
+            .unwrap();
+        assert_eq!(take(), vec![[(true, true); 2]], "backup");
+        drop(repo);
+        Repository::restore_new(&p, &d.path().join("restored.sqlite"), &cancel).unwrap();
+        assert_eq!(take(), vec![[(true, true); 2]], "restore");
+        let old = d.path().join("legacy");
+        legacy(&old);
+        Repository::open(&old).unwrap();
+        assert!(d.path().join("legacy.schema1-backup").exists());
+        assert_eq!(take(), vec![[(true, true); 2]], "pre-migration backup");
+    }
+
     #[test]
     fn backup_failures_never_publish_or_replace() {
         let (d, p, mut repo) = fixture();
@@ -2021,7 +2712,7 @@ mod tests {
             );
             assert_eq!(std::fs::read(input).unwrap(), bytes);
         }
-        repo.db.execute_batch("PRAGMA user_version=7").unwrap();
+        repo.db.execute_batch("PRAGMA user_version=9").unwrap();
         drop(repo);
         let before = std::fs::read(&p).unwrap();
         assert_eq!(
@@ -2276,7 +2967,7 @@ mod tests {
     }
     #[test]
     fn rejects_newer_foreign_corrupt_without_replacement() {
-        for sql in ["PRAGMA user_version=7", "PRAGMA application_id=42"] {
+        for sql in ["PRAGMA user_version=9", "PRAGMA application_id=42"] {
             let (_d, p, r) = fixture();
             r.db.execute_batch(sql).unwrap();
             drop(r);
@@ -2589,7 +3280,7 @@ mod tests {
         let path = d.path().join("library");
         let v = schema2(&path);
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 6);
+        assert_eq!(schema_of(&path), CURRENT);
         let first = repo.song(v).unwrap();
         assert_eq!(first.sections[1].id, SectionId(Id([11; 16])));
         assert!(first.sections.iter().all(|s| s.format.is_default()));
@@ -2787,7 +3478,7 @@ mod tests {
         let path = d.path().join("library");
         let v = schema3(&path);
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 6);
+        assert_eq!(schema_of(&path), CURRENT);
         let first = repo.song(v).unwrap();
         assert_eq!(first.sections[0].format, crate::format::tests::full());
         assert!(first.master.is_none());
@@ -3530,7 +4221,7 @@ mod tests {
         let path = d.path().join("library");
         let v = schema4(&path);
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 6);
+        assert_eq!(schema_of(&path), CURRENT);
         let head = Version { revision: 2, ..v };
         let current = repo.song(head).unwrap();
         assert_eq!(current.master, Some(Background::color([1, 2, 3])));
@@ -3765,12 +4456,40 @@ mod tests {
         repo.save_song(Some(c), titled("Delta 2")).unwrap();
         assert_eq!(modified_order(&repo).last().unwrap(), "Delta 2");
     }
+    /// The search index as schemas 5 and 6 created it: no labels column, no
+    /// sort keys.
+    const SEARCH5: &str = "CREATE TABLE search_rows(row INTEGER PRIMARY KEY, song BLOB NOT NULL UNIQUE REFERENCES songs(id));
+CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='unicode61 remove_diacritics 2');";
+    /// Fills a `SEARCH5` index the way schema 5 and 6 did.
+    fn fill_search5(db: &Connection) {
+        let metadata = has_table(db, "song_metadata").unwrap();
+        let mut statement = db.prepare("SELECT s.id,r.payload,s.head FROM songs s JOIN song_revisions r ON r.id=s.id AND r.revision=s.head WHERE s.deleted=0 ORDER BY s.id").unwrap();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let id: Vec<u8> = row.get(0).unwrap();
+            let mut song = Song::decode(&row.get::<_, Vec<u8>>(1).unwrap()).unwrap();
+            if metadata {
+                apply_metadata(
+                    &mut song,
+                    read_metadata(db, &id, row.get(2).unwrap()).unwrap(),
+                );
+            }
+            db.execute("INSERT INTO search_rows(song) VALUES(?)", params![id])
+                .unwrap();
+            let [title, lyrics, metadata, _] = search_fields(&song);
+            db.execute(
+                "INSERT INTO song_search(rowid,title,lyrics,metadata) VALUES(?,?,?,?)",
+                params![db.last_insert_rowid(), title, lyrics, metadata],
+            )
+            .unwrap();
+        }
+    }
     /// The schema 4 library after the schema 5 migration: search index only.
     fn schema5(path: &std::path::Path) -> Version {
         let v = schema4(path);
         let db = Connection::open(path).unwrap();
-        db.execute_batch(SEARCH).unwrap();
-        fill_search(&db).unwrap();
+        db.execute_batch(SEARCH5).unwrap();
+        fill_search5(&db);
         db.execute_batch("PRAGMA user_version=5").unwrap();
         v
     }
@@ -3791,7 +4510,7 @@ mod tests {
         };
         assert!(!rows.is_empty());
         let repo = Repository::open(&path).unwrap();
-        assert_eq!(schema_of(&path), 6);
+        assert_eq!(schema_of(&path), CURRENT);
         let db = Connection::open(&path).unwrap();
         for (song, row) in &rows {
             let modified: i64 = db
@@ -3855,5 +4574,871 @@ mod tests {
             .unwrap()
             .verify_history(&AtomicBool::new(false), std::time::Instant::now())
             .unwrap();
+    }
+
+    fn import_write(title: &str, lyrics: &str) -> ImportWrite {
+        ImportWrite {
+            replace: None,
+            song: Arc::new(lyric_song(title, lyrics)),
+        }
+    }
+
+    #[test]
+    fn an_import_commits_every_song_in_one_transaction_and_indexes_it() {
+        let (_d, _path, mut repo) = fixture();
+        let existing = repo
+            .save_song(None, lyric_song("Kasih Setia", "old words"))
+            .unwrap();
+        let mut replacement = import_write("Kasih Setia", "kasih-Mu sétia selamanya");
+        replacement.replace = Some(existing);
+        let saved = repo
+            .commit_import(
+                vec![
+                    import_write("Bapa yang Kekal", "Engkau sungguh ajaib"),
+                    replacement,
+                    import_write("Harbor Light", "the lamp is lit"),
+                ],
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert_eq!(saved.len(), 3);
+        assert_eq!(saved[1].id, existing.id, "Replace keeps the song");
+        assert_eq!(saved[1].revision, existing.revision + 1);
+        // The same index as an editor save: accented words, prefix search.
+        assert_eq!(titles(&repo, "sétia"), ["Kasih Setia"]);
+        assert_eq!(titles(&repo, "ajai"), ["Bapa yang Kekal"]);
+        assert!(titles(&repo, "old").is_empty());
+        assert!(repo.check_search().unwrap());
+        assert_eq!(repo.heads(false, None).unwrap().len(), 3);
+        // History of the replaced song stays readable.
+        assert_eq!(repo.song(existing).unwrap().sections[0].lyrics, "old words");
+    }
+
+    #[test]
+    fn a_failing_save_rolls_the_whole_import_back() {
+        let (_d, _path, mut repo) = fixture();
+        let kept = repo
+            .save_song(None, lyric_song("Kept", "kept words"))
+            .unwrap();
+        // The third song's index insert fails (failure injection).
+        repo.db
+            .execute_batch(
+                "CREATE TRIGGER fail_third BEFORE INSERT ON search_rows WHEN (SELECT count(*) FROM search_rows) >= 3 BEGIN SELECT RAISE(ABORT,'injected'); END;",
+            )
+            .unwrap();
+        let writes = vec![
+            import_write("One", "first"),
+            import_write("Two", "second"),
+            import_write("Three", "third"),
+        ];
+        assert_eq!(
+            repo.commit_import(writes.clone(), &AtomicBool::new(false)),
+            Err(Error::Io)
+        );
+        assert_eq!(repo.heads(false, None).unwrap(), [kept]);
+        assert!(titles(&repo, "first").is_empty());
+        assert!(repo.check_search().unwrap());
+        // A replace of a song that moved on conflicts, and also rolls back.
+        repo.db.execute_batch("DROP TRIGGER fail_third").unwrap();
+        let newer = repo
+            .save_song(Some(kept), lyric_song("Kept", "newer"))
+            .unwrap();
+        let mut stale = import_write("Kept", "stale replace");
+        stale.replace = Some(kept);
+        assert_eq!(
+            repo.commit_import(
+                vec![import_write("One", "first"), stale],
+                &AtomicBool::new(false)
+            ),
+            Err(Error::Conflict)
+        );
+        assert_eq!(repo.heads(false, None).unwrap(), [newer]);
+        // A cancelled commit saves nothing.
+        assert_eq!(
+            repo.commit_import(writes.clone(), &AtomicBool::new(true)),
+            Err(Error::Canceled)
+        );
+        assert_eq!(repo.heads(false, None).unwrap(), [newer]);
+        // An invalid song refuses the whole batch before any write.
+        let mut invalid = writes;
+        Arc::make_mut(&mut invalid[1].song).title = " ".into();
+        assert_eq!(
+            repo.commit_import(invalid, &AtomicBool::new(false)),
+            Err(Error::Invalid)
+        );
+        assert_eq!(repo.heads(false, None).unwrap(), [newer]);
+        let too_many = vec![import_write("X", "x"); MAX_IMPORT_SONGS + 1];
+        assert_eq!(
+            repo.commit_import(too_many, &AtomicBool::new(false)),
+            Err(Error::Invalid)
+        );
+    }
+
+    #[test]
+    fn a_cancel_between_songs_or_before_commit_rolls_back() {
+        let (_d, _path, mut repo) = fixture();
+        let kept = repo
+            .save_song(None, lyric_song("Kept", "kept words"))
+            .unwrap();
+        let writes = vec![
+            import_write("One", "first"),
+            import_write("Two", "second"),
+            import_write("Three", "third"),
+        ];
+        // Check 1 is before song 1, 2 and 3 between songs, 4 before COMMIT.
+        for cancel_at in 2..=4 {
+            let calls = std::cell::Cell::new(0);
+            let canceled = || {
+                calls.set(calls.get() + 1);
+                calls.get() >= cancel_at
+            };
+            assert_eq!(
+                repo.commit_import_until(writes.clone(), &canceled),
+                Err(Error::Canceled),
+                "cancel at check {cancel_at}"
+            );
+            assert_eq!(calls.get(), cancel_at, "stopped at check {cancel_at}");
+            assert_eq!(repo.heads(false, None).unwrap(), [kept]);
+            assert!(titles(&repo, "first").is_empty());
+            assert!(repo.check_search().unwrap());
+        }
+        // Never cancelled: four checks, then the batch lands.
+        let calls = std::cell::Cell::new(0);
+        let saved = repo
+            .commit_import_until(writes, &|| {
+                calls.set(calls.get() + 1);
+                false
+            })
+            .unwrap();
+        assert_eq!((saved.len(), calls.get()), (3, 4));
+    }
+
+    #[test]
+    fn duplicates_prefer_same_words_then_same_title() {
+        let (_d, path, mut repo) = fixture();
+        let other = repo
+            .save_song(None, lyric_song("Amazing  Grace", "different words"))
+            .unwrap();
+        let same = repo
+            .save_song(None, lyric_song("amazing grace!", "How sweet the sound"))
+            .unwrap();
+        let deleted = repo
+            .save_song(None, lyric_song("Gone Song", "gone"))
+            .unwrap();
+        repo.delete_song(deleted).unwrap();
+        let key = |title: &str, lyrics: &str| batch::duplicate_key(&lyric_song(title, lyrics));
+        let found = repo
+            .find_duplicates(&[
+                key("Amazing Grace", "how sweet, the SOUND"),
+                key("Amazing Grace", "new words"),
+                key("Gone Song", "gone"),
+                key("Brand New", "x"),
+            ])
+            .unwrap();
+        assert_eq!(
+            found[0],
+            Some(LibraryMatch {
+                version: same,
+                title: "amazing grace!".into(),
+                same_lyrics: true
+            })
+        );
+        let title_only = found[1].clone().unwrap();
+        assert!(!title_only.same_lyrics);
+        assert!([other, same].contains(&title_only.version));
+        assert_eq!(found[2], None, "deleted songs are not duplicates");
+        assert_eq!(found[3], None);
+        assert_eq!(repo.find_duplicates(&[]).unwrap(), []);
+        // Through the worker, with the commit after it.
+        drop(repo);
+        let mut worker = Worker::open(path).unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Opened)));
+        worker
+            .submit(Command::FindDuplicates(vec![key("Brand New", "x")]))
+            .unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Duplicates(d)) if d == [None]));
+        worker
+            .submit(Command::CommitImport(vec![import_write("Brand New", "x")]))
+            .unwrap();
+        assert!(matches!(wait(&mut worker), Ok(Reply::Committed(v)) if v.len() == 1));
+        assert!(matches!(
+            worker.submit(Command::CommitImport(vec![
+                import_write("X", "x");
+                MAX_IMPORT_SONGS + 1
+            ])),
+            Err(Error::Invalid)
+        ));
+    }
+
+    fn keyed(title: &str, authors: &str, copyright: &str, admin: &str, number: &str) -> Song {
+        let mut s = titled(title);
+        s.authors = authors.into();
+        s.copyright = copyright.into();
+        s.administrator = admin.into();
+        s.song_number = number.into();
+        s
+    }
+    fn listed(repo: &Repository, sort: SongSort, descending: bool) -> Vec<String> {
+        repo.library(SongOrder { sort, descending })
+            .unwrap()
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect()
+    }
+    #[test]
+    fn library_sorts_by_author_copyright_administrator_and_song_number() {
+        let (_d, _p, mut repo) = fixture();
+        for (title, authors, copyright, admin, number) in [
+            ("Delta", "bravo writer", "© 2001 Zeta", "Northwind", "900"),
+            ("Alpha", "", "", "", ""),
+            ("Echo", "Alpha Writer", "(c) 1999 Omega", "acme", "10"),
+            ("Bravo", "Charlie  Writer", "© 2001 Zeta", "", "0042"),
+            ("Charlie", "Alpha Writer", "", "Acme", "7"),
+        ] {
+            repo.save_song(None, keyed(title, authors, copyright, admin, number))
+                .unwrap();
+        }
+        // Empty keys last; ASCII case ignored; equal keys by title.
+        assert_eq!(
+            listed(&repo, SongSort::Author, false),
+            ["Charlie", "Echo", "Delta", "Bravo", "Alpha"]
+        );
+        assert_eq!(
+            listed(&repo, SongSort::Author, true),
+            ["Bravo", "Delta", "Charlie", "Echo", "Alpha"],
+            "descending reverses the keys, keeps title ties ascending and empties last"
+        );
+        assert_eq!(
+            listed(&repo, SongSort::Copyright, false),
+            ["Echo", "Bravo", "Delta", "Alpha", "Charlie"]
+        );
+        assert_eq!(
+            listed(&repo, SongSort::Administrator, false),
+            ["Charlie", "Echo", "Delta", "Alpha", "Bravo"]
+        );
+        // Numeric, not text: 7 < 10 < 0042 < 900.
+        assert_eq!(
+            listed(&repo, SongSort::SongNumber, false),
+            ["Charlie", "Echo", "Bravo", "Delta", "Alpha"]
+        );
+        assert_eq!(
+            listed(&repo, SongSort::SongNumber, true),
+            ["Delta", "Bravo", "Echo", "Charlie", "Alpha"]
+        );
+        // Case-only and leading-zero differences are ties: title decides.
+        for (title, authors, number) in [("Zulu", "Smith", "007"), ("Yankee", "smith", "7")] {
+            repo.save_song(None, keyed(title, authors, "", "", number))
+                .unwrap();
+        }
+        let tied = |sort, descending| -> Vec<String> {
+            listed(&repo, sort, descending)
+                .into_iter()
+                .filter(|t| t == "Yankee" || t == "Zulu")
+                .collect()
+        };
+        for descending in [false, true] {
+            assert_eq!(tied(SongSort::Author, descending), ["Yankee", "Zulu"]);
+            assert_eq!(tied(SongSort::SongNumber, descending), ["Yankee", "Zulu"]);
+        }
+        // A key follows the head revision and a deleted song is gone.
+        let alpha = repo
+            .library(SongOrder::default())
+            .unwrap()
+            .into_iter()
+            .find(|(_, t)| t == "Alpha")
+            .unwrap()
+            .0;
+        let alpha = repo
+            .save_song(Some(alpha), keyed("Alpha", "Aaron", "", "", "1"))
+            .unwrap();
+        assert_eq!(listed(&repo, SongSort::Author, false)[0], "Alpha");
+        assert_eq!(listed(&repo, SongSort::SongNumber, false)[0], "Alpha");
+        repo.delete_song(alpha).unwrap();
+        assert_eq!(listed(&repo, SongSort::Author, false).len(), 6);
+        assert!(repo.check_search().unwrap());
+    }
+    #[test]
+    fn section_labels_are_searchable_and_rank_below_title_and_lyric_matches() {
+        let (_d, _p, mut repo) = fixture();
+        let with_labels = |title: &str, lyrics: &str, labels: &[&str]| {
+            let mut s = titled(title);
+            s.authors.clear();
+            s.copyright.clear();
+            s.license.clear();
+            s.sections = labels
+                .iter()
+                .enumerate()
+                .map(|(i, label)| Section {
+                    id: SectionId(Id([i as u8 + 1; 16])),
+                    label: (*label).into(),
+                    lyrics: lyrics.into(),
+                    format: Default::default(),
+                    background: None,
+                })
+                .collect();
+            s
+        };
+        repo.save_song(
+            None,
+            with_labels(
+                "Plain Song",
+                "nothing here",
+                &["Etsaer", "Sadsdasd", "Etsaer"],
+            ),
+        )
+        .unwrap();
+        repo.save_song(
+            None,
+            with_labels("Etsaer Anthem", "other words", &["Verse 1"]),
+        )
+        .unwrap();
+        repo.save_song(
+            None,
+            with_labels("Lyric Song", "we sing etsaer loud", &["Verse 1"]),
+        )
+        .unwrap();
+        // EW8-OBS-046 examples: word prefixes of a label find the song.
+        assert_eq!(titles(&repo, "sad"), ["Plain Song"]);
+        assert_eq!(titles(&repo, "SADS"), ["Plain Song"]);
+        assert!(
+            titles(&repo, "dsd").is_empty(),
+            "word prefix, not substring"
+        );
+        // Title beats lyrics beats a label-only match.
+        assert_eq!(
+            titles(&repo, "ets"),
+            ["Etsaer Anthem", "Lyric Song", "Plain Song"]
+        );
+        // A label with a number: both words must match.
+        assert_eq!(
+            sorted(titles(&repo, "verse 1")),
+            ["Etsaer Anthem", "Lyric Song"]
+        );
+        // The stored label column holds each distinct label once, in order.
+        let labels: String = repo
+            .db
+            .query_row(
+                "SELECT labels FROM song_search WHERE title='Plain Song'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(labels, "Etsaer\nSadsdasd");
+        assert!(repo.check_search().unwrap());
+    }
+    #[test]
+    fn a_label_only_hit_ranks_below_a_lyric_hit_in_a_much_longer_song() {
+        // bm25 normalizes by row length, so a 0.5 label weight alone let the
+        // short song's label hit outrank the long song's lyric hit.
+        let (_d, _p, mut repo) = fixture();
+        let long: Vec<String> = (0..400).map(|i| format!("word{}", i % 50)).collect();
+        let mut lyric = lyric_song("Long Lyric Song", &format!("{} etsaer", long.join(" ")));
+        lyric.sections[0].label = "Verse 1".into();
+        for label in ["Chorus", "Bridge"] {
+            let mut section = lyric.sections[0].clone();
+            section.id = SectionId::allocate();
+            section.label = label.into();
+            section.lyrics = "more lines".into();
+            lyric.sections.push(section);
+        }
+        repo.save_song(None, lyric).unwrap();
+        let mut label = lyric_song("Label Song", "short words here");
+        label.sections[0].label = "Etsaer".into();
+        repo.save_song(None, label).unwrap();
+        for i in 0..20 {
+            repo.save_song(
+                None,
+                lyric_song(&format!("Filler {i}"), "some filler lyric text"),
+            )
+            .unwrap();
+        }
+        assert_eq!(titles(&repo, "ets"), ["Long Lyric Song", "Label Song"]);
+        // A query with a hit outside the labels keeps its bm25 place even
+        // when another of its words is only in a label.
+        assert_eq!(titles(&repo, "etsaer short"), ["Label Song"]);
+        assert_eq!(titles(&repo, "filler 7"), ["Filler 7"]);
+    }
+    #[test]
+    fn schema5_and_6_libraries_with_only_a_damaged_index_still_migrate() {
+        for version in [5, 6] {
+            let d = tempfile::tempdir().unwrap();
+            let path = d.path().join("library");
+            let v = if version == 5 {
+                schema5(&path)
+            } else {
+                schema6(&path)
+            };
+            Connection::open(&path)
+                .unwrap()
+                .execute_batch("DELETE FROM song_search_data WHERE id>10")
+                .unwrap();
+            assert!(!quick_check(&Connection::open(&path).unwrap()).unwrap());
+            let repo = Repository::open(&path).unwrap_or_else(|e| panic!("{version}: {e:?}"));
+            assert_eq!(schema_of(&path), CURRENT);
+            assert!(repo.check_search().unwrap(), "{version}");
+            let head = Version { revision: 2, ..v };
+            let current = repo.song(head).unwrap();
+            assert_eq!(
+                titles(&repo, "vers"),
+                std::slice::from_ref(&current.title),
+                "{version}: rebuilt with labels"
+            );
+            // The verified backup is the file as it was, damaged index included.
+            let backup = d.path().join(format!("library.schema{version}-backup"));
+            assert_eq!(schema_of(&backup), version);
+            assert!(!quick_check(&Connection::open(&backup).unwrap()).unwrap());
+            let old = Repository::open_internal(&backup, false).unwrap();
+            old.verify_history(&AtomicBool::new(false), std::time::Instant::now())
+                .unwrap();
+            assert_eq!(old.song(head).unwrap(), current, "{version}");
+        }
+        // Damage outside the index is still refused, unchanged and unbacked.
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        schema6(&path);
+        let (root, page_size): (i64, i64) = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT rootpage,(SELECT page_size FROM pragma_page_size) FROM sqlite_schema WHERE name='song_revisions'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[((root - 1) * page_size) as usize] = 0x07;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(matches!(Repository::open(&path), Err(Error::Corrupt)));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(!d.path().join("library.schema6-backup").exists());
+    }
+    #[test]
+    fn stale_labels_or_sort_keys_fail_the_check_and_are_repaired() {
+        for damage in [
+            "UPDATE search_rows SET author='Nobody'",
+            "UPDATE search_rows SET song_number='1'",
+            "UPDATE song_search SET labels='Ghost'",
+        ] {
+            let (_d, _p, mut repo) = fixture();
+            repo.save_song(None, keyed("Psalm", "Writer", "© Owner", "Admin", "77"))
+                .unwrap();
+            assert!(repo.check_search().unwrap());
+            repo.db.execute_batch(damage).unwrap();
+            assert!(!repo.check_search().unwrap(), "{damage}");
+            assert_eq!(
+                repo.repair_search().unwrap(),
+                search::IndexState::Rebuilt { songs: 1 }
+            );
+            assert!(repo.check_search().unwrap(), "{damage}");
+            assert_eq!(titles(&repo, "verse"), ["Psalm"], "{damage}");
+        }
+    }
+    /// The schema 5 library after the schema 6 migration, with properties on
+    /// the head revision that only `song_metadata` holds.
+    fn schema6(path: &std::path::Path) -> Version {
+        let v = schema5(path);
+        let db = Connection::open(path).unwrap();
+        db.execute_batch(SCHEMA6).unwrap();
+        db.execute(
+            "INSERT INTO song_metadata VALUES(?,2,'Zed Admin','42')",
+            params![&v.id.0[..]],
+        )
+        .unwrap();
+        v
+    }
+    #[test]
+    fn schema6_migration_indexes_labels_and_sort_keys_and_keeps_the_stamps() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        let v = schema6(&path);
+        let stamps = |path: &std::path::Path| -> Vec<(Vec<u8>, i64)> {
+            let db = Connection::open(path).unwrap();
+            let mut s = db
+                .prepare("SELECT id,modified FROM songs ORDER BY id")
+                .unwrap();
+            s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        let before = stamps(&path);
+        {
+            let db = Connection::open(&path).unwrap();
+            assert!(db.prepare("SELECT labels FROM song_search").is_err());
+        }
+        let repo = Repository::open(&path).unwrap();
+        assert_eq!(schema_of(&path), CURRENT);
+        assert_eq!(stamps(&path), before, "Date modified survives");
+        let head = Version { revision: 2, ..v };
+        let current = repo.song(head).unwrap();
+        assert_eq!(
+            (current.administrator.as_str(), current.song_number.as_str()),
+            ("Zed Admin", "42")
+        );
+        assert!(current.sections.iter().any(|s| s.label == "Verse"));
+        assert_eq!(
+            titles(&repo, "vers"),
+            std::slice::from_ref(&current.title),
+            "label search"
+        );
+        assert_eq!(
+            repo.library(SongOrder {
+                sort: SongSort::SongNumber,
+                descending: false
+            })
+            .unwrap(),
+            [(head, current.title.clone())]
+        );
+        let keys: (String, String) = repo
+            .db
+            .query_row(
+                "SELECT administrator,song_number FROM search_rows",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(keys, ("Zed Admin".into(), "42".into()));
+        assert!(repo.check_search().unwrap());
+        let backup = d.path().join("library.schema6-backup");
+        assert_eq!(schema_of(&backup), 6);
+        let old = Repository::open_internal(&backup, false).unwrap();
+        old.verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert_eq!(old.song(head).unwrap(), current);
+        drop((old, repo));
+        // Reopening at the current schema neither migrates nor rebuilds again.
+        let rows = |path: &std::path::Path| -> Vec<i64> {
+            let db = Connection::open(path).unwrap();
+            let mut s = db
+                .prepare("SELECT row FROM search_rows ORDER BY row")
+                .unwrap();
+            s.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        let after = rows(&path);
+        let repo = Repository::open(&path).unwrap();
+        assert!(repo.check_search().unwrap());
+        drop(repo);
+        assert_eq!(rows(&path), after);
+        assert!(!d.path().join("library.schema7-backup").exists());
+    }
+    #[test]
+    fn schema6_migration_abort_keeps_schema6_and_the_verified_backup() {
+        const CHILD: &str = "SELA_ABORT_MIGRATION_SCHEMA7";
+        if let Some(path) = std::env::var_os(CHILD) {
+            let _ = Repository::open(std::path::Path::new(&path));
+            panic!("schema 7 abort hook did not run");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        schema6(&path);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::schema6_migration_abort_keeps_schema6_and_the_verified_backup",
+            ])
+            .env(CHILD, &path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success());
+        assert_eq!(schema_of(&path), 6);
+        let db = Connection::open(&path).unwrap();
+        assert!(db.prepare("SELECT labels FROM song_search").is_err());
+        assert!(db.prepare("SELECT author FROM search_rows").is_err());
+        Repository::open_internal(&d.path().join("library.schema6-backup"), false)
+            .unwrap()
+            .verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert!(matches!(Repository::open(&path), Err(Error::Exists)));
+    }
+    /// A schema 7 library: a current one with the schema 8 tables removed
+    /// (schema 8 only adds tables), holding two songs, one with a revision.
+    fn schema7_without_themes(path: &std::path::Path) -> Version {
+        let mut repo = Repository::open(path).unwrap();
+        let v = repo.save_song(None, titled("Six")).unwrap();
+        let v = repo.save_song(Some(v), titled("Six again")).unwrap();
+        repo.save_song(None, titled("Other")).unwrap();
+        drop(repo);
+        let db = Connection::open(path).unwrap();
+        db.execute_batch(
+            "DROP TABLE themes; DROP TABLE song_themes; DROP TABLE theme_default; PRAGMA user_version=7;",
+        )
+        .unwrap();
+        v
+    }
+    #[test]
+    fn schema7_migration_adds_empty_themes_behind_a_verified_backup() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        let v = schema7_without_themes(&path);
+        let repo = Repository::open(&path).unwrap();
+        assert_eq!(schema_of(&path), 8);
+        assert_eq!(repo.themes().unwrap(), ThemeSet::default());
+        assert_eq!(repo.song_theme(v.id).unwrap(), None);
+        let current = repo.song(v).unwrap();
+        assert_eq!(current.title, "Six again");
+        let backup = d.path().join("library.schema7-backup");
+        assert_eq!(schema_of(&backup), 7);
+        let old = Repository::open_internal(&backup, false).unwrap();
+        old.verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert_eq!(old.song(v).unwrap(), current);
+        // Opening again is a no-op: no second backup, same schema.
+        drop((old, repo));
+        std::fs::remove_file(&backup).unwrap();
+        Repository::open(&path).unwrap();
+        assert!(!backup.exists());
+    }
+    #[test]
+    fn schema7_migration_abort_keeps_schema7_and_the_verified_backup() {
+        const CHILD: &str = "SELA_ABORT_MIGRATION_SCHEMA8";
+        if let Some(path) = std::env::var_os(CHILD) {
+            let _ = Repository::open(std::path::Path::new(&path));
+            panic!("schema 8 abort hook did not run");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        schema7_without_themes(&path);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::schema7_migration_abort_keeps_schema7_and_the_verified_backup",
+            ])
+            .env(CHILD, &path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success());
+        assert_eq!(schema_of(&path), 7);
+        let db = Connection::open(&path).unwrap();
+        assert!(db.prepare("SELECT 1 FROM themes").is_err());
+        Repository::open_internal(&d.path().join("library.schema7-backup"), false)
+            .unwrap()
+            .verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        // The stale backup is never overwritten: the next open refuses
+        // until it is moved aside, then migrates.
+        drop(db);
+        assert_eq!(Repository::open(&path).err(), Some(Error::Exists));
+        assert_eq!(schema_of(&path), 7);
+        std::fs::rename(
+            d.path().join("library.schema7-backup"),
+            d.path().join("kept-backup"),
+        )
+        .unwrap();
+        Repository::open(&path).unwrap();
+        assert_eq!(schema_of(&path), 8);
+    }
+
+    #[test]
+    fn themes_save_update_default_and_delete_atomically() {
+        let (_d, p, mut repo) = fixture();
+        let navy = crate::theme::tests::styled();
+        let plain = Theme::new("aardvark plain");
+        let set = repo.save_theme(&navy).unwrap();
+        assert_eq!(set.themes, vec![navy.clone()]);
+        let set = repo.save_theme(&plain).unwrap();
+        assert_eq!(set.themes, vec![plain.clone(), navy.clone()], "by name");
+        // Replacing keeps one row and bumps its revision.
+        let renamed = Theme {
+            name: "Navy renamed".into(),
+            ..navy.clone()
+        };
+        repo.save_theme(&renamed).unwrap();
+        let revision: i64 = repo
+            .db
+            .query_row(
+                "SELECT revision FROM themes WHERE id=?",
+                params![&navy.id.0[..]],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(revision, 2);
+        let set = repo.set_default_theme(Some(navy.id)).unwrap();
+        assert_eq!(set.default, Some(navy.id));
+        assert_eq!(set.default_theme(), renamed);
+        // Refusals change nothing.
+        assert_eq!(repo.save_theme(&Theme::built_in()), Err(Error::Invalid));
+        let unnamed = Theme {
+            name: " ".into(),
+            ..plain.clone()
+        };
+        assert_eq!(repo.save_theme(&unnamed), Err(Error::Invalid));
+        assert_eq!(
+            repo.set_default_theme(Some(ThemeId([99; 16]))),
+            Err(Error::Missing)
+        );
+        assert_eq!(repo.delete_theme(ThemeId([99; 16])), Err(Error::Missing));
+        // Deleting the default returns to the built-in default.
+        let set = repo.delete_theme(navy.id).unwrap();
+        assert_eq!(set.themes, vec![plain.clone()]);
+        assert_eq!(set.default, None);
+        let set = repo.set_default_theme(Some(plain.id)).unwrap();
+        assert_eq!(set.default, Some(plain.id));
+        let set = repo.set_default_theme(None).unwrap();
+        assert_eq!(set.default, None);
+        drop(repo);
+        let repo = Repository::open(&p).unwrap();
+        assert_eq!(repo.themes().unwrap().themes, vec![plain]);
+    }
+    #[test]
+    fn song_themes_name_live_songs_and_fall_back_when_a_theme_goes() {
+        let (_d, _p, mut repo) = fixture();
+        let v = repo.save_song(None, titled("Themed")).unwrap();
+        let navy = crate::theme::tests::styled();
+        repo.save_theme(&navy).unwrap();
+        repo.set_song_theme(v.id, Some(navy.id)).unwrap();
+        assert_eq!(repo.song_theme(v.id).unwrap(), Some(navy.id));
+        // Every revision of the song shares it; saving does not drop it.
+        let v2 = repo.save_song(Some(v), titled("Themed 2")).unwrap();
+        assert_eq!(repo.song_theme(v2.id).unwrap(), Some(navy.id));
+        let reply = execute(
+            &mut repo,
+            Request {
+                command: Command::ThemedSong(v),
+                canceled: Arc::default(),
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(reply, Reply::ThemedSong(song, Some(id)) if song.title == "Themed" && id == navy.id)
+        );
+        assert_eq!(
+            repo.set_song_theme(v.id, Some(ThemeId([5; 16]))),
+            Err(Error::Missing)
+        );
+        assert_eq!(
+            repo.set_song_theme(Id([8; 16]), Some(navy.id)),
+            Err(Error::Missing)
+        );
+        // A deleted theme leaves the reference; resolution reports it.
+        let set = repo.delete_theme(navy.id).unwrap();
+        let resolution = set.resolve(repo.song_theme(v.id).unwrap());
+        assert_eq!(resolution.missing, Some(navy.id));
+        assert!(resolution.theme.is_built_in());
+        repo.set_song_theme(v.id, Some(ThemeId::BUILT_IN)).unwrap();
+        assert_eq!(repo.song_theme(v.id).unwrap(), Some(ThemeId::BUILT_IN));
+        repo.set_song_theme(v.id, None).unwrap();
+        assert_eq!(repo.song_theme(v.id).unwrap(), None);
+        repo.delete_song(v2).unwrap();
+        assert_eq!(repo.set_song_theme(v.id, None), Err(Error::Missing));
+    }
+    #[test]
+    fn song_themes_apply_to_every_song_or_to_none() {
+        let (_d, _p, mut repo) = fixture();
+        let a = repo.save_song(None, titled("A")).unwrap();
+        let b = repo.save_song(None, titled("B")).unwrap();
+        let c = repo.save_song(None, titled("C")).unwrap();
+        let navy = crate::theme::tests::styled();
+        repo.save_theme(&navy).unwrap();
+        repo.delete_song(c).unwrap();
+        // C was deleted (say, from a Song Editor) before Apply to Song ran:
+        // A and B keep their themes too.
+        assert_eq!(
+            repo.set_song_themes(&[a.id, b.id, c.id], Some(navy.id)),
+            Err(Error::Missing)
+        );
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        assert_eq!(repo.song_theme(b.id).unwrap(), None);
+        assert_eq!(
+            repo.set_song_themes(&[a.id, b.id], Some(ThemeId([5; 16]))),
+            Err(Error::Missing)
+        );
+        repo.set_song_themes(&[a.id, b.id], Some(navy.id)).unwrap();
+        assert_eq!(repo.song_theme(a.id).unwrap(), Some(navy.id));
+        assert_eq!(repo.song_theme(b.id).unwrap(), Some(navy.id));
+        // A Select All of more songs than there are themes is accepted; the
+        // bound is the batch limit.
+        let many = vec![a.id; MAX_THEMES + 1];
+        repo.set_song_themes(&many, None).unwrap();
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        assert_eq!(
+            repo.set_song_themes(&vec![a.id; MAX_SONG_THEME_BATCH + 1], None),
+            Err(Error::Invalid)
+        );
+    }
+    #[test]
+    fn apply_to_song_tells_a_deleted_theme_from_a_deleted_song() {
+        let (_d, _p, mut repo) = fixture();
+        let a = repo.save_song(None, titled("A")).unwrap();
+        let b = repo.save_song(None, titled("B")).unwrap();
+        let navy = crate::theme::tests::styled();
+        repo.save_theme(&navy).unwrap();
+        let apply = |repo: &mut Repository, songs: Vec<Id>, theme| {
+            execute(
+                repo,
+                Request {
+                    command: Command::SetSongTheme(songs, theme),
+                    canceled: Arc::default(),
+                },
+            )
+        };
+        repo.delete_song(b).unwrap();
+        // A deleted song: `Missing`, nothing changed.
+        assert!(matches!(
+            apply(&mut repo, vec![a.id, b.id], Some(navy.id)),
+            Err(Error::Missing)
+        ));
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        // A deleted theme: the current set without it, nothing changed.
+        repo.delete_theme(navy.id).unwrap();
+        assert!(matches!(
+            apply(&mut repo, vec![a.id], Some(navy.id)),
+            Ok(Reply::ThemeGone(set)) if set.get(navy.id).is_none()
+        ));
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        // The built-in theme always exists.
+        assert!(matches!(
+            apply(&mut repo, vec![a.id], Some(ThemeId::BUILT_IN)),
+            Ok(Reply::Themes(_))
+        ));
+    }
+    #[test]
+    fn a_theme_update_never_resurrects_a_deleted_theme() {
+        let (_d, _p, mut repo) = fixture();
+        let navy = crate::theme::tests::styled();
+        assert_eq!(repo.update_theme(&navy), Err(Error::Missing));
+        repo.save_theme(&navy).unwrap();
+        let renamed = Theme {
+            name: "Navy 2".into(),
+            ..navy.clone()
+        };
+        assert_eq!(
+            repo.update_theme(&renamed).unwrap().themes,
+            vec![renamed.clone()]
+        );
+        repo.delete_theme(navy.id).unwrap();
+        assert_eq!(repo.update_theme(&renamed), Err(Error::Missing));
+        assert!(repo.themes().unwrap().themes.is_empty());
+    }
+    #[test]
+    fn theme_rows_are_bounded_and_corruption_is_reported() {
+        let (_d, _p, mut repo) = fixture();
+        for n in 0..MAX_THEMES {
+            repo.save_theme(&Theme::new(&format!("Theme {n:03}")))
+                .unwrap();
+        }
+        assert_eq!(
+            repo.save_theme(&Theme::new("One too many")),
+            Err(Error::Budget)
+        );
+        let first = repo.themes().unwrap().themes[0].clone();
+        // Replacing an existing theme is still allowed at the limit.
+        repo.save_theme(&Theme {
+            name: "Replaced".into(),
+            ..first.clone()
+        })
+        .unwrap();
+        repo.db
+            .execute(
+                "UPDATE themes SET payload=X'00' WHERE id=?",
+                params![&first.id.0[..]],
+            )
+            .unwrap();
+        assert_eq!(repo.themes(), Err(Error::Corrupt));
     }
 }

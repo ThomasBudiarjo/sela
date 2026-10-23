@@ -35,6 +35,15 @@ pub(crate) enum Dialog {
     GoLiveMissing,
     /// Songs menu → Update items in Schedule: the reviewable diff.
     UpdateItems,
+    /// File › Import › Songs: the staged preview; drawn by `import_overlay`.
+    ImportSongs,
+    /// The previous run ended uncleanly: restore its autosave (M1-12).
+    Recovery,
+    /// Live › Stage Message…; drawn by `stage_message_overlay`.
+    StageMessage,
+    /// A standalone schedule or profile backup job: progress with Cancel,
+    /// then its result (M1-13).
+    Bundle,
 }
 
 impl Operator {
@@ -45,7 +54,12 @@ impl Operator {
         cx: &mut Context<Self>,
     ) {
         if self.dialog.is_none() {
-            self.dialog_return = window.focused(cx);
+            self.dialog_return = self.focus_to_return(window, cx);
+        }
+        // Replacing the import preview cancels the import as its Cancel
+        // button does, so `song_import` never outlives its dialog.
+        if self.dialog == Some(Dialog::ImportSongs) && dialog != Dialog::ImportSongs {
+            self.cancel_song_import();
         }
         self.dialog = Some(dialog);
         self.dialog_message = None;
@@ -58,10 +72,16 @@ impl Operator {
     }
 
     pub(crate) fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog == Some(Dialog::Bundle) {
+            self.bundles.view = None;
+        }
         self.dialog = None;
         self.dialog_message = None;
         self.settings.draft = None;
         self.settings.language_draft = None;
+        self.settings.song.draft = None;
+        self.stage.draft = None;
+        self.stage.message_input = None;
         match self.dialog_return.take() {
             Some(handle) => handle.focus(window, cx),
             None => self.focus.focus(window, cx),
@@ -155,9 +175,14 @@ impl Operator {
                 self.clear_entry_selection();
                 self.schedule_message = None;
             }
+            // A Save-then-Quit resumes after the write; an import preview
+            // opened meanwhile still holds the close back (PP-IMPF-09).
+            Then::Quit if self.song_import.holds_dialog() => {
+                self.may_close(window, cx);
+            }
             Then::Quit => {
-                if self.settings_allow_close(window, cx) {
-                    window.remove_window();
+                if self.allow_close(window, cx) {
+                    self.remove_for_close(window);
                 }
             }
         }
@@ -172,10 +197,18 @@ impl Operator {
                 Some(entry) => t!(Msg::DialogRemoveTitled, title = entry.title),
                 None => t!(Msg::DialogRemoveGeneric).into(),
             },
-            Dialog::Options => return None,
+            Dialog::Options | Dialog::ImportSongs | Dialog::StageMessage => return None,
             Dialog::Preflight => t!(Msg::PreflightHeading).into(),
+            Dialog::Bundle => self
+                .bundles
+                .view
+                .as_ref()
+                .map(|view| view.heading.clone())
+                .unwrap_or_default(),
             Dialog::GoLiveMissing => t!(Msg::GoLiveMissingHeading).into(),
             Dialog::UpdateItems => t!(Msg::MenuUpdateSchedule).into(),
+            Dialog::Recovery if self.recovery_restorable() => t!(Msg::RecoveryHeading).into(),
+            Dialog::Recovery => t!(Msg::RecoveryLostHeading).into(),
             Dialog::DeleteSong(version) => match self.catalog.iter().find(|(v, _)| *v == version) {
                 Some((_, title)) => t!(Msg::DialogDeleteTitled, title = shown_title(title)),
                 None => t!(Msg::DialogDeleteGeneric).into(),
@@ -185,9 +218,15 @@ impl Operator {
             Dialog::Unsaved(_) => Some(t!(Msg::ConfirmDontSave)),
             Dialog::Remove(_) => Some(t!(Msg::ConfirmRemove)),
             Dialog::DeleteSong(_) => Some(t!(Msg::ConfirmYes)),
-            Dialog::Options | Dialog::Preflight | Dialog::FileError => None,
+            Dialog::Options
+            | Dialog::StageMessage
+            | Dialog::Preflight
+            | Dialog::FileError
+            | Dialog::Bundle
+            | Dialog::ImportSongs => None,
             Dialog::GoLiveMissing => Some(t!(Msg::GoLiveAnyway)),
             Dialog::UpdateItems => Some(t!(Msg::UpdateItemsConfirm)),
+            Dialog::Recovery => self.recovery_restorable().then(|| t!(Msg::RecoveryRestore)),
         };
         let body = match dialog {
             Dialog::FileError => self.file_error.clone().map(|message| {
@@ -203,8 +242,10 @@ impl Operator {
                     .into_any_element()
             }),
             Dialog::Preflight => Some(self.preflight_body(cx)),
+            Dialog::Bundle => Some(self.bundle_body()),
             Dialog::GoLiveMissing => Some(self.go_live_missing_body()),
             Dialog::UpdateItems => Some(self.update_items_body()),
+            Dialog::Recovery => Some(self.recovery_body()),
             Dialog::DeleteSong(_) => Some(
                 div()
                     .text_size(px(TEXT_SMALL))
@@ -214,11 +255,26 @@ impl Operator {
             ),
             _ => None,
         };
+        // Screen readers announce what is asked, not only the focused button
+        // (SC2-A11Y-01).
+        let description = match dialog {
+            Dialog::DeleteSong(_) => Some(t!(Msg::DialogDeleteNote).to_string()),
+            Dialog::FileError => self.file_error.clone(),
+            _ => None,
+        };
         let panel = div()
+            .id("schedule-dialog")
             .debug_selector(|| "schedule-dialog".into())
+            .role(Role::Dialog)
+            .aria_label(heading.clone())
+            .when_some(description, |d, text| d.aria_description(text))
+            .accessibility_id("schedule-dialog")
             .max_w_full()
             .w(px(
-                if matches!(dialog, Dialog::Preflight | Dialog::UpdateItems) {
+                if matches!(
+                    dialog,
+                    Dialog::Preflight | Dialog::UpdateItems | Dialog::Recovery | Dialog::Bundle
+                ) {
                     PREFLIGHT_DIALOG_W
                 } else {
                     380.
@@ -270,8 +326,18 @@ impl Operator {
                             t!(Msg::ButtonKeep)
                         } else if dialog == Dialog::Preflight {
                             t!(Msg::PreflightClose)
-                        } else if dialog == Dialog::FileError {
+                        } else if dialog == Dialog::Bundle {
+                            if self.bundles.view.as_ref().is_some_and(|v| v.working) {
+                                t!(Msg::ButtonCancel)
+                            } else {
+                                t!(Msg::ButtonOk)
+                            }
+                        } else if dialog == Dialog::FileError
+                            || (dialog == Dialog::Recovery && !self.recovery_restorable())
+                        {
                             t!(Msg::ButtonOk)
+                        } else if dialog == Dialog::Recovery {
+                            t!(Msg::RecoveryDiscard)
                         } else {
                             t!(Msg::ButtonCancel)
                         },

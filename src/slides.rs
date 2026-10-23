@@ -9,7 +9,7 @@ use crate::{
     fonts::Resolved,
     format::{Align, Size, SlideFormat, VAlign},
     scene::{
-        ContentVersion, Extent, OutlineStyle, OwnedText, PrepareError, PreparedBackground,
+        ContentVersion, Extent, Insets, OutlineStyle, OwnedText, PrepareError, PreparedBackground,
         PreparedCue, RendererCapabilities, ShadowStyle, TextStyle,
     },
     storage::{Section, Song, Version},
@@ -19,8 +19,9 @@ use crate::{
 /// offset and blur): values are defined at 1080 lines and scale with the
 /// output height (Sela's rule, not observed EasyWorship behavior).
 pub const REFERENCE_HEIGHT: u32 = 1080;
-/// Renderer text inset on each side, matching the audience preparer.
-const INSET: u32 = 32;
+/// Renderer text inset on each side when a slide has no margins; the
+/// audience preparer lays text out with `lyrics_box` from the same value.
+pub const INSET: u32 = 32;
 const SLIDE_BITS: u32 = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,7 +224,7 @@ pub fn size_cap_with_footer(
             .filter(|(s, _)| !s.text.is_empty() && !matches!(s.format.size, Some(Size::Fixed(_))))
             .filter_map(|(s, r)| {
                 let strip = footer.and_then(|f| footer_plan(f, r, extent));
-                fit_size(&s.text, r, text_extent(strip, extent))
+                fit_in(&s.text, r, slide_box(&s.format, extent, strip.as_ref())?)
             })
             .min(),
     }
@@ -233,69 +234,243 @@ pub fn size_cap_with_footer(
 const FOOTER_EM: f32 = 0.032;
 /// Below this output height the strip is not drawn: it would leave no room.
 const FOOTER_MIN_HEIGHT: u32 = 360;
-const FOOTER_LINES: usize = 2;
+/// "Title - Author" and the copyright, plus an optional licensing line.
+const FOOTER_LINES: std::ops::RangeInclusive<usize> = 2..=3;
+/// Longest License Info text kept (Options › Main Output › Song).
+pub const MAX_LICENSE_INFO: usize = 256;
 /// Pixel height of `lines` lines of strip text at `size`; the audience raster
 /// and the cue reserve the same box.
 pub fn footer_height(lines: usize, size: u16) -> u32 {
     (lines as f32 * f32::from(size) * LINE_HEIGHT).ceil() as u32 + 2
 }
 
-/// The strip text of a song, or `None` for a song without copyright text
-/// (EW8-OBS-063): "Title - Author" over the Copyright line. Administrator and
-/// Song Number are not drawn (unobserved). Line breaks inside a field become
-/// spaces so the strip is always two lines.
+/// The strip text of a song with the default options, or `None` for a song
+/// without copyright text; see `CopyrightStrip`.
 pub fn copyright_strip(song: &Song) -> Option<String> {
-    let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-    let copyright = one_line(&song.copyright);
-    if copyright.is_empty() {
-        return None;
-    }
-    let (title, authors) = (one_line(&song.title), one_line(&song.authors));
-    let first = if authors.is_empty() {
-        title
-    } else {
-        format!("{title} - {authors}")
-    };
-    Some(format!("{first}\n{copyright}"))
+    CopyrightStrip::of(song).map(|strip| strip.text(&CopyrightOptions::default()))
 }
 
-/// Strip font size and box height that fit the width, or `None` when it
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Options › Main Output › Song › Copyright Info (EW8-OBS-055, EW8-OBS-056):
+/// "Display Copyright Information" (on), "Show on first displayed slide only"
+/// (off) and the License Info box (empty), with EW's observed defaults. The
+/// Copyright Font menu is not implemented.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopyrightOptions {
+    pub display: bool,
+    /// UNOBSERVED best guess: "first displayed slide" is the item's first
+    /// slide in presentation order (slide 1 of the chosen arrangement), not
+    /// whichever slide happens to go live first.
+    pub first_slide_only: bool,
+    /// One line, at most `MAX_LICENSE_INFO` bytes; see `CopyrightStrip::text`.
+    pub license_info: String,
+}
+
+impl Default for CopyrightOptions {
+    fn default() -> Self {
+        Self {
+            display: true,
+            first_slide_only: false,
+            license_info: String::new(),
+        }
+    }
+}
+
+impl CopyrightOptions {
+    /// Whether slide `index` of an item draws the strip.
+    pub fn shown_on(&self, index: usize) -> bool {
+        self.display && (!self.first_slide_only || index == 0)
+    }
+
+    /// License Info as stored: one line without control characters,
+    /// trimmed, at most `MAX_LICENSE_INFO` bytes on a character boundary.
+    pub fn clean_license(text: &str) -> String {
+        let mut line = one_line(&text.replace(char::is_control, " "));
+        if line.len() > MAX_LICENSE_INFO {
+            let mut end = MAX_LICENSE_INFO;
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            line.truncate(end);
+            line = line.trim_end().to_owned();
+        }
+        line
+    }
+}
+
+/// What a song contributes to its copyright strip (EW8-OBS-063): "Title -
+/// Author" over the Copyright line. Administrator is not drawn (unobserved).
+/// Line breaks inside a field become spaces so each part is one line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopyrightStrip {
+    first: String,
+    copyright: String,
+    song_number: String,
+}
+
+impl CopyrightStrip {
+    /// `None` for a song without copyright text: it shows no strip.
+    pub fn of(song: &Song) -> Option<Self> {
+        let copyright = one_line(&song.copyright);
+        if copyright.is_empty() {
+            return None;
+        }
+        let (title, authors) = (one_line(&song.title), one_line(&song.authors));
+        let first = if authors.is_empty() {
+            title
+        } else {
+            format!("{title} - {authors}")
+        };
+        Some(Self {
+            first,
+            copyright,
+            song_number: one_line(&song.song_number),
+        })
+    }
+
+    /// The strip text under `options`. A non-empty License Info adds a third
+    /// line, "CCLI Song # N · License Info" ("CCLI Song # N · " only when the
+    /// song has a Song Number). UNOBSERVED best guess (EW8-OBS-063).
+    pub fn text(&self, options: &CopyrightOptions) -> String {
+        let license = CopyrightOptions::clean_license(&options.license_info);
+        let mut text = format!("{}\n{}", self.first, self.copyright);
+        if !license.is_empty() {
+            text.push('\n');
+            if !self.song_number.is_empty() {
+                text.push_str(&format!("CCLI Song # {} \u{b7} ", self.song_number));
+            }
+            text.push_str(&license);
+        }
+        text
+    }
+}
+
+/// Strip font size, box height and the text as drawn, or `None` when it
 /// cannot be drawn (small output, a glyph the face lacks, too much text).
-fn footer_plan(text: &str, resolved: &Resolved, extent: Extent) -> Option<(u16, u32)> {
+///
+/// The size fits "Title - Author" and the copyright line to the width. A
+/// licensing (third) line never shrinks them: one wider than the strip is
+/// cut at a character boundary and ends in an ellipsis, and dropped when not
+/// even that fits. UNOBSERVED best guess (PP-SB-11): how EW lays out a
+/// License Info longer than the output width.
+fn footer_plan(text: &str, resolved: &Resolved, extent: Extent) -> Option<(u16, u32, String)> {
+    let lines: Vec<&str> = text.lines().collect();
     if extent.height < FOOTER_MIN_HEIGHT
         || text.len() > MAX_TEXT_BYTES
-        || text.lines().count() != FOOTER_LINES
+        || !FOOTER_LINES.contains(&lines.len())
     {
         return None;
     }
     let width = extent.width.checked_sub(2 * INSET).filter(|w| *w > 0)? as f32;
     let face = ttf_parser::Face::parse(resolved.face().bytes(), resolved.face().index()).ok()?;
     let em = f32::from(face.units_per_em());
+    let advance = |c: char| -> Option<f32> {
+        Some(f32::from(face.glyph_hor_advance(face.glyph_index(c)?).unwrap_or(0)) / em)
+    };
+    let measure = |line: &str| -> Option<f32> { line.chars().map(advance).sum() };
     let mut widest: f32 = 0.;
-    for line in text.lines() {
-        let mut advance = 0u32;
-        for c in line.chars() {
-            advance += u32::from(face.glyph_hor_advance(face.glyph_index(c)?).unwrap_or(0));
-        }
-        widest = widest.max(advance as f32 / em);
+    for line in &lines[..2] {
+        widest = widest.max(measure(line)?);
     }
     let target = (extent.height as f32 * FOOTER_EM).round().max(10.);
     let size = (width / (widest * 1.05).max(f32::EPSILON))
         .min(target)
         .floor();
-    (size >= 8.).then(|| (size as u16, footer_height(FOOTER_LINES, size as u16)))
+    if size < 8. {
+        return None;
+    }
+    let room = width / (size * 1.05);
+    let mut drawn = format!("{}\n{}", lines[0], lines[1]);
+    if let Some(license) = lines.get(2) {
+        let fitted = if measure(license)? <= room {
+            Some((*license).to_owned())
+        } else {
+            let ellipsis = if advance('\u{2026}').is_some() {
+                "\u{2026}"
+            } else {
+                "..."
+            };
+            let mut used = measure(ellipsis)?;
+            let mut cut = String::new();
+            for c in license.chars() {
+                used += advance(c)?;
+                if used > room {
+                    break;
+                }
+                cut.push(c);
+            }
+            let cut = cut.trim_end();
+            (!cut.is_empty()).then(|| format!("{cut}{ellipsis}"))
+        };
+        if let Some(line) = fitted {
+            drawn.push('\n');
+            drawn.push_str(&line);
+        }
+    }
+    let lines = drawn.lines().count();
+    Some((size as u16, footer_height(lines, size as u16), drawn))
 }
 
-/// The extent the lyrics are fitted in: the canvas without the strip's box
-/// (`footer_plan`), which the audience raster also keeps for the strip alone.
-fn text_extent(strip: Option<(u16, u32)>, extent: Extent) -> Extent {
-    match strip {
-        Some((_, height)) => Extent {
-            height: extent.height.saturating_sub(height),
-            ..extent
-        },
-        None => extent,
+/// Where the lyrics are laid out, in output pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextBox {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A format's margins (1080-reference px) scaled to `extent`'s height, like
+/// the other point-valued format fields; `None` keeps the fixed inset.
+pub fn insets(format: &SlideFormat, extent: Extent) -> Option<Insets> {
+    let margins = format.margins?;
+    let scale =
+        |v: u16| (f32::from(v) * extent.height as f32 / REFERENCE_HEIGHT as f32).round() as u32;
+    Some(Insets {
+        left: scale(margins.left),
+        right: scale(margins.right),
+        top: scale(margins.top),
+        bottom: scale(margins.bottom),
+    })
+}
+
+/// The lyrics box: the canvas inside `insets` (the fixed `INSET` when
+/// `None`), ending above a copyright strip `footer` px tall, which keeps the
+/// fixed inset box's bottom (`footer_plan`). The cue fit and the audience
+/// raster both use this, so the fitted size is the drawn size. `None` when no
+/// room is left or the box exceeds the renderer's text area.
+pub fn lyrics_box(extent: Extent, insets: Option<Insets>, footer: u32) -> Option<TextBox> {
+    let insets = insets.unwrap_or(Insets::uniform(INSET));
+    let right = extent.width.checked_sub(insets.right)?;
+    let mut bottom = extent.height.checked_sub(insets.bottom)?;
+    if footer > 0 {
+        bottom = bottom.min(extent.height.checked_sub(INSET + footer)?);
     }
+    let width = right.checked_sub(insets.left)?;
+    let height = bottom.checked_sub(insets.top)?;
+    let side = 1..=MAX_TEXT_AREA;
+    (side.contains(&width) && side.contains(&height)).then_some(TextBox {
+        x: insets.left,
+        y: insets.top,
+        width,
+        height,
+    })
+}
+
+/// The lyrics box of one slide at `extent` with the planned strip, if any.
+fn slide_box(
+    format: &SlideFormat,
+    extent: Extent,
+    strip: Option<&(u16, u32, String)>,
+) -> Option<TextBox> {
+    lyrics_box(
+        extent,
+        insets(format, extent),
+        strip.map_or(0, |(_, h, _)| *h),
+    )
 }
 
 /// Identity of slide `index` of one immutable song revision.
@@ -366,19 +541,22 @@ pub fn cue_with_footer(
                 let scaled = (f32::from(fixed) * extent.height as f32 / REFERENCE_HEIGHT as f32)
                     .round()
                     .max(1.) as u16;
-                let fits = |room: Extent| {
-                    fit_size(&slide.text, resolved, room).is_some_and(|fits| scaled <= fits)
+                let fits = |strip: Option<&(u16, u32, String)>| {
+                    slide_box(&slide.format, extent, strip)
+                        .and_then(|room| fit_in(&slide.text, resolved, room))
+                        .is_some_and(|fits| scaled <= fits)
                 };
-                if !fits(text_extent(strip, extent)) {
+                if !fits(strip.as_ref()) {
                     strip = None;
-                    if !fits(extent) {
+                    if !fits(None) {
                         return Err(PrepareError::InvalidScene);
                     }
                 }
                 scaled
             }
             _ => {
-                let size = fit_size(&slide.text, resolved, text_extent(strip, extent))
+                let size = slide_box(&slide.format, extent, strip.as_ref())
+                    .and_then(|room| fit_in(&slide.text, resolved, room))
                     .ok_or(PrepareError::InvalidScene)?;
                 cap.map_or(size, |cap| size.min(cap.max(1)))
             }
@@ -392,10 +570,13 @@ pub fn cue_with_footer(
             style: style_of(&slide.format, resolved),
         })
     };
-    let cue = PreparedCue::from_owned(version, extent, background, text, caps)?;
-    match footer.zip(strip) {
-        Some((content, (size, _))) => cue.with_footer(OwnedText {
-            content: content.to_owned(),
+    let mut cue = PreparedCue::from_owned(version, extent, background, text, caps)?;
+    if let Some(insets) = insets(&slide.format, extent).filter(|_| cue.text().is_some()) {
+        cue = cue.with_insets(insets)?;
+    }
+    match strip {
+        Some((size, _, content)) => cue.with_footer(OwnedText {
+            content,
             font_version: resolved.face().version(),
             font: resolved.face().bytes_arc(),
             face_index: resolved.face().index(),
@@ -456,16 +637,18 @@ const SYNTH_ITALIC_EM: f32 = 0.25;
 /// Fits from the resolved face's unshaped advances with a 5% margin for
 /// shaping differences plus synthetic-style margins; `None` when the renderer
 /// would reject the text, including a glyph the font lacks.
+#[cfg(test)]
 fn fit_size(text: &str, resolved: &Resolved, extent: Extent) -> Option<u16> {
+    fit_in(text, resolved, lyrics_box(extent, None, 0)?)
+}
+
+/// `fit_size` inside an explicit lyrics box.
+fn fit_in(text: &str, resolved: &Resolved, room: TextBox) -> Option<u16> {
     if text.len() > MAX_TEXT_BYTES || text.split('\n').count() > MAX_LINES {
         return None;
     }
-    let area = |side: u32| {
-        side.checked_sub(2 * INSET)
-            .filter(|s| (1..=MAX_TEXT_AREA).contains(s))
-    };
-    let width = area(extent.width)? as f32;
-    let height = area(extent.height)? as f32;
+    let width = room.width as f32;
+    let height = room.height as f32;
     let face = ttf_parser::Face::parse(resolved.face().bytes(), resolved.face().index()).ok()?;
     let em = f32::from(face.units_per_em());
     let mut widest: f32 = 0.;
@@ -544,6 +727,167 @@ mod tests {
         width: 1920,
         height: 1080,
     };
+
+    #[test]
+    fn margins_move_the_lyrics_box_and_travel_with_the_cue() {
+        use crate::format::Margins;
+        let line = "A line wide enough to fill the width";
+        let plain = Slide {
+            label: String::new(),
+            text: line.into(),
+            format: SlideFormat::default(),
+            background: None,
+        };
+        let face = Resolved::bundled(&plain.format);
+        let version = ContentVersion { id: 3, revision: 1 };
+        let base = cue(version, &plain, &face, EXTENT, CAPS, None, black()).unwrap();
+        assert_eq!(base.insets(), None, "no margins keeps the fixed inset");
+        let narrow = Slide {
+            format: SlideFormat {
+                margins: Some(Margins {
+                    left: 480,
+                    right: 0,
+                    top: 0,
+                    bottom: 270,
+                }),
+                ..Default::default()
+            },
+            ..plain.clone()
+        };
+        let boxed = cue(version, &narrow, &face, EXTENT, CAPS, None, black()).unwrap();
+        // 1080-reference values on a 1080 output are pixels.
+        assert_eq!(
+            boxed.insets(),
+            Some(Insets {
+                left: 480,
+                right: 0,
+                top: 0,
+                bottom: 270,
+            })
+        );
+        let (wide, tight) = (
+            base.text().unwrap().font_size(),
+            boxed.text().unwrap().font_size(),
+        );
+        assert!(tight < wide, "{tight} < {wide}: the box is narrower");
+        // The same reference margins scale with a 720-line output.
+        let small = Extent {
+            width: 1280,
+            height: 720,
+        };
+        let scaled = cue(version, &narrow, &face, small, CAPS, None, black()).unwrap();
+        assert_eq!(scaled.insets().unwrap().left, 320);
+        // The strip keeps the fixed box's bottom; lyrics end above both.
+        let footer = 60;
+        let room = lyrics_box(EXTENT, insets(&narrow.format, EXTENT), footer).unwrap();
+        assert_eq!((room.x, room.y), (480, 0));
+        assert_eq!(room.height, 1080 - 270);
+        let low = SlideFormat {
+            margins: Some(Margins::default()),
+            ..Default::default()
+        };
+        let room = lyrics_box(EXTENT, insets(&low, EXTENT), footer).unwrap();
+        assert_eq!(room.height, 1080 - INSET - footer);
+        // No room at all is refused rather than drawn outside the canvas.
+        assert_eq!(
+            lyrics_box(
+                Extent {
+                    width: 100,
+                    height: 100
+                },
+                Some(Insets::uniform(60)),
+                0
+            ),
+            None
+        );
+        assert!(
+            PreparedCue::from_owned(version, EXTENT, black(), None, CAPS)
+                .unwrap()
+                .with_insets(Insets {
+                    left: 1000,
+                    right: 920,
+                    top: 0,
+                    bottom: 0
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn themed_long_and_short_text_fit_every_landscape_output() {
+        use crate::theme::{Theme, apply};
+        let theme = Theme {
+            format: SlideFormat {
+                margins: Some(crate::format::Margins {
+                    left: 200,
+                    right: 200,
+                    top: 120,
+                    bottom: 120,
+                }),
+                ..crate::theme::tests::styled().format
+            },
+            ..crate::theme::tests::styled()
+        };
+        let auto = Theme {
+            format: SlideFormat {
+                size: Some(Size::Auto),
+                ..theme.format.clone()
+            },
+            ..theme.clone()
+        };
+        let long = (1..=8)
+            .map(|n| format!("line {n} of a long synthetic verse for the fit"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let song = song(&[("Short", "Amen"), ("Long", &long)]);
+        for (width, height) in [
+            (1920, 1080),
+            (1280, 720),
+            (1024, 768),
+            (1920, 1200),
+            (2560, 1080),
+        ] {
+            let extent = Extent { width, height };
+            for theme in [&theme, &auto] {
+                let themed = apply(&song, theme);
+                let slides = slides(&themed);
+                for slide in &slides {
+                    let face = Resolved::bundled(&slide.format);
+                    let room = lyrics_box(extent, insets(&slide.format, extent), 0).unwrap();
+                    match cue(version_of(1), slide, &face, extent, CAPS, None, black()) {
+                        Ok(cue) => {
+                            let text = cue.text().unwrap();
+                            assert!(
+                                u32::from(text.font_size()) * 13 / 10 <= room.height,
+                                "{width}x{height}"
+                            );
+                            assert_eq!(cue.insets(), insets(&slide.format, extent));
+                        }
+                        // A fixed 64 point long verse may not fit a small
+                        // box: refused, never clipped (EW8-OBS-028 fixed size).
+                        Err(error) => {
+                            assert_eq!(error, PrepareError::InvalidScene);
+                            assert!(matches!(slide.format.size, Some(Size::Fixed(_))));
+                            assert!(slide.text.lines().count() > 1, "{width}x{height}");
+                        }
+                    }
+                }
+            }
+            // Auto size always fits, short and long alike.
+            let themed = apply(&song, &auto);
+            for slide in slides(&themed) {
+                let face = Resolved::bundled(&slide.format);
+                assert!(cue(version_of(1), &slide, &face, extent, CAPS, None, black()).is_ok());
+            }
+        }
+    }
+
+    fn version_of(n: u64) -> ContentVersion {
+        ContentVersion {
+            id: 77,
+            revision: n,
+        }
+    }
 
     #[test]
     fn sections_become_trimmed_slides_in_order() {
@@ -632,6 +976,127 @@ mod tests {
             copyright_strip(&s).as_deref(),
             Some("Signal Hymn - A. Writer\n(c) 2020 Some Owner")
         );
+    }
+
+    #[test]
+    fn copyright_options_pick_the_slides_and_add_a_licensing_line() {
+        let mut s = song(&[("A", "one")]);
+        s.copyright = "(c) 2020 Some Owner".into();
+        let strip = CopyrightStrip::of(&s).unwrap();
+        let defaults = CopyrightOptions::default();
+        assert!(defaults.display && !defaults.first_slide_only);
+        assert!((0..4).all(|i| defaults.shown_on(i)), "every slide");
+        let first = CopyrightOptions {
+            first_slide_only: true,
+            ..Default::default()
+        };
+        assert!(first.shown_on(0) && !first.shown_on(1) && !first.shown_on(7));
+        let hidden = CopyrightOptions {
+            display: false,
+            ..Default::default()
+        };
+        assert!(!hidden.shown_on(0));
+        assert_eq!(strip.text(&defaults), "Signal Hymn\n(c) 2020 Some Owner");
+        let licensed = CopyrightOptions {
+            license_info: "  CCLI License #\t11223344\n".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            strip.text(&licensed),
+            "Signal Hymn\n(c) 2020 Some Owner\nCCLI License # 11223344"
+        );
+        s.song_number = "7654321".into();
+        assert_eq!(
+            CopyrightStrip::of(&s).unwrap().text(&licensed),
+            "Signal Hymn\n(c) 2020 Some Owner\nCCLI Song # 7654321 \u{b7} CCLI License # 11223344"
+        );
+        let long = "é".repeat(200);
+        let clean = CopyrightOptions::clean_license(&long);
+        assert!(clean.len() <= MAX_LICENSE_INFO && clean.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn a_three_line_strip_is_drawn_taller_than_two_lines() {
+        let slide = Slide {
+            label: String::new(),
+            text: "one\ntwo".into(),
+            format: Default::default(),
+            background: None,
+        };
+        let resolved = Resolved::bundled(&slide.format);
+        let version = ContentVersion { id: 4, revision: 1 };
+        let build = |strip: &str| {
+            cue_with_footer(
+                version,
+                &slide,
+                Some(strip),
+                &resolved,
+                EXTENT,
+                CAPS,
+                None,
+                black(),
+            )
+            .unwrap()
+        };
+        let two = build("Signal Hymn\n(c) 2020");
+        let three = build("Signal Hymn\n(c) 2020\nCCLI License # 1");
+        assert_eq!(three.footer().unwrap().content().lines().count(), 3);
+        let height = |cue: &PreparedCue| {
+            let f = cue.footer().unwrap();
+            footer_height(f.content().lines().count(), f.font_size())
+        };
+        assert!(height(&three) > height(&two));
+        // Four lines are refused like other strips that cannot be drawn.
+        assert!(build("a\nb\nc\nd").footer().is_none());
+    }
+
+    #[test]
+    fn a_long_license_line_is_cut_and_never_shrinks_the_copyright() {
+        let slide = Slide {
+            label: String::new(),
+            text: "one\ntwo".into(),
+            format: Default::default(),
+            background: None,
+        };
+        let resolved = Resolved::bundled(&slide.format);
+        let version = ContentVersion { id: 4, revision: 1 };
+        let base = "Amazing Grace - John Newton\nPublic Domain";
+        let license = CopyrightOptions::clean_license(&"CCLI License 1234567 ".repeat(13));
+        assert!(license.len() > 250);
+        for (width, height) in [(1920, 1080), (1280, 720), (854, 480)] {
+            let extent = Extent { width, height };
+            let build = |strip: &str| {
+                cue_with_footer(
+                    version,
+                    &slide,
+                    Some(strip),
+                    &resolved,
+                    extent,
+                    CAPS,
+                    None,
+                    black(),
+                )
+                .unwrap()
+                .footer()
+                .map(|f| (f.font_size(), f.content().to_owned()))
+            };
+            let (plain, _) = build(base).unwrap();
+            let (size, text) = build(&format!("{base}\n{license}")).expect("still drawn");
+            assert_eq!(
+                size, plain,
+                "{width}x{height}: the copyright keeps its size"
+            );
+            let third = text.lines().nth(2).expect("a cut licensing line");
+            assert!(third.starts_with("CCLI License 1234567"), "{third}");
+            assert!(
+                third.ends_with('\u{2026}') || third.ends_with("..."),
+                "{third}"
+            );
+            assert!(third.len() < license.len());
+            // A licensing line that fits is drawn whole.
+            let short = format!("{base}\nCCLI License # 1");
+            assert_eq!(build(&short).unwrap().1, short);
+        }
     }
 
     #[test]

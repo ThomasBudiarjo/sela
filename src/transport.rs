@@ -3,7 +3,11 @@
 use crate::{
     delivery::{Acknowledgment, Command, DeliveryError, Epoch, Lane, Outcome, Payload, Stamp},
     masks::Layer,
-    scene::{ContentVersion, Extent, PreparedBackground, PreparedCue, RendererCapabilities},
+    playback::{AudioState, MediaAction, MediaStatus, PlayState},
+    scene::{
+        ContentVersion, Extent, MAX_VIDEO_PATH, PreparedBackground, PreparedCue,
+        RendererCapabilities, VideoSource,
+    },
 };
 use std::{
     io::{self, Read, Write},
@@ -25,6 +29,15 @@ const SURFACE: u8 = 4;
 const MASK: u8 = 5;
 /// Version 2 only: same body as an owned-resource COMMAND, aimed at the logo.
 const LOGO: u8 = 6;
+/// Version 2 only: owned-resource metadata and background, then a stage panel
+/// (M3-02). Decodes to a stage cue, which only a stage renderer accepts.
+const STAGE: u8 = 7;
+/// Version 1 only: stamp, lane, budget, action (M2-03). Like MASK, never
+/// waits for preparation.
+const MEDIA: u8 = 8;
+/// Version 1 only, renderer to operator: the applied scene's video state
+/// (M2-03). Best effort, latest wins; never a receipt.
+const STATUS: u8 = 9;
 const MAX_BODY: usize = 65;
 pub const MAX_RESOURCE_BODY: usize = crate::scene::MAX_SCENE_BYTES + 160;
 
@@ -37,7 +50,8 @@ fn length(kind: u8) -> io::Result<usize> {
         ACK => Ok(25),
         READY => Ok(20),
         SURFACE => Ok(24),
-        MASK => Ok(30),
+        MASK | MEDIA => Ok(30),
+        STATUS => Ok(50),
         _ => Err(invalid()),
     }
 }
@@ -72,7 +86,7 @@ impl Frame {
             return Err(invalid());
         }
         if bytes[4] == 2 {
-            if !matches!(bytes[5], COMMAND | LOGO) || bytes[6..8] != [0, 0] {
+            if !matches!(bytes[5], COMMAND | LOGO | STAGE) || bytes[6..8] != [0, 0] {
                 return Err(invalid());
             }
             let received_at = Instant::now();
@@ -116,12 +130,19 @@ impl Frame {
     pub fn command(command: &Command, now: Instant) -> io::Result<Self> {
         let cue = match command.payload() {
             Payload::Mask(layer) => return Self::mask(command, *layer, now),
+            Payload::Media(action) => return Self::media(command, *action, now),
             Payload::Logo(cue) => return Self::resource_command(command, cue, LOGO, now),
+            Payload::Scene(cue) if cue.stage().is_some() => {
+                return Self::resource_command(command, cue, STAGE, now);
+            }
             Payload::Scene(cue) => cue,
         };
         if cue.text().is_some()
             || cue.footer().is_some()
-            || matches!(cue.background(), PreparedBackground::Image { .. })
+            || matches!(
+                cue.background(),
+                PreparedBackground::Image { .. } | PreparedBackground::Video { .. }
+            )
         {
             return Self::resource_command(command, cue, COMMAND, now);
         }
@@ -167,6 +188,86 @@ impl Frame {
         };
         Ok(f)
     }
+    fn media(command: &Command, action: MediaAction, now: Instant) -> io::Result<Self> {
+        let budget = budget(command, now)?;
+        let mut f = Self::new(MEDIA);
+        let b = &mut f.bytes[HEADER..];
+        put_stamp(b, command.stamp());
+        b[24] = lane_byte(command.lane());
+        b[25..29].copy_from_slice(&budget.to_le_bytes());
+        b[29] = match action {
+            MediaAction::Play => 0,
+            MediaAction::Pause => 1,
+            MediaAction::Restart => 2,
+        };
+        Ok(f)
+    }
+    /// The renderer's video report for the operator (renderer epoch first).
+    pub fn status(epoch: Epoch, status: MediaStatus) -> Self {
+        let mut f = Self::new(STATUS);
+        let b = &mut f.bytes[HEADER..];
+        b[..16].copy_from_slice(&epoch.0.to_le_bytes());
+        b[16..32].copy_from_slice(&status.scene.id.to_le_bytes());
+        b[32..40].copy_from_slice(&status.scene.revision.to_le_bytes());
+        b[40] = match status.state {
+            PlayState::Primed => 0,
+            PlayState::Playing => 1,
+            PlayState::Paused => 2,
+            PlayState::Ended => 3,
+            PlayState::Failed => 4,
+        };
+        let millis = |d: Duration| d.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+        b[41..45].copy_from_slice(&millis(status.position).to_le_bytes());
+        // 0 means unknown; a known duration is at least 1 ms on the wire.
+        let duration = status.duration.map_or(0, |d| millis(d).max(1));
+        b[45..49].copy_from_slice(&duration.to_le_bytes());
+        b[49] = match status.audio {
+            AudioState::None => 0,
+            AudioState::Playing => 1,
+            AudioState::NoDevice => 2,
+            AudioState::Failed => 3,
+        };
+        f
+    }
+    pub fn into_status(self) -> io::Result<(Epoch, MediaStatus)> {
+        if !self.is_status() {
+            return Err(invalid());
+        }
+        let b = &self.bytes[HEADER..];
+        let state = match b[40] {
+            0 => PlayState::Primed,
+            1 => PlayState::Playing,
+            2 => PlayState::Paused,
+            3 => PlayState::Ended,
+            4 => PlayState::Failed,
+            _ => return Err(invalid()),
+        };
+        let u32_at = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        let duration = u32_at(45);
+        let audio = match b[49] {
+            0 => AudioState::None,
+            1 => AudioState::Playing,
+            2 => AudioState::NoDevice,
+            3 => AudioState::Failed,
+            _ => return Err(invalid()),
+        };
+        Ok((
+            Epoch(u128::from_le_bytes(b[..16].try_into().unwrap())),
+            MediaStatus {
+                scene: ContentVersion {
+                    id: u128::from_le_bytes(b[16..32].try_into().unwrap()),
+                    revision: u64::from_le_bytes(b[32..40].try_into().unwrap()),
+                },
+                state,
+                position: Duration::from_millis(u64::from(u32_at(41))),
+                duration: (duration > 0).then(|| Duration::from_millis(u64::from(duration))),
+                audio,
+            },
+        ))
+    }
+    pub fn is_status(&self) -> bool {
+        self.bytes[4] == 1 && self.bytes[5] == STATUS
+    }
     fn resource_command(
         command: &Command,
         cue: &PreparedCue,
@@ -204,11 +305,35 @@ impl Frame {
                 f.bytes.extend_from_slice(&extent.height.to_le_bytes());
                 put_blob(&mut f.bytes, rgba);
             }
+            // Tag 2: version, aspect, flags (bit 0 repeat), UTF-8 path.
+            PreparedBackground::Video { version, source } => {
+                let Some(path) = source.path.to_str().filter(|_| source.is_valid()) else {
+                    return Err(invalid());
+                };
+                f.bytes.push(2);
+                put_version(&mut f.bytes, *version);
+                f.bytes.push(source.aspect as u8);
+                f.bytes.push(u8::from(source.repeat));
+                put_blob(&mut f.bytes, path.as_bytes());
+            }
         }
-        // The lyrics text, then the copyright strip, each tag 0 (absent) or 2
-        // (styled owned text; tag 1 was removed in M1-05g2).
-        put_text(&mut f.bytes, cue.text());
-        put_text(&mut f.bytes, cue.footer());
+        if kind == STAGE {
+            let Some(stage) = cue.stage() else {
+                return Err(invalid());
+            };
+            put_stage(&mut f.bytes, stage);
+        } else {
+            // The lyrics text, then the copyright strip, each tag 0 (absent) or 2
+            // (styled owned text; tag 1 was removed in M1-05g2).
+            put_text(&mut f.bytes, cue.text());
+            put_text(&mut f.bytes, cue.footer());
+            if let Some(insets) = cue.insets() {
+                f.bytes.push(1);
+                for side in [insets.left, insets.right, insets.top, insets.bottom] {
+                    f.bytes.extend_from_slice(&side.to_le_bytes());
+                }
+            }
+        }
         f.len = f.bytes.len();
         if f.len - HEADER > MAX_RESOURCE_BODY {
             return Err(invalid());
@@ -216,7 +341,7 @@ impl Frame {
         Ok(f)
     }
     fn is_command_kind(&self) -> bool {
-        matches!(self.bytes[5], COMMAND | MASK | LOGO)
+        matches!(self.bytes[5], COMMAND | MASK | LOGO | STAGE | MEDIA)
     }
     pub fn command_stamp(&self) -> io::Result<Stamp> {
         if !self.is_command_kind() {
@@ -238,9 +363,10 @@ impl Frame {
             _ => Err(invalid()),
         }
     }
-    /// Masks carry no resources and bypass the renderer's preparation worker.
+    /// Masks and media commands carry no resources and bypass the
+    /// renderer's preparation worker.
     pub fn is_mask(&self) -> bool {
-        self.bytes[4] == 1 && self.bytes[5] == MASK
+        self.bytes[4] == 1 && matches!(self.bytes[5], MASK | MEDIA)
     }
     /// Relative budget starts after v1 read, or before v2 length/body transfer.
     /// Queue/preparation delay never restarts it; pre-header transit is excluded.
@@ -279,6 +405,20 @@ impl Frame {
                 deadline,
             ));
         }
+        if self.bytes[5] == MEDIA {
+            let action = match b[29] {
+                0 => MediaAction::Play,
+                1 => MediaAction::Pause,
+                2 => MediaAction::Restart,
+                _ => return Err(invalid()),
+            };
+            return Ok(Command::from_wire(
+                stamp,
+                lane,
+                Payload::Media(action),
+                deadline,
+            ));
+        }
         let version = ContentVersion {
             id: u128::from_le_bytes(b[29..45].try_into().unwrap()),
             revision: u64::from_le_bytes(b[45..53].try_into().unwrap()),
@@ -299,17 +439,70 @@ impl Frame {
                     },
                     rgba: payload.blob(crate::scene::MAX_SCENE_BYTES)?.into(),
                 },
+                2 => {
+                    let version = payload.version()?;
+                    let aspect = match payload.byte()? {
+                        0 => crate::background::Aspect::Maintain,
+                        1 => crate::background::Aspect::Stretch,
+                        2 => crate::background::Aspect::Zoom,
+                        _ => return Err(invalid()),
+                    };
+                    let repeat = match payload.byte()? {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(invalid()),
+                    };
+                    let path = payload.string(MAX_VIDEO_PATH)?;
+                    PreparedBackground::Video {
+                        version,
+                        source: Arc::new(VideoSource {
+                            path: path.into(),
+                            aspect,
+                            repeat,
+                        }),
+                    }
+                }
                 _ => return Err(invalid()),
             };
-            let text = payload.text()?;
-            let footer = payload.text()?;
-            if !payload.0.is_empty() {
-                return Err(invalid());
-            }
-            let cue = PreparedCue::from_owned(version, extent, background, text, caps);
-            match footer {
-                Some(footer) => cue.and_then(|cue| cue.with_footer(footer)),
-                None => cue,
+            if self.bytes[5] == STAGE {
+                let PreparedBackground::Color([r, g, b, _]) = background else {
+                    return Err(invalid());
+                };
+                let (panel, font) = payload.stage()?;
+                if !payload.0.is_empty() {
+                    return Err(invalid());
+                }
+                PreparedCue::for_stage(version, extent, [r, g, b], panel, font, caps)
+            } else {
+                let text = payload.text()?;
+                let footer = payload.text()?;
+                // Optional trailing lyrics box (M1-08 margins): tag 1 then the
+                // four insets; absent for the fixed inset.
+                let insets = if payload.0.is_empty() {
+                    None
+                } else {
+                    if payload.byte()? != 1 {
+                        return Err(invalid());
+                    }
+                    Some(crate::scene::Insets {
+                        left: payload.u32()?,
+                        right: payload.u32()?,
+                        top: payload.u32()?,
+                        bottom: payload.u32()?,
+                    })
+                };
+                if !payload.0.is_empty() {
+                    return Err(invalid());
+                }
+                let cue = PreparedCue::from_owned(version, extent, background, text, caps);
+                let cue = match footer {
+                    Some(footer) => cue.and_then(|cue| cue.with_footer(footer)),
+                    None => cue,
+                };
+                match insets {
+                    Some(insets) => cue.and_then(|cue| cue.with_insets(insets)),
+                    None => cue,
+                }
             }
         } else {
             PreparedCue::diagnostic_color(version, extent, b[61..65].try_into().unwrap(), caps)
@@ -468,6 +661,36 @@ impl<'a> Reader<'a> {
         }
         self.take(size)
     }
+    /// A UTF-8 field of at most `limit` bytes.
+    fn string(&mut self, limit: usize) -> io::Result<String> {
+        std::str::from_utf8(self.blob(limit)?)
+            .map(str::to_owned)
+            .map_err(|_| invalid())
+    }
+    /// A stage panel and its face; see `put_stage`.
+    #[allow(clippy::type_complexity)]
+    fn stage(
+        &mut self,
+    ) -> io::Result<(crate::stage::StagePanel, (ContentVersion, Arc<[u8]>, u32))> {
+        let flags = self.byte()?;
+        if flags > 0b11 {
+            return Err(invalid());
+        }
+        let version = self.version()?;
+        let face_index = self.u32()?;
+        let font: Arc<[u8]> = self.blob(crate::scene::MAX_SOURCE_BYTES)?.into();
+        let limit = crate::stage::MAX_FIELD_BYTES;
+        let panel = crate::stage::StagePanel {
+            current_label: self.string(limit)?,
+            current: self.string(limit)?,
+            next_label: self.string(limit)?,
+            next: self.string(limit)?,
+            message: self.string(limit)?,
+            show_clock: flags & 1 != 0,
+            show_next: flags & 2 != 0,
+        };
+        Ok((panel, (version, font, face_index)))
+    }
     /// One optional styled text; see `put_text`.
     fn text(&mut self) -> io::Result<Option<crate::scene::OwnedText>> {
         match self.byte()? {
@@ -540,6 +763,24 @@ impl<'a> Reader<'a> {
             }
             _ => Err(invalid()),
         }
+    }
+}
+/// Flags (bit 0 clock, bit 1 next area), the face (version, index, bytes),
+/// then the five panel fields as length-prefixed UTF-8.
+fn put_stage(bytes: &mut Vec<u8>, stage: &crate::scene::PreparedStage) {
+    let panel = stage.panel();
+    bytes.push(u8::from(panel.show_clock) | u8::from(panel.show_next) << 1);
+    put_version(bytes, stage.font_version());
+    bytes.extend_from_slice(&stage.face_index().to_le_bytes());
+    put_blob(bytes, stage.font());
+    for field in [
+        &panel.current_label,
+        &panel.current,
+        &panel.next_label,
+        &panel.next,
+        &panel.message,
+    ] {
+        put_blob(bytes, field.as_bytes());
     }
 }
 /// Tag 0 for no text, else tag 2 and the styled text.
@@ -655,7 +896,13 @@ pub struct PipeWorkers {
     outgoing: SyncSender<Frame>,
     incoming: Receiver<Frame>,
     failed: Arc<AtomicBool>,
+    /// One best-effort status frame, latest wins; written between queued
+    /// frames, never in place of a receipt.
+    status: Arc<std::sync::Mutex<Option<Frame>>>,
 }
+
+/// How often the writer looks at the status slot while no frame is queued.
+const STATUS_TICK: Duration = Duration::from_millis(50);
 impl PipeWorkers {
     pub fn new(
         reader: impl Read + Send + 'static,
@@ -674,14 +921,24 @@ impl PipeWorkers {
         let (reads, incoming) = mpsc::sync_channel(2);
         let failed = Arc::new(AtomicBool::new(false));
         let failure = failed.clone();
+        let status: Arc<std::sync::Mutex<Option<Frame>>> = Arc::default();
+        let pending_status = status.clone();
         std::thread::Builder::new()
             .name("cue-pipe-write".into())
             .spawn(move || {
                 let mut writer = writer;
-                while let Ok(frame) = writes.recv() {
-                    if frame.write(&mut writer).is_err() {
-                        failure.store(true, Ordering::Release);
-                        break;
+                loop {
+                    let frame = match writes.recv_timeout(STATUS_TICK) {
+                        Ok(frame) => Some(frame),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    let status = pending_status.lock().ok().and_then(|mut slot| slot.take());
+                    for frame in frame.into_iter().chain(status) {
+                        if frame.write(&mut writer).is_err() {
+                            failure.store(true, Ordering::Release);
+                            return;
+                        }
                     }
                 }
             })?;
@@ -700,7 +957,15 @@ impl PipeWorkers {
             outgoing,
             incoming,
             failed,
+            status,
         })
+    }
+    /// Offers a status frame; it replaces any status not yet written, never
+    /// blocks and never takes a receipt's queue slot.
+    pub fn offer_status(&self, frame: Frame) {
+        if let Ok(mut slot) = self.status.lock() {
+            *slot = Some(frame);
+        }
     }
     /// Full receipt queue is fatal to a session, not a reason to block rendering
     /// or discard Applied and continue claiming a healthy connection.
@@ -1290,6 +1555,192 @@ mod tests {
         );
     }
 
+    fn stage_wire(panel: crate::stage::StagePanel) -> io::Result<Vec<u8>> {
+        let now = Instant::now();
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        let cue = PreparedCue::for_stage(
+            ContentVersion { id: 7, revision: 3 },
+            Extent {
+                width: 640,
+                height: 360,
+            },
+            crate::stage::BACKGROUND,
+            panel,
+            (
+                ContentVersion { id: 8, revision: 1 },
+                Arc::from(crate::fonts::BUNDLED),
+                0,
+            ),
+            caps,
+        )
+        .map_err(|_| invalid())?;
+        let mut d = Delivery::new(Epoch(42));
+        d.submit(Arc::new(cue), Lane::Cue, now, now + Duration::from_secs(2))
+            .unwrap();
+        let mut wire = Vec::new();
+        Frame::command(&d.take_next().unwrap(), now)?.write(&mut wire)?;
+        Ok(wire)
+    }
+
+    #[test]
+    fn stage_panels_round_trip_as_their_own_kind() {
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        let panel = crate::stage::StagePanel {
+            current_label: "Hymn · Verse 1".into(),
+            current: "Line one\nLine two".into(),
+            next_label: "Next · Chorus".into(),
+            next: "Refrain".into(),
+            message: "Two minutes".into(),
+            show_clock: false,
+            show_next: true,
+        };
+        let wire = stage_wire(panel.clone()).unwrap();
+        assert_eq!((wire[4], wire[5]), (2, STAGE));
+        let decoded = Frame::read(wire.as_slice())
+            .unwrap()
+            .into_command(Instant::now(), caps)
+            .unwrap();
+        let cue = decoded.cue().unwrap();
+        assert!(matches!(decoded.payload(), Payload::Scene(_)));
+        assert!(cue.text().is_none() && cue.footer().is_none());
+        let stage = cue.stage().unwrap();
+        assert_eq!(stage.panel(), &panel);
+        assert_eq!(stage.font(), crate::fonts::BUNDLED);
+        assert_eq!(cue.version(), ContentVersion { id: 7, revision: 3 });
+        // A plain slide never uses the stage kind.
+        let mut plain = Vec::new();
+        Frame::command(&command(), Instant::now())
+            .unwrap()
+            .write(&mut plain)
+            .unwrap();
+        assert_ne!(plain[5], STAGE);
+    }
+
+    #[test]
+    fn malformed_stage_frames_fail_before_becoming_cues() {
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        let decode = |wire: &[u8]| {
+            Frame::read(wire).and_then(|frame| frame.into_command(Instant::now(), caps))
+        };
+        let wire = stage_wire(Default::default()).unwrap();
+        assert!(decode(&wire).is_ok());
+        // Body: 8 header + 4 length + 61 metadata + background tag and RGBA.
+        let flags = 8 + 4 + 61 + 5;
+        let mut bad = wire.clone();
+        bad[flags] = 0b100;
+        assert!(decode(&bad).is_err(), "unknown flag bits");
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        let size = u32::from_le_bytes(trailing[8..12].try_into().unwrap()) + 1;
+        trailing[8..12].copy_from_slice(&size.to_le_bytes());
+        assert!(decode(&trailing).is_err(), "trailing bytes");
+        let mut cut = wire.clone();
+        cut.truncate(wire.len() - 1);
+        let size = u32::from_le_bytes(cut[8..12].try_into().unwrap()) - 1;
+        cut[8..12].copy_from_slice(&size.to_le_bytes());
+        assert!(decode(&cut).is_err(), "truncated message field");
+        // Panels outside the renderer's text bounds are refused at build time.
+        assert!(
+            stage_wire(crate::stage::StagePanel {
+                message: "x\ny".into(),
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            stage_wire(crate::stage::StagePanel {
+                current: "x".repeat(crate::stage::MAX_FIELD_BYTES + 1),
+                ..Default::default()
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn margin_insets_round_trip_and_bad_insets_are_rejected() {
+        let now = Instant::now();
+        let caps = RendererCapabilities {
+            max_texture_dimension: 8192,
+        };
+        let extent = Extent {
+            width: 640,
+            height: 360,
+        };
+        let format = crate::format::SlideFormat {
+            margins: Some(crate::format::Margins {
+                left: 300,
+                right: 60,
+                top: 90,
+                bottom: 30,
+            }),
+            ..Default::default()
+        };
+        let slide = crate::slides::Slide {
+            label: String::new(),
+            text: "Margin wire refrain".into(),
+            format: format.clone(),
+            background: None,
+        };
+        let cue = Arc::new(
+            crate::slides::cue(
+                ContentVersion { id: 5, revision: 6 },
+                &slide,
+                &crate::fonts::Resolved::bundled(&format),
+                extent,
+                caps,
+                None,
+                crate::slides::color_background([0, 0, 0]),
+            )
+            .unwrap(),
+        );
+        let insets = cue.insets().unwrap();
+        assert_eq!(insets.left, 100, "300 points at 360 lines");
+        let command = Command::from_wire(
+            Stamp {
+                epoch: Epoch(7),
+                sequence: 1,
+            },
+            Lane::Cue,
+            Payload::Scene(cue.clone()),
+            now + Duration::from_secs(2),
+        );
+        let mut wire = Vec::new();
+        Frame::command(&command, now)
+            .unwrap()
+            .write(&mut wire)
+            .unwrap();
+        let back = Frame::read(wire.as_slice())
+            .unwrap()
+            .into_command(now, caps)
+            .unwrap();
+        assert_eq!(back.cue().unwrap().insets(), Some(insets));
+        // The block trails the strip: a bad tag or a box wider than the
+        // canvas is refused, never drawn somewhere else.
+        let tag = wire.len() - 17;
+        let mut bad = wire.clone();
+        bad[tag] = 2;
+        assert!(
+            Frame::read(bad.as_slice())
+                .unwrap()
+                .into_command(now, caps)
+                .is_err()
+        );
+        let mut wide = wire.clone();
+        wide[tag + 1..tag + 5].copy_from_slice(&700u32.to_le_bytes());
+        assert!(
+            Frame::read(wide.as_slice())
+                .unwrap()
+                .into_command(now, caps)
+                .is_err()
+        );
+    }
+
     #[test]
     fn styled_text_round_trips_and_rejects_bad_wire_values() {
         let now = Instant::now();
@@ -1470,5 +1921,242 @@ mod tests {
                 .outcome,
             Outcome::Rejected(DeliveryError::WrongEpoch)
         );
+    }
+
+    fn video_command(path: &str, aspect: crate::background::Aspect, repeat: bool) -> Command {
+        let now = Instant::now();
+        let source = VideoSource {
+            path: path.into(),
+            aspect,
+            repeat,
+        };
+        let cue = PreparedCue::from_owned(
+            ContentVersion { id: 7, revision: 1 },
+            Extent {
+                width: 64,
+                height: 36,
+            },
+            PreparedBackground::Video {
+                version: ContentVersion {
+                    id: 99,
+                    revision: 2,
+                },
+                source: Arc::new(source),
+            },
+            None,
+            RendererCapabilities {
+                max_texture_dimension: 2048,
+            },
+        )
+        .unwrap();
+        let mut d = Delivery::new(Epoch(42));
+        d.submit(Arc::new(cue), Lane::Cue, now, now + Duration::from_secs(2))
+            .unwrap();
+        d.take_next().unwrap()
+    }
+
+    fn wire(frame: &Frame) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        frame.write(&mut bytes).unwrap();
+        bytes
+    }
+
+    /// An absolute local path on this platform.
+    fn local(path: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{}", path.replace('/', "\\"))
+        } else {
+            path.to_owned()
+        }
+    }
+
+    #[test]
+    fn video_backgrounds_round_trip_their_path_aspect_and_repeat() {
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        for (aspect, repeat) in [
+            (crate::background::Aspect::Zoom, true),
+            (crate::background::Aspect::Maintain, false),
+            (crate::background::Aspect::Stretch, true),
+        ] {
+            let path = local("/profile/Resources/Videos/Wäves.mp4");
+            let command = video_command(&path, aspect, repeat);
+            let bytes = wire(&Frame::command(&command, Instant::now()).unwrap());
+            let decoded = Frame::read(&bytes[..])
+                .unwrap()
+                .into_command(Instant::now(), caps)
+                .unwrap();
+            let PreparedBackground::Video { version, source } = decoded.cue().unwrap().background()
+            else {
+                panic!("a video background");
+            };
+            assert_eq!(
+                *version,
+                ContentVersion {
+                    id: 99,
+                    revision: 2
+                }
+            );
+            assert_eq!(source.path, std::path::Path::new(&path));
+            assert_eq!((source.aspect, source.repeat), (aspect, repeat));
+        }
+        // Bad aspect or repeat bytes and a refused path fail framing.
+        let command = video_command(&local("/v.mp4"), crate::background::Aspect::Zoom, true);
+        let bytes = wire(&Frame::command(&command, Instant::now()).unwrap());
+        // Body: 8 header + 4 length + 61 metadata, tag 2, 24 version bytes.
+        let aspect_at = 8 + 4 + 61 + 1 + 24;
+        for (at, value) in [(aspect_at, 3u8), (aspect_at + 1, 2)] {
+            let mut bad = bytes.clone();
+            bad[at] = value;
+            assert!(
+                Frame::read(&bad[..])
+                    .unwrap()
+                    .into_command(Instant::now(), caps)
+                    .is_err(),
+                "{at}"
+            );
+        }
+        let path_at = aspect_at + 2 + 4;
+        let mut relative = bytes.clone();
+        relative[path_at..path_at + 2].copy_from_slice(b"vv");
+        assert!(
+            Frame::read(&relative[..])
+                .unwrap()
+                .into_command(Instant::now(), caps)
+                .is_err(),
+            "a relative path never becomes a cue"
+        );
+        // Builders refuse what the decoder would refuse.
+        let source = VideoSource {
+            path: "http://example.com/v.mp4".into(),
+            aspect: crate::background::Aspect::Zoom,
+            repeat: true,
+        };
+        assert!(!source.is_valid());
+    }
+
+    #[test]
+    fn media_commands_bypass_preparation_and_round_trip() {
+        let now = Instant::now();
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        for action in [MediaAction::Play, MediaAction::Pause, MediaAction::Restart] {
+            let mut d = Delivery::new(Epoch(42));
+            let stamp = d
+                .submit_media(action, now, now + Duration::from_secs(1))
+                .unwrap();
+            let command = d.take_next().unwrap();
+            assert_eq!(command.lane(), Lane::Safety);
+            let frame = Frame::command(&command, now).unwrap();
+            let bytes = wire(&frame);
+            let read = Frame::read(&bytes[..]).unwrap();
+            assert!(read.is_mask(), "no preparation for {action:?}");
+            assert_eq!(read.command_stamp().unwrap(), stamp);
+            let decoded = read.into_command(now, caps).unwrap();
+            assert!(matches!(decoded.payload(), Payload::Media(a) if *a == action));
+        }
+        let mut d = Delivery::new(Epoch(42));
+        d.submit_media(MediaAction::Play, now, now + Duration::from_secs(1))
+            .unwrap();
+        let mut bytes = wire(&Frame::command(&d.take_next().unwrap(), now).unwrap());
+        bytes[8 + 29] = 3;
+        assert!(
+            Frame::read(&bytes[..])
+                .unwrap()
+                .into_command(now, caps)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn status_frames_round_trip_and_reject_unknown_states() {
+        let status = MediaStatus {
+            scene: ContentVersion {
+                id: u128::MAX - 3,
+                revision: 9,
+            },
+            state: PlayState::Playing,
+            position: Duration::from_millis(61_250),
+            duration: Some(Duration::from_secs(90)),
+            audio: AudioState::NoDevice,
+        };
+        let bytes = wire(&Frame::status(Epoch(5), status));
+        let frame = Frame::read(&bytes[..]).unwrap();
+        assert!(frame.is_status() && !frame.is_acknowledgment());
+        assert!(frame.command_stamp().is_err(), "never a command");
+        assert_eq!(frame.into_status().unwrap(), (Epoch(5), status));
+        let unknown = MediaStatus {
+            duration: None,
+            ..status
+        };
+        let bytes = wire(&Frame::status(Epoch(5), unknown));
+        assert_eq!(
+            Frame::read(&bytes[..]).unwrap().into_status().unwrap().1,
+            unknown
+        );
+        let mut bad = bytes.clone();
+        bad[8 + 40] = 5;
+        assert!(Frame::read(&bad[..]).unwrap().into_status().is_err());
+        let mut bad_audio = bytes.clone();
+        bad_audio[8 + 49] = 4;
+        assert!(Frame::read(&bad_audio[..]).unwrap().into_status().is_err());
+        assert!(
+            Frame::read(&wire(&Frame::ready(Epoch(5), 8))[..])
+                .unwrap()
+                .into_status()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_status_offer_is_written_without_a_receipt_slot_and_latest_wins() {
+        struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let workers = PipeWorkers::with_wake(io::empty(), Sink(written.clone()), || {}).unwrap();
+        let status = |ms| MediaStatus {
+            scene: ContentVersion { id: 1, revision: 1 },
+            state: PlayState::Playing,
+            position: Duration::from_millis(ms),
+            duration: None,
+            audio: AudioState::None,
+        };
+        // Offered faster than the writer looks: only the latest is written.
+        workers.offer_status(Frame::status(Epoch(1), status(1)));
+        workers.offer_status(Frame::status(Epoch(1), status(2)));
+        // Receipts keep all four queue slots.
+        for _ in 0..4 {
+            let _ = workers.try_send(Frame::ready(Epoch(1), 8));
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let bytes = written.lock().unwrap().clone();
+            let mut reader = &bytes[..];
+            let mut frames = Vec::new();
+            while let Ok(frame) = Frame::read(&mut reader) {
+                frames.push(frame);
+            }
+            let statuses: Vec<_> = frames
+                .into_iter()
+                .filter(Frame::is_status)
+                .map(|f| f.into_status().unwrap().1.position)
+                .collect();
+            if !statuses.is_empty() {
+                assert_eq!(statuses, [Duration::from_millis(2)]);
+                break;
+            }
+            assert!(Instant::now() < deadline, "status written");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

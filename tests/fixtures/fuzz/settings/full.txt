@@ -1,0 +1,10 @@
+sela-settings 1
+output_monitor=\\.\DISPLAY6
+language=id
+recent=C:/s/a.selaschedule
+recent=C:/s/a.selaschedule
+recent=
+pane_ratios=2400,6200,6200
+resources_collapsed=1
+window=-100,0,1280,720,max
+future_key=1

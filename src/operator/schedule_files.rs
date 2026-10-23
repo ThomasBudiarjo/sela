@@ -8,12 +8,24 @@ use sela::schedule_file::{ReadError, ScheduleFile, WriteError};
 /// A save waiting for the songs it embeds.
 pub(crate) struct SaveJob {
     pub(crate) path: PathBuf,
+    /// The song entries' revisions and arrangements, in schedule order.
     pub(crate) versions: Vec<Version>,
+    pub(crate) arrangements: Vec<Option<VariantId>>,
+    /// Scripture entries with their positions (`.selaschedule` version 5).
+    pub(crate) scripture: Vec<schedule_file::ScriptureItem>,
+    /// Every entry's pin: the baseline once the file is written.
     pub(crate) pins: Vec<Pin>,
     /// Guarded command to continue with once the file is written.
     pub(crate) then: Option<Then>,
     /// `Schedule::document` when the save began.
     pub(crate) document: u64,
+    /// Each song entry and its theme snapshot when the save began (M1-08),
+    /// in the order of `versions`; an entry without one takes its song's
+    /// library theme in the file.
+    pub(crate) themes: Vec<(EntryId, Option<sela::schedule::ItemTheme>)>,
+    /// Export Standalone Schedule (M1-13): the document goes to the bundle
+    /// worker instead of the file, and the schedule stays as it is.
+    pub(crate) package: bool,
 }
 
 /// The one file operation on the schedule file worker.
@@ -103,6 +115,7 @@ impl Operator {
     fn prompt_save_as(&mut self, then: Option<Then>, cx: &mut Context<Self>) {
         let suggested = self.schedule.name();
         let picked = cx.prompt_for_new_path(&self.schedule_dir(), suggested.as_deref());
+        self.save_as_quits = matches!(then, Some(Then::Quit));
         self.file_prompt = Some(cx.spawn(async move |this, cx| {
             let picked = picked.await;
             let _ = this.update(cx, |this, cx| {
@@ -118,27 +131,68 @@ impl Operator {
     }
 
     fn finish_prompt(&mut self) {
+        self.save_as_quits = false;
         if let Some(task) = self.file_prompt.take() {
             task.detach();
         }
     }
 
+    /// Save was chosen in a quit's Unsaved prompt and has not finished: the
+    /// window closes once the file is written. A cancelled Save As or a
+    /// failed write drops the quit.
+    pub(crate) fn quitting_after_save(&self) -> bool {
+        let quits = |job: &SaveJob| matches!(job.then, Some(Then::Quit));
+        self.save_as_quits
+            || matches!(self.resume, Some(Then::Quit))
+            || matches!(&self.file_job, Some(FileJob::Write(job)) if quits(job))
+            || matches!(&self.request, Some(Request::SaveSchedule(job)) if quits(job))
+            || matches!(&self.queued, Some((_, Request::SaveSchedule(job))) if quits(job))
+    }
+
     fn begin_save(&mut self, path: PathBuf, then: Option<Then>) {
+        self.begin_save_to(path, then, false);
+    }
+
+    /// File › Export Standalone Schedule…, after its Save dialog.
+    pub(crate) fn begin_export(&mut self, path: PathBuf) {
+        self.begin_save_to(path, None, true);
+    }
+
+    fn begin_save_to(&mut self, path: PathBuf, then: Option<Then>, package: bool) {
         if self.schedule_busy() {
             return self.report_busy();
         }
-        let versions = self.schedule.versions();
+        let entries = self.schedule.entries();
+        let songs = || entries.iter().filter(|e| e.scripture.is_none());
+        let versions: Vec<Version> = songs().map(|e| e.version).collect();
         let job = SaveJob {
             path,
             versions: versions.clone(),
+            arrangements: songs().map(|e| e.arrangement).collect(),
+            scripture: entries
+                .iter()
+                .enumerate()
+                .filter_map(|(position, e)| {
+                    e.scripture
+                        .as_ref()
+                        .map(|snapshot| schedule_file::ScriptureItem {
+                            position,
+                            title: e.title.clone(),
+                            snapshot: (**snapshot).clone(),
+                        })
+                })
+                .collect(),
             pins: self.schedule.pins().collect(),
             then,
             document: self.schedule.document(),
+            themes: songs().map(|e| (e.id, e.theme.clone())).collect(),
+            package,
         };
         if self.queue(
-            storage::Command::Songs(versions),
+            storage::Command::ThemedSongs(versions),
             Request::SaveSchedule(job),
-        ) {
+        ) && !package
+        {
             self.schedule_message = Some(t!(Msg::Saving).into());
         }
     }
@@ -168,7 +222,13 @@ impl Operator {
                 if let Ok(Ok(Some(paths))) = picked
                     && let Some(path) = paths.into_iter().next()
                 {
-                    this.begin_read(path);
+                    // A standalone schedule is unpacked into the profile
+                    // first (M1-13), then opened like any schedule file.
+                    if sela::bundle::is_bundle(&path) {
+                        this.begin_package_open(path);
+                    } else {
+                        this.begin_read(path);
+                    }
                 }
                 cx.notify();
             });
@@ -200,27 +260,71 @@ impl Operator {
     }
 
     /// The saved songs arrived: hand the document to the file worker.
-    pub(crate) fn write_schedule(&mut self, job: SaveJob, songs: Vec<storage::Song>) {
+    pub(crate) fn write_schedule(
+        &mut self,
+        job: SaveJob,
+        songs: Vec<(storage::Song, Option<sela::theme::ThemeId>)>,
+    ) {
         let title = job
             .path
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let items = job
+        let mut items = Vec::with_capacity(songs.len());
+        for (((source, (song, song_theme)), arrangement), (entry, snapshot)) in job
             .versions
             .iter()
             .zip(songs)
-            .zip(&job.pins)
-            .map(|((source, song), pin)| schedule_file::Item {
+            .zip(&job.arrangements)
+            .zip(&job.themes)
+        {
+            // A saved item carries its theme snapshot (M1-08), so the file
+            // reopens with the same look on another library (image
+            // backgrounds are references: name and SHA-256). One never shown
+            // takes its song's library theme now, in the file and in the
+            // session alike, unless that cannot be trusted (themes not
+            // loaded, or the song's theme is missing): then it is saved
+            // without a snapshot and resolves again when reopened.
+            let theme = match snapshot {
+                Some(snapshot) => Some(snapshot.clone()),
+                None => self.capturable_theme(song_theme).map(|theme| {
+                    if job.document == self.schedule.document() {
+                        self.schedule.capture_theme(*entry, &theme);
+                    }
+                    sela::schedule::ItemTheme {
+                        theme,
+                        explicit: false,
+                    }
+                }),
+            };
+            items.push(schedule_file::Item {
                 source: *source,
                 song,
-                arrangement: pin.arrangement,
-            })
-            .collect();
+                arrangement: *arrangement,
+                theme,
+            });
+        }
+        let document = ScheduleFile {
+            title,
+            items,
+            scripture: job.scripture.clone(),
+        };
+        if job.package {
+            // The title is the schedule's, not the package file's.
+            let title = self
+                .schedule
+                .path()
+                .and_then(Path::file_stem)
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or(document.title.clone());
+            let document = ScheduleFile { title, ..document };
+            self.export_document(job.path, document);
+            return;
+        }
         let queued = self
             .file_worker
             .as_ref()
-            .is_some_and(|worker| worker.write(job.path.clone(), ScheduleFile { title, items }));
+            .is_some_and(|worker| worker.write(job.path.clone(), document));
         if queued {
             self.file_job = Some(FileJob::Write(job));
         } else {
@@ -241,18 +345,57 @@ impl Operator {
         arrangements: Vec<Option<VariantId>>,
     ) -> Option<Vec<storage::Song>> {
         let name = schedule_file::display_name(&path);
-        let entries = items
+        let mut themes = match self.themes.opening.take() {
+            Some((opened, themes)) if opened == path && themes.len() == items.len() => themes,
+            _ => vec![None; items.len()],
+        }
+        .into_iter();
+        let mut songs = items
             .iter()
             .zip(arrangements)
             .map(|((version, song), arrangement)| {
                 let pin = Pin {
                     version: *version,
                     arrangement,
+                    theme: None,
                 };
-                (pin, song.title.clone())
+                (pin, song.title.clone(), themes.next().flatten(), None)
             })
-            .collect();
-        match self.schedule.open(path.clone(), entries) {
+            .peekable();
+        // Scripture items go back to their places between the songs.
+        let mut scripture = self
+            .scripture
+            .opening
+            .take()
+            .unwrap_or_default()
+            .into_iter()
+            .peekable();
+        let mut entries = Vec::new();
+        while songs.peek().is_some() || scripture.peek().is_some() {
+            match scripture.next_if(|item| item.position == entries.len()) {
+                Some(item) => {
+                    let pin = Pin {
+                        version: item.snapshot.version(),
+                        arrangement: None,
+                        theme: None,
+                    };
+                    entries.push((pin, item.title, None, Some(item.snapshot)));
+                }
+                None => match songs.next() {
+                    Some(song) => entries.push(song),
+                    // A position past the songs: keep the file order.
+                    None => entries.extend(scripture.next().map(|item| {
+                        let pin = Pin {
+                            version: item.snapshot.version(),
+                            arrangement: None,
+                            theme: None,
+                        };
+                        (pin, item.title, None, Some(item.snapshot))
+                    })),
+                },
+            }
+        }
+        match self.schedule.open_items(path.clone(), entries) {
             Ok(()) => {
                 self.clear_entry_selection();
                 self.remember_recent(path);
@@ -319,7 +462,15 @@ impl Operator {
         let name = schedule_file::display_name(&path);
         match result {
             Ok(file) => {
+                // Scripture items need no library; they rejoin the songs in
+                // `finish_open`.
+                self.scripture.opening = Some(file.scripture);
                 let arrangements = file.items.iter().map(|item| item.arrangement).collect();
+                // The snapshots wait beside the library import (M1-08).
+                self.themes.opening = Some((
+                    path.clone(),
+                    file.items.iter().map(|item| item.theme.clone()).collect(),
+                ));
                 let items = file
                     .items
                     .into_iter()
@@ -390,12 +541,18 @@ impl Operator {
         let title = match self.schedule.name() {
             Some(name) if self.schedule.is_dirty() => format!("{name}* — Sela"),
             Some(name) => format!("{name} — Sela"),
-            None if self.schedule.is_dirty() => "Untitled schedule* — Sela".to_owned(),
-            None => "Sela — Technical preview".to_owned(),
+            // Localized like every other operator string (SC2-I18N-01).
+            None if self.schedule.is_dirty() => t!(Msg::WindowTitleUntitledDirty).to_owned(),
+            None => t!(Msg::WindowTitleIdle).to_owned(),
         };
         if title != self.window_title {
             window.set_window_title(&title);
             self.window_title = title;
+            // GPUI names the accessibility tree's window node when a frame
+            // begins, and this runs inside the frame: without another frame,
+            // screen readers keep the old title until something else redraws
+            // (SC2-A11Y-02).
+            window.request_animation_frame();
         }
     }
 }

@@ -23,6 +23,12 @@ use std::{
 };
 
 mod format_pane;
+mod theme_mode;
+#[cfg(test)]
+pub(crate) use theme_mode::{
+    COPYRIGHT as THEME_COPYRIGHT, MARGINS_DEFAULT as THEME_MARGINS_DEFAULT, RESET as THEME_RESET,
+};
+pub(crate) use theme_mode::{open_theme, theme_preview};
 
 actions!(
     song_library,
@@ -165,6 +171,8 @@ enum Pending {
     Load(Version),
     Save(Song),
     Delete,
+    /// A theme save from the theme editor (M1-08); the draft it saved.
+    SaveTheme(Song),
 }
 
 fn blank() -> Song {
@@ -423,10 +431,15 @@ type Backdrop = ((ImageRef, Aspect), Arc<[u8]>);
 
 /// Background preparation for previews and thumbnails, shared by their
 /// background tasks; the UI thread never locks it.
+/// A video's first frame at the preview size, by video and aspect.
+type Poster = ((sela::background::VideoRef, Aspect), Arc<[u8]>);
+
 struct Backdrops {
     profile: Option<PathBuf>,
     /// Least recently fitted first.
     fitted: Mutex<VecDeque<Backdrop>>,
+    /// Video posters (first frames) at the preview size, same bound.
+    posters: Mutex<VecDeque<Poster>>,
 }
 
 impl Backdrops {
@@ -434,6 +447,62 @@ impl Backdrops {
         Self {
             profile,
             fitted: Mutex::new(VecDeque::new()),
+            posters: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// A video background previews as its first frame (the audience plays
+    /// it); black with the substitution warning when it cannot be read.
+    fn poster(
+        &self,
+        video: &sela::background::VideoRef,
+        aspect: Aspect,
+    ) -> (PreparedBackground, Option<String>) {
+        let key = (video.clone(), aspect);
+        let cached = {
+            let posters = self.posters.lock().unwrap_or_else(|e| e.into_inner());
+            posters
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.clone())
+        };
+        let poster = match cached {
+            Some(rgba) => Ok(rgba),
+            None => self
+                .profile
+                .as_deref()
+                .ok_or(sela::videos::Substitute::Missing)
+                .and_then(|profile| {
+                    sela::videos::poster(
+                        profile,
+                        sela::videos::tools().as_ref(),
+                        video,
+                        aspect,
+                        PREVIEW,
+                    )
+                })
+                .inspect(|rgba| {
+                    let mut posters = self.posters.lock().unwrap_or_else(|e| e.into_inner());
+                    posters.retain(|(k, _)| *k != key);
+                    posters.push_back((key.clone(), rgba.clone()));
+                    while posters.len() > BACKDROPS {
+                        posters.pop_front();
+                    }
+                }),
+        };
+        match poster {
+            Ok(rgba) => (
+                PreparedBackground::Image {
+                    version: sela::videos::poster_version(video, aspect),
+                    extent: PREVIEW,
+                    rgba,
+                },
+                None,
+            ),
+            Err(why) => (
+                sela::slides::color_background(sela::background::BLACK),
+                Some(why.warning(&video.name)),
+            ),
         }
     }
 
@@ -444,6 +513,7 @@ impl Backdrops {
         let (image, aspect) = match plan(slide.background.as_ref()) {
             Plan::Color(rgb) => return (sela::slides::color_background(rgb), None),
             Plan::Image(image, aspect) => (image, aspect),
+            Plan::Video(video, aspect, _) => return self.poster(video, aspect),
         };
         let key = (image.clone(), aspect);
         let cached = {
@@ -529,6 +599,8 @@ fn pixels(
             crate::audience::compositor::blend_over(rgba, &coverage, &blend)?,
             size,
         )),
+        // Previews receive posters as images; a video cue never comes here.
+        PreparedBackground::Video { .. } => None,
     }
 }
 
@@ -589,7 +661,7 @@ pub(crate) struct Library {
     field_edits: [u64; 6],
     /// Label and lyrics cell per section; always parallel to `draft.sections`.
     cells: Vec<[Entity<TextInput>; 2]>,
-    buttons: [FocusHandle; 32],
+    buttons: [FocusHandle; 33],
     subscriptions: Vec<Subscription>,
     task: Option<Task<()>>,
     worker: Option<Worker>,
@@ -654,6 +726,8 @@ pub(crate) struct Library {
     variant: usize,
     entry: Option<usize>,
     entry_focus: Vec<FocusHandle>,
+    /// Theme mode (M1-08): this window edits a theme, not a song.
+    theme: Option<theme_mode::ThemeEdit>,
 }
 
 impl Library {
@@ -716,6 +790,8 @@ impl Library {
             buttons: std::array::from_fn(|i| {
                 cx.focus_handle().tab_stop(true).tab_index(if i == YES {
                     10
+                } else if i == theme_mode::MARGINS_DEFAULT {
+                    theme_mode::MARGINS_DEFAULT_TAB
                 } else {
                     i as isize + 1
                 })
@@ -764,6 +840,7 @@ impl Library {
             variant: 0,
             entry: None,
             entry_focus: Vec::new(),
+            theme: None,
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
@@ -1212,11 +1289,40 @@ impl Library {
                     self.refresh(cx);
                 }
             }
+            (Some(Pending::SaveTheme(song)), Ok(Reply::Themes(_))) => {
+                if let Some(edit) = &mut self.theme {
+                    edit.stored = true;
+                }
+                self.baseline = song;
+                self.set_confirm_close(false, cx);
+                self.set_status(t!(Msg::ThemeSavedStatus));
+                library_changed(cx);
+                if self.close_after_save {
+                    self.committed_close = !self.dirty(cx);
+                    self.close_after_save = false;
+                    if !self.committed_close {
+                        self.set_status(t!(Msg::SavedEditsRemain));
+                    }
+                }
+            }
             (Some(Pending::Delete), Ok(Reply::Deleted)) => {
                 library_changed(cx);
                 self.begin(blank(), None, cx);
                 self.cursor = None;
                 self.refresh(cx);
+            }
+            (Some(Pending::SaveTheme(_)), Err(Error::Missing)) => {
+                // Deleted in the operator while this editor was open: not
+                // re-inserted (`Repository::update_theme`). The edits stay
+                // and the next OK saves them as a new theme under a fresh
+                // id, so songs that named the deleted theme are not
+                // silently restyled by it.
+                self.close_after_save = false;
+                if let Some(edit) = &mut self.theme {
+                    edit.id = sela::theme::ThemeId::allocate();
+                    edit.stored = false;
+                }
+                self.reject_status(t!(Msg::ThemeDeletedElsewhere));
             }
             (_, Err(e)) => {
                 self.close_after_save = false;
@@ -1232,6 +1338,10 @@ impl Library {
             return;
         }
         self.record(self.current(cx));
+        if self.theme_button_action(index, window, cx) {
+            cx.notify();
+            return;
+        }
         match index {
             12 => {
                 self.inspector = !self.inspector;
@@ -2258,6 +2368,10 @@ impl Library {
         }
         div()
             .id(("library-button", index))
+            // Stable automation id and name (M1-08 theme editor scripts).
+            .role(Role::Button)
+            .aria_label(label.to_owned())
+            .accessibility_id(format!("editor-button-{index}"))
             .track_focus(&self.buttons[index])
             .key_context("SelaControl")
             .flex_shrink_0()
@@ -2482,9 +2596,15 @@ impl Render for Library {
         }
         let title = self.fields[0].read(cx).text().to_owned();
         if title != self.title {
-            window.set_window_title(&window_title(&title));
+            window.set_window_title(&if self.theme.is_some() {
+                theme_mode::theme_window_title(&title)
+            } else {
+                window_title(&title)
+            });
             self.title = title;
         }
+        self.sync_theme(window, cx);
+        let themed = self.theme.is_some();
         self.ensure_preview(cx);
         self.ensure_thumbnails(cx);
         let busy = self.pending.is_some();
@@ -2578,7 +2698,7 @@ impl Render for Library {
                             .gap(px(2.))
                             .child(self.fields[0].clone())
                             .child(div().flex().when(!busy, |d| {
-                                d.child(self.button(0, t!(Msg::EditorNew), cx))
+                                d.when(!themed, |d| d.child(self.button(0, t!(Msg::EditorNew), cx)))
                                     .child(self.button(5, t!(Msg::EditorUndo), cx))
                                     .child(self.button(6, t!(Msg::EditorRedo), cx))
                             })),
@@ -2605,7 +2725,7 @@ impl Render for Library {
                     })
                     .children([t!(Msg::EditorAnimate), t!(Msg::EditorPresentation)].map(inert))
                     .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(theme::BORDER)))
-                    .when(!busy, |d| {
+                    .when(!busy && !themed, |d| {
                         d.child(self.button(13, t!(Msg::EditorLibrary), cx))
                             .child(self.button(12, t!(Msg::EditorInspector), cx))
                     }),
@@ -2760,6 +2880,8 @@ impl Render for Library {
                                                 self.arrangement && !self.layouts,
                                             ),
                                         ]
+                                        .into_iter()
+                                        .filter(|(index, _, _)| !themed || *index != 20)
                                         .map(
                                             |(index, label, active)| {
                                                 div()
@@ -2856,9 +2978,17 @@ impl Render for Library {
                                     .items_center()
                                     .border_t_1()
                                     .border_color(rgb(theme::BORDER))
-                                    .when(!busy, |d| {
+                                    .when(!busy && !themed, |d| {
                                         d.child(self.button(7, "+", cx))
                                             .child(self.button(8, "−", cx))
+                                    })
+                                    .when(themed, |d| {
+                                        d.child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(rgb(theme::MUTED))
+                                                .child(t!(Msg::ThemeSampleHint)),
+                                        )
                                     }),
                             ),
                     )
@@ -3010,22 +3140,42 @@ impl Render for Library {
                         .px_3()
                         .border_t_1()
                         .border_color(rgb(theme::BORDER))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .text_size(px(12.))
-                                .text_color(rgb(theme::FAINT))
+                        .when(!themed, |d| {
+                            d.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(theme::FAINT))
+                                    .child(
+                                        div()
+                                            .size(px(13.))
+                                            .border_1()
+                                            .rounded(px(2.))
+                                            .border_color(rgb(theme::BORDER)),
+                                    )
+                                    .child(t!(Msg::ApplyToSchedule)),
+                            )
+                        })
+                        .when(themed, |d| {
+                            let warnings = self
+                                .theme
+                                .as_ref()
+                                .map(|t| t.warnings.join(" · "))
+                                .unwrap_or_default();
+                            d.child(self.framed(theme_mode::RESET, t!(Msg::ThemeReset), true, cx))
                                 .child(
                                     div()
-                                        .size(px(13.))
-                                        .border_1()
-                                        .rounded(px(2.))
-                                        .border_color(rgb(theme::BORDER)),
+                                        .id("theme-warnings")
+                                        .debug_selector(|| "theme-warnings".into())
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(0xb36b00))
+                                        .child(warnings),
                                 )
-                                .child(t!(Msg::ApplyToSchedule)),
-                        )
+                        })
                         .child(div().flex_1())
                         .child(self.framed(1, t!(Msg::EditorApply), dirty, cx))
                         .child(self.framed(15, t!(Msg::EditorOk), true, cx))
@@ -3037,6 +3187,12 @@ impl Render for Library {
             })
     }
 }
+
+/// The close prompt's question. Yes saves and closes and No discards
+/// (EW8-OBS-012: "Would you like to save changes before closing?"), so the
+/// question asks whether to save; "Close without saving?" inverted both
+/// answers, also for screen readers that announce it (SC2-I18N-02).
+const CLOSE_PROMPT_QUESTION: Msg = Msg::SaveBeforeClosing;
 
 impl Library {
     /// The Yes/No/Cancel close prompt (EW8-OBS-012): a full-window backdrop
@@ -3076,7 +3232,13 @@ impl Library {
             )
             .child(
                 div()
+                    .id("close-prompt-panel")
                     .debug_selector(|| "close-prompt-panel".into())
+                    // Announced as a dialog with its question (SC2-A11Y-01).
+                    .role(Role::Dialog)
+                    .aria_label(t!(CLOSE_PROMPT_QUESTION))
+                    .aria_description(t!(Msg::UnsavedChanges))
+                    .accessibility_id("close-prompt")
                     .w(px(380.))
                     .max_w_full()
                     .p(px(theme::DIALOG_PAD))
@@ -3091,7 +3253,7 @@ impl Library {
                     .child(
                         div()
                             .font_weight(FontWeight::MEDIUM)
-                            .child(t!(Msg::CloseWithoutSaving)),
+                            .child(t!(CLOSE_PROMPT_QUESTION)),
                     )
                     .child(
                         div()
@@ -4776,6 +4938,87 @@ mod tests {
         click(cx, &format!("format-menu-{row}"));
     }
 
+    /// video-playback: Select Media… › Videos sets a video Media Fill that
+    /// repeats, the Slide pane's Repeating turns it off as one undo step,
+    /// and the song saves it (EW8-OBS-032, EW8-OBS-039, SRC-10).
+    #[gpui::test]
+    fn select_media_videos_sets_a_repeating_video_fill_that_saves(cx: &mut TestAppContext) {
+        use sela::background::{Background, Fill};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let videos = sela::videos::videos_dir(dir.path());
+        std::fs::create_dir_all(&videos).unwrap();
+        std::fs::write(videos.join("Waves.mp4"), b"original wave clip bytes").unwrap();
+        let pinned = sela::videos::video_ref(dir.path(), "Waves.mp4").unwrap();
+        let (mut cx, view) = format_fixture(cx, path.clone());
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Media Fill");
+        let count = undo_len(&cx, &view);
+        click(&mut cx, "format-SelectMedia");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(vec!["Waves.mp4".to_owned()]))
+        );
+        let rows = view.read_with(&cx, |v, _| v.menu_rows(format_pane::Menu::Media));
+        assert_eq!(rows[0].0, "Waves", "named without the extension");
+        // Right and Left switch the category from the keyboard.
+        cx.simulate_keystrokes("right");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.kind),
+            format_pane::MediaKind::Images
+        );
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(Vec::new()))
+        );
+        cx.simulate_keystrokes("left");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(vec!["Waves.mp4".to_owned()]))
+        );
+        click(&mut cx, "media-item-0");
+        cx.run_until_parked();
+        assert_eq!(
+            backgrounds(&cx, &view)[0],
+            Some(Background::video(pinned.clone()))
+        );
+        assert!(matches!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| &b.fill),
+            Some(Fill::Video { repeat: true, .. })
+        ));
+        assert_eq!(undo_len(&cx, &view), count + 1);
+        // The pane names it and offers Repeating for a video.
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("format-repeat").is_some());
+        click(&mut cx, "format-repeat");
+        assert!(matches!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| &b.fill),
+            Some(Fill::Video { repeat: false, .. })
+        ));
+        assert_eq!(undo_len(&cx, &view), count + 2);
+        // Media Fill again keeps the chosen video (EW keeps the current media).
+        fill(&mut cx, &view, "Media Fill");
+        assert!(matches!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| &b.fill),
+            Some(Fill::Video { repeat: false, .. })
+        ));
+        cx.simulate_keystrokes("ctrl-s");
+        wait(&mut cx, &view);
+        let version = view.read_with(&cx, |v, _| v.version.unwrap());
+        let saved = Repository::open(&path).unwrap().song(version).unwrap();
+        assert_eq!(saved.sections[0].background, backgrounds(&cx, &view)[0]);
+        assert_eq!(
+            saved.sections[0]
+                .background
+                .as_ref()
+                .and_then(|b| b.video_ref().cloned()),
+            Some(pinned)
+        );
+    }
+
     #[gpui::test]
     fn slide_tab_sets_color_image_and_aspect_as_undo_steps(cx: &mut TestAppContext) {
         use sela::background::{Background, Fill};
@@ -4826,6 +5069,14 @@ mod tests {
             Some(Fill::Media(None))
         );
         click(&mut cx, "format-SelectMedia");
+        cx.run_until_parked();
+        // EW8-OBS-039: the picker opens on Videos (empty here); Images is
+        // the next category.
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(Vec::new()))
+        );
+        click(&mut cx, "media-images");
         cx.run_until_parked();
         assert_eq!(
             view.read_with(&cx, |v, _| v.pane.media.names.clone()),
@@ -4917,6 +5168,154 @@ mod tests {
                 .map(|s| s.background.clone())
                 .collect::<Vec<_>>(),
             backgrounds(&cx, &view)
+        );
+    }
+
+    /// video-playback review: Select Media… › Videos › Import runs one
+    /// import at a time, says so in the status line, turns the row into
+    /// Cancel import (which reaches the copy), and an editor that closes
+    /// cancels its copy (the import's guard is dropped with the pane).
+    #[gpui::test]
+    fn select_media_video_import_is_one_at_a_time_shown_and_cancellable(cx: &mut TestAppContext) {
+        use format_pane::{MediaImport, MediaKind};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        std::fs::create_dir_all(sela::videos::videos_dir(dir.path())).unwrap();
+        let source = dir.path().join("Clip.mp4");
+        std::fs::write(&source, b"a long video, as far as this test knows").unwrap();
+        let (mut cx, view) = format_fixture(cx, path);
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Media Fill");
+        click(&mut cx, "format-SelectMedia");
+        // Started, not yet run: the background thread has not been polled.
+        view.update(&mut cx, |v, cx| {
+            v.start_media_import(MediaKind::Videos, source.clone(), cx)
+        });
+        let flag = view.read_with(&cx, |v, _| {
+            assert_eq!(v.status, "Importing Clip.mp4…");
+            let rows = v.menu_rows(format_pane::Menu::Media);
+            assert_eq!(rows.last().unwrap().0, "Cancel import");
+            assert!(rows.last().unwrap().1, "Cancel import is enabled");
+            v.pane.media.importing.as_ref().unwrap().flag()
+        });
+        // One at a time: a second import is refused, the first one stays.
+        let other = dir.path().join("Other.mp4");
+        view.update(&mut cx, |v, cx| {
+            v.start_media_import(MediaKind::Videos, other, cx)
+        });
+        view.read_with(&cx, |v, _| {
+            assert_eq!(v.status, sela::t!(sela::i18n::Msg::ImportBusy));
+            assert_eq!(v.pane.media.importing.as_ref().unwrap().name, "Clip.mp4");
+        });
+        // The row now cancels instead of prompting for another file.
+        cx.update(|window, cx| view.update(cx, |v, cx| v.import_media(window, cx)));
+        assert!(!cx.did_prompt_for_paths());
+        assert!(flag.load(std::sync::atomic::Ordering::Acquire));
+        view.read_with(&cx, |v, _| {
+            assert_eq!(v.status, "Cancelling import…");
+            let rows = v.menu_rows(format_pane::Menu::Media);
+            assert!(!rows.last().unwrap().1, "Cancel is spent");
+        });
+        // The job ends (refused or cancelled) and Import… is back.
+        cx.run_until_parked();
+        view.read_with(&cx, |v, _| {
+            assert!(v.pane.media.importing.is_none());
+            assert_ne!(v.status, "Importing Clip.mp4…");
+            let rows = v.menu_rows(format_pane::Menu::Media);
+            assert_eq!(rows.last().unwrap().0, "Import…");
+        });
+        assert!(
+            !sela::videos::videos_dir(dir.path())
+                .join("Clip.mp4")
+                .exists()
+        );
+        // Dropping the guard (the editor closed) cancels the copy.
+        let guard = MediaImport::new("Clip.mp4", MediaKind::Videos);
+        let flag = guard.flag();
+        assert!(!flag.load(std::sync::atomic::Ordering::Acquire));
+        drop(guard);
+        assert!(flag.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    /// video-playback review round 2: closing the editor window while its
+    /// Select Media… video import runs releases the editor and with it the
+    /// import's guard, which cancels the copy (the flag the copy polls).
+    #[gpui::test]
+    fn closing_the_editor_during_a_select_media_import_cancels_it(cx: &mut TestAppContext) {
+        use format_pane::MediaKind;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        std::fs::create_dir_all(sela::videos::videos_dir(dir.path())).unwrap();
+        let source = dir.path().join("Clip.mp4");
+        std::fs::write(&source, b"a long video, as far as this test knows").unwrap();
+        let (mut cx, view) = format_fixture(cx, path);
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Media Fill");
+        click(&mut cx, "format-SelectMedia");
+        view.update(&mut cx, |v, cx| {
+            v.start_media_import(MediaKind::Videos, source, cx)
+        });
+        let flag = view.read_with(&cx, |v, _| v.pane.media.importing.as_ref().unwrap().flag());
+        assert!(!flag.load(std::sync::atomic::Ordering::Acquire));
+        let weak = view.downgrade();
+        drop(view);
+        cx.update(|window, _| window.remove_window());
+        cx.run_until_parked();
+        assert!(weak.upgrade().is_none(), "nothing keeps the closed editor");
+        assert!(
+            flag.load(std::sync::atomic::Ordering::Acquire),
+            "the closed editor's import is cancelled"
+        );
+    }
+
+    /// With the pinned development FFmpeg: a cancelled Select Media… video
+    /// import stops before copying and leaves no file.
+    #[test]
+    fn a_cancelled_select_media_video_import_leaves_no_file() {
+        use format_pane::{MediaImportError, MediaKind, import_media_file};
+        let Ok(found) = sela::media::ffmpeg::locate() else {
+            let message = "SKIPPED a_cancelled_select_media_video_import_leaves_no_file: no FFmpeg";
+            assert!(
+                std::env::var_os("SELA_REQUIRE_FFMPEG").is_none_or(|v| v != "1"),
+                "{message}"
+            );
+            eprintln!("{message}");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join("Loop.mkv");
+        let status = std::process::Command::new(&found.ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x90:rate=10:duration=1",
+            ])
+            .args(["-c:v", "ffv1"])
+            .arg(&clip)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let tools = sela::media::decode::Tools::from(&found);
+        let profile = dir.path().join("profile");
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(
+            import_media_file(
+                MediaKind::Videos,
+                &profile,
+                &clip,
+                Some(tools.clone()),
+                &cancel
+            ),
+            Err(MediaImportError::Cancelled)
+        );
+        assert_eq!(sela::videos::list(&profile).unwrap(), Vec::<String>::new());
+        // Not cancelled, the same call imports it.
+        cancel.store(false, std::sync::atomic::Ordering::Release);
+        assert_eq!(
+            import_media_file(MediaKind::Videos, &profile, &clip, Some(tools), &cancel),
+            Ok("Loop.mkv".to_owned())
         );
     }
 
@@ -5283,6 +5682,19 @@ mod tests {
             "7654321"
         );
         assert!(!view.read_with(&cx, |v, cx| v.dirty(cx)));
+    }
+
+    /// SC2-I18N-02: the question matches its answers (Yes saves, No discards).
+    #[test]
+    fn the_close_prompt_asks_whether_to_save() {
+        assert_eq!(
+            CLOSE_PROMPT_QUESTION.english(),
+            "Save changes before closing?"
+        );
+        assert_eq!(
+            CLOSE_PROMPT_QUESTION.indonesian(),
+            "Simpan perubahan sebelum menutup?"
+        );
     }
 
     #[gpui::test]

@@ -117,6 +117,17 @@ pub enum Msg {
     MenuSortAscending,
     MenuSortDescending,
     A11ySortMenu,
+    MenuSortAuthor,
+    MenuSortCopyright,
+    MenuSortAdministrator,
+    MenuSortSongNumber,
+    OptionsCopyrightHeading,
+    OptionsCopyrightDisplay,
+    OptionsCopyrightFirstSlide,
+    OptionsCopyrightHint,
+    OptionsLicenseInfo,
+    OptionsLicenseInfoPlaceholder,
+    OptionsLicenseInfoHint,
     A11ySongScrollbar,
     SongSearchMore,
     ConfirmYes,
@@ -366,6 +377,7 @@ pub enum Msg {
     ImportingName,
     ImportCancel,
     ImportCancelling,
+    MediaImportCancel,
     ImportNoteDownscaled,
     ImportNoteReused,
     ImportNoteOriented,
@@ -374,7 +386,7 @@ pub enum Msg {
     AllSlidesSelected,
     ApplyToSchedule,
     CannotBeShown,
-    CloseWithoutSaving,
+    SaveBeforeClosing,
     ConfirmDeleteHint,
     ContinueEditing,
     CursorInLyrics,
@@ -548,6 +560,412 @@ pub enum Msg {
     StyleTab,
     SwatchesTab,
     ValuesTab,
+    // Song import (M1-14, M4-07).
+    BarImport,
+    BarImportSongs,
+    BarImportFolder,
+    ImportHeading,
+    ImportListA11y,
+    ImportFinding,
+    ImportReading,
+    ImportChecking,
+    ImportCommitting,
+    ImportSummary,
+    ImportIgnored,
+    ImportOverLimit,
+    ImportNothing,
+    ImportRowDetail,
+    ImportBulkLabel,
+    ImportReplaceNote,
+    ImportChoiceImport,
+    ImportChoiceSkip,
+    ImportChoiceCopy,
+    ImportChoiceReplace,
+    ImportChoiceA11y,
+    ImportConfirm,
+    ImportDuplicateSame,
+    ImportDuplicateTitle,
+    ImportDuplicateBatch,
+    ImportDuplicateCheckFailed,
+    ImportReplaceTwice,
+    ImportCommitFailed,
+    ImportCancelled,
+    ImportDone,
+    ImportDoneLate,
+    ImportFailedStart,
+    ImportBusy,
+    ImportStopped,
+    ImportWarnElement,
+    ImportWarnDirective,
+    ImportWarnOrder,
+    ImportWarnTitle,
+    ImportWarnEmpty,
+    ImportWarnChords,
+    ImportWarnTruncated,
+    ImportWarnInvalid,
+    ImportWarnLimit,
+    ImportWarnAttribute,
+    ImportErrUnsupported,
+    ImportErrUnreadable,
+    ImportErrLibraryLimit,
+    ImportErrBatchFull,
+    ImportErrTooLarge,
+    ImportErrEncoding,
+    ImportErrMalformed,
+    ImportErrEntities,
+    ImportErrTooDeep,
+    ImportErrNoLyrics,
+    ImportFolderTruncated,
+    ImportDialogBusy,
+    ImportQuitBlocked,
+    ImportErrBatchBytes,
+    BarImportEasyWorship,
+    ImportSongsOverLimit,
+    ImportErrMissingWords,
+    ImportEwNoSongs,
+    ImportEwNoWords,
+    ImportEwTooLarge,
+    ImportEwChanged,
+    ImportEwNotLibrary,
+    ImportEwCopyFailed,
+    LiveItemNotShown,
+    WindowTitleIdle,
+    WindowTitleUntitledDirty,
+    // Autosave and recovery (M1-12).
+    RecoveryHeading,
+    RecoveryLostHeading,
+    RecoveryUnclean,
+    RecoveryUnanswered,
+    RecoveryRevision,
+    RecoveryNotInFile,
+    RecoveryFileNewer,
+    RecoveryLost,
+    RecoveryNoCopy,
+    RecoveryDamaged,
+    RecoveryInterrupted,
+    RecoveryKept,
+    RecoveryAutosaveOff,
+    RecoveryRestore,
+    RecoveryDiscard,
+    RecoveryRestored,
+    RecoveryUntitled,
+    AgoJustNow,
+    AgoMinutes,
+    AgoHours,
+    AgoDays,
+    AutosaveProtected,
+    AutosaveFailed,
+    AutosaveOff,
+    AutosaveCleanup,
+    AutosaveClosing,
+    ReasonDiskFull,
+    ReasonReadOnly,
+    ReasonLocked,
+    ReasonBudget,
+    ReasonUnlocked,
+    ReasonIo,
+    AlreadyRunningTitle,
+    AlreadyRunningBody,
+    // Themes (M1-08).
+    ThemeNew,
+    ThemeNewName,
+    ThemeEdit,
+    ThemeDuplicate,
+    ThemeCopyName,
+    ThemeDelete,
+    ThemeConfirmDelete,
+    ThemeSetDefault,
+    ThemeApplySong,
+    ThemeApplyItem,
+    ThemeItemSongTheme,
+    ThemeBuiltIn,
+    ThemeDefaultBadge,
+    ThemeInPreview,
+    ThemeRendering,
+    ThemeSavedNamed,
+    ThemeDeleted,
+    ThemeDefaultSet,
+    ThemeAppliedSong,
+    ThemeAppliedItem,
+    ThemeItemCleared,
+    ThemeLimit,
+    ThemeStorageFailed,
+    ThemeBusy,
+    ThemeMissing,
+    ThemeUnavailable,
+    ThemeSongGone,
+    ThemeGoneApply,
+    ThemeLoadRetrying,
+    ThemeTooManySongs,
+    ThemeDeletedElsewhere,
+    MarginLeftField,
+    MarginRightField,
+    MarginTopField,
+    MarginBottomField,
+    ThemeWarnFont,
+    ThemeWarnContrast,
+    ThemeWarnStretch,
+    ThemeWarnBars,
+    ThemeWarnCrop,
+    ThemeBuiltInReadOnly,
+    ThemeSelectTheme,
+    ThemeSelectSong,
+    ThemeSelectItem,
+    ThemeDeleteHint,
+    ThemeEditorWindowTitle,
+    ThemeNamePlaceholder,
+    ThemeEditing,
+    ThemeNameInvalid,
+    ThemeResetDone,
+    ThemeReset,
+    ThemeSavedStatus,
+    ThemeSampleHint,
+    ThemeElementsHeader,
+    ThemeShowCopyright,
+    ThemeMarginsHeader,
+    MarginLeft,
+    MarginRight,
+    MarginTop,
+    MarginBottom,
+    MarginInvalid,
+    MarginsSet,
+    MarginsDefault,
+    MarginsUseDefault,
+    ThemeUsing,
+    // Media backend (M2-01).
+    MediaUnavailableMissing,
+    MediaUnavailableGpl,
+    MediaUnavailableNonfree,
+    MediaUnavailableBroken,
+    ScriptureTranslationsHeader,
+    ScriptureModeReference,
+    ScriptureModeKeyword,
+    ScriptureModeLabel,
+    ScriptureReferencePlaceholder,
+    ScriptureKeywordPlaceholder,
+    ScriptureReferenceLabel,
+    ScriptureKeywordLabel,
+    ScriptureClear,
+    ScriptureSuggestions,
+    ScriptureVerseList,
+    ScriptureErrUnknownBook,
+    ScriptureErrMissingChapter,
+    ScriptureErrChapterNotFound,
+    ScriptureErrInvalidRange,
+    ScriptureErrMalformed,
+    ScriptureErrBookMissing,
+    ScriptureErrChapterMissing,
+    ScriptureErrVerseMissing,
+    ScriptureErrTooLong,
+    ScriptureMissingVerses,
+    ScriptureLoading,
+    ScriptureNoTranslations,
+    ScriptureNoProfile,
+    ScriptureUnavailable,
+    ScriptureDamaged,
+    ScriptureEmptyTitle,
+    ScriptureEmptyHint,
+    ScriptureSearchShort,
+    ScriptureNoResults,
+    ScriptureMoreResults,
+    ScriptureImport,
+    ScriptureImportPrompt,
+    ScriptureImporting,
+    ScriptureImported,
+    ScriptureImportFailed,
+    ScriptureRejectTooLarge,
+    ScriptureRejectEncoding,
+    ScriptureRejectMalformed,
+    ScriptureRejectEntities,
+    ScriptureRejectDeep,
+    ScriptureRejectFormat,
+    ScriptureRejectNoVerses,
+    ScriptureRejectTooMany,
+    ScriptureBusy,
+    ScriptureSelectVerses,
+    ScriptureSelectionCount,
+    ScriptureRebuilt,
+    ScriptureNotInstalled,
+    ScriptureRestricted,
+    ScriptureDamagedTag,
+    ScriptureAddedToSchedule,
+    ScriptureWhyMissing,
+    ScriptureWhyIo,
+    ScriptureWhyUnsupported,
+    ScriptureWhyCorrupt,
+    ScriptureWhyInvalid,
+    ScriptureWhyChecksum,
+    ScriptureWhyInflate,
+    ScriptureWhyBundle,
+    ScriptureWhyFileName,
+    ScriptureWhyFolder,
+    ScriptureWhyUnreadable,
+    ScriptureWhyStopped,
+    StageOutputOff,
+    StageStarting,
+    StageConnected,
+    StageNothingConfirmed,
+    StageLost,
+    StageLossSpawn,
+    StageLossStartup,
+    StageLossExited,
+    StageLossProtocol,
+    StageNotShown,
+    StageMessageLine,
+    StageNoMonitor,
+    StageUnavailable,
+    StageNothingLive,
+    StageNextSlide,
+    StageNextItem,
+    StageEnd,
+    BarShowStageOutput,
+    BarStageMessage,
+    StageMessageHeading,
+    StageMessageHint,
+    StageMessageLabel,
+    StageMessageShow,
+    StageMessageClear,
+    FoldbackEnable,
+    FoldbackHint,
+    FoldbackMonitorHeading,
+    FoldbackAutoMonitor,
+    FoldbackContentHeading,
+    FoldbackShowClock,
+    FoldbackShowNext,
+    OptionsTabAlertsClocks,
+    StageMonitorMissing,
+    // Bundles: standalone schedules, profile backup and restore (M1-13).
+    BarBackupProfile,
+    BarRestoreProfile,
+    BundlePickBackup,
+    BundleExportHeading,
+    BundleOpenHeading,
+    BundleBackupHeading,
+    BundleRestoreHeading,
+    BundleWorkingExport,
+    BundleWorkingOpen,
+    BundleWorkingBackup,
+    BundleWorkingRestore,
+    BundleWorkingNote,
+    BundleCancelling,
+    BundleCancelled,
+    BundleBusy,
+    BundleNoProfile,
+    BundleExported,
+    BundleEmbedded,
+    BundleNotEmbedded,
+    BundleFontsNeeded,
+    BundleFontsMissingHere,
+    BundleOmitted,
+    BundleOpened,
+    BundleAdded,
+    BundleReused,
+    BundleRenamed,
+    BundleNotIncluded,
+    BundleOmittedBySender,
+    BundleBackedUp,
+    BundleBackupExcluded,
+    BundleSkipped,
+    BundleRecentDropped,
+    BundleUnsavedNotInBackup,
+    BundleRestored,
+    BundleRestoreOpen,
+    BundleSettingsSkipped,
+    BundleUnchanged,
+    BundleMore,
+    BundleErrNotBundle,
+    BundleErrIsBackup,
+    BundleErrIsSchedule,
+    BundleErrNewer,
+    BundleErrNewerLibrary,
+    BundleErrNewerSchedule,
+    BundleErrUnsafe,
+    BundleErrDamaged,
+    BundleErrTooLarge,
+    BundleErrExists,
+    BundleErrLibrary,
+    BundleLibBusy,
+    BundleLibDamaged,
+    BundleLibUnsupported,
+    BundleLibUnreadable,
+    BundleLibMissing,
+    BundleLibTooLarge,
+    BundleLibExists,
+    BundleLibChanged,
+    BundleLibClosed,
+    BundleErrInternal,
+    BundleOpenedTooLate,
+    BundleErrImage,
+    BundleErrEmpty,
+    BundleErrDiskFull,
+    BundleErrDenied,
+    BundleErrIo,
+    BundleIoNotFound,
+    BundleIoExists,
+    BundleIoInUse,
+    BundleIoConnection,
+    BundleIoName,
+    BundleIoTooBig,
+    BundleIoOther,
+    BundlePackageNotes,
+    BundleSkipLink,
+    BundleSkipTooLarge,
+    BundleSkipUnusable,
+    BundleSkipUnreadable,
+    VideoErrIo,
+    VideoErrMissing,
+    VideoErrSourceMissing,
+    VideoErrUnsupported,
+    VideoErrNotVideo,
+    VideoErrTooLarge,
+    VideoErrInvalidName,
+    VideoErrReadDenied,
+    VideoErrProfileDenied,
+    VideoErrDiskFull,
+    VideoErrCancelled,
+    VideoErrUnavailable,
+    VideoErrBusy,
+    VideoErrDisconnected,
+    VideoWhyMissing,
+    VideoWhyNoVideo,
+    VideoWhyCodec,
+    VideoWhyCorrupt,
+    VideoWhyTooLarge,
+    VideoWhyNotLocal,
+    VideoWhySlow,
+    VideoWhyDecoder,
+    BgVideoMissing,
+    BgVideoChanged,
+    BgVideoUnreadable,
+    BgVideoUnavailable,
+    LoadingVideos,
+    NoVideosYet,
+    VideosHeader,
+    RepeatingLabel,
+    RepeatingOn,
+    RepeatingOff,
+    VideoImportReused,
+    VideoImported,
+    VideoImportFailed,
+    NoProfileVideoImport,
+    NoVideoLive,
+    VideoStarting,
+    VideoPlaying,
+    VideoPaused,
+    VideoEnded,
+    VideoFailed,
+    VideoTransport,
+    VideoPause,
+    VideoPlay,
+    VideoRestart,
+    VideoCommandRefused,
+    MediaHeader,
+    VideosNoProfile,
+    VideosEmptyHint,
+    ImportVideo,
+    VideoSoundOn,
+    VideoSoundNoDevice,
+    VideoSoundFailed,
 }
 
 impl Msg {
@@ -603,6 +1021,17 @@ impl Msg {
         Msg::MenuSortAscending,
         Msg::MenuSortDescending,
         Msg::A11ySortMenu,
+        Msg::MenuSortAuthor,
+        Msg::MenuSortCopyright,
+        Msg::MenuSortAdministrator,
+        Msg::MenuSortSongNumber,
+        Msg::OptionsCopyrightHeading,
+        Msg::OptionsCopyrightDisplay,
+        Msg::OptionsCopyrightFirstSlide,
+        Msg::OptionsCopyrightHint,
+        Msg::OptionsLicenseInfo,
+        Msg::OptionsLicenseInfoPlaceholder,
+        Msg::OptionsLicenseInfoHint,
         Msg::A11ySongScrollbar,
         Msg::SongSearchMore,
         Msg::ConfirmYes,
@@ -840,6 +1269,7 @@ impl Msg {
         Msg::ImportingName,
         Msg::ImportCancel,
         Msg::ImportCancelling,
+        Msg::MediaImportCancel,
         Msg::ImportNoteDownscaled,
         Msg::ImportNoteReused,
         Msg::ImportNoteOriented,
@@ -847,7 +1277,7 @@ impl Msg {
         Msg::AllSlidesSelected,
         Msg::ApplyToSchedule,
         Msg::CannotBeShown,
-        Msg::CloseWithoutSaving,
+        Msg::SaveBeforeClosing,
         Msg::ConfirmDeleteHint,
         Msg::ContinueEditing,
         Msg::CursorInLyrics,
@@ -1020,6 +1450,407 @@ impl Msg {
         Msg::StyleTab,
         Msg::SwatchesTab,
         Msg::ValuesTab,
+        Msg::BarImport,
+        Msg::BarImportSongs,
+        Msg::BarImportFolder,
+        Msg::ImportHeading,
+        Msg::ImportListA11y,
+        Msg::ImportFinding,
+        Msg::ImportReading,
+        Msg::ImportChecking,
+        Msg::ImportCommitting,
+        Msg::ImportSummary,
+        Msg::ImportIgnored,
+        Msg::ImportOverLimit,
+        Msg::ImportNothing,
+        Msg::ImportRowDetail,
+        Msg::ImportBulkLabel,
+        Msg::ImportReplaceNote,
+        Msg::ImportChoiceImport,
+        Msg::ImportChoiceSkip,
+        Msg::ImportChoiceCopy,
+        Msg::ImportChoiceReplace,
+        Msg::ImportChoiceA11y,
+        Msg::ImportConfirm,
+        Msg::ImportDuplicateSame,
+        Msg::ImportDuplicateTitle,
+        Msg::ImportDuplicateBatch,
+        Msg::ImportDuplicateCheckFailed,
+        Msg::ImportReplaceTwice,
+        Msg::ImportCommitFailed,
+        Msg::ImportCancelled,
+        Msg::ImportDone,
+        Msg::ImportDoneLate,
+        Msg::ImportFailedStart,
+        Msg::ImportBusy,
+        Msg::ImportStopped,
+        Msg::ImportWarnElement,
+        Msg::ImportWarnDirective,
+        Msg::ImportWarnOrder,
+        Msg::ImportWarnTitle,
+        Msg::ImportWarnEmpty,
+        Msg::ImportWarnChords,
+        Msg::ImportWarnTruncated,
+        Msg::ImportWarnInvalid,
+        Msg::ImportWarnLimit,
+        Msg::ImportWarnAttribute,
+        Msg::ImportErrUnsupported,
+        Msg::ImportErrUnreadable,
+        Msg::ImportErrLibraryLimit,
+        Msg::ImportErrBatchFull,
+        Msg::ImportErrTooLarge,
+        Msg::ImportErrEncoding,
+        Msg::ImportErrMalformed,
+        Msg::ImportErrEntities,
+        Msg::ImportErrTooDeep,
+        Msg::ImportErrNoLyrics,
+        Msg::ImportFolderTruncated,
+        Msg::ImportDialogBusy,
+        Msg::ImportQuitBlocked,
+        Msg::ImportErrBatchBytes,
+        Msg::BarImportEasyWorship,
+        Msg::ImportSongsOverLimit,
+        Msg::ImportErrMissingWords,
+        Msg::ImportEwNoSongs,
+        Msg::ImportEwNoWords,
+        Msg::ImportEwTooLarge,
+        Msg::ImportEwChanged,
+        Msg::ImportEwNotLibrary,
+        Msg::ImportEwCopyFailed,
+        Msg::LiveItemNotShown,
+        Msg::WindowTitleIdle,
+        Msg::WindowTitleUntitledDirty,
+        Msg::RecoveryHeading,
+        Msg::RecoveryLostHeading,
+        Msg::RecoveryUnclean,
+        Msg::RecoveryUnanswered,
+        Msg::RecoveryRevision,
+        Msg::RecoveryNotInFile,
+        Msg::RecoveryFileNewer,
+        Msg::RecoveryLost,
+        Msg::RecoveryNoCopy,
+        Msg::RecoveryDamaged,
+        Msg::RecoveryInterrupted,
+        Msg::RecoveryKept,
+        Msg::RecoveryAutosaveOff,
+        Msg::RecoveryRestore,
+        Msg::RecoveryDiscard,
+        Msg::RecoveryRestored,
+        Msg::RecoveryUntitled,
+        Msg::AgoJustNow,
+        Msg::AgoMinutes,
+        Msg::AgoHours,
+        Msg::AgoDays,
+        Msg::AutosaveProtected,
+        Msg::AutosaveFailed,
+        Msg::AutosaveOff,
+        Msg::AutosaveCleanup,
+        Msg::AutosaveClosing,
+        Msg::ReasonDiskFull,
+        Msg::ReasonReadOnly,
+        Msg::ReasonLocked,
+        Msg::ReasonBudget,
+        Msg::ReasonUnlocked,
+        Msg::ReasonIo,
+        Msg::AlreadyRunningTitle,
+        Msg::AlreadyRunningBody,
+        Msg::ThemeNew,
+        Msg::ThemeNewName,
+        Msg::ThemeEdit,
+        Msg::ThemeDuplicate,
+        Msg::ThemeCopyName,
+        Msg::ThemeDelete,
+        Msg::ThemeConfirmDelete,
+        Msg::ThemeSetDefault,
+        Msg::ThemeApplySong,
+        Msg::ThemeApplyItem,
+        Msg::ThemeItemSongTheme,
+        Msg::ThemeBuiltIn,
+        Msg::ThemeDefaultBadge,
+        Msg::ThemeInPreview,
+        Msg::ThemeRendering,
+        Msg::ThemeSavedNamed,
+        Msg::ThemeDeleted,
+        Msg::ThemeDefaultSet,
+        Msg::ThemeAppliedSong,
+        Msg::ThemeAppliedItem,
+        Msg::ThemeItemCleared,
+        Msg::ThemeLimit,
+        Msg::ThemeStorageFailed,
+        Msg::ThemeBusy,
+        Msg::ThemeMissing,
+        Msg::ThemeUnavailable,
+        Msg::ThemeSongGone,
+        Msg::ThemeGoneApply,
+        Msg::ThemeLoadRetrying,
+        Msg::ThemeTooManySongs,
+        Msg::ThemeDeletedElsewhere,
+        Msg::MarginLeftField,
+        Msg::MarginRightField,
+        Msg::MarginTopField,
+        Msg::MarginBottomField,
+        Msg::ThemeWarnFont,
+        Msg::ThemeWarnContrast,
+        Msg::ThemeWarnStretch,
+        Msg::ThemeWarnBars,
+        Msg::ThemeWarnCrop,
+        Msg::ThemeBuiltInReadOnly,
+        Msg::ThemeSelectTheme,
+        Msg::ThemeSelectSong,
+        Msg::ThemeSelectItem,
+        Msg::ThemeDeleteHint,
+        Msg::ThemeEditorWindowTitle,
+        Msg::ThemeNamePlaceholder,
+        Msg::ThemeEditing,
+        Msg::ThemeNameInvalid,
+        Msg::ThemeResetDone,
+        Msg::ThemeReset,
+        Msg::ThemeSavedStatus,
+        Msg::ThemeSampleHint,
+        Msg::ThemeElementsHeader,
+        Msg::ThemeShowCopyright,
+        Msg::ThemeMarginsHeader,
+        Msg::MarginLeft,
+        Msg::MarginRight,
+        Msg::MarginTop,
+        Msg::MarginBottom,
+        Msg::MarginInvalid,
+        Msg::MarginsSet,
+        Msg::MarginsDefault,
+        Msg::MarginsUseDefault,
+        Msg::ThemeUsing,
+        Msg::MediaUnavailableMissing,
+        Msg::MediaUnavailableGpl,
+        Msg::MediaUnavailableNonfree,
+        Msg::MediaUnavailableBroken,
+        Msg::ScriptureTranslationsHeader,
+        Msg::ScriptureModeReference,
+        Msg::ScriptureModeKeyword,
+        Msg::ScriptureModeLabel,
+        Msg::ScriptureReferencePlaceholder,
+        Msg::ScriptureKeywordPlaceholder,
+        Msg::ScriptureReferenceLabel,
+        Msg::ScriptureKeywordLabel,
+        Msg::ScriptureClear,
+        Msg::ScriptureSuggestions,
+        Msg::ScriptureVerseList,
+        Msg::ScriptureErrUnknownBook,
+        Msg::ScriptureErrMissingChapter,
+        Msg::ScriptureErrChapterNotFound,
+        Msg::ScriptureErrInvalidRange,
+        Msg::ScriptureErrMalformed,
+        Msg::ScriptureErrBookMissing,
+        Msg::ScriptureErrChapterMissing,
+        Msg::ScriptureErrVerseMissing,
+        Msg::ScriptureErrTooLong,
+        Msg::ScriptureMissingVerses,
+        Msg::ScriptureLoading,
+        Msg::ScriptureNoTranslations,
+        Msg::ScriptureNoProfile,
+        Msg::ScriptureUnavailable,
+        Msg::ScriptureDamaged,
+        Msg::ScriptureEmptyTitle,
+        Msg::ScriptureEmptyHint,
+        Msg::ScriptureSearchShort,
+        Msg::ScriptureNoResults,
+        Msg::ScriptureMoreResults,
+        Msg::ScriptureImport,
+        Msg::ScriptureImportPrompt,
+        Msg::ScriptureImporting,
+        Msg::ScriptureImported,
+        Msg::ScriptureImportFailed,
+        Msg::ScriptureRejectTooLarge,
+        Msg::ScriptureRejectEncoding,
+        Msg::ScriptureRejectMalformed,
+        Msg::ScriptureRejectEntities,
+        Msg::ScriptureRejectDeep,
+        Msg::ScriptureRejectFormat,
+        Msg::ScriptureRejectNoVerses,
+        Msg::ScriptureRejectTooMany,
+        Msg::ScriptureBusy,
+        Msg::ScriptureSelectVerses,
+        Msg::ScriptureSelectionCount,
+        Msg::ScriptureRebuilt,
+        Msg::ScriptureNotInstalled,
+        Msg::ScriptureRestricted,
+        Msg::ScriptureDamagedTag,
+        Msg::ScriptureAddedToSchedule,
+        Msg::ScriptureWhyMissing,
+        Msg::ScriptureWhyIo,
+        Msg::ScriptureWhyUnsupported,
+        Msg::ScriptureWhyCorrupt,
+        Msg::ScriptureWhyInvalid,
+        Msg::ScriptureWhyChecksum,
+        Msg::ScriptureWhyInflate,
+        Msg::ScriptureWhyBundle,
+        Msg::ScriptureWhyFileName,
+        Msg::ScriptureWhyFolder,
+        Msg::ScriptureWhyUnreadable,
+        Msg::ScriptureWhyStopped,
+        Msg::StageOutputOff,
+        Msg::StageStarting,
+        Msg::StageConnected,
+        Msg::StageNothingConfirmed,
+        Msg::StageLost,
+        Msg::StageLossSpawn,
+        Msg::StageLossStartup,
+        Msg::StageLossExited,
+        Msg::StageLossProtocol,
+        Msg::StageNotShown,
+        Msg::StageMessageLine,
+        Msg::StageNoMonitor,
+        Msg::StageUnavailable,
+        Msg::StageNothingLive,
+        Msg::StageNextSlide,
+        Msg::StageNextItem,
+        Msg::StageEnd,
+        Msg::BarShowStageOutput,
+        Msg::BarStageMessage,
+        Msg::StageMessageHeading,
+        Msg::StageMessageHint,
+        Msg::StageMessageLabel,
+        Msg::StageMessageShow,
+        Msg::StageMessageClear,
+        Msg::FoldbackEnable,
+        Msg::FoldbackHint,
+        Msg::FoldbackMonitorHeading,
+        Msg::FoldbackAutoMonitor,
+        Msg::FoldbackContentHeading,
+        Msg::FoldbackShowClock,
+        Msg::FoldbackShowNext,
+        Msg::OptionsTabAlertsClocks,
+        Msg::StageMonitorMissing,
+        Msg::BarBackupProfile,
+        Msg::BarRestoreProfile,
+        Msg::BundlePickBackup,
+        Msg::BundleExportHeading,
+        Msg::BundleOpenHeading,
+        Msg::BundleBackupHeading,
+        Msg::BundleRestoreHeading,
+        Msg::BundleWorkingExport,
+        Msg::BundleWorkingOpen,
+        Msg::BundleWorkingBackup,
+        Msg::BundleWorkingRestore,
+        Msg::BundleWorkingNote,
+        Msg::BundleCancelling,
+        Msg::BundleCancelled,
+        Msg::BundleBusy,
+        Msg::BundleNoProfile,
+        Msg::BundleExported,
+        Msg::BundleEmbedded,
+        Msg::BundleNotEmbedded,
+        Msg::BundleFontsNeeded,
+        Msg::BundleFontsMissingHere,
+        Msg::BundleOmitted,
+        Msg::BundleOpened,
+        Msg::BundleAdded,
+        Msg::BundleReused,
+        Msg::BundleRenamed,
+        Msg::BundleNotIncluded,
+        Msg::BundleOmittedBySender,
+        Msg::BundleBackedUp,
+        Msg::BundleBackupExcluded,
+        Msg::BundleSkipped,
+        Msg::BundleRecentDropped,
+        Msg::BundleUnsavedNotInBackup,
+        Msg::BundleRestored,
+        Msg::BundleRestoreOpen,
+        Msg::BundleSettingsSkipped,
+        Msg::BundleUnchanged,
+        Msg::BundleMore,
+        Msg::BundleErrNotBundle,
+        Msg::BundleErrIsBackup,
+        Msg::BundleErrIsSchedule,
+        Msg::BundleErrNewer,
+        Msg::BundleErrNewerLibrary,
+        Msg::BundleErrNewerSchedule,
+        Msg::BundleErrUnsafe,
+        Msg::BundleErrDamaged,
+        Msg::BundleErrTooLarge,
+        Msg::BundleErrExists,
+        Msg::BundleErrLibrary,
+        Msg::BundleLibBusy,
+        Msg::BundleLibDamaged,
+        Msg::BundleLibUnsupported,
+        Msg::BundleLibUnreadable,
+        Msg::BundleLibMissing,
+        Msg::BundleLibTooLarge,
+        Msg::BundleLibExists,
+        Msg::BundleLibChanged,
+        Msg::BundleLibClosed,
+        Msg::BundleErrInternal,
+        Msg::BundleOpenedTooLate,
+        Msg::BundleErrImage,
+        Msg::BundleErrEmpty,
+        Msg::BundleErrDiskFull,
+        Msg::BundleErrDenied,
+        Msg::BundleErrIo,
+        Msg::BundleIoNotFound,
+        Msg::BundleIoExists,
+        Msg::BundleIoInUse,
+        Msg::BundleIoConnection,
+        Msg::BundleIoName,
+        Msg::BundleIoTooBig,
+        Msg::BundleIoOther,
+        Msg::BundlePackageNotes,
+        Msg::BundleSkipLink,
+        Msg::BundleSkipTooLarge,
+        Msg::BundleSkipUnusable,
+        Msg::BundleSkipUnreadable,
+        Msg::VideoErrIo,
+        Msg::VideoErrMissing,
+        Msg::VideoErrSourceMissing,
+        Msg::VideoErrUnsupported,
+        Msg::VideoErrNotVideo,
+        Msg::VideoErrTooLarge,
+        Msg::VideoErrInvalidName,
+        Msg::VideoErrReadDenied,
+        Msg::VideoErrProfileDenied,
+        Msg::VideoErrDiskFull,
+        Msg::VideoErrCancelled,
+        Msg::VideoErrUnavailable,
+        Msg::VideoErrBusy,
+        Msg::VideoErrDisconnected,
+        Msg::VideoWhyMissing,
+        Msg::VideoWhyNoVideo,
+        Msg::VideoWhyCodec,
+        Msg::VideoWhyCorrupt,
+        Msg::VideoWhyTooLarge,
+        Msg::VideoWhyNotLocal,
+        Msg::VideoWhySlow,
+        Msg::VideoWhyDecoder,
+        Msg::BgVideoMissing,
+        Msg::BgVideoChanged,
+        Msg::BgVideoUnreadable,
+        Msg::BgVideoUnavailable,
+        Msg::LoadingVideos,
+        Msg::NoVideosYet,
+        Msg::VideosHeader,
+        Msg::RepeatingLabel,
+        Msg::RepeatingOn,
+        Msg::RepeatingOff,
+        Msg::VideoImportReused,
+        Msg::VideoImported,
+        Msg::VideoImportFailed,
+        Msg::NoProfileVideoImport,
+        Msg::NoVideoLive,
+        Msg::VideoStarting,
+        Msg::VideoPlaying,
+        Msg::VideoPaused,
+        Msg::VideoEnded,
+        Msg::VideoFailed,
+        Msg::VideoTransport,
+        Msg::VideoPause,
+        Msg::VideoPlay,
+        Msg::VideoRestart,
+        Msg::VideoCommandRefused,
+        Msg::MediaHeader,
+        Msg::VideosNoProfile,
+        Msg::VideosEmptyHint,
+        Msg::ImportVideo,
+        Msg::VideoSoundOn,
+        Msg::VideoSoundNoDevice,
+        Msg::VideoSoundFailed,
     ];
 
     pub fn english(self) -> &'static str {
@@ -1075,6 +1906,21 @@ impl Msg {
             Self::MenuSortAscending => "Ascending",
             Self::MenuSortDescending => "Descending",
             Self::A11ySortMenu => "Sort songs by",
+            Self::MenuSortAuthor => "Author",
+            Self::MenuSortCopyright => "Copyright",
+            Self::MenuSortAdministrator => "Administrator",
+            Self::MenuSortSongNumber => "Song Number",
+            Self::OptionsCopyrightHeading => "Copyright Info",
+            Self::OptionsCopyrightDisplay => "Display Copyright Information",
+            Self::OptionsCopyrightFirstSlide => "Show on first displayed slide only",
+            Self::OptionsCopyrightHint => {
+                "The strip under a song with copyright text. Changes apply from the next slide sent to Live."
+            }
+            Self::OptionsLicenseInfo => "License Info",
+            Self::OptionsLicenseInfoPlaceholder => "For example: CCLI License # 1234567",
+            Self::OptionsLicenseInfoHint => {
+                "When filled in, a third strip line shows it after the song's CCLI number."
+            }
             Self::A11ySongScrollbar => "Songs scroll bar",
             Self::SongSearchMore => {
                 "More songs match than are shown. Type more to narrow the search."
@@ -1338,6 +2184,7 @@ impl Msg {
             Self::ImportingName => "Importing {name}…",
             Self::ImportCancel => "Cancel",
             Self::ImportCancelling => "Cancelling import…",
+            Self::MediaImportCancel => "Cancel import",
             Self::ImportNoteDownscaled => {
                 "Downscaled from {from} to {to} to fit the output; the original file is unchanged"
             }
@@ -1347,7 +2194,7 @@ impl Msg {
             Self::AllSlidesSelected => "All slides selected · formatting applies to every slide",
             Self::ApplyToSchedule => "Apply changes to items in schedule",
             Self::CannotBeShown => "Cannot be shown",
-            Self::CloseWithoutSaving => "Close without saving?",
+            Self::SaveBeforeClosing => "Save changes before closing?",
             Self::ConfirmDeleteHint => {
                 "Click Confirm delete to remove this library entry. Schedule snapshots remain."
             }
@@ -1560,6 +2407,556 @@ impl Msg {
             Self::StyleTab => "Style",
             Self::SwatchesTab => "Swatches",
             Self::ValuesTab => "Values",
+            Self::BarImport => "Import",
+            Self::BarImportSongs => "Songs…",
+            Self::BarImportFolder => "Song Folder…",
+            Self::ImportHeading => "Import Songs",
+            Self::ImportListA11y => "Songs to import",
+            Self::ImportFinding => "Finding song files…",
+            Self::ImportReading => "Reading files… {done} of {total}",
+            Self::ImportChecking => "Checking the library for duplicates…",
+            Self::ImportCommitting => "Importing…",
+            Self::ImportSummary => {
+                "Ready: {songs} · Not importable: {failed} · Duplicates: {duplicates}"
+            }
+            Self::ImportIgnored => "Not song files, skipped: {count}",
+            Self::ImportOverLimit => "Not read, over the limit of {max} files: {count}",
+            Self::ImportNothing => "No song files were found.",
+            Self::ImportRowDetail => "{name} · Slides: {count}",
+            Self::ImportBulkLabel => "All duplicates",
+            Self::ImportReplaceNote => {
+                "Replace saves the file's words as a new revision of the library song. That revision drops the song's slide formatting, backgrounds and master background, and the file's order replaces its arrangements; schedules keep their copy."
+            }
+            Self::ImportChoiceImport => "Import",
+            Self::ImportChoiceSkip => "Skip",
+            Self::ImportChoiceCopy => "Import as copy",
+            Self::ImportChoiceReplace => "Replace",
+            Self::ImportChoiceA11y => "What to do with {title}",
+            Self::ImportConfirm => "Import ({count})",
+            Self::ImportDuplicateSame => "Already in the library as “{title}” with the same words",
+            Self::ImportDuplicateTitle => "Same title as “{title}” in the library, different words",
+            Self::ImportDuplicateBatch => "Same song as {name} in this import",
+            Self::ImportDuplicateCheckFailed => {
+                "Duplicates could not be checked ({error}); every song is offered as new."
+            }
+            Self::ImportReplaceTwice => {
+                "Two files would replace “{title}”. Choose another action for one of them."
+            }
+            Self::ImportCommitFailed => "Nothing was imported: {error}",
+            Self::ImportCancelled => "Import cancelled. Nothing was imported.",
+            Self::ImportDone => "Imported: {count} · Skipped: {skipped} · Not importable: {failed}",
+            Self::ImportDoneLate => {
+                "The import finished before it could be cancelled. Imported: {count}"
+            }
+            Self::ImportFailedStart => "Import could not start: {error}",
+            Self::ImportBusy => "Another import is still finishing. Try again in a moment.",
+            Self::ImportStopped => {
+                "The import stopped unexpectedly while reading the files. Nothing was imported; try again."
+            }
+            Self::ImportWarnElement => "Not imported: <{name}>",
+            Self::ImportWarnDirective => "Directive not imported: {name}",
+            Self::ImportWarnOrder => "The order names a missing section: {name}",
+            Self::ImportWarnTitle => "No title in the file; the file name is used",
+            Self::ImportWarnEmpty => "Empty section skipped: {label}",
+            Self::ImportWarnChords => "Chords removed",
+            Self::ImportWarnTruncated => "Shortened to fit: {field}",
+            Self::ImportWarnInvalid => "Invalid value dropped: {field}",
+            Self::ImportWarnLimit => "Too many sections or slides; the rest was dropped",
+            Self::ImportWarnAttribute => "Attribute ignored: {name}",
+            Self::ImportErrUnsupported => "Not an OpenLyrics, OpenSong or ChordPro song file",
+            Self::ImportErrUnreadable => "Could not be read: {error}",
+            Self::ImportErrLibraryLimit => "The song is larger than the library allows",
+            Self::ImportErrBatchFull => "Not read: one import holds at most {max} files",
+            Self::ImportErrTooLarge => "The file is too large (over 1 MiB)",
+            Self::ImportErrEncoding => "Not UTF-8 text",
+            Self::ImportErrMalformed => "Malformed file: {error}",
+            Self::ImportErrEntities => "Refused: the file declares a DOCTYPE or entities",
+            Self::ImportErrTooDeep => "Refused: elements are nested too deeply",
+            Self::ImportErrNoLyrics => "No lyrics found",
+            Self::ImportFolderTruncated => {
+                "Folder has more than {max} entries; files after that were not looked at: {name}"
+            }
+            Self::ImportDialogBusy => "Close the open dialog, then import again.",
+            Self::ImportQuitBlocked => "Finish or cancel the import before quitting.",
+            Self::ImportErrBatchBytes => {
+                "Not read: one import holds at most {max} MiB of song text"
+            }
+            Self::BarImportEasyWorship => "EasyWorship Library…",
+            Self::ImportSongsOverLimit => {
+                "Songs not read, over the limit of {max} per import: {count}. Songs whose titles are not in the library yet are read first, so importing this library again continues with the rest."
+            }
+            Self::ImportErrMissingWords => "No words for this song in SongWords.db",
+            Self::ImportEwNoSongs => {
+                "No EasyWorship library here: Songs.db was not found in this folder or in its Data, Databases\\Data, v6.1\\Databases\\Data or Default\\v6.1\\Databases\\Data folder. Choose the EasyWorship folder, its Default profile folder or the folder that holds Songs.db."
+            }
+            Self::ImportEwNoWords => "Songs.db was found, but SongWords.db is missing beside it",
+            Self::ImportEwTooLarge => "The EasyWorship library is larger than {max} MiB",
+            Self::ImportEwChanged => {
+                "The library changed while it was copied. Close EasyWorship and import again."
+            }
+            Self::ImportEwNotLibrary => "Not an EasyWorship library: {error}",
+            Self::ImportEwCopyFailed => {
+                "The library could not be copied to Sela's temporary folder (check free disk space): {error}"
+            }
+            Self::LiveItemNotShown => "{title} is not on screen yet; use Go Live first",
+            Self::WindowTitleIdle => "Sela — Technical preview",
+            Self::WindowTitleUntitledDirty => "Untitled schedule* — Sela",
+            Self::RecoveryHeading => "Recover the unsaved schedule?",
+            Self::RecoveryLostHeading => "Unsaved changes were lost",
+            Self::RecoveryUnclean => "Sela did not close normally last time.",
+            Self::RecoveryUnanswered => {
+                "Sela was closed last time before this recovery question was answered."
+            }
+            Self::RecoveryRevision => {
+                "The last autosave ({ago}) holds “{name}” with {count} item(s)."
+            }
+            Self::RecoveryNotInFile => "Those changes were never saved to the schedule file.",
+            Self::RecoveryFileNewer => {
+                "Its schedule file was saved again {ago}, after this autosave, so the file may hold newer work: restoring brings back this older copy, and saving it replaces the file."
+            }
+            Self::RecoveryLost => {
+                "Newer changes (made {ago}) were not autosaved and cannot be recovered; the schedule then had {count} item(s)."
+            }
+            Self::RecoveryNoCopy => "No autosaved copy of the schedule exists.",
+            Self::RecoveryDamaged => "{count} newer autosave copies were damaged and skipped.",
+            Self::RecoveryInterrupted => {
+                "An autosave was cut off when Sela stopped; its partial copy was discarded."
+            }
+            Self::RecoveryKept => {
+                "If you don't restore, the copies stay in the profile's Recovery folder until newer autosaves replace them."
+            }
+            Self::RecoveryAutosaveOff => {
+                "Autosave is off ({reason}), so this answer cannot be recorded: the question returns at the next start, and a restored schedule is not autosaved."
+            }
+            Self::RecoveryRestore => "Restore",
+            Self::RecoveryDiscard => "Don't Restore",
+            Self::RecoveryRestored => "Restored the autosaved schedule ({count} item(s))",
+            Self::RecoveryUntitled => "Untitled schedule",
+            Self::AgoJustNow => "less than a minute ago",
+            Self::AgoMinutes => "{count} min ago",
+            Self::AgoHours => "{count} h ago",
+            Self::AgoDays => "{count} days ago",
+            Self::AutosaveProtected => "Unsaved changes are autosaved",
+            Self::AutosaveFailed => {
+                "Autosave failed: {reason}. Unsaved changes are not protected; Sela retries every {seconds} seconds."
+            }
+            Self::AutosaveOff => "Autosave is off: {reason}.",
+            Self::AutosaveCleanup => "Old autosave copies could not be removed: {reason}.",
+            Self::AutosaveClosing => "Finishing the autosave…",
+            Self::ReasonDiskFull => "the disk is full",
+            Self::ReasonReadOnly => "the profile folder is read-only",
+            Self::ReasonLocked => "another program is holding a recovery file",
+            Self::ReasonBudget => "the schedule is larger than the autosave budget",
+            Self::ReasonUnlocked => "the profile folder cannot be locked for one Sela at a time",
+            Self::ReasonIo => "disk error ({kind})",
+            Self::AlreadyRunningTitle => "Sela is already running",
+            Self::AlreadyRunningBody => {
+                "Another Sela window is already using this profile ({path}). Switch to that window. This copy closes without changing anything."
+            }
+            Self::ThemeNew => "New Theme",
+            Self::ThemeNewName => "New Theme",
+            Self::ThemeEdit => "Edit…",
+            Self::ThemeDuplicate => "Duplicate",
+            Self::ThemeCopyName => "{name} copy",
+            Self::ThemeDelete => "Delete",
+            Self::ThemeConfirmDelete => "Confirm Delete",
+            Self::ThemeSetDefault => "Set as Default",
+            Self::ThemeApplySong => "Apply to Song",
+            Self::ThemeApplyItem => "Apply to Item",
+            Self::ThemeItemSongTheme => "Item: Song Theme",
+            Self::ThemeBuiltIn => "Default (built-in)",
+            Self::ThemeDefaultBadge => "Default",
+            Self::ThemeInPreview => "In Preview",
+            Self::ThemeRendering => "Rendering…",
+            Self::ThemeSavedNamed => "Saved theme “{name}”.",
+            Self::ThemeDeleted => {
+                "Deleted theme “{name}”. Songs using it now show the default theme."
+            }
+            Self::ThemeDefaultSet => "“{name}” is now the default song theme.",
+            Self::ThemeAppliedSong => {
+                "Applied “{name}” to {count} song(s). Live changes only on the next Go Live."
+            }
+            Self::ThemeAppliedItem => {
+                "Applied “{name}” to {count} schedule item(s). Live changes only on the next Go Live."
+            }
+            Self::ThemeItemCleared => {
+                "{count} schedule item(s) take their song theme again when next shown."
+            }
+            Self::ThemeLimit => "A library holds at most {max} themes.",
+            Self::ThemeStorageFailed => "Theme change failed: {error}",
+            Self::ThemeBusy => "A theme change is still running. Try again in a moment.",
+            Self::ThemeMissing => "This song's theme is missing · showing the default theme",
+            Self::ThemeUnavailable => {
+                "Themes are not loaded · showing the default look; nothing is captured until they load"
+            }
+            Self::ThemeSongGone => "A selected song no longer exists · no song was restyled",
+            Self::ThemeGoneApply => "“{name}” no longer exists · no song was restyled",
+            Self::ThemeLoadRetrying => "Themes could not be loaded ({error}) · retrying",
+            Self::ThemeTooManySongs => "Select at most {max} songs to restyle at once.",
+            Self::ThemeDeletedElsewhere => {
+                "This theme was deleted in the Themes tab · it was not saved · OK saves it as a new theme"
+            }
+            Self::MarginLeftField => "Left margin",
+            Self::MarginRightField => "Right margin",
+            Self::MarginTopField => "Top margin",
+            Self::MarginBottomField => "Bottom margin",
+            Self::ThemeWarnFont => "Font “{name}” is not installed · showing DejaVu Sans",
+            Self::ThemeWarnContrast => "Low contrast {ratio}:1 · text may be hard to read",
+            Self::ThemeWarnStretch => {
+                "Image aspect differs from the output by {percent}% · Stretch distorts it"
+            }
+            Self::ThemeWarnBars => {
+                "Image aspect differs from the output · Maintain adds black bars"
+            }
+            Self::ThemeWarnCrop => {
+                "Image aspect differs from the output · Zoom crops {percent}% of it"
+            }
+            Self::ThemeBuiltInReadOnly => {
+                "The built-in theme cannot be edited or deleted. Duplicate it to make your own."
+            }
+            Self::ThemeSelectTheme => "Select a theme first.",
+            Self::ThemeSelectSong => "Select a song in Songs first.",
+            Self::ThemeSelectItem => "Select a schedule item first.",
+            Self::ThemeDeleteHint => {
+                "Press Confirm Delete to remove “{name}”. Songs using it will show the default theme."
+            }
+            Self::ThemeEditorWindowTitle => "Theme Editor - {title}",
+            Self::ThemeNamePlaceholder => "Theme name",
+            Self::ThemeEditing => "Editing a theme. Preview only: Live does not change.",
+            Self::ThemeNameInvalid => "Give the theme a name of at most {max} bytes.",
+            Self::ThemeResetDone => "Theme reset to the built-in look.",
+            Self::ThemeReset => "Reset Look",
+            Self::ThemeSavedStatus => "Theme saved.",
+            Self::ThemeSampleHint => "Sample text: type to try long or short lyrics (not saved)",
+            Self::ThemeElementsHeader => "THEME ELEMENTS",
+            Self::ThemeShowCopyright => "Copyright",
+            Self::ThemeMarginsHeader => "MARGINS",
+            Self::MarginLeft => "Left",
+            Self::MarginRight => "Right",
+            Self::MarginTop => "Top",
+            Self::MarginBottom => "Bottom",
+            Self::MarginInvalid => "Margins are whole numbers from 0 to {max}.",
+            Self::MarginsSet => "Points at 1080 lines",
+            Self::MarginsDefault => "Default inset (32)",
+            Self::MarginsUseDefault => "Use default",
+            Self::ThemeUsing => "Theme: {name}",
+            // Media backend (M2-01).
+            Self::MediaUnavailableMissing => "Video and audio unavailable: FFmpeg was not found",
+            Self::MediaUnavailableGpl => {
+                "Video and audio unavailable: the FFmpeg found is a GPL build"
+            }
+            Self::MediaUnavailableNonfree => {
+                "Video and audio unavailable: the FFmpeg found is a nonfree build"
+            }
+            Self::MediaUnavailableBroken => "Video and audio unavailable: FFmpeg did not start",
+            Self::ScriptureTranslationsHeader => "Translations",
+            Self::ScriptureModeReference => "Reference",
+            Self::ScriptureModeKeyword => "Keyword",
+            Self::ScriptureModeLabel => "Search by",
+            Self::ScriptureReferencePlaceholder => "Type a reference, e.g. John 3:16-18",
+            Self::ScriptureKeywordPlaceholder => "Search words (2 or more characters)",
+            Self::ScriptureReferenceLabel => "Scripture reference",
+            Self::ScriptureKeywordLabel => "Scripture keyword search",
+            Self::ScriptureClear => "Clear",
+            Self::ScriptureSuggestions => "Book suggestions",
+            Self::ScriptureVerseList => "Verses",
+            Self::ScriptureErrUnknownBook => "No book is named “{name}”",
+            Self::ScriptureErrMissingChapter => "Type a chapter after {book}",
+            Self::ScriptureErrChapterNotFound => "{book} has no chapter {chapter}",
+            Self::ScriptureErrInvalidRange => "The range ends before it starts",
+            Self::ScriptureErrMalformed => "Not a reference. Try “John 3:16-18”",
+            Self::ScriptureErrBookMissing => "{book} is not in {translation}",
+            Self::ScriptureErrChapterMissing => "{book} {chapter} is not in {translation}",
+            Self::ScriptureErrVerseMissing => {
+                "{book} {chapter} has {count} verses in {translation}"
+            }
+            Self::ScriptureErrTooLong => "The passage is too long ({max} verses at most)",
+            Self::ScriptureMissingVerses => "Not in {translation}: {verses}",
+            Self::ScriptureLoading => "Preparing Bibles…",
+            Self::ScriptureNoTranslations => "No Bible is installed",
+            Self::ScriptureNoProfile => "Scriptures need a profile folder",
+            Self::ScriptureUnavailable => "Scriptures are unavailable: {error}",
+            Self::ScriptureDamaged => "{translation} is damaged: {error}",
+            Self::ScriptureEmptyTitle => "No passage shown",
+            Self::ScriptureEmptyHint => "Type a reference such as John 3:16, or search by keyword.",
+            Self::ScriptureSearchShort => "Type at least 2 characters",
+            Self::ScriptureNoResults => "No verses found",
+            Self::ScriptureMoreResults => "Showing the first {count} verses",
+            Self::ScriptureImport => "Import Bible…",
+            Self::ScriptureImportPrompt => "Import",
+            Self::ScriptureImporting => "Importing {name}…",
+            Self::ScriptureImported => "Imported {translation}: {count} verses, {notes} notes",
+            Self::ScriptureImportFailed => "Import failed: {error}",
+            Self::ScriptureRejectTooLarge => "the file is too large",
+            Self::ScriptureRejectEncoding => "the file is not UTF-8 text",
+            Self::ScriptureRejectMalformed => "the XML is not well formed ({detail})",
+            Self::ScriptureRejectEntities => "DTDs and entity declarations are not allowed",
+            Self::ScriptureRejectDeep => "the XML is nested too deeply",
+            Self::ScriptureRejectFormat => "not an OSIS, USFX or Zefania file",
+            Self::ScriptureRejectNoVerses => "no verses of the 66 books were found",
+            Self::ScriptureRejectTooMany => "too many translations are installed",
+            Self::ScriptureBusy => "The Bible reader is busy; try again",
+            Self::ScriptureSelectVerses => "Select verses first",
+            Self::ScriptureSelectionCount => "Verses selected: {count}",
+            Self::ScriptureRebuilt => "Rebuilt {translation} from the bundled copy",
+            Self::ScriptureNotInstalled => "{translation} is not installed",
+            Self::ScriptureRestricted => "restricted",
+            Self::ScriptureDamagedTag => "damaged",
+            Self::ScriptureAddedToSchedule => "Added {reference} to the schedule",
+            Self::ScriptureWhyMissing => "the file is missing",
+            Self::ScriptureWhyIo => "the file cannot be read or written ({detail})",
+            Self::ScriptureWhyUnsupported => "not a Sela Bible file, or one from a newer Sela",
+            Self::ScriptureWhyCorrupt => "the file fails a check ({detail})",
+            Self::ScriptureWhyInvalid => "the text was refused ({detail})",
+            Self::ScriptureWhyChecksum => "the bundled copy fails its checksum",
+            Self::ScriptureWhyInflate => "the bundled copy cannot be decompressed",
+            Self::ScriptureWhyBundle => "the bundled copy is invalid ({detail})",
+            Self::ScriptureWhyFileName => "the file name does not match the translation inside",
+            Self::ScriptureWhyFolder => "the Scripture folder cannot be created ({detail})",
+            Self::ScriptureWhyUnreadable => "the file cannot be read ({detail})",
+            Self::ScriptureWhyStopped => "the Bible reader stopped",
+            Self::StageOutputOff => "Stage output off",
+            Self::StageStarting => "Stage output starting…",
+            Self::StageConnected => "Stage {width}×{height} · showing {slide}",
+            Self::StageNothingConfirmed => "nothing confirmed yet",
+            Self::StageLost => "Stage output lost: {reason} · Live › Show Stage Output restarts it",
+            Self::StageLossSpawn => "it could not be started",
+            Self::StageLossStartup => "it did not become ready in time",
+            Self::StageLossExited => "its process ended",
+            Self::StageLossProtocol => "it sent an invalid message",
+            Self::StageNotShown => "Stage did not show the latest panel: {error}",
+            Self::StageMessageLine => "Stage message: {message}",
+            Self::StageNoMonitor => {
+                "No free monitor for the stage output; choose one in Options › Foldback"
+            }
+            Self::StageUnavailable => "Stage output is not available here",
+            Self::StageNothingLive => "Nothing live",
+            Self::StageNextSlide => "Next · {name}",
+            Self::StageNextItem => "Next item · {title}",
+            Self::StageEnd => "End of schedule",
+            Self::BarShowStageOutput => "Show Stage Output",
+            Self::BarStageMessage => "Stage Message…",
+            Self::StageMessageHeading => "Stage message",
+            Self::StageMessageHint => {
+                "Shown only on the stage output, never on the audience. One line, up to 160 characters."
+            }
+            Self::StageMessageLabel => "Stage message text",
+            Self::StageMessageShow => "Show on Stage",
+            Self::StageMessageClear => "Clear Message",
+            Self::FoldbackEnable => "Enable support for Foldback Output",
+            Self::FoldbackHint => {
+                "The stage (confidence) output shows performers the current and next slide, the clock and stage messages. It starts and stops with Live output."
+            }
+            Self::FoldbackMonitorHeading => "Foldback monitor",
+            Self::FoldbackAutoMonitor => "Automatic (a monitor the audience does not use)",
+            Self::FoldbackContentHeading => "Stage content",
+            Self::FoldbackShowClock => "Show clock",
+            Self::FoldbackShowNext => "Show next slide",
+            Self::OptionsTabAlertsClocks => "Alerts and Clocks",
+            Self::BarBackupProfile => "Back Up Profile...",
+            Self::BarRestoreProfile => "Restore Profile...",
+            Self::BundlePickBackup => "Choose a Sela profile backup",
+            Self::BundleExportHeading => "Export Standalone Schedule",
+            Self::BundleOpenHeading => "Open Standalone Schedule",
+            Self::BundleBackupHeading => "Back Up Profile",
+            Self::BundleRestoreHeading => "Restore Profile",
+            Self::BundleWorkingExport => "Writing “{name}”…",
+            Self::BundleWorkingOpen => "Checking and opening “{name}”…",
+            Self::BundleWorkingBackup => "Backing up this profile to “{name}”…",
+            Self::BundleWorkingRestore => "Restoring “{name}”…",
+            Self::BundleWorkingNote => {
+                "Nothing changes until every file has been checked. Cancel stops without changing anything."
+            }
+            Self::BundleCancelling => "Cancelling…",
+            Self::BundleCancelled => "Cancelled; nothing was changed",
+            Self::BundleBusy => {
+                "An export, backup or restore is still running; wait for it to finish"
+            }
+            Self::BundleNoProfile => "No profile folder is open",
+            Self::BundleExported => "Saved “{name}”: {items} item(s), {size}",
+            Self::BundleEmbedded => "Images included: {names}",
+            Self::BundleNotEmbedded => {
+                "Not included because they are missing or changed in this profile: {names}. The other computer needs its own copies."
+            }
+            Self::BundleFontsNeeded => {
+                "Fonts the other computer needs installed (Sela never copies font files): {names}"
+            }
+            Self::BundleFontsMissingHere => "Not installed on this computer either: {names}",
+            Self::BundleOmitted => "Left out because their translation may not be shared: {names}",
+            Self::BundleOpened => {
+                "Opened “{title}” from “{name}” ({items} item(s)), saved as “{file}” in Schedules"
+            }
+            Self::BundleAdded => "Images added to this profile: {names}",
+            Self::BundleReused => "Images this profile already had: {names}",
+            Self::BundleRenamed => {
+                "Saved under another name because a different image already uses the name: {names}"
+            }
+            Self::BundleNotIncluded => {
+                "Images the package does not carry (use Locate… if you have them): {names}"
+            }
+            Self::BundleOmittedBySender => {
+                "Left out by the sender because their translation may not be shared: {names}"
+            }
+            Self::BundleBackedUp => "Backed up to “{name}”: {files} files, {size}",
+            Self::BundleBackupExcluded => {
+                "Autosave recovery copies and the bundled KJV and WEB translations are not included; Sela recreates them"
+            }
+            Self::BundleSkipped => "Not backed up: {names}",
+            Self::BundleRecentDropped => {
+                "{count} recent schedules outside this profile are not in the backup"
+            }
+            Self::BundleUnsavedNotInBackup => {
+                "The open schedule has unsaved changes; they are not in the backup"
+            }
+            Self::BundleRestored => "Restored as the new profile folder “{folder}”: {files} files",
+            Self::BundleRestoreOpen => {
+                "This profile is unchanged. To use the restored one, start Sela with --operator-library “{library}”"
+            }
+            Self::BundleSettingsSkipped => {
+                "Its settings could not be read; the restored profile starts with default settings"
+            }
+            Self::BundleUnchanged => "Nothing was changed.",
+            Self::BundleMore => "{names} and {count} more",
+            Self::BundleErrNotBundle => {
+                "“{name}” is not a Sela standalone schedule or profile backup"
+            }
+            Self::BundleErrIsBackup => {
+                "“{name}” is a profile backup; use Profiles › Restore Profile..."
+            }
+            Self::BundleErrIsSchedule => {
+                "“{name}” is a standalone schedule; open it with File › Open Schedule"
+            }
+            Self::BundleErrNewer => {
+                "“{name}” was made by a newer Sela (bundle version {version}); update Sela to open it"
+            }
+            Self::BundleErrNewerLibrary => {
+                "“{name}” holds a song library from a newer Sela (schema {version}); update Sela to restore it"
+            }
+            Self::BundleErrNewerSchedule => {
+                "The schedule in “{name}” was made by a newer Sela (version {version}); update Sela to open it"
+            }
+            Self::BundleErrUnsafe => {
+                "“{name}” was refused because it could write outside its place or overwrite other files ({detail})"
+            }
+            Self::BundleErrDamaged => {
+                "“{name}” is damaged or incomplete ({detail}); export or back it up again"
+            }
+            Self::BundleErrTooLarge => "“{name}” is larger than Sela accepts ({detail})",
+            Self::BundleErrExists => {
+                "“{name}” already exists; a restore never writes into an existing folder or file. Choose a new name"
+            }
+            Self::BundleErrLibrary => "The song library could not be copied or used ({detail})",
+            Self::BundleLibBusy => "it is busy; wait a moment, then try again",
+            Self::BundleLibDamaged => "it is damaged",
+            Self::BundleLibUnsupported => "it is not a Sela library, or a newer Sela made it",
+            Self::BundleLibUnreadable => "it could not be read or written",
+            Self::BundleLibMissing => "it is not in the profile",
+            Self::BundleLibTooLarge => "it is larger than 256 MB, or copying it took too long",
+            Self::BundleLibExists => "a file is already where its copy goes; try again",
+            Self::BundleLibChanged => "it changed while it was copied; try again",
+            Self::BundleLibClosed => {
+                "Sela's connection to it was closed; restart Sela, then try again"
+            }
+            Self::BundleErrInternal => {
+                "“{name}” stopped because of an internal error in Sela; its unfinished files were removed"
+            }
+            Self::BundleOpenedTooLate => {
+                "Cancel came too late: “{name}” was already saved as “{file}” in Schedules. It was not opened; open it with File › Open Schedule."
+            }
+            Self::BundleErrImage => "The image “{image}” cannot be used: {detail}",
+            Self::BundleErrEmpty => "The schedule has nothing that can be exported",
+            Self::BundleErrDiskFull => "The disk is full; free some space, then try again",
+            Self::BundleErrDenied => "Sela is not allowed to write there; choose another folder",
+            Self::BundleErrIo => "The file could not be read or written ({detail})",
+            Self::BundleIoNotFound => "the file or folder was not found",
+            Self::BundleIoExists => "a file or folder with that name already exists",
+            Self::BundleIoInUse => "another program is using it",
+            Self::BundleIoConnection => "the connection to the drive or network share was lost",
+            Self::BundleIoName => "that name is not allowed there",
+            Self::BundleIoTooBig => "the drive cannot hold a file this large",
+            Self::BundleIoOther => "the system reported an unexpected file error",
+            Self::BundlePackageNotes => "From the standalone schedule",
+            Self::BundleSkipLink => "a link",
+            Self::BundleSkipTooLarge => "too large",
+            Self::BundleSkipUnusable => "not a profile file",
+            Self::BundleSkipUnreadable => "cannot be read",
+            Self::StageMonitorMissing => {
+                "The chosen foldback monitor ({name}) is not connected; the stage uses a free monitor instead, or stays off when none is free."
+            }
+            Self::VideoErrIo => {
+                "Video file cannot be read or written ({kind}); check the file and the profile folder, then try again"
+            }
+            Self::VideoErrMissing => "Video file is missing from the profile",
+            Self::VideoErrSourceMissing => {
+                "The chosen file no longer exists or changed while it was copied; choose it again"
+            }
+            Self::VideoErrUnsupported => {
+                "Only MP4, M4V, MOV, MKV, WebM, AVI and MPEG videos can be imported"
+            }
+            Self::VideoErrNotVideo => "This file cannot be played as a video: {reason}",
+            Self::VideoErrTooLarge => {
+                "Video file is larger than 16 GiB; export a smaller copy and import it"
+            }
+            Self::VideoErrInvalidName => "Video file name is not usable",
+            Self::VideoErrReadDenied => {
+                "Sela is not allowed to read this file. Check its permissions, or copy it to a folder you own and import the copy"
+            }
+            Self::VideoErrProfileDenied => {
+                "Sela is not allowed to change the profile's Resources/Videos folder. Make sure it is not read-only, then try again"
+            }
+            Self::VideoErrDiskFull => "The disk is full; free some space, then try again",
+            Self::VideoErrCancelled => "Import cancelled; nothing was added",
+            Self::VideoErrUnavailable => {
+                "Video and audio are unavailable, so videos cannot be imported or played"
+            }
+            Self::VideoErrBusy => "Video work is still running; try again",
+            Self::VideoErrDisconnected => "Video worker stopped; restart Sela",
+            Self::VideoWhyMissing => "the file is missing",
+            Self::VideoWhyNoVideo => "it has no video picture",
+            Self::VideoWhyCodec => "its video format is not supported",
+            Self::VideoWhyCorrupt => "it is damaged or not a video",
+            Self::VideoWhyTooLarge => "its picture is too large",
+            Self::VideoWhyNotLocal => "only local files can be played",
+            Self::VideoWhySlow => "reading it took too long",
+            Self::VideoWhyDecoder => "the decoder stopped unexpectedly",
+            Self::BgVideoMissing => "Background video ‘{name}’ is missing; showing black",
+            Self::BgVideoChanged => {
+                "Background video ‘{name}’ was replaced by a different file; showing black"
+            }
+            Self::BgVideoUnreadable => "Background video ‘{name}’ cannot be read; showing black",
+            Self::BgVideoUnavailable => {
+                "Background video ‘{name}’ cannot play because video is unavailable; showing black"
+            }
+            Self::LoadingVideos => "Loading videos…",
+            Self::NoVideosYet => "No videos yet. Import one.",
+            Self::VideosHeader => "Videos",
+            Self::RepeatingLabel => "Repeating",
+            Self::RepeatingOn => "On",
+            Self::RepeatingOff => "Off",
+            Self::VideoImportReused => "‘{name}’ is already in the profile; nothing was copied",
+            Self::VideoImported => "Imported video ‘{name}’",
+            Self::VideoImportFailed => "Video import failed: {error}",
+            Self::NoProfileVideoImport => "No profile folder; videos cannot be imported",
+            Self::NoVideoLive => "The live slide has no video",
+            Self::VideoStarting => "Starting video…",
+            Self::VideoPlaying => "Playing",
+            Self::VideoPaused => "Paused",
+            Self::VideoEnded => "Ended",
+            Self::VideoFailed => "Video stopped; the last picture stays. Restart to try again",
+            Self::VideoTransport => "Video controls",
+            Self::VideoPause => "Pause",
+            Self::VideoPlay => "Play",
+            Self::VideoRestart => "Restart",
+            Self::VideoCommandRefused => "Video command not applied: {error}",
+            Self::MediaHeader => "Media",
+            Self::VideosNoProfile => "Videos · no profile",
+            Self::VideosEmptyHint => {
+                "No videos yet. Use Import video… to add an MP4, MOV, MKV, WebM or AVI file."
+            }
+            Self::ImportVideo => "Import video…",
+            Self::VideoSoundOn => "Sound on",
+            Self::VideoSoundNoDevice => "No sound output",
+            Self::VideoSoundFailed => "Sound failed; the video plays on silently",
         }
     }
 
@@ -1616,6 +3013,21 @@ impl Msg {
             Self::MenuSortAscending => "Menaik",
             Self::MenuSortDescending => "Menurun",
             Self::A11ySortMenu => "Urutkan lagu menurut",
+            Self::MenuSortAuthor => "Penulis",
+            Self::MenuSortCopyright => "Hak Cipta",
+            Self::MenuSortAdministrator => "Administrator",
+            Self::MenuSortSongNumber => "Nomor Lagu",
+            Self::OptionsCopyrightHeading => "Info Hak Cipta",
+            Self::OptionsCopyrightDisplay => "Tampilkan informasi hak cipta",
+            Self::OptionsCopyrightFirstSlide => "Tampilkan hanya pada slide pertama",
+            Self::OptionsCopyrightHint => {
+                "Strip di bawah lagu yang punya teks hak cipta. Perubahan berlaku mulai slide berikutnya yang dikirim ke Live."
+            }
+            Self::OptionsLicenseInfo => "Info Lisensi",
+            Self::OptionsLicenseInfoPlaceholder => "Contoh: CCLI License # 1234567",
+            Self::OptionsLicenseInfoHint => {
+                "Jika diisi, baris ketiga strip menampilkannya setelah nomor CCLI lagu."
+            }
             Self::A11ySongScrollbar => "Bilah gulir lagu",
             Self::SongSearchMore => {
                 "Lebih banyak lagu cocok daripada yang ditampilkan. Ketik lebih banyak untuk mempersempit."
@@ -1891,6 +3303,7 @@ impl Msg {
             Self::ImportingName => "Mengimpor {name}…",
             Self::ImportCancel => "Batal",
             Self::ImportCancelling => "Membatalkan impor…",
+            Self::MediaImportCancel => "Batalkan impor",
             Self::ImportNoteDownscaled => {
                 "Diperkecil dari {from} ke {to} agar sesuai keluaran; berkas asli tidak diubah"
             }
@@ -1900,7 +3313,7 @@ impl Msg {
             Self::AllSlidesSelected => "Semua slide dipilih · format berlaku untuk setiap slide",
             Self::ApplyToSchedule => "Terapkan perubahan ke item di jadwal",
             Self::CannotBeShown => "Tidak dapat ditampilkan",
-            Self::CloseWithoutSaving => "Tutup tanpa menyimpan?",
+            Self::SaveBeforeClosing => "Simpan perubahan sebelum menutup?",
             Self::ConfirmDeleteHint => {
                 "Klik Konfirmasi hapus untuk menghapus entri pustaka ini. Salinan di jadwal tetap ada."
             }
@@ -2121,6 +3534,584 @@ impl Msg {
             Self::StyleTab => "Gaya",
             Self::SwatchesTab => "Palet Warna",
             Self::ValuesTab => "Nilai",
+            Self::BarImport => "Impor",
+            Self::BarImportSongs => "Lagu…",
+            Self::BarImportFolder => "Folder Lagu…",
+            Self::ImportHeading => "Impor Lagu",
+            Self::ImportListA11y => "Lagu yang akan diimpor",
+            Self::ImportFinding => "Mencari berkas lagu…",
+            Self::ImportReading => "Membaca berkas… {done} dari {total}",
+            Self::ImportChecking => "Memeriksa duplikat di pustaka…",
+            Self::ImportCommitting => "Mengimpor…",
+            Self::ImportSummary => {
+                "Siap: {songs} · Tidak dapat diimpor: {failed} · Duplikat: {duplicates}"
+            }
+            Self::ImportIgnored => "Bukan berkas lagu, dilewati: {count}",
+            Self::ImportOverLimit => "Tidak dibaca, melebihi batas {max} berkas: {count}",
+            Self::ImportNothing => "Tidak ada berkas lagu yang ditemukan.",
+            Self::ImportRowDetail => "{name} · Slide: {count}",
+            Self::ImportBulkLabel => "Semua duplikat",
+            Self::ImportReplaceNote => {
+                "Ganti menyimpan lirik dari berkas sebagai revisi baru untuk lagu di pustaka. Revisi itu tidak menyertakan format slide, latar, atau latar master lagu, dan urutan dari berkas menggantikan susunan lagu; jadwal tetap memakai salinannya."
+            }
+            Self::ImportChoiceImport => "Impor",
+            Self::ImportChoiceSkip => "Lewati",
+            Self::ImportChoiceCopy => "Impor sebagai salinan",
+            Self::ImportChoiceReplace => "Ganti",
+            Self::ImportChoiceA11y => "Tindakan untuk {title}",
+            Self::ImportConfirm => "Impor ({count})",
+            Self::ImportDuplicateSame => {
+                "Sudah ada di pustaka sebagai “{title}” dengan kata-kata yang sama"
+            }
+            Self::ImportDuplicateTitle => {
+                "Judul sama dengan “{title}” di pustaka, kata-katanya berbeda"
+            }
+            Self::ImportDuplicateBatch => "Lagu yang sama dengan {name} dalam impor ini",
+            Self::ImportDuplicateCheckFailed => {
+                "Duplikat tidak dapat diperiksa ({error}); setiap lagu ditawarkan sebagai lagu baru."
+            }
+            Self::ImportReplaceTwice => {
+                "Dua berkas akan mengganti “{title}”. Pilih tindakan lain untuk salah satunya."
+            }
+            Self::ImportCommitFailed => "Tidak ada yang diimpor: {error}",
+            Self::ImportCancelled => "Impor dibatalkan. Tidak ada yang diimpor.",
+            Self::ImportDone => {
+                "Diimpor: {count} · Dilewati: {skipped} · Tidak dapat diimpor: {failed}"
+            }
+            Self::ImportDoneLate => "Impor selesai sebelum dapat dibatalkan. Diimpor: {count}",
+            Self::ImportFailedStart => "Impor tidak dapat dimulai: {error}",
+            Self::ImportBusy => "Impor lain masih berjalan. Coba lagi sebentar lagi.",
+            Self::ImportStopped => {
+                "Impor berhenti tanpa diduga saat membaca berkas. Tidak ada yang diimpor; coba lagi."
+            }
+            Self::ImportWarnElement => "Tidak diimpor: <{name}>",
+            Self::ImportWarnDirective => "Direktif tidak diimpor: {name}",
+            Self::ImportWarnOrder => "Urutan menyebut bagian yang tidak ada: {name}",
+            Self::ImportWarnTitle => "Berkas tidak berjudul; nama berkas dipakai",
+            Self::ImportWarnEmpty => "Bagian kosong dilewati: {label}",
+            Self::ImportWarnChords => "Akor dihapus",
+            Self::ImportWarnTruncated => "Dipendekkan agar muat: {field}",
+            Self::ImportWarnInvalid => "Nilai tidak sah dibuang: {field}",
+            Self::ImportWarnLimit => "Terlalu banyak bagian atau slide; sisanya dibuang",
+            Self::ImportWarnAttribute => "Atribut diabaikan: {name}",
+            Self::ImportErrUnsupported => "Bukan berkas lagu OpenLyrics, OpenSong, atau ChordPro",
+            Self::ImportErrUnreadable => "Tidak dapat dibaca: {error}",
+            Self::ImportErrLibraryLimit => "Lagu lebih besar daripada yang diizinkan pustaka",
+            Self::ImportErrBatchFull => "Tidak dibaca: satu impor paling banyak {max} berkas",
+            Self::ImportErrTooLarge => "Berkas terlalu besar (lebih dari 1 MiB)",
+            Self::ImportErrEncoding => "Bukan teks UTF-8",
+            Self::ImportErrMalformed => "Berkas rusak: {error}",
+            Self::ImportErrEntities => "Ditolak: berkas mendeklarasikan DOCTYPE atau entitas",
+            Self::ImportErrTooDeep => "Ditolak: elemen bersarang terlalu dalam",
+            Self::ImportErrNoLyrics => "Lirik tidak ditemukan",
+            Self::ImportFolderTruncated => {
+                "Folder berisi lebih dari {max} entri; berkas setelahnya tidak diperiksa: {name}"
+            }
+            Self::ImportDialogBusy => "Tutup dialog yang terbuka, lalu impor lagi.",
+            Self::ImportQuitBlocked => "Selesaikan atau batalkan impor sebelum keluar.",
+            Self::ImportErrBatchBytes => {
+                "Tidak dibaca: satu impor paling banyak {max} MiB teks lagu"
+            }
+            Self::BarImportEasyWorship => "Pustaka EasyWorship…",
+            Self::ImportSongsOverLimit => {
+                "Lagu tidak dibaca, melebihi batas {max} per impor: {count}. Lagu yang judulnya belum ada di pustaka dibaca lebih dulu, jadi mengimpor pustaka ini lagi melanjutkan sisanya."
+            }
+            Self::ImportErrMissingWords => "Tidak ada lirik lagu ini di SongWords.db",
+            Self::ImportEwNoSongs => {
+                "Tidak ada pustaka EasyWorship di sini: Songs.db tidak ditemukan di folder ini atau di folder Data, Databases\\Data, v6.1\\Databases\\Data, atau Default\\v6.1\\Databases\\Data di dalamnya. Pilih folder EasyWorship, folder profil Default-nya, atau folder yang berisi Songs.db."
+            }
+            Self::ImportEwNoWords => {
+                "Songs.db ditemukan, tetapi SongWords.db tidak ada di sampingnya"
+            }
+            Self::ImportEwTooLarge => "Pustaka EasyWorship lebih besar dari {max} MiB",
+            Self::ImportEwChanged => {
+                "Pustaka berubah saat disalin. Tutup EasyWorship lalu impor lagi."
+            }
+            Self::ImportEwNotLibrary => "Bukan pustaka EasyWorship: {error}",
+            Self::ImportEwCopyFailed => {
+                "Pustaka tidak dapat disalin ke folder sementara Sela (periksa ruang disk kosong): {error}"
+            }
+            Self::LiveItemNotShown => "{title} belum tampil; gunakan Tayangkan dulu",
+            Self::WindowTitleIdle => "Sela — Pratinjau teknis",
+            Self::WindowTitleUntitledDirty => "Jadwal tanpa judul* — Sela",
+            Self::RecoveryHeading => "Pulihkan jadwal yang belum disimpan?",
+            Self::RecoveryLostHeading => "Perubahan yang belum disimpan hilang",
+            Self::RecoveryUnclean => "Sela tidak ditutup secara normal terakhir kali.",
+            Self::RecoveryUnanswered => {
+                "Terakhir kali Sela ditutup sebelum pertanyaan pemulihan ini dijawab."
+            }
+            Self::RecoveryRevision => {
+                "Simpan otomatis terakhir ({ago}) berisi “{name}” dengan {count} item."
+            }
+            Self::RecoveryNotInFile => "Perubahan itu belum pernah disimpan ke file jadwal.",
+            Self::RecoveryFileNewer => {
+                "File jadwalnya disimpan lagi {ago}, setelah simpan otomatis ini, jadi file itu mungkin berisi pekerjaan yang lebih baru: memulihkan mengembalikan salinan lama ini, dan menyimpannya akan menggantikan file itu."
+            }
+            Self::RecoveryLost => {
+                "Perubahan yang lebih baru (dibuat {ago}) belum tersimpan otomatis dan tidak dapat dipulihkan; saat itu jadwal berisi {count} item."
+            }
+            Self::RecoveryNoCopy => "Tidak ada salinan jadwal yang tersimpan otomatis.",
+            Self::RecoveryDamaged => {
+                "{count} salinan simpan otomatis yang lebih baru rusak dan dilewati."
+            }
+            Self::RecoveryInterrupted => {
+                "Sebuah simpan otomatis terputus saat Sela berhenti; salinan setengah jadinya dibuang."
+            }
+            Self::RecoveryKept => {
+                "Jika tidak dipulihkan, salinannya tetap di folder Recovery profil sampai diganti simpan otomatis yang lebih baru."
+            }
+            Self::RecoveryAutosaveOff => {
+                "Simpan otomatis mati ({reason}), jadi jawaban ini tidak dapat dicatat: pertanyaan ini muncul lagi saat mulai berikutnya, dan jadwal yang dipulihkan tidak disimpan otomatis."
+            }
+            Self::RecoveryRestore => "Pulihkan",
+            Self::RecoveryDiscard => "Jangan Pulihkan",
+            Self::RecoveryRestored => "Jadwal simpan otomatis dipulihkan ({count} item)",
+            Self::RecoveryUntitled => "Jadwal tanpa judul",
+            Self::AgoJustNow => "kurang dari semenit yang lalu",
+            Self::AgoMinutes => "{count} menit yang lalu",
+            Self::AgoHours => "{count} jam yang lalu",
+            Self::AgoDays => "{count} hari yang lalu",
+            Self::AutosaveProtected => "Perubahan yang belum disimpan sudah tersimpan otomatis",
+            Self::AutosaveFailed => {
+                "Simpan otomatis gagal: {reason}. Perubahan yang belum disimpan tidak terlindungi; Sela mencoba lagi tiap {seconds} detik."
+            }
+            Self::AutosaveOff => "Simpan otomatis mati: {reason}.",
+            Self::AutosaveCleanup => "Salinan simpan otomatis lama tidak dapat dihapus: {reason}.",
+            Self::AutosaveClosing => "Menyelesaikan simpan otomatis…",
+            Self::ReasonDiskFull => "disk penuh",
+            Self::ReasonReadOnly => "folder profil hanya-baca",
+            Self::ReasonLocked => "program lain sedang memakai file pemulihan",
+            Self::ReasonBudget => "jadwal lebih besar dari batas simpan otomatis",
+            Self::ReasonUnlocked => "folder profil tidak dapat dikunci untuk satu Sela saja",
+            Self::ReasonIo => "galat disk ({kind})",
+            Self::AlreadyRunningTitle => "Sela sudah berjalan",
+            Self::AlreadyRunningBody => {
+                "Jendela Sela lain sudah memakai profil ini ({path}). Beralihlah ke jendela itu. Salinan ini ditutup tanpa mengubah apa pun."
+            }
+            Self::ThemeNew => "Tema Baru",
+            Self::ThemeNewName => "Tema Baru",
+            Self::ThemeEdit => "Sunting…",
+            Self::ThemeDuplicate => "Duplikat",
+            Self::ThemeCopyName => "Salinan {name}",
+            Self::ThemeDelete => "Hapus",
+            Self::ThemeConfirmDelete => "Konfirmasi Hapus",
+            Self::ThemeSetDefault => "Jadikan Utama",
+            Self::ThemeApplySong => "Terapkan ke Lagu",
+            Self::ThemeApplyItem => "Terapkan ke Item",
+            Self::ThemeItemSongTheme => "Item: Tema Lagu",
+            Self::ThemeBuiltIn => "Bawaan Sela",
+            Self::ThemeDefaultBadge => "Utama",
+            Self::ThemeInPreview => "Di Pratinjau",
+            Self::ThemeRendering => "Merender…",
+            Self::ThemeSavedNamed => "Tema “{name}” disimpan.",
+            Self::ThemeDeleted => {
+                "Tema “{name}” dihapus. Lagu yang memakainya kini menampilkan tema utama."
+            }
+            Self::ThemeDefaultSet => "“{name}” kini menjadi tema lagu utama.",
+            Self::ThemeAppliedSong => {
+                "“{name}” diterapkan ke {count} lagu. Live berubah hanya pada Go Live berikutnya."
+            }
+            Self::ThemeAppliedItem => {
+                "“{name}” diterapkan ke {count} item jadwal. Live berubah hanya pada Go Live berikutnya."
+            }
+            Self::ThemeItemCleared => {
+                "{count} item jadwal kembali memakai tema lagunya saat ditampilkan lagi."
+            }
+            Self::ThemeLimit => "Pustaka memuat paling banyak {max} tema.",
+            Self::ThemeStorageFailed => "Perubahan tema gagal: {error}",
+            Self::ThemeBusy => "Perubahan tema masih berjalan. Coba lagi sebentar lagi.",
+            Self::ThemeMissing => "Tema lagu ini tidak ada · menampilkan tema utama",
+            Self::ThemeUnavailable => {
+                "Tema belum dimuat · menampilkan tampilan bawaan; tidak ada yang disimpan sampai tema dimuat"
+            }
+            Self::ThemeSongGone => "Lagu yang dipilih sudah tidak ada · tidak ada lagu yang diubah",
+            Self::ThemeGoneApply => "“{name}” sudah tidak ada · tidak ada lagu yang diubah",
+            Self::ThemeLoadRetrying => "Tema tidak dapat dimuat ({error}) · mencoba lagi",
+            Self::ThemeTooManySongs => "Pilih paling banyak {max} lagu untuk diubah sekaligus.",
+            Self::ThemeDeletedElsewhere => {
+                "Tema ini sudah dihapus di tab Tema · tidak disimpan · OK menyimpannya sebagai tema baru"
+            }
+            Self::MarginLeftField => "Margin kiri",
+            Self::MarginRightField => "Margin kanan",
+            Self::MarginTopField => "Margin atas",
+            Self::MarginBottomField => "Margin bawah",
+            Self::ThemeWarnFont => "Fon “{name}” tidak terpasang · menampilkan DejaVu Sans",
+            Self::ThemeWarnContrast => "Kontras rendah {ratio}:1 · teks mungkin sulit dibaca",
+            Self::ThemeWarnStretch => {
+                "Rasio gambar berbeda {percent}% dari output · Regangkan membuatnya terdistorsi"
+            }
+            Self::ThemeWarnBars => {
+                "Rasio gambar berbeda dari output · Pertahankan menambah bilah hitam"
+            }
+            Self::ThemeWarnCrop => {
+                "Rasio gambar berbeda dari output · Perbesar memotong {percent}% gambar"
+            }
+            Self::ThemeBuiltInReadOnly => {
+                "Tema bawaan tidak dapat disunting atau dihapus. Duplikat untuk membuat tema sendiri."
+            }
+            Self::ThemeSelectTheme => "Pilih tema terlebih dahulu.",
+            Self::ThemeSelectSong => "Pilih lagu di Lagu terlebih dahulu.",
+            Self::ThemeSelectItem => "Pilih item jadwal terlebih dahulu.",
+            Self::ThemeDeleteHint => {
+                "Tekan Konfirmasi Hapus untuk menghapus “{name}”. Lagu yang memakainya akan menampilkan tema utama."
+            }
+            Self::ThemeEditorWindowTitle => "Editor Tema - {title}",
+            Self::ThemeNamePlaceholder => "Nama tema",
+            Self::ThemeEditing => "Menyunting tema. Hanya pratinjau: Live tidak berubah.",
+            Self::ThemeNameInvalid => "Beri tema nama paling panjang {max} byte.",
+            Self::ThemeResetDone => "Tema dikembalikan ke tampilan bawaan.",
+            Self::ThemeReset => "Atur Ulang Tampilan",
+            Self::ThemeSavedStatus => "Tema disimpan.",
+            Self::ThemeSampleHint => {
+                "Teks contoh: ketik untuk mencoba lirik panjang atau pendek (tidak disimpan)"
+            }
+            Self::ThemeElementsHeader => "ELEMEN TEMA",
+            Self::ThemeShowCopyright => "Hak cipta",
+            Self::ThemeMarginsHeader => "MARGIN",
+            Self::MarginLeft => "Kiri",
+            Self::MarginRight => "Kanan",
+            Self::MarginTop => "Atas",
+            Self::MarginBottom => "Bawah",
+            Self::MarginInvalid => "Margin berupa bilangan bulat 0 sampai {max}.",
+            Self::MarginsSet => "Poin pada 1080 baris",
+            Self::MarginsDefault => "Jarak bawaan (32)",
+            Self::MarginsUseDefault => "Pakai bawaan",
+            Self::ThemeUsing => "Tema: {name}",
+            // Media backend (M2-01).
+            Self::MediaUnavailableMissing => {
+                "Video dan audio tidak tersedia: FFmpeg tidak ditemukan"
+            }
+            Self::MediaUnavailableGpl => {
+                "Video dan audio tidak tersedia: FFmpeg yang ditemukan berlisensi GPL"
+            }
+            Self::MediaUnavailableNonfree => {
+                "Video dan audio tidak tersedia: FFmpeg yang ditemukan bukan perangkat lunak bebas"
+            }
+            Self::MediaUnavailableBroken => {
+                "Video dan audio tidak tersedia: FFmpeg gagal dijalankan"
+            }
+            Self::ScriptureTranslationsHeader => "Terjemahan",
+            Self::ScriptureModeReference => "Referensi",
+            Self::ScriptureModeKeyword => "Kata kunci",
+            Self::ScriptureModeLabel => "Cari menurut",
+            Self::ScriptureReferencePlaceholder => "Ketik referensi, mis. Yohanes 3:16-18",
+            Self::ScriptureKeywordPlaceholder => "Cari kata (2 karakter atau lebih)",
+            Self::ScriptureReferenceLabel => "Referensi Alkitab",
+            Self::ScriptureKeywordLabel => "Pencarian kata Alkitab",
+            Self::ScriptureClear => "Hapus",
+            Self::ScriptureSuggestions => "Saran kitab",
+            Self::ScriptureVerseList => "Ayat",
+            Self::ScriptureErrUnknownBook => "Tidak ada kitab bernama “{name}”",
+            Self::ScriptureErrMissingChapter => "Ketik pasal setelah {book}",
+            Self::ScriptureErrChapterNotFound => "{book} tidak memiliki pasal {chapter}",
+            Self::ScriptureErrInvalidRange => "Rentang berakhir sebelum awalnya",
+            Self::ScriptureErrMalformed => "Bukan referensi. Coba “Yohanes 3:16-18”",
+            Self::ScriptureErrBookMissing => "{book} tidak ada dalam {translation}",
+            Self::ScriptureErrChapterMissing => "{book} {chapter} tidak ada dalam {translation}",
+            Self::ScriptureErrVerseMissing => {
+                "{book} {chapter} memiliki {count} ayat dalam {translation}"
+            }
+            Self::ScriptureErrTooLong => "Perikop terlalu panjang (paling banyak {max} ayat)",
+            Self::ScriptureMissingVerses => "Tidak ada dalam {translation}: {verses}",
+            Self::ScriptureLoading => "Menyiapkan Alkitab…",
+            Self::ScriptureNoTranslations => "Belum ada Alkitab yang terpasang",
+            Self::ScriptureNoProfile => "Alkitab memerlukan folder profil",
+            Self::ScriptureUnavailable => "Alkitab tidak tersedia: {error}",
+            Self::ScriptureDamaged => "{translation} rusak: {error}",
+            Self::ScriptureEmptyTitle => "Belum ada perikop",
+            Self::ScriptureEmptyHint => {
+                "Ketik referensi seperti Yohanes 3:16, atau cari dengan kata kunci."
+            }
+            Self::ScriptureSearchShort => "Ketik minimal 2 karakter",
+            Self::ScriptureNoResults => "Tidak ada ayat yang ditemukan",
+            Self::ScriptureMoreResults => "Menampilkan {count} ayat pertama",
+            Self::ScriptureImport => "Impor Alkitab…",
+            Self::ScriptureImportPrompt => "Impor",
+            Self::ScriptureImporting => "Mengimpor {name}…",
+            Self::ScriptureImported => "{translation} diimpor: {count} ayat, {notes} catatan",
+            Self::ScriptureImportFailed => "Impor gagal: {error}",
+            Self::ScriptureRejectTooLarge => "berkas terlalu besar",
+            Self::ScriptureRejectEncoding => "berkas bukan teks UTF-8",
+            Self::ScriptureRejectMalformed => "XML tidak tersusun dengan benar ({detail})",
+            Self::ScriptureRejectEntities => "DTD dan deklarasi entitas tidak diizinkan",
+            Self::ScriptureRejectDeep => "XML bersarang terlalu dalam",
+            Self::ScriptureRejectFormat => "bukan berkas OSIS, USFX, atau Zefania",
+            Self::ScriptureRejectNoVerses => "tidak ditemukan ayat dari 66 kitab",
+            Self::ScriptureRejectTooMany => "terlalu banyak terjemahan yang terpasang",
+            Self::ScriptureBusy => "Pembaca Alkitab sedang sibuk; coba lagi",
+            Self::ScriptureSelectVerses => "Pilih ayat terlebih dahulu",
+            Self::ScriptureSelectionCount => "Ayat dipilih: {count}",
+            Self::ScriptureRebuilt => "{translation} dibangun ulang dari salinan bawaan",
+            Self::ScriptureNotInstalled => "{translation} tidak terpasang",
+            Self::ScriptureRestricted => "terbatas",
+            Self::ScriptureDamagedTag => "rusak",
+            Self::ScriptureAddedToSchedule => "{reference} ditambahkan ke jadwal",
+            Self::ScriptureWhyMissing => "berkas tidak ada",
+            Self::ScriptureWhyIo => "berkas tidak dapat dibaca atau ditulis ({detail})",
+            Self::ScriptureWhyUnsupported => {
+                "bukan berkas Alkitab Sela, atau dari Sela yang lebih baru"
+            }
+            Self::ScriptureWhyCorrupt => "berkas gagal diperiksa ({detail})",
+            Self::ScriptureWhyInvalid => "teks ditolak ({detail})",
+            Self::ScriptureWhyChecksum => "salinan bawaan gagal uji checksum",
+            Self::ScriptureWhyInflate => "salinan bawaan tidak dapat diekstrak",
+            Self::ScriptureWhyBundle => "salinan bawaan tidak valid ({detail})",
+            Self::ScriptureWhyFileName => "nama berkas tidak cocok dengan terjemahan di dalamnya",
+            Self::ScriptureWhyFolder => "folder Alkitab tidak dapat dibuat ({detail})",
+            Self::ScriptureWhyUnreadable => "berkas tidak dapat dibaca ({detail})",
+            Self::ScriptureWhyStopped => "pembaca Alkitab berhenti",
+            Self::StageOutputOff => "Output panggung mati",
+            Self::StageStarting => "Output panggung sedang dimulai…",
+            Self::StageConnected => "Panggung {width}×{height} · menampilkan {slide}",
+            Self::StageNothingConfirmed => "belum ada yang dikonfirmasi",
+            Self::StageLost => {
+                "Output panggung terputus: {reason} · Langsung › Tampilkan Output Panggung untuk memulai ulang"
+            }
+            Self::StageLossSpawn => "tidak dapat dimulai",
+            Self::StageLossStartup => "tidak siap tepat waktu",
+            Self::StageLossExited => "prosesnya berhenti",
+            Self::StageLossProtocol => "mengirim pesan yang tidak valid",
+            Self::StageNotShown => "Panggung tidak menampilkan panel terbaru: {error}",
+            Self::StageMessageLine => "Pesan panggung: {message}",
+            Self::StageNoMonitor => {
+                "Tidak ada monitor bebas untuk output panggung; pilih di Opsi › Foldback"
+            }
+            Self::StageUnavailable => "Output panggung tidak tersedia di sini",
+            Self::StageNothingLive => "Tidak ada yang tayang",
+            Self::StageNextSlide => "Berikutnya · {name}",
+            Self::StageNextItem => "Item berikutnya · {title}",
+            Self::StageEnd => "Akhir jadwal",
+            Self::BarShowStageOutput => "Tampilkan Output Panggung",
+            Self::BarStageMessage => "Pesan Panggung…",
+            Self::StageMessageHeading => "Pesan panggung",
+            Self::StageMessageHint => {
+                "Hanya tampil di output panggung, tidak pernah di layar jemaat. Satu baris, paling banyak 160 karakter."
+            }
+            Self::StageMessageLabel => "Teks pesan panggung",
+            Self::StageMessageShow => "Tampilkan di Panggung",
+            Self::StageMessageClear => "Hapus Pesan",
+            Self::FoldbackEnable => "Aktifkan dukungan Output Foldback",
+            Self::FoldbackHint => {
+                "Output panggung menampilkan slide saat ini dan berikutnya, jam, dan pesan panggung kepada pemusik. Output ini mulai dan berhenti bersama Output Langsung."
+            }
+            Self::FoldbackMonitorHeading => "Monitor foldback",
+            Self::FoldbackAutoMonitor => "Otomatis (monitor yang tidak dipakai jemaat)",
+            Self::FoldbackContentHeading => "Isi panggung",
+            Self::FoldbackShowClock => "Tampilkan jam",
+            Self::FoldbackShowNext => "Tampilkan slide berikutnya",
+            Self::OptionsTabAlertsClocks => "Peringatan dan Jam",
+            Self::BarBackupProfile => "Cadangkan Profil...",
+            Self::BarRestoreProfile => "Pulihkan Profil...",
+            Self::BundlePickBackup => "Pilih cadangan profil Sela",
+            Self::BundleExportHeading => "Ekspor Jadwal Mandiri",
+            Self::BundleOpenHeading => "Buka Jadwal Mandiri",
+            Self::BundleBackupHeading => "Cadangkan Profil",
+            Self::BundleRestoreHeading => "Pulihkan Profil",
+            Self::BundleWorkingExport => "Menulis “{name}”…",
+            Self::BundleWorkingOpen => "Memeriksa dan membuka “{name}”…",
+            Self::BundleWorkingBackup => "Mencadangkan profil ini ke “{name}”…",
+            Self::BundleWorkingRestore => "Memulihkan “{name}”…",
+            Self::BundleWorkingNote => {
+                "Tidak ada yang berubah sampai semua berkas diperiksa. Batal menghentikan tanpa mengubah apa pun."
+            }
+            Self::BundleCancelling => "Membatalkan…",
+            Self::BundleCancelled => "Dibatalkan; tidak ada yang diubah",
+            Self::BundleBusy => {
+                "Ekspor, pencadangan, atau pemulihan masih berjalan; tunggu sampai selesai"
+            }
+            Self::BundleNoProfile => "Tidak ada folder profil yang terbuka",
+            Self::BundleExported => "“{name}” disimpan: {items} item, {size}",
+            Self::BundleEmbedded => "Gambar yang disertakan: {names}",
+            Self::BundleNotEmbedded => {
+                "Tidak disertakan karena hilang atau berubah di profil ini: {names}. Komputer lain memerlukan salinannya sendiri."
+            }
+            Self::BundleFontsNeeded => {
+                "Font yang harus terpasang di komputer lain (Sela tidak pernah menyalin berkas font): {names}"
+            }
+            Self::BundleFontsMissingHere => "Juga tidak terpasang di komputer ini: {names}",
+            Self::BundleOmitted => {
+                "Tidak disertakan karena terjemahannya tidak boleh dibagikan: {names}"
+            }
+            Self::BundleOpened => {
+                "“{title}” dibuka dari “{name}” ({items} item), disimpan sebagai “{file}” di Schedules"
+            }
+            Self::BundleAdded => "Gambar yang ditambahkan ke profil ini: {names}",
+            Self::BundleReused => "Gambar yang sudah ada di profil ini: {names}",
+            Self::BundleRenamed => {
+                "Disimpan dengan nama lain karena gambar lain sudah memakai nama itu: {names}"
+            }
+            Self::BundleNotIncluded => {
+                "Gambar yang tidak dibawa paket (pakai Cari… jika Anda memilikinya): {names}"
+            }
+            Self::BundleOmittedBySender => {
+                "Tidak disertakan oleh pengirim karena terjemahannya tidak boleh dibagikan: {names}"
+            }
+            Self::BundleBackedUp => "Dicadangkan ke “{name}”: {files} berkas, {size}",
+            Self::BundleBackupExcluded => {
+                "Salinan pemulihan autosave dan terjemahan KJV serta WEB bawaan tidak disertakan; Sela membuatnya kembali"
+            }
+            Self::BundleSkipped => "Tidak dicadangkan: {names}",
+            Self::BundleRecentDropped => {
+                "{count} jadwal terbaru di luar profil ini tidak ada di cadangan"
+            }
+            Self::BundleUnsavedNotInBackup => {
+                "Jadwal yang terbuka memiliki perubahan yang belum disimpan; perubahan itu tidak ada di cadangan"
+            }
+            Self::BundleRestored => {
+                "Dipulihkan sebagai folder profil baru “{folder}”: {files} berkas"
+            }
+            Self::BundleRestoreOpen => {
+                "Profil ini tidak berubah. Untuk memakai profil yang dipulihkan, jalankan Sela dengan --operator-library “{library}”"
+            }
+            Self::BundleSettingsSkipped => {
+                "Pengaturannya tidak dapat dibaca; profil yang dipulihkan memakai pengaturan bawaan"
+            }
+            Self::BundleUnchanged => "Tidak ada yang diubah.",
+            Self::BundleMore => "{names} dan {count} lainnya",
+            Self::BundleErrNotBundle => "“{name}” bukan jadwal mandiri atau cadangan profil Sela",
+            Self::BundleErrIsBackup => {
+                "“{name}” adalah cadangan profil; pakai Profil › Pulihkan Profil..."
+            }
+            Self::BundleErrIsSchedule => {
+                "“{name}” adalah jadwal mandiri; buka dengan Berkas › Buka Jadwal"
+            }
+            Self::BundleErrNewer => {
+                "“{name}” dibuat oleh Sela yang lebih baru (versi bundel {version}); perbarui Sela untuk membukanya"
+            }
+            Self::BundleErrNewerLibrary => {
+                "“{name}” berisi pustaka lagu dari Sela yang lebih baru (skema {version}); perbarui Sela untuk memulihkannya"
+            }
+            Self::BundleErrNewerSchedule => {
+                "Jadwal di “{name}” dibuat oleh Sela yang lebih baru (versi {version}); perbarui Sela untuk membukanya"
+            }
+            Self::BundleErrUnsafe => {
+                "“{name}” ditolak karena dapat menulis di luar tempatnya atau menimpa berkas lain ({detail})"
+            }
+            Self::BundleErrDamaged => {
+                "“{name}” rusak atau tidak lengkap ({detail}); ekspor atau cadangkan lagi"
+            }
+            Self::BundleErrTooLarge => "“{name}” lebih besar dari yang diterima Sela ({detail})",
+            Self::BundleErrExists => {
+                "“{name}” sudah ada; pemulihan tidak pernah menulis ke folder atau berkas yang sudah ada. Pilih nama baru"
+            }
+            Self::BundleErrLibrary => "Pustaka lagu tidak dapat disalin atau dipakai ({detail})",
+            Self::BundleLibBusy => "pustaka sedang dipakai; tunggu sebentar, lalu coba lagi",
+            Self::BundleLibDamaged => "pustaka rusak",
+            Self::BundleLibUnsupported => {
+                "bukan pustaka Sela, atau dibuat oleh Sela yang lebih baru"
+            }
+            Self::BundleLibUnreadable => "pustaka tidak dapat dibaca atau ditulis",
+            Self::BundleLibMissing => "pustaka tidak ada di profil",
+            Self::BundleLibTooLarge => {
+                "pustaka lebih besar dari 256 MB, atau penyalinannya terlalu lama"
+            }
+            Self::BundleLibExists => "sudah ada berkas di tempat salinannya; coba lagi",
+            Self::BundleLibChanged => "pustaka berubah saat disalin; coba lagi",
+            Self::BundleLibClosed => {
+                "sambungan Sela ke pustaka tertutup; mulai ulang Sela, lalu coba lagi"
+            }
+            Self::BundleErrInternal => {
+                "“{name}” berhenti karena galat internal di Sela; berkas yang belum selesai sudah dihapus"
+            }
+            Self::BundleOpenedTooLate => {
+                "Pembatalan terlambat: “{name}” sudah disimpan sebagai “{file}” di Schedules. Jadwal itu tidak dibuka; buka melalui Berkas › Buka Jadwal."
+            }
+            Self::BundleErrImage => "Gambar “{image}” tidak dapat dipakai: {detail}",
+            Self::BundleErrEmpty => "Jadwal tidak berisi apa pun yang dapat diekspor",
+            Self::BundleErrDiskFull => "Disk penuh; kosongkan sebagian ruang, lalu coba lagi",
+            Self::BundleErrDenied => "Sela tidak diizinkan menulis di sana; pilih folder lain",
+            Self::BundleErrIo => "Berkas tidak dapat dibaca atau ditulis ({detail})",
+            Self::BundleIoNotFound => "berkas atau folder tidak ditemukan",
+            Self::BundleIoExists => "sudah ada berkas atau folder dengan nama itu",
+            Self::BundleIoInUse => "sedang dipakai program lain",
+            Self::BundleIoConnection => "sambungan ke drive atau folder jaringan terputus",
+            Self::BundleIoName => "nama itu tidak diizinkan di sana",
+            Self::BundleIoTooBig => "drive tidak dapat menyimpan berkas sebesar ini",
+            Self::BundleIoOther => "sistem melaporkan galat berkas yang tidak terduga",
+            Self::BundlePackageNotes => "Dari jadwal mandiri",
+            Self::BundleSkipLink => "sebuah tautan",
+            Self::BundleSkipTooLarge => "terlalu besar",
+            Self::BundleSkipUnusable => "bukan berkas profil",
+            Self::BundleSkipUnreadable => "tidak dapat dibaca",
+            Self::StageMonitorMissing => {
+                "Monitor foldback yang dipilih ({name}) tidak terhubung; panggung memakai monitor bebas, atau tetap mati bila tidak ada yang bebas."
+            }
+            Self::VideoErrIo => {
+                "File video tidak dapat dibaca atau ditulis ({kind}); periksa file dan folder profil, lalu coba lagi"
+            }
+            Self::VideoErrMissing => "File video tidak ada di profil",
+            Self::VideoErrSourceMissing => {
+                "File yang dipilih sudah tidak ada atau berubah saat disalin; pilih lagi"
+            }
+            Self::VideoErrUnsupported => {
+                "Hanya video MP4, M4V, MOV, MKV, WebM, AVI dan MPEG yang dapat diimpor"
+            }
+            Self::VideoErrNotVideo => "File ini tidak dapat diputar sebagai video: {reason}",
+            Self::VideoErrTooLarge => {
+                "File video lebih besar dari 16 GiB; ekspor salinan yang lebih kecil lalu impor"
+            }
+            Self::VideoErrInvalidName => "Nama file video tidak dapat dipakai",
+            Self::VideoErrReadDenied => {
+                "Sela tidak diizinkan membaca file ini. Periksa izinnya, atau salin ke folder milik Anda lalu impor salinannya"
+            }
+            Self::VideoErrProfileDenied => {
+                "Sela tidak diizinkan mengubah folder Resources/Videos profil. Pastikan folder tidak hanya-baca, lalu coba lagi"
+            }
+            Self::VideoErrDiskFull => "Disk penuh; kosongkan ruang, lalu coba lagi",
+            Self::VideoErrCancelled => "Impor dibatalkan; tidak ada yang ditambahkan",
+            Self::VideoErrUnavailable => {
+                "Video dan audio tidak tersedia, jadi video tidak dapat diimpor atau diputar"
+            }
+            Self::VideoErrBusy => "Pekerjaan video masih berjalan; coba lagi",
+            Self::VideoErrDisconnected => "Pekerja video berhenti; mulai ulang Sela",
+            Self::VideoWhyMissing => "file tidak ditemukan",
+            Self::VideoWhyNoVideo => "file tidak berisi gambar video",
+            Self::VideoWhyCodec => "format videonya tidak didukung",
+            Self::VideoWhyCorrupt => "file rusak atau bukan video",
+            Self::VideoWhyTooLarge => "gambarnya terlalu besar",
+            Self::VideoWhyNotLocal => "hanya file lokal yang dapat diputar",
+            Self::VideoWhySlow => "membacanya terlalu lama",
+            Self::VideoWhyDecoder => "dekoder berhenti tiba-tiba",
+            Self::BgVideoMissing => "Video latar ‘{name}’ tidak ditemukan; menampilkan hitam",
+            Self::BgVideoChanged => {
+                "Video latar ‘{name}’ diganti dengan file lain; menampilkan hitam"
+            }
+            Self::BgVideoUnreadable => "Video latar ‘{name}’ tidak dapat dibaca; menampilkan hitam",
+            Self::BgVideoUnavailable => {
+                "Video latar ‘{name}’ tidak dapat diputar karena video tidak tersedia; menampilkan hitam"
+            }
+            Self::LoadingVideos => "Memuat video…",
+            Self::NoVideosYet => "Belum ada video. Impor satu.",
+            Self::VideosHeader => "Video",
+            Self::RepeatingLabel => "Berulang",
+            Self::RepeatingOn => "Aktif",
+            Self::RepeatingOff => "Mati",
+            Self::VideoImportReused => "‘{name}’ sudah ada di profil; tidak ada yang disalin",
+            Self::VideoImported => "Video ‘{name}’ diimpor",
+            Self::VideoImportFailed => "Impor video gagal: {error}",
+            Self::NoProfileVideoImport => "Tidak ada folder profil; video tidak dapat diimpor",
+            Self::NoVideoLive => "Slide yang tayang tidak memiliki video",
+            Self::VideoStarting => "Memulai video…",
+            Self::VideoPlaying => "Diputar",
+            Self::VideoPaused => "Dijeda",
+            Self::VideoEnded => "Selesai",
+            Self::VideoFailed => {
+                "Video berhenti; gambar terakhir tetap tampil. Mulai ulang untuk mencoba lagi"
+            }
+            Self::VideoTransport => "Kontrol video",
+            Self::VideoPause => "Jeda",
+            Self::VideoPlay => "Putar",
+            Self::VideoRestart => "Ulangi",
+            Self::VideoCommandRefused => "Perintah video tidak diterapkan: {error}",
+            Self::MediaHeader => "Media",
+            Self::VideosNoProfile => "Video · tidak ada profil",
+            Self::VideosEmptyHint => {
+                "Belum ada video. Gunakan Impor video… untuk menambahkan file MP4, MOV, MKV, WebM atau AVI."
+            }
+            Self::ImportVideo => "Impor video…",
+            Self::VideoSoundOn => "Suara aktif",
+            Self::VideoSoundNoDevice => "Tidak ada keluaran suara",
+            Self::VideoSoundFailed => "Suara gagal; video tetap diputar tanpa suara",
         }
     }
 }
@@ -2190,7 +4181,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 468);
+        assert_eq!(Msg::ALL.len(), 881);
     }
 
     #[test]

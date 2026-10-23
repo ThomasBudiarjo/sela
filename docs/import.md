@@ -3,9 +3,10 @@
 Parsers for untrusted song files live in `src/import/`. Each one turns a
 single file's bytes into a `ParsedSong` (sections of slides, a presentation
 order, metadata and warnings) or a `Rejected` reason. They never touch the
-library, the UI thread or the network. The import framework (M1-14) owns
-staging, the staged preview, duplicate policy and the commit transaction, and
-maps a `ParsedSong` onto `storage::Song`.
+library, the UI thread or the network. The import framework (M1-14, see
+[Import framework](#import-framework-m1-14) below) owns staging, the staged
+preview, duplicate policy and the commit transaction, and maps a
+`ParsedSong` onto `storage::Song`.
 
 Shared rules (`src/import/mod.rs`):
 
@@ -19,6 +20,24 @@ Shared rules (`src/import/mod.rs`):
 - Section codes shared by OpenLyrics and OpenSong map to Sela labels with
   `label_for_code` (`v1` is "Verse 1", `c` is "Chorus").
 - Anything a parser drops or guesses is reported as a `Warning`.
+- Every accepted file fits the song model, so it can always be stored
+  (M5-02). OpenLyrics applies the limits as it reads; OpenSong, ChordPro and
+  EasyWorship words end with `ParsedSong::fit_to_model`, which applies the
+  same rules: title over 1,024 bytes, authors joined over 4,096, copyright
+  over 4,096, administrator over 256 and section labels over 256 bytes are
+  cut at a grapheme boundary with `Truncated(field)`; slides past the shared
+  text budget (240 KiB of labels and slide text, 24 bytes per slide on top)
+  are dropped from the end with one `LimitReached`; order entries past 512
+  expanded slides are dropped with `LimitReached`; a song whose first slide
+  alone is over the budget is `TooLarge`. A title that the cut leaves empty
+  or blank (one grapheme longer than 1,024 bytes, such as a letter with
+  hundreds of combining marks) is cleared and reported as `MissingTitle`
+  next to `Truncated("title")`, so the file name is used (SEC-09). Whenever
+  the title is empty, `MissingTitle` is the first warning, so it survives a
+  full warning list (`warn_missing_title`).
+- Seeded property and fuzz suites in `src/fuzz/` check these rules for every
+  parser on mutated fixtures, token soups and worst-case 1 MiB inputs
+  ([security.md](security.md#fuzzing)).
 
 ## OpenLyrics
 
@@ -99,12 +118,15 @@ Not imported, reported once each as `UnknownElement(name)`: `<format>`,
 `<instrument>`, and every property not listed above, such as `keywords`,
 `themes`, `songbooks`, `releaseDate`, `tempo`, `key` and `comments`.
 
-Not imported and not reported: the attributes `author/@type`,
-`author/@lang`, `title/@lang`, `title/@original`, `verse/@lang`,
-`verse/@translit`, `lines/@part`, `lines/@break` and `lines/@repeat`.
-This is an open loss: `Warning` has no attribute variant yet, and adding one
-is a framework decision (M1-14), because the staged preview names every
-warning kind.
+Not imported, reported once each as `IgnoredAttribute("element/@name")`
+(added by the import framework, 2026-10-22): every attribute of `<title>`,
+`<author>` and `<lines>`, and every attribute of `<verse>` except `name`,
+such as `author/@type`, `author/@lang`, `title/@lang`, `title/@original`,
+`verse/@lang`, `verse/@translit`, `lines/@part`, `lines/@break` and
+`lines/@repeat`. A repeated chorus (`lines/@repeat`) therefore plays once
+unless the `verseOrder` repeats it. Attributes of `<song>` itself (version,
+creating application, dates) describe the file, not the song, and are not
+reported.
 
 Limits: 128 sections, 128 slides, and an order of at most 512 slides after
 expansion. Slide text and labels share a budget of 240 KiB, priced like the
@@ -141,9 +163,10 @@ Sela's song model has no chord data, so nothing keeps them as hidden data.
 Every warning is reported once per file, however often its cause repeats.
 A song over the limits keeps its first `MAX_SECTIONS` sections, its first
 `MAX_SLIDES` slides and its first `MAX_ORDER` order entries, with
-`LimitReached`. A file with no lyric text is `Rejected::NoLyrics`. A missing
-title is `Warning::MissingTitle` with an empty title, and the caller
-substitutes the file name. A CCLI number that is not ASCII digits
+`LimitReached`; the text budget, field limits and the expanded-order cap of
+the shared rules apply on top. A file with no lyric text is
+`Rejected::NoLyrics`. A missing title is `Warning::MissingTitle` with an
+empty title, and the caller substitutes the file name. A CCLI number that is not ASCII digits
 (`storage::song_number_ok`) is dropped with `InvalidField("ccli")`.
 
 ### OpenSong
@@ -326,7 +349,8 @@ may start with a label line such as `Verse 1`.
   removed. A slide left empty is dropped. So is a section left with no slides,
   with one `EmptySection(label)` warning per section. Words without any
   slide are `Rejected::NoLyrics`. Hitting `MAX_SECTIONS` or `MAX_SLIDES` stops
-  the parse with `LimitReached`.
+  the parse with `LimitReached`, and so does the shared text budget; one
+  slide over the whole budget is `TooLarge`.
 
 ### Decoding
 
@@ -391,3 +415,356 @@ Still unobserved in EW 8.0.49:
 - Whether EW8 shows a legacy block's "Verse 1" first line as a label. Sela's
   "Verse N" numbering of unlabelled legacy blocks is Sela's own choice.
 - Whether a label paragraph ever follows lyrics without a marker.
+
+## EasyWorship library (M4-07)
+
+Status: **implemented-unqualified** (ew-library-import stream, 2026-10-23).
+Linux evidence only: unit tests in `src/import/ew_library.rs` and
+`src/import/worker.rs`, GPUI tests in `src/tests/ew_library_import.rs` and
+`scripts/ew-import-x11.py`. `scripts/ew-import-windows.py` is NOT RUN (no
+Windows host). Every schema detail below is an **UNOBSERVED best guess**
+from public sources (the open-source OpenLP EasyWorship importer's
+description of `Songs.db`/`SongWords.db` and the one read-only look at the
+owner's `SongWords.db` recorded under "Observed format" above). The checks
+against a copy of the owner's real EW 8.0.49 library are PP-EWL-01..08 in
+docs/parity-pending.md (Stream: ew-library-import); the guesses are
+EW8-OBS-EWL-1..7 in docs/reference-observations.md.
+
+### Entry point and folder
+
+File › Import ▸ **EasyWorship Library…**, after Song Folder… (UNOBSERVED
+placement, EW8-OBS-EWL-1). It opens the native folder chooser (one folder,
+`prompt_for_paths` with `directories: true, multiple: false`; asynchronous,
+the UI never waits). The chosen folder, or the first of these folders below
+it, must hold `Songs.db` with `SongWords.db` beside it
+(`ew_library::DATA_FOLDERS`): `.`, `Data`, `Databases/Data`,
+`v6.1/Databases/Data`, `Default/v6.1/Databases/Data`. So the EasyWorship
+profile folder (`...\EasyWorship\Default`), its `v6.1` folder, `Databases`
+or `Data` may be chosen. Names compare without ASCII case (a library copied
+from Windows). The disabled state, the preview dialog, the staged rows,
+duplicates, commit and cancel are the import framework's below.
+
+### Read-only copies
+
+The user's library is never handed to SQLite. On the `sela-import` thread
+(`import::worker`, `Source::EasyWorship`), `ew_library::Library::open`:
+
+1. finds the two databases;
+2. copies each one, plus its `-wal` and `-journal` when present, into a new
+   private temporary folder (`tempfile`, `sela-ew-library-*`), reading the
+   sources through the same regular-file open as song files (`O_NONBLOCK` on
+   Unix); at most 256 MiB per file (`MAX_DB_BYTES`, checked from the size
+   and while copying); the cancel flag is checked between 1 MiB chunks;
+3. compares each source's size and modification time from before its copy
+   with the values once *both* databases are copied, and fails with "The
+   library changed while it was copied. Close EasyWorship and import
+   again." when one changed or a journal appeared beside either database
+   (EasyWorship saving while Sela copies). Checking only after both copies
+   makes the two copies one moment: a save to `Songs.db` while
+   `SongWords.db` is copied is refused too (tested). A copy that cannot be
+   written (the temporary folder full or not writable) is its own error,
+   "The library could not be copied to Sela's temporary folder (check free
+   disk space): ..." (`LibraryError::CopyFailed`), not "Not read";
+4. opens the copies read-write (so SQLite can replay a copied `-wal` or roll
+   back a copied hot journal in the copy only) with `trusted_schema = OFF`,
+   a 2 MiB value limit (`SQLITE_LIMIT_LENGTH`), the `UTF8_U_CI` collation
+   registered, and `query_only = ON` before any query of the songs;
+5. checks the schema: table `song` with a `title` column, table `word` with
+   `song_id` and `words`.
+
+The copies are deleted when the job ends (the `Library` is dropped). Tests
+hash every source file (SHA-256, size, mtime) before and after, including a
+library whose rows live only in an open `-wal` (`ew_fixture::write_databases`
+with `wal: true`).
+
+### `UTF8_U_CI`
+
+EasyWorship's schema declares this collation on its text columns (public
+sources); SQLite refuses any statement that sorts or compares such a column
+until a collation of that name exists ("no such collation sequence", tested).
+Sela registers it as Unicode lower case, then code point order
+(`ew_library::utf8_u_ci`). EW's exact rules are UNOBSERVED (PP-EWL-03); only
+the preview order depends on them: songs are listed by
+`title COLLATE UTF8_U_CI`, then rowid.
+
+### Field mapping (UNOBSERVED column names)
+
+| `Songs.db` `song` column | Sela | Rule |
+| --- | --- | --- |
+| `rowid` | row name `Songs.db #N` | `word.song_id` refers to it. |
+| `title` | Title | Line breaks become spaces; trimmed; cut at 1,024 bytes with `Truncated("title")`. Empty: "Untitled" with `MissingTitle`. |
+| `author` | Authors | One line, kept as one author (no splitting), cut at 4,096 bytes. |
+| `copyright` | Copyright | Trimmed, cut at 4,096 bytes. |
+| `administrator` | Administrator | One line, cut at 256 bytes. |
+| `vendor_id` | Song Number (CCLI) | Integer or digits, at most 12; anything else gives `InvalidField("vendor_id")` and is dropped. |
+| `description` | none | Sela songs have no description field: `IgnoredAttribute("song/description")` when not empty. |
+| `tags` | none | No keyword field yet: `IgnoredAttribute("song/tags")` when not empty. |
+| `song_uid` | `Staged::source_id` | Duplicate detection inside one import (below); not stored. |
+| other columns | none | Not read (layout, revision, presentation ids). |
+
+Only `title` is required; missing optional columns read as empty. A value
+that is not valid UTF-8 is decoded with replacement characters and gives
+`InvalidField(<column>)`. Words: the newest `word` row (highest rowid) for the
+song's rowid, parsed by `ew_rtf::parse` ("EasyWorship song words" above);
+older rows for the same song give `IgnoredAttribute("word (older rows)")`.
+Which `word` rows the chosen songs have is read in one pass over the table
+(`Library::scan_words`, rowid and `song_id` only), then each song's newest
+row by rowid, so the preview does not depend on an index on
+`word.song_id` (EW's indexes are UNOBSERVED, PP-EWL-04). Two lookups per
+song by `song_id` would each scan the whole table without one. Measured
+(Linux dev profile, this container): a synthetic library of 20,000 songs
+with a 164 MB `SongWords.db` of 20,000 word rows and no `song_id` index
+copied in 0.32 s, chose 500 songs and read their word rows in 0.23 s, and
+staged all 500 in 0.88 s in total. A test checks that the `word` queries
+take at most one full-scan step per word row.
+
+### Failures
+
+- No `word` row, or a NULL `words`: that song's row says "No words for this
+  song in SongWords.db" (`FileError::MissingWords`); the other songs import
+  (VAL-IMPORT-009).
+- Words the RTF parser refuses (not RTF, malformed, too deep) or over 1 MiB
+  (or over the 2 MiB SQLite value limit): that song's row with the parser's
+  reason, under the EasyWorship format.
+- A library that cannot be read at all is one failed row named after the
+  chosen folder (`FileError::Library`): no `Songs.db` ("No EasyWorship library
+  here..."), `Songs.db` without `SongWords.db`, over 256 MiB, changed during
+  the copy, unreadable, not a database or not the expected tables ("Not an
+  EasyWorship library: ..."). Import stays disabled.
+- At most 500 songs per import (`batch::MAX_FILES`); the rest are counted
+  ("Songs not read, over the limit of 500 per import: N. Songs whose
+  titles are not in the library yet are read first, so importing this
+  library again continues with the rest.") and are not staged. The 32 MiB
+  staged-text budget applies as for files.
+- A library over the limit is imported in turns: `Library::song_ids` reads
+  the songs in title order and takes first those whose title
+  (`batch::title_key`, case, spacing and punctuation folded) is not among
+  the titles of Sela's library (the operator's Songs list, passed as
+  `Source::EasyWorship { known_titles }`), then fills the room left with
+  songs the library already has, still listed in title order. So a 1,800
+  song library stages songs 1-500 the first time and, once those are
+  imported, the next 500 the next time, and so on; under the limit every
+  song is listed as before (tested in `import::worker` and
+  `import::ew_library`). Only the selection uses titles; the duplicate
+  policy below is unchanged. A song the operator chose to skip keeps a
+  title the library does not have and is offered again first. UNOBSERVED
+  best guess (EW8-OBS-EWL-8, PP-EWL-08).
+
+### Duplicates and re-import
+
+The framework's policy applies unchanged (title and words key against the
+library and inside the import). In addition, a later row whose `song_uid`
+equals an earlier row's is a duplicate inside the import ("Same song as
+Songs.db #N in this import", default Skip), even when its title or words
+differ (`batch_duplicates`, tested). Importing the same library again finds
+every song in the library with the same words, so each defaults to Skip and
+Import shows (0). Sela does not store the `song_uid`, so an EW song edited
+after an import is matched by title (Import as copy by default, or Replace).
+How EW itself treats a re-import is UNOBSERVED (PP-EWL-06).
+
+### Tests
+
+- U (`src/import/ew_library.rs`, synthetic `Songs.db`/`SongWords.db` built
+  by `src/import/ew_fixture.rs`): metadata and words mapping; sources hashed
+  before and after, copies deleted; rows only in a `-wal`; collation order
+  and SQLite's refusal without it; missing word row and NULL words; older
+  word rows; truncation, invalid CCLI, missing title, invalid UTF-8; words
+  over the parser and value limits; folder search and case-insensitive
+  names; not-a-library refusals; a source changing during the copy,
+  including `Songs.db` saved while `SongWords.db` is copied; a copy that
+  cannot be written (`CopyFailed`, not `Unreadable`); songs not in the
+  library chosen first over the limit; word rows read in one pass without
+  a `song_id` index; cancel; an oversized database.
+- I (`src/import/worker.rs`): a library job staged in title order with a
+  missing-words row and sources unchanged; a folder without a library is
+  one failed row; the 500-song limit and cancel; a 503-song library
+  imported again continues with the 3 songs not yet in the library.
+- `operator::song_import::tests`: `song_uid` duplicates inside an import;
+  every new error has EN text.
+- GPUI (`src/tests/ew_library_import.rs`): menu, folder chooser options,
+  preview rows, warnings, the uid duplicate, commit with metadata read back
+  from the library, re-import as duplicates, cancel, sources unchanged; a
+  folder without a library.
+- Native: `scripts/ew-import-x11.py` (PASS on Linux/Xvfb) and
+  `scripts/ew-import-windows.py` (NOT RUN: no Windows host). Both build the
+  library with `scripts/ew_library_fixture.py`.
+
+## Import framework (M1-14)
+
+Status: **implemented-unqualified** (import-framework stream, 2026-10-22).
+Linux evidence only: GPUI tests and `scripts/song-import-x11.py`. Windows
+(`scripts/song-import-windows.py`) and every EasyWorship comparison are open
+(docs/parity-pending.md, "Stream: import-framework").
+
+### Entry point and chooser
+
+File › Import ▸ Songs… (files, several at once) and Song Folder… (one or
+more folders) in the operator menu bar; EasyWorship Library… (one folder)
+is described in "EasyWorship library" above. The Import ▸ group is flattened into
+the File popup like New ▸, after Close Schedule. Where EasyWorship 8.0.49
+offers library import is **UNOBSERVED**: its observed File menu
+(EW8-OBS-053) has no Import row and its Songs context menu (EW8-OBS-061)
+none either; the Song Editor's Import ▾ (EW8-OBS-021) imports into one open
+song. See docs/reference-observations.md, "Song import — UNOBSERVED best
+guesses". The native chooser is GPUI's `prompt_for_paths` (asynchronous; the
+UI never waits on it). All three items are disabled while an import runs.
+
+### Which files, which parser (`import::batch`)
+
+- `.cho`, `.chopro`, `.chordpro`, `.crd`, `.pro`: ChordPro.
+- `.xml`, or no extension with content that starts with `<`: OpenLyrics when
+  the root is `<song>` in the OpenLyrics namespace, otherwise OpenSong. A
+  well-formed file with another root is "not a song file".
+- A chosen file of any other type is listed as unsupported. Inside a chosen
+  folder, other files are only counted ("Not song files, skipped: N"),
+  because song folders hold pictures and notes too. A file without an
+  extension is the exception, in a folder too: OpenSong songs have none, so
+  it is read, and one whose content is not a song gets a row "Not an
+  OpenLyrics, OpenSong or ChordPro song file". Folders are walked three
+  levels deep without following symbolic links; hidden entries are skipped;
+  only regular files are candidates (a named pipe, socket or device is
+  counted as not a song file, and a chosen one is refused from its metadata
+  before it is opened; on Unix the open itself does not wait
+  (`O_NONBLOCK`) and the opened file's type is checked again, so a pipe
+  swapped in after the first check cannot block the worker either); at most 20,000
+  directory entries are looked at per chosen folder, and a folder cut there
+  is named in the preview ("Folder has more than 20000 entries; files after
+  that were not looked at: …"). Which entries fall past the budget depends
+  on the file system's listing order.
+- Limits: 500 files per import (the rest are counted as not read), 1 MiB
+  per file (checked from the file size before reading, and again while
+  reading), 32 MiB of staged song text (later files get "Not read: one
+  import holds at most 32 MiB of song text", distinct from the 500-file
+  message), and the library's own song limits
+  (`Song::validate`, `storage::MAX_SONG_BYTES`). The parsers already cut a
+  song to those limits with `Truncated`/`LimitReached` warnings (see
+  above), so a long file is staged shorter, with the warning in the
+  preview; "larger than the library allows" remains as the fallback for a
+  song `to_song` still refuses.
+- A missing title becomes the file name (without extension); the
+  `MissingTitle` warning stays and the preview says so.
+
+### The `sela-import` worker (`import::worker`)
+
+One long-lived thread, started on first use. Its job channel holds one job
+and its event channel `EVENT_DEPTH` (16) results; when the UI does not read,
+the worker blocks instead of queueing more (tested). Events carry the job
+number, so results of a cancelled job are dropped. Cancel is checked before
+every file; `Done { canceled }` ends a job, or `Failed` when the thread ended
+without finishing it (a panic): the operator closes the preview, says "The
+import stopped unexpectedly …" and starts a new thread for the next import
+(pr1-review). The UI handles at most 64
+events per 16 ms poll. Nothing in the worker touches the library.
+
+### Staged preview
+
+A modal dialog (`Dialog::ImportSongs`, `src/operator/song_import.rs`) that
+opens while files are read and lists every file in order: the song title, a
+format chip, the file name and slide count, every warning as text, and for
+a failed file its error in red. A summary line counts ready songs, files
+that cannot be imported and duplicates. Nothing is saved while the dialog is
+open. Keyboard: focus starts on Cancel; Tab cycles the per-row choice groups,
+Import and Cancel inside the dialog; Left/Right (or Up/Down) change the
+focused group's choice; a row focused from the keyboard scrolls into view;
+Esc is Cancel. Accessibility: the dialog is a Dialog named "Import Songs",
+the list a List, each row a ListItem named by the song title (or the file
+name) with the path as its description, each choice group a RadioGroup
+("What to do with <title>") of RadioButtons with their toggle state, the
+summary and progress lines Status nodes.
+
+### Duplicates (UNOBSERVED best guess)
+
+After reading, the operator asks the storage worker (`find_duplicates`) for
+library songs with the same title, compared case-insensitively with
+punctuation and spacing ignored (`batch::title_key`; accents count). A
+match with the same words (`batch::lyrics_key`, a SHA-256 of the
+normalized lyrics in slide order, labels and metadata ignored) wins over a
+title-only match. Inside one import, a later file with the same title and
+words points at the first one.
+
+| Kind | Default | Choices |
+| --- | --- | --- |
+| Not a duplicate | Import | Import, Skip |
+| Same title and words as a library song | Skip | Skip, Import as copy, Replace |
+| Same title, other words | Import as copy | Skip, Import as copy, Replace |
+| Same song earlier in this import | Skip | Skip, Import as copy |
+
+"All duplicates" sets one choice on every row that offers it. Import as
+copy adds a new song with the same title. Replace saves the file's song as
+a new revision of the library song (same song id): schedules keep the
+revision they pinned until Update items in Schedule, and the old revision
+stays in history. Replace overwrites words, labels and metadata, drops
+that song's backgrounds, master background and per-slide formatting
+(the file has none), and replaces its arrangement variants with the file's
+order (none when the file has no order). The dialog's Replace note says
+so in EN and ID.
+Two rows replacing the same song are refused before anything is saved.
+
+### Commit and cancel
+
+Import (n) sends every accepted song to the storage worker as one
+`Command::CommitImport`. `Repository::commit_import` validates all songs,
+then writes them in ONE immediate transaction through `write_song`, the
+same path as `save_song` (revision, section ids, formats, metadata, search
+index row, Date modified). Any failure rolls the whole batch back and the
+preview stays open with "Nothing was imported: …" for a retry. A replaced
+song that changed since the check fails with `Conflict` (also a full
+rollback). This closes M1-07's import index maintenance: imported words are
+searchable at once, accent-folded (`unicode61 remove_diacritics 2`).
+
+Cancel works in every phase: while reading, the worker stops before its next
+file and its late results are dropped; while checking or reviewing, the
+staged songs are discarded; while committing, a commit that has not reached
+the storage worker is dropped, and one that has is cancelled through its
+`storage::Cancel` flag, which `commit_import` checks before every song and
+before the commit, so it rolls back. If the commit had already finished,
+the footer says so ("finished before it could be cancelled"). Source files
+are only read, never written (tested by content and modification time).
+
+While the preview is reading, checking, in review or committing, Quit
+(Ctrl+Q, which still reaches the main window behind a dialog) and the
+window's close request are refused with "Finish or cancel the import before
+quitting." in the dialog (on its own line, so an import error such as a
+failed duplicate check stays visible), so an Unsaved prompt can never
+replace the preview and strand the import (UNOBSERVED, EW8-OBS-IMP-7). This
+also holds for a quit that resumes later, after Don't Save while a settings
+write was pending or after a Save, when the preview was opened in the
+meantime: the quit is dropped and the operator quits again once the import
+is finished or cancelled. Any other
+dialog that replaces the preview cancels the import first. A chooser that
+returns while another dialog is open drops its choice with "Close the open
+dialog, then import again."
+
+After a commit the dialog closes, the Songs footer reports
+"Imported: n · Skipped: n · Not importable: n", the Songs list reloads, the
+imported songs become the Songs selection, Preview loads the first one and
+keyboard focus moves to its row. Live is never touched.
+
+### Tests
+
+- `import::batch` (format choice, unsupported and hostile files, library
+  limit, title from the file name, duplicate keys, bounded folder walk, file
+  limit), `import::worker` (ordered results with partial failure, cancel
+  before the next file, back-pressure, a panicked thread reported as
+  `Failed`), `storage` (one transaction with the
+  index and Replace, failure injection by trigger, Conflict, cancel, invalid
+  batch, duplicate lookup through the worker),
+  `operator::song_import::tests` (batch duplicates, choices, every warning
+  and error has text), `import::openlyrics` (attributes reported).
+- GPUI (`src/tests/song_import.rs`): folder import with preview, commit,
+  selection, focus, accented search, a repeated OpenSong label, preview and
+  an acknowledged Live slide; keyboard File menu and choice groups with an
+  unsupported file and Esc; cancel while reading (worker held by the test
+  pace hook); cancel before the commit reaches storage; a failing save
+  (SQLite trigger) rolling back the batch, then a retry; duplicate choices
+  (bulk, Replace, copy, double Replace refused).
+- Native: `scripts/song-import-x11.py` (PASS on Linux/Xvfb) and
+  `scripts/song-import-windows.py` (NOT RUN: no Windows host).
+- Fixtures: `tests/fixtures/import/batch/` (original synthetic text).
+
+Open: the EasyWorship observations listed in parity-pending; Windows run;
+cancel during a long commit is covered by the storage flag test and the
+queued-commit GPUI test, not by a native run; per-file read timeouts (a hung
+network share would hold the worker, never the UI); `.txt`/EasyWorship
+lyrics files and SongSelect formats are not imported; several songs in one
+ChordPro file still merge (see ChordPro above).

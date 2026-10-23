@@ -62,9 +62,13 @@ pub struct CueJob {
     pub sizing: Sizing,
     /// Already fitted to `extent` by the image worker, or a plain color.
     pub background: PreparedBackground,
-    /// The song's copyright strip (`slides::copyright_strip`), drawn on every
-    /// slide of the item; `None` for a song without copyright text.
+    /// The item's copyright strip (`slides::CopyrightStrip::text`); `None`
+    /// for a song without copyright text or with the strip turned off. The
+    /// normalized size cap always leaves room for it, so every slide of the
+    /// item keeps one size whether it draws the strip or not.
     pub footer: Option<Arc<str>>,
+    /// This slide draws `footer` (`CopyrightOptions::shown_on`).
+    pub footer_shown: bool,
 }
 
 pub struct Built {
@@ -306,18 +310,27 @@ fn run(shared: Arc<Shared>, mut builder: Builder) {
 }
 
 /// The normalized cap depends on every slide of an item; recompute it only
-/// when the item, surface, sizing or face resolution changes. Holding the
+/// when the item, surface, sizing, face resolution or copyright strip text
+/// (the footer, whose height the text area gives up) changes. Holding the
 /// resolution `Arc` keeps its address from being reused while cached.
 #[derive(Default)]
 struct CapCache(Option<CapEntry>);
 
-type CapEntry = (Version, Extent, Sizing, Arc<[Resolved]>, Option<u16>);
+type CapEntry = (
+    Version,
+    Extent,
+    Sizing,
+    Arc<[Resolved]>,
+    Option<Arc<str>>,
+    Option<u16>,
+);
 
 impl CapCache {
     fn cap(&mut self, job: &CueJob) -> Option<u16> {
-        if let Some((item, extent, sizing, resolved, cap)) = &self.0
+        if let Some((item, extent, sizing, resolved, footer, cap)) = &self.0
             && (*item, *extent, *sizing) == (job.item, job.extent, job.sizing)
             && Arc::ptr_eq(resolved, &job.resolved)
+            && *footer == job.footer
         {
             return *cap;
         }
@@ -328,7 +341,14 @@ impl CapCache {
             job.sizing,
             job.footer.as_deref(),
         );
-        self.0 = Some((job.item, job.extent, job.sizing, job.resolved.clone(), cap));
+        self.0 = Some((
+            job.item,
+            job.extent,
+            job.sizing,
+            job.resolved.clone(),
+            job.footer.clone(),
+            cap,
+        ));
         cap
     }
 }
@@ -347,7 +367,7 @@ impl CueJob {
         let cue = slides::cue_with_footer(
             self.version,
             slide,
-            self.footer.as_deref(),
+            self.footer.as_deref().filter(|_| self.footer_shown),
             face,
             self.extent,
             self.caps,

@@ -239,6 +239,12 @@ Depends on: M0-01. Tests: U, I, N, E feasibility.
 
 Bounded slice **implemented-unqualified**; see `docs/native-testing.md` and the
 M0-03 work-log record. Windows/native accessibility and physical checks remain open.
+Shared Linux X11 harness (2026-10-22, **implemented-unqualified**):
+`scripts/native_x11.py` with private Xvfb or two-monitor Xorg displays, private
+profiles and D-Bus sessions, AT-SPI control ids, portal file dialogs and tagged
+cleanup; `live-output-x11.py`, `schedule-x11.py`, `song-editor-x11.py` pass. See
+`docs/e2e-linux.md`; the owner's Windows/reference checklist is
+`docs/parity-pending.md`. Fixed clocks and failure injection remain open.
 
 - [ ] Add synthetic fixture conventions, isolated temporary profiles, fixed clocks
   and reproducible failure injection without production-only test shortcuts.
@@ -489,6 +495,14 @@ its toolbar/keyboard equivalent.
 - [ ] Implement next/previous, Go Live and safety bindings in the proper contexts.
 - [ ] Test typing in search/editor, open modal, unfocused panes, repeat keys and
   boundary slides so navigation cannot accidentally fire while entering text.
+  scrutiny-r2 (2026-10-22): an open Songs row menu now keeps every show key
+  inert (SC2-FOCUS-01, GPUI test and `scenario-s02-x11.py`); review round 1
+  did the same for the Schedule item, image and New ▾ menus, which now take
+  the focus (right-click menus) and close with Esc (SC2-FOCUS-02, GPUI tests
+  and `scenario-s02-x11.py` step 2b). EW behavior unobserved (PP-SC2-01).
+  Review round 2: a press on New ▾ that closed its menu without completing a
+  click no longer swallows the next Enter, and a right press no longer arms
+  the swallow (SC2-FOCUS-03, GPUI test and `scenario-s02-x11.py` step 2c).
 - [ ] Verify keyboard-only access, visible focus and disabled/unavailable actions.
 
 Acceptance: focus and selection match observed workflows, with no typing-triggered
@@ -505,13 +519,27 @@ B/C/L-in-search best guess), 061, 064, 065 (context menu, sort, delete confirm).
 
 - [ ] Implement observed resource tabs, list/grid sizing, sorting, context actions,
   collections/folders and selection behavior; audit any missing browser controls.
-  (Songs: Sort by Title/Date modified with Ascending/Descending persisted, multi-select, Delete with Yes/No default No are done; Author, Copyright, Administrator and Song Number sort remain.)
+  (Songs: Sort by Title/Date modified with Ascending/Descending persisted, multi-select, Delete with Yes/No default No are done; Author, Copyright, Administrator and Song Number sort added by songs-browser 2026-10-22 (schema 7 sort keys, empty keys last, Song Number numeric; implemented-unqualified, EW order rules UNOBSERVED, parity-pending PP-SB-01..03). Media/other tabs, grid sizing and collections remain.)
 - [ ] Add asynchronous, cancellable search with result generations to reject
   stale queries; implement empty/loading/error states without list selection drift.
 - [ ] Virtualize large lists and bound thumbnail requests/cache ownership.
   (Songs list virtualized and measured on 20k; Media and other lists and thumbnails remain.)
 - [ ] Test a slow earlier query completing after a newer one, deletion of selected
   resource, large libraries and keyboard navigation through virtualized rows.
+  (Done by songs-browser 2026-10-22, `src/tests/songs_browser.rs`: deleting
+  the selected search hit selects the neighbour hit and keeps focus in the
+  list; Down/Up/Page Up/End through a 300-row virtual list sorted by Song
+  Number keep the cursor row built and focused; the generation guard drops
+  a reply for an earlier query that is taken after a newer one was typed
+  (on a 4-song library the worker answers fast, so the late reply comes from
+  the poll timing, not a slow query) and a synthetic later generation-1
+  `Results` handed to `Operator::search_results`. Open: no query was
+  actually slow: a real slow storage-worker query raced against a newer one
+  on a large library needs a delay hook or a 20k library in the GPUI test.
+  Large libraries rely on earlier evidence not re-run here: the 400-row GPUI
+  test, the focus-scopes-resource-browser 20k Windows run and the 20k
+  database benchmark; songs-browser repeated only the benchmark, on this
+  Linux VM.)
 - [ ] Defer decoder-specific thumbnail production to M2-05, not browser behavior.
 
 Acceptance: resource browsing remains responsive and cannot act on stale results.
@@ -603,6 +631,8 @@ Follow-ups:
   - Open for the whole ticket: Linux/macOS native checks, IME and screen
     reader qualification, mixed-value display (unobserved).
 - [x] M1-05 residual: song metadata fields (administrator, song number), schema 6 modified stamp, modal editor close prompt (implemented-unqualified).
+- [x] M1-05 copyright display follow-up (songs-browser, 2026-10-22, implemented-unqualified): Options › Main Output › Song › Copyright Info with the observed Display Copyright Information (on), Show on first displayed slide only (off) and License Info (EW8-OBS-055/056), persisted in settings.txt; first-slide meaning and the "CCLI Song # N · License Info" third line are UNOBSERVED best guesses (PP-SB-05..07). Open: Copyright Font, Song Font and Show Verse/Chorus Label of the same tab (PP-SB-08, M1-05t below).
+- M1-05t Options › Main Output › Song: Song Font, Show Verse/Chorus Label with Label Font, and the Copyright Font menu (EW8-OBS-056). Planned; needs the font menu control shared with themes.
 - M1-05j Text › Style superscript/subscript and indent (EW8-OBS-028), and
   bullets (EW8-OBS-029). Planned.
 - M1-05k Text › Layout: margins, auto sizing with normalize, word wrap,
@@ -729,15 +759,19 @@ painted list p95 81.5-83.8 ms (three runs of 30 two-letter queries, release).
 Truncation hint added in focus-scopes-resource-browser. Open: slide-label search (documented deviation from EW8-OBS-045, see below), Narrator and older-hardware runs.
 
 <a id="m1-07-search-label-matching"></a>Backlog (M1-07 search label matching): EW8-OBS-045 matches slide/section text labels; Sela indexes only title, lyrics and metadata. Index the labels (extra FTS column, schema bump, index rebuild) and add a native check that a label-only query finds the song. Not done because it changes the schema; the two-character minimum is a separate owner-approved deviation.
+**Done, implemented-unqualified (songs-browser, 2026-10-22):** schema 7 adds the `labels` FTS column (distinct labels per song, label-only hits sorted after every other hit, bm25 weight 0.5), migrated by a rebuild behind the verified `.schema6-backup`; storage and GPUI tests plus `scripts/songs-browser-x11.py` (label-only "etsa" hit) pass on Linux. Open: EW ranking observation (PP-SB-04), the Windows script and the reference-laptop timings (PP-SB-09/10).
 
 - [x] Add indexed/FTS search for observed title/lyrics/metadata queries and filters.
   (Index in M1-07a, Songs search box in M1-07b; EW also matches slide labels,
-  which Sela does not index yet, and no filter UI exists in EW 8.0.49.)
+  indexed since schema 7 (songs-browser), and no filter UI exists in EW 8.0.49.)
 - [x] Define normalization, escaping, ranking and deterministic tie handling;
   keep display text unchanged.
-- [ ] Maintain indexes transactionally on edits/deletes/imports and support rebuild.
-  (Edits, deletes and rebuild done in M1-07a; no importer exists yet, so
-  import maintenance is unproven until M1-14 saves through `save_song`.)
+- [x] Maintain indexes transactionally on edits/deletes/imports and support rebuild.
+  (Edits, deletes and rebuild done in M1-07a; imports since
+  import-framework 2026-10-22: `Repository::commit_import` writes every
+  imported song through `write_song`, the `save_song` path, in one transaction;
+  `storage::tests::an_import_commits_every_song_in_one_transaction_and_indexes_it`
+  and the GPUI accented search after import prove it.)
 - [x] Test punctuation, diacritics, Indonesian text, duplicate titles, empty queries,
   corrupt index recovery and canceled requests.
 - [x] Benchmark a synthetic 20k-song corpus, separating database query latency
@@ -752,13 +786,47 @@ provisional 30 ms target/100 ms p95 ceiling, not an unqualified speed claim.
 
 Depends on: M1-06, M1-01. Tests: U, R, N.
 
-- [ ] Implement font, size, color, alignment, margins, shadow/outline, background
+Progress (stream "themes", 2026-10-22, **implemented-unqualified**; see
+[themes](themes.md)): `sela::theme` model with field-by-field inheritance
+(slide → song master → theme → built-in), schema 8 (developed as 7, renumbered at integration) behind a verified backup,
+`.selaschedule` v4 item snapshots, margins carried to the audience as cue
+insets, the operator Themes tab (thumbnails, warnings, default, apply to song
+and to schedule items) and the Song Editor theme mode. GPUI tests and
+`scripts/themes-x11.py` pass on Linux; `scripts/themes-windows.py`, the EW
+Themes tab observation and screen-reader checks are open
+([parity pending](parity-pending.md#stream-themes)). Review round 1
+(2026-10-23): substitutes are never frozen into schedule items, Apply to Song
+is atomic, the native live-edit step edits the live theme; follow-ups M1-08a
+and M1-08b below. Review round 2 (2026-10-23): thumbnails are released from
+the operator window's sprite atlas, Apply to Song reaches a previewed
+schedule item, a theme deleted elsewhere is named, a lock-blocked theme load
+is retried, and a theme editor keeps its edits for a theme deleted meanwhile
+(PP-TH-10).
+
+- [x] Implement font, size, color, alignment, margins, shadow/outline, background
   color/image and copyright position where confirmed by the reference.
-- [ ] Specify default/theme/item overrides and snapshot inheritance explicitly.
-- [ ] Preview changes without applying them live; implement reset/cancel/undo.
-- [ ] Validate missing fonts/assets, unsuitable aspect ratios and text contrast;
+  (Copyright: shown/hidden at the bottom, the observed position; free
+  placement is unobserved and not built. Margins live under the Text tab, EW's
+  Text › Layout is M1-05k.)
+- [x] Specify default/theme/item overrides and snapshot inheritance explicitly.
+- [x] Preview changes without applying them live; implement reset/cancel/undo.
+- [x] Validate missing fonts/assets, unsuitable aspect ratios and text contrast;
   make substitutions visible rather than claiming identical output.
 - [ ] Render long/short text, landscape variants and override combinations.
+  (Partial: raster/fit unit tests on five landscape sizes and GPUI checks.
+  The R level this ticket lists is not done: no golden image and no physical
+  display run, so this stays open.)
+
+Follow-up tickets found in review (planned, not built; docs/themes.md,
+"Divergences from EasyWorship and missing workflows"):
+
+- [ ] **M1-08a** — Song Editor Layouts tab "Theme - name" selector and the
+  Master-edit scope of EW8-OBS-057 (Master edit as a theme edit with
+  copy-on-write). Sela currently keeps the song master song-local above the
+  theme (TH-BG-09); decide after PP-TH-08. Depends on M1-05h. Tests: U, I, N.
+- [ ] **M1-08b** — Media › Images "Copy to Theme ▸ Song Theme" (EW8-OBS-019):
+  create a song theme from an image item. PP-TH-09. Depends on M1-10. Tests:
+  U, I, N.
 
 Acceptance: theme edits are predictable, serializable and isolated from live;
 advanced shape/layer tooling remains tracked in M4-01.
@@ -827,6 +895,23 @@ Images and picture logo) are **implemented-unqualified**; see
 - [ ] Bound preview work and give audience rendering priority under overload.
 - [ ] Test delayed/rejected apply, repeated Go Live, rapid navigation, live item
   removal and masked Go Live; inspect audience and operator state together.
+  scrutiny-r2 (2026-10-22): a failed Go Live of another item no longer borrows
+  the old slide index (footer, Next/Previous, surface refresh; SC2-LIVE-01), a
+  Go Live on a duplicate entry drops the original's pending cues
+  (SC2-LIVE-02), a library pick cancels a waiting Live Page Down
+  (SC2-LIVE-03); masked Go Live and Page Up under Black checked natively by
+  `scenario-s02-x11.py`. Review round 1: Normalize text size re-sends the
+  newest requested slide, so a Go Live still in preparation lands normalized
+  (SC2-LIVE-04, GPUI test). Review round 2: it rebuilds that request in
+  place, so the old-sizing cue never reaches the audience and a pending
+  double-click unmask survives (SC2-LIVE-05, GPUI tests). Windows and
+  physical display runs open.
+- [ ] Linux/X11: keep the operator's input focus when the audience window maps.
+  winit 0.30's X11 backend ignores `with_active(false)`, so Openbox focuses the
+  monitor-covering audience (found by `scripts/live-output-x11.py --kind dual`,
+  2026-10-22; Windows is unaffected). Fix in the audience window setup (for
+  example `_NET_WM_USER_TIME` 0 or a non-focus input hint) and drop
+  `--tolerate-audience-focus` from the dual run.
 
 Acceptance: Live reflects renderer acknowledgment; preview/selection never leaks
 to audience and rapid input cannot apply an older scene last. Reference records:
@@ -882,30 +967,117 @@ Acceptance: failed imports/preflight preserve current library and live scene.
 
 Depends on: M1-01, M1-09. Tests: U, I, N, P; S03.
 
-- [ ] Define committed/dirty state, bounded autosave cadence, flush/close behavior,
+Progress (autosave-recovery, 2026-10-22): **implemented-unqualified**; see
+[autosave](autosave.md). Checksummed revision files in `<profile>/Recovery/`
+(temp + fsync + rename), 2 s quiet / 10 s maximum cadence on the worker
+thread, close flush, OS profile lock with a second-instance notice, recovery
+prompt with honest loss disclosure, 20-revision / 4 MiB retention. Linux U/I,
+GPUI and `scripts/autosave-x11.py` pass; `autosave-windows.py`, EW
+observations (EW8-OBS-071..078 UNOBSERVED), real disk/ACL faults, power loss
+and the older-hardware hitch measurement are open (PP-AUTO-01..11).
+**Local profile management is not delivered here**: one implicit profile per
+library folder; the Profiles menu (Default, Profiles Manager…) stays inert.
+Create/switch/rename moved to M1-12b below (planned), so the title's "local
+profiles" is only partly covered by this ticket.
+
+- [x] Define committed/dirty state, bounded autosave cadence, flush/close behavior,
   profile location and single-instance/concurrent-open policy.
-- [ ] Commit schedule revisions transactionally without UI-thread filesystem work.
-- [ ] Implement recovery prompt and backup rotation with documented retention.
-- [ ] Inject termination before/during/after commit; recover the last committed
+  (docs/autosave.md; the editor-only `--library` mode takes no lock.)
+- [x] Commit schedule revisions transactionally without UI-thread filesystem work.
+  (Atomic file publication, not SQLite: revisions pin committed song revisions.)
+- [x] Implement recovery prompt and backup rotation with documented retention.
+  (Recovery folder copies only; portable backup/restore stays with M1-13.)
+- [x] Inject termination before/during/after commit; recover the last committed
   revision and disclose newer unsaved work rather than claiming zero loss.
-- [ ] Test disk full, locked/read-only profile, corrupt latest revision, exhausted
+  (SIGKILL child-process tests and the X11 script; TerminateProcess on Windows
+  not run.)
+- [x] Test disk full, locked/read-only profile, corrupt latest revision, exhausted
   backup budget and autosave while output is active.
+  (Injected faults and GPUI receipts; real volumes/ACLs on Windows: PP-AUTO-07.)
+- [ ] Local profile management (create, switch, rename profiles): not done;
+  owned by M1-12b.
 
 Acceptance: S03 passes and live rendering shows no autosave-induced sustained hitch.
+
+### M1-12b — Local profile management (Profiles menu)
+
+Depends on: M1-12. Tests: U, I, N. State: **planned** (split from M1-12 in
+its 2026-10-22 review; nothing built).
+
+- [ ] Observe EW 8.0.49's Profiles menu and Profiles Manager… (create,
+  rename, delete, switch, what is per profile: songs, media, schedules,
+  settings, backups) on a disposable install (EW8-OBS-077, PP-AUTO-10).
+- [ ] Profile list and chooser behind Profiles > Default / Profiles Manager…
+  (currently rendered inert, docs/operator-shell.md), with the existing
+  per-folder lock, `Recovery/` and settings reused per profile.
+- [ ] Switching profiles closes the current one like a quit (unsaved guard,
+  autosave close flush, lock release) before opening the other; a locked
+  profile shows the M1-12 already-running notice.
+- [ ] Rename/delete never touch a profile another operator holds; failure
+  paths (read-only, locked, name collision) tested.
+
+Acceptance: an operator can create, switch to and rename a local profile
+without losing the current schedule or another profile's data.
 
 ### M1-13 — Portable bundle, backup and restore
 
 Depends on: M1-09, M1-11, M1-12. Tests: U, I, N; S04.
 
-- [ ] Specify versioned manifest, snapshots, asset hashes, relative references,
+Progress (bundle-backup-restore, 2026-10-23): **implemented-unqualified**;
+see [bundle](bundle.md). Standalone schedules (`.selapackage`, File › Export
+Standalone Schedule…, opened through File › Open Schedule) and profile
+backups (`.selabackup`, Profiles › Back Up Profile… / Restore Profile…) as a
+strict ZIP subset with a version-1 manifest, on the `sela-bundle` worker.
+Linux U/I/fuzz/GPUI tests and `scripts/bundle-x11.py` PASS;
+`scripts/bundle-windows.py` NOT RUN (no Windows host); EW behavior
+unobserved (EW8-OBS-BUN-1..7, PP-BUN-01..08). Restore creates a new profile
+folder; switching to it from the menu waits for M1-12b.
+
+- [x] Specify versioned manifest, snapshots, asset hashes, relative references,
   optional embedded assets and permitted font/content redistribution.
-- [ ] Implement export/import/backup/restore with atomic publication and validation
+  (docs/bundle.md: manifest v1, schedule snapshots, SHA-256 per file and
+  image, profile-relative paths and recent schedules, images embedded by
+  default or listed; fonts never embedded (license unknowable), restricted
+  scripture left out and listed.)
+- [x] Implement export/import/backup/restore with atomic publication and validation
   before mutation; explain missing/licensed assets and version incompatibility.
-- [ ] Reject traversal, absolute paths, symlink escape, duplicate/conflicting names,
+  (Temporary + rename for exports and backups, private staging + one rename
+  for restore, whole-bundle validation before any profile change; preflight
+  report with package notes; newer manifest/library/schedule refused with
+  "update Sela".)
+- [x] Reject traversal, absolute paths, symlink escape, duplicate/conflicting names,
   oversized/expanding archives, checksum mismatches and malformed manifests.
+  (`src/bundle/tests.rs` hostile archives built byte by byte, fuzz
+  `portable`, `bundle-x11.py` "../" package; backups never follow links.)
 - [ ] Test round-trip on a fresh offline profile and transfer between machines with
   different paths, fonts and case-sensitivity; test interrupted restore.
-- [ ] Document format and recovery steps; never overwrite original data on failure.
+  (Done on Linux: two profiles at different paths with different font
+  catalogs (`tests/bundle_s04.rs`, `bundle-x11.py`), names that differ only
+  in case never replace each other (platform-independent rule), aborted
+  restore child process after 1 and 4 files. Open: a real second machine and
+  a case-insensitive NTFS volume (`bundle-windows.py`, PP-BUN-08).)
+- [x] Document format and recovery steps; never overwrite original data on failure.
+  (docs/bundle.md "Recovery steps"; exports replace only when complete,
+  restore never writes into an existing place.)
+- [ ] Operator export options: let the operator leave images out of a
+  standalone schedule (list them only). The library supports it
+  (`ExportOptions::embed_images`, tested); File › Export Standalone
+  Schedule… always embeds. Shape the dialog (or its absence) after
+  PP-BUN-01's record of EW's export options; found by review round 1.
+- [ ] Localize image errors: `images::Error`'s `Display` is English only,
+  so "The image “…” cannot be used: …" (`BundleErrImage`) and the Media
+  tab's image messages show English detail in Indonesian. Give
+  `images::Error` EN/ID `Msg` reasons as done for library and file system
+  failures (`src/operator/bundles.rs` `library_line`/`io_line`); found by
+  review round 2.
+- [ ] Videos in bundles and backups: M1-13 predates M2-02 video
+  backgrounds. A standalone schedule whose slides use a `Fill::Video`
+  background carries no video and its preflight does not list it, and a
+  profile backup leaves out `Resources/Videos` without listing it as
+  skipped (`src/bundle.rs` `profile_files`, `backgrounds`). Decide per
+  EW8-OBS-BUN-1/5 whether videos are packaged (size limits) or listed as
+  not included, then cover both in tests; found at the video-playback
+  integration (2026-10-23).
 
 Acceptance: S04 passes; portability does not imply permission to redistribute assets.
 
@@ -915,18 +1087,27 @@ Depends on: M1-05, M1-06. Tests: U, I, N, L.
 
 - [x] Pin supported OpenLyrics versions/fields and consult authoritative format docs.
   (0.8/0.9 parser core, `src/import/openlyrics.rs`; docs/import.md "OpenLyrics".)
-- [ ] Map sections, metadata, line breaks and arrangements with loss diagnostics.
+- [x] Map sections, metadata, line breaks and arrangements with loss diagnostics.
   (Parser part done: `ParsedSong` and `import::song::to_song` onto `storage::Song`,
-  with elements and repeated properties reported. Open: dropped attributes such as
-  `lines/@repeat` and `verse/@lang` are not reported yet, see docs/import.md; saving
-  through `save_song` stays with the framework.)
+  with elements and repeated properties reported. import-framework 2026-10-22:
+  dropped attributes (`lines/@repeat`, `verse/@lang`, ...) are reported as
+  `Warning::IgnoredAttribute`, and songs are saved through the `save_song` path
+  (`storage::write_song`); docs/import.md "Import framework".)
 - [x] Disable external entity/network resolution; bound input size and nesting.
-- [ ] Stage import with preview, duplicates policy and transaction/cancel behavior.
-- [ ] Test malformed XML, unknown fields, repeated labels, Unicode and partial batch
+- [x] Stage import with preview, duplicates policy and transaction/cancel behavior.
+  (import-framework 2026-10-22, implemented-unqualified: File › Import ▸ Songs… /
+  Song Folder… (UNOBSERVED placement), bounded `sela-import` worker, staged
+  preview with warnings and per-file errors, duplicate policy Skip / Import as
+  copy / Replace (UNOBSERVED best guess), one-transaction commit, cancel in every
+  phase. GPUI tests and `song-import-x11.py` PASS; Windows script not run, EW
+  behavior unobserved: parity-pending PP-IMPF-01..09.)
+- [x] Test malformed XML, unknown fields, repeated labels, Unicode and partial batch
   failure using redistributable fixtures; keep originals untouched.
   (Parser part done: malformed/hostile XML, unknown fields, repeated labels, Unicode
-  and a bounded property test. Partial batch failure and untouched originals need the
-  framework.)
+  and a bounded property test. import-framework 2026-10-22: partial batch with bad
+  files, cancel mid-import, duplicate choices, rollback on an injected failing save,
+  accented search after import and untouched source files (bytes and mtime) in
+  `src/tests/song_import.rs`; fixtures `tests/fixtures/import/batch/`.)
 
 Acceptance: supported data imports correctly and unsupported content is reported,
 not silently discarded or guessed.
@@ -939,6 +1120,14 @@ Tests: I, N, E if viable, H, P; S01–S04.
 - [ ] Prepare a complete synthetic service with arrangements, image/color themes,
   saved snapshots, keyboard navigation and expected audience slides.
 - [ ] Execute S01–S04, including failed preparation and safety controls under load.
+  scrutiny-r2 (2026-10-22): S01 and S02 are automated as
+  `scripts/scenario-s0{1,2}-x11.py` (PASS on Xvfb with the real audience
+  process; themes do not exist yet, so S01 uses a slide Color Fill) and
+  `scripts/scenario-s0{1,2}-windows.py` (NOT RUN: no Windows host). S03/S04
+  wait for M1-12/M1-13; load and hardware parts are open. bundle-backup-restore
+  (2026-10-23): S04 is automated as `tests/bundle_s04.rs` and
+  `scripts/bundle-x11.py` (PASS on Xvfb) with `scripts/bundle-windows.py`
+  NOT RUN.
 - [ ] Run a 90-minute rehearsal on an older Windows integrated-GPU laptop with
   independent projector output while searching, editing and autosaving.
 - [ ] Record frame/control timings, memory trend, recovery outcomes, manual visual
@@ -1005,6 +1194,17 @@ instructions and the work log for precise evidence and limits.
   WM_MOUSELEAVE on Windows (hover can stick after scripted pointer moves),
   and hover paint wins over the focus fill; Narrator qualification and the
   search-box gap stay with M5-03.
+  scrutiny-r2 (2026-10-22): the operator dialogs, Options and the Song
+  Editor close prompt are AccessKit Dialog nodes named with their question
+  (SC2-A11Y-01); a title change now reaches the accessibility tree with the
+  next frame instead of waiting for an unrelated redraw (SC2-A11Y-02); the
+  idle and untitled window titles are localized (SC2-I18N-01). Checked on
+  Linux over AT-SPI by `scenario-s01-x11.py`, which asserts role `dialog`
+  and the name of the unsaved-schedule prompt, Options and the Song Editor
+  close prompt ("Save changes before closing?", SC2-I18N-02). Delete song,
+  file error, preflight, Go Live missing and Update items use the same
+  `schedule-dialog` node as the unsaved prompt but their names and
+  descriptions are not asserted natively; Narrator/UIA run open (PP-SC2-05).
 
 Acceptance: another Windows operator can install and rehearse M1 from instructions.
 
@@ -1021,6 +1221,22 @@ folder, never PATH) and the `-buildconf` refusal of `--enable-gpl` and
 `--enable-nonfree` are unit-tested in `src/media/ffmpeg.rs` but not wired into
 the app: discovery off the UI thread, logging the accepted version and the
 missing-FFmpeg warning stay open. No checkbox below is satisfied yet.
+
+Progress (media-core, 2026-10-22; implemented-unqualified): pinned
+`linux64` and `win64` LGPL builds with `scripts/fetch-ffmpeg` and
+`scripts/fetch-ffmpeg.ps1` (size and SHA-256 checked, nothing unpacked on a
+mismatch); the operator locates FFmpeg once on its own thread at startup,
+logs the accepted version or every refusal, and shows a non-blocking
+"Video and audio unavailable" status for a missing, GPL or nonfree build
+(Ubuntu's GPL `/usr/bin/ffmpeg` is the negative case). Process isolation is
+decided (FFmpeg as supervised children: process group on Unix, Job Object on
+Windows; the Job Object and, on Linux, `PR_SET_PDEATHSIG` also end children
+when Sela itself dies; macOS has no such mechanism yet) and
+the CPU frames a decoder holds are bounded by count and by `frame_budget`
+bytes (enforced; review round 1 fixed a reported-only bound); a
+provisional software-decode matrix is in [media](media.md). Checkboxes stay
+open: no hardware decode, GPU/audio budgets or Windows evidence yet.
+Windows runs: parity-pending PP-MC-03.
 
 - [ ] Use the M0 interop findings to compare native/software decode options,
   codec/container coverage, GPU transfer paths and distribution obligations.
@@ -1042,16 +1258,62 @@ and accepts only absolute local file paths ([media](media.md)). The
 crafted-playlist runtime check (VAL-MEDIA-038), the Job Object supervisor and
 all decoding stay open.
 
-- [ ] Implement open/probe/preload/decode/frame delivery outside UI/render paths.
-- [ ] Bound packet/frame queues and decide drop/backpressure behavior by timestamps.
+Progress (media-core, 2026-10-22; implemented-unqualified): framework-free
+`media::decode::Decoder` (ffprobe metadata, then `ffmpeg` to raw RGBA over a
+pipe with per-frame `showinfo` timestamps) delivers `Opened`, frames and one
+terminal event through a bounded queue with backpressure, never blocking the
+caller (`try_next`), with cancellation by drop, a stall watchdog, crash and
+corrupt/unsupported/no-video classification, timestamp repair and
+`VideoFrame::background()` as a `PreparedBackground` for cues
+(`first_frame` for posters). `tests/media_decode.rs` decodes generated clips
+(VFR, odd and 1x1 sizes, short clips, unknown codec, truncated and garbage
+files) and checks VAL-MEDIA-038 (a crafted HLS/ffconcat playlist naming
+`http://` fails with a protocol error and nothing connects). Not done: frames
+are not presented anywhere, so the scene-stability, stale-frame, seek and
+text-over-video items stay open for the video-playback stream.
+
+Progress (video-playback, 2026-10-23; implemented-unqualified): video Media
+Fill per slide or song master (`Fill::Video`, codec tag 4, Repeating),
+managed profile videos (`src/videos.rs`: probe-checked import, fingerprint
+pins), pin checks off the UI thread with the image substitution rule, a
+video cue background (wire tag 2) that the renderer decodes itself, primed
+on its first frame before the cue can be accepted (failure keeps the live
+scene), presented at frame timestamps by a playback thread that writes a
+texture (no decode or upload in the redraw), shared across slides of the
+same video, looping with `-stream_loop`. Evidence: U/I/R tests
+(`audience::video::tests` on a real adapter), GPUI `tests::video_playback`,
+`scripts/video-x11.py` PASS (docs/media.md "Video backgrounds and
+playback"). Windows (`video-windows.py`, PP-VP-12), hardware decode and EW
+observations (PP-VP-01..11) are open. The boxes below are ticked from
+Linux evidence only.
+
+- [x] Implement open/probe/preload/decode/frame delivery outside UI/render paths.
+  (Preparation worker primes; `audience-video` thread presents; video-playback.)
+- [x] Bound packet/frame queues and decide drop/backpressure behavior by timestamps.
+  (Four frames per playback; late frames skipped to the newest due one.)
 - [ ] Handle cancellation, end-of-stream, bad timestamps, corrupt media and decoder
   stalls without replacing a valid scene with partially prepared content.
-- [ ] Recycle resources safely on cue switch; prevent stale frames after seek/restart.
-- [ ] Test variable frame rate, multiple resolutions, short clips, unsupported codecs
+- [x] Recycle resources safely on cue switch and Restart. (A replaced
+  playback drops its decoder; Restart reopens it.)
+- [ ] Prevent stale frames after seek (seek is not built; M2-03).
+- [x] Test variable frame rate, multiple resolutions, short clips, unsupported codecs
   and failed first-frame preparation; inspect text overlay on playing video.
-- [ ] Video slide backgrounds: a Media Fill video per slide or song master
-  (EW8-OBS-032 Volume and Media Usage, EW8-OBS-039 Videos category), with
-  the M1-05h resolution, gate and missing-file substitution.
+  (media-core decode tests; `failures_before_the_first_frame_never_give_a_playback`;
+  overlay captures in `.amp/in/artifacts/video-x11/`.)
+- [x] Video slide backgrounds: a Media Fill video per slide or song master
+  (EW8-OBS-039 Videos category), with the M1-05h resolution and the
+  missing/changed-file black substitution with a warning, the pin checked
+  again for every cue (review round 1). (Linux.)
+- [ ] Videos in the Go Live missing-file dialog and the schedule preflight
+  report (M1-05h gate; images only today: a missing video goes live black
+  with the warning, without asking first).
+- [ ] EW8-OBS-032 Volume and Media Usage for a video fill (not built).
+- [ ] FFmpeg children end when Sela itself crashes or is killed, on every
+  platform (media-core review rounds 1-2). Linux: `PR_SET_PDEATHSIG(SIGKILL)`
+  on the spawning thread, tested (`a_child_dies_when_its_parent_is_sigkilled`).
+  Windows: Job Object `KILL_ON_JOB_CLOSE`, written, not run (PP-MC-03).
+  macOS: open, no parent-death signal (needs a watchdog pipe or kqueue
+  `NOTE_EXIT` helper); only matters if macOS becomes a target.
 
 Acceptance: ready video is cue-addressable and failure leaves live stable.
 
@@ -1059,13 +1321,32 @@ Acceptance: ready video is cue-addressable and failure leaves live stable.
 
 Depends on: M2-02, M1-10, M0-02. Tests: U, I, N, H.
 
+Progress (video-playback, 2026-10-23; implemented-unqualified): Play, Pause
+and Restart from a Live pane transport row (wire kind 8 MEDIA on the Safety
+lane), the renderer's reports (wire kind 9 STATUS: state, presented frame
+time, length) shown in that row, looping (Repeating, SRC-10) and play-once
+holding the last frame, masks never pausing a video (best guess). Rules are
+UNOBSERVED best guesses (EW8-OBS-VP-4..10); seek, a start position and stop
+are not built. Evidence: `playback::tests`, `tests/output_process.rs`,
+GPUI `tests::video_playback`, `scripts/video-x11.py`.
+
 - [ ] Implement observed play/pause/stop/seek, looping, start position and replay rules.
-- [ ] Specify preview versus live transport ownership and behavior on Go Live.
+- [x] Specify preview versus live transport ownership and behavior on Go Live.
+  (Only Live plays; Preview tiles show the first frame; a new video starts
+  at its first frame when its cue applies; docs/media.md.)
 - [ ] Complete M0-08 video cases and specify audio transport intent for
   Black/Clear/Logo continuation/restore; actual audio qualification belongs to M2-04.
 - [ ] Test seek while loading, repeated toggles, loop boundary, end-of-stream under
   mask, rapid cue change and failed seek while previous scene is active.
-- [ ] Inspect transport feedback against actual presented position, not only requests.
+- [ ] Masks never wait behind a transport command: today both share the
+  one-command Safety lane, so Black/Clear/Logo pressed while Pause/Play/
+  Restart is in flight waits one round trip (review round 1); a lane of
+  its own needs a wire and renderer acceptance change.
+- [ ] Keyboard routes for Play/Pause and Restart once EW's media shortcuts
+  are observed (PP-VP-07; buttons only today).
+- [x] Inspect transport feedback against actual presented position, not only requests.
+  (STATUS carries the presented frame's time; `video-x11.py` checks Paused
+  holds the picture and Restart shows the first frames.)
 
 Acceptance: media controls match observations and cannot leak preview playback
 into audience/audio unexpectedly.
@@ -1073,6 +1354,18 @@ into audience/audio unexpectedly.
 ### M2-04 — Audio clock, routing and synchronization
 
 Depends on: M2-02, M2-03. Tests: U, I, H, P.
+
+Progress (video-playback, 2026-10-23; feasible part, implemented-unqualified):
+the audio of a background video plays in the renderer process from a second
+supervised FFmpeg decode into a bounded lock-free ring (500 ms); the video
+is the master clock and the output callback (atomics and the ring only)
+keeps within 40 ms of it, following Pause/Play/Restart, loop and the end;
+masks never mute it (best guess, EW8-OBS-VP-13). Windows opens the default
+device through `cpal` 0.18.2; elsewhere a null output consumes in real time.
+The report's audio state shows in the Live transport row. Headless tests
+only (unit, real decode, real-GPU playback with the null output, GPUI,
+`scripts/video-x11.py`); no speakers, capture measurement, Windows run,
+volume, mute, fades, routing, device loss or audio-only items (PP-VP-13).
 
 - [ ] Define master clock, drift correction, mute/volume/fade and output-device routing.
 - [ ] Implement audio-only resources and observed playlist/background-audio behavior.
@@ -1087,6 +1380,18 @@ silent/headless tests alone do not qualify audio.
 ### M2-05 — Thumbnails, preload scheduler and cache budgets
 
 Depends on: M2-02, M1-04, M1-11. Tests: U, I, P.
+
+Progress (video-playback, 2026-10-23; basic slice, implemented-unqualified):
+video posters and pin checks run on latest-wins worker threads with
+in-flight deduplication (`videos::Lookups`), cached in a byte- and
+entry-bounded LRU (16 MiB / 256 posters) keyed by content identity, so a
+changed file gets new keys and a rescan drops stale posters and their GPUI
+atlas sprites. The live video never waits for them (it decodes in the
+renderer process). Videos-list posters follow the rows scrolled into
+view (at most 64 wanted at once); slide posters follow their pin checks.
+Open: next-cue preload, the shared preparation scheduler, GPU and disk
+budgets, a virtualized Videos list, scrolling/import storm and allocation
+profiling.
 
 - [ ] Share bounded preparation ownership where appropriate; prioritize live-ready
   cues over visible previews and background thumbnails.
@@ -1150,6 +1455,17 @@ measured configuration, not inferred from 1080p success.
 
 Depends on: M2-08. Tests: U, I, R, N, H.
 
+Progress (stage-display, 2026-10-22, **implemented-unqualified**; see
+`docs/stage-display.md`): a second renderer process `sela --stage` with its
+own supervisor, epoch and receipts; explicit routing by cue kind (wire kind 7
+STAGE; each renderer refuses the other kind; masks and logo audience-only);
+Options › Foldback (enable, monitor, clock, next) whose Automatic monitor is
+never the audience's and which refuses to start without a free monitor;
+failure isolation both ways tested (GPUI + X11 kill). Audience and stage only:
+alternate/stream/house outputs (M3-03), per-output themes, mixed DPI/refresh,
+hotplug/topology reorder and Windows/physical routes remain open, so no box
+below is ticked yet (the isolation/bounds box is done for audience+stage only).
+
 - [ ] Model audience, stage, alternate/stream and house outputs with stable identity,
   independent geometry/themes and explicit routing.
 - [ ] Define which cue/control state is shared versus output-specific from observations.
@@ -1165,11 +1481,23 @@ stage information; each physical route is qualified explicitly.
 
 Depends on: M3-01, M1-06. Tests: U, R, N, H.
 
+Progress (stage-display, 2026-10-22, **implemented-unqualified**; see
+`docs/stage-display.md`): stage composition with current slide, deterministic
+next slide/next item/end, header label, renderer-drawn clock and a private
+stage message line; Options switches for clock and next area. EW content and
+layout are UNOBSERVED best guesses (EW8-OBS-STG-1..7, PP-STG-01..09). Open:
+EW audit, safe-area/font/size settings (only Sela's fixed layout exists),
+chords/notes (later scope, not started), physical viewing-distance check.
+
 - [ ] Audit observed current/next content, labels, notes, clock and stage layout controls.
 - [ ] Implement stage-specific composition and safe-area/font/readability settings.
 - [ ] Add tracked Sela requirements for chords/notes as explicit extensions where
   not established in the pinned reference, with stable arrangement association.
-- [ ] Test last slide, repeated chorus, empty next item and rapid arrangement change.
+- [x] Test last slide, repeated chorus, empty next item and rapid arrangement change.
+  (`stage::tests`, GPUI `the_last_slide_points_at_the_next_schedule_item` and
+  `arrangement_changes_and_repeated_choruses_keep_next_deterministic`, 2026-10-22;
+  the latter switches the live entry's arrangement seven times in a row,
+  six of them before the previous rebuild settled, review round 2026-10-23.)
 - [ ] Verify stage-only information never enters audience/stream renders or bundles
   intended to exclude private notes; inspect at actual stage viewing distance.
 
@@ -1206,6 +1534,17 @@ Acceptance: only intended recipients see an applied alert; stale alerts do not r
 ### M3-05 — Clocks, countdowns and service timers
 
 Depends on: M3-02, M3-04. Tests: U, R, N, H.
+
+Owner scope (Mission 2026-10): only the stage clock. Progress (stage-display,
+2026-10-22): the stage process draws local time of day ("HH:MM", chrono
+`Local`) on its own clock worker, redrawn on the minute and independent of the
+operator UI (it keeps running when the operator stalls or exits). The clock
+worker's tick (`clock_step`) takes the clock source and upload as parameters
+and has fake-clock unit tests (minute change, full-slot retry, new frame,
+stale redraw dropped, upload failure ends the stage process; 2026-10-23).
+Countdowns, service timers, audience clocks, midnight/wall-clock-correction
+and suspension tests and the EW clock audit (PP-STG-04) are not started; no
+box below is ticked.
 
 - [ ] Audit timer modes/start/pause/reset/expiry and output visibility against reference.
 - [ ] Use monotonic elapsed time and explicit wall-clock/timezone conversion where needed.
@@ -1300,14 +1639,25 @@ Acceptance: timed announcements remain predictable under edit/prepare load.
 
 Depends on: M1-01, M1-13. Tests: U, I, L.
 
-- [ ] Define translation metadata, canon/book/verse identity, versification and
+- [x] Define translation metadata, canon/book/verse identity, versification and
   provider capabilities without assuming all translations share verse numbering.
-- [ ] Establish a lawful bundled test translation or synthetic corpus and a
+  (scripture stream 2026-10-22: `TranslationInfo`, `VerseId`, per-translation
+  `Inventory` built from the verses present; docs/scripture.md.)
+- [x] Establish a lawful bundled test translation or synthetic corpus and a
   rights-aware import/provider mechanism; no scraped proprietary Bible databases.
-- [ ] Support offline installed texts, integrity/version checks and index rebuild.
-- [ ] Test missing books, differing versification, Unicode, corrupt provider files
-  and restricted export/redistribution flags.
-- [ ] Document translation availability and permissions independently from UI parity.
+  (Public-domain KJV and WEB from seven1m/open-bibles at a pinned commit with
+  SHA-256s; OSIS/USFX/Zefania import marked restricted; synthetic test texts.)
+- [x] Support offline installed texts, integrity/version checks and index rebuild.
+  (One SQLite file per translation: application id, format version,
+  quick_check, verse count and content hash; damaged FTS index rebuilt;
+  damaged bundled files rebuilt from the bundle; worker thread.)
+- [x] Test missing books, differing versification, Unicode, corrupt provider files
+  and restricted export/redistribution flags. (Unit and GPUI tests; the
+  restricted flag travels with schedule snapshots; M1-13 (2026-10-23) leaves
+  restricted items out of standalone schedules and lists them.)
+- [x] Document translation availability and permissions independently from UI parity.
+  (docs/scripture.md "Bundled translations and provenance".) State:
+  implemented-unqualified (no Windows run; work-log record "scripture").
 
 Acceptance: a functional offline provider path; "90+ translations" cannot be
 claimed from a generic provider interface without licensed content.
@@ -1322,11 +1672,25 @@ Depends on: M4-03, M1-04, M1-08, M1-10. Tests: U, I, R, N.
   Parser core only (`src/scripture/`, docs/scripture.md): EN/ID names and aliases,
   ranges, cross-chapter ranges, chapter checks, completion; implemented-unqualified
   until the Scriptures tab uses it and EW completion is observed (VAL-BIBLE-010).
+  The Scriptures tab uses it since 2026-10-22 (EN/ID error wording); EW
+  completion is still unobserved (PP-BIB-01).
 - [ ] Add translation selection, verse/reference labels, theme/pagination and
-  schedule snapshots respecting content permissions.
-- [ ] Test cross-chapter ranges, nonconsecutive verses, translation switches,
+  schedule snapshots respecting content permissions. Progress (scripture
+  stream 2026-10-22): translation picker, per-slide reference footer,
+  readable pagination (44-character lines, 6 lines a slide), pinned schedule
+  snapshots with the redistribution flag (`.selaschedule` version 5,
+  renumbered from 4 at integration) and in autosave revisions (recovery
+  version 3) are
+  implemented-unqualified; a scripture theme (EW Scripture Theme) is open.
+- [x] Test cross-chapter ranges, nonconsecutive verses, translation switches,
   mismatched canon, empty search and long passages with readable splitting.
+  (`tests::scripture` GPUI tests and scripture unit tests.)
 - [ ] Inspect browser/editor/output, including malformed reference recovery.
+  Progress: Linux X11 captures inspected (`scripture-x11.py` PASS, including
+  `.selaschedule` v5 (then v4) save/reopen through the portal dialogs since review
+  round 2); the 1080p reference strip is checked natively on Linux by
+  `scripture-x11.py --kind dual` (strip at [748, 988, 1170, 1042]); the
+  Windows run is open (PP-BIB-09).
 
 Acceptance: selected verses appear in intended order with correct translation
 and references; historical support documentation alone is not UX verification.
@@ -1375,9 +1739,18 @@ Depends on: M1-13, M1-14, M4-06. Tests: U, I, N, L.
   - [ ] OpenSong song files: parser core `import::opensong` is
     implemented-unqualified (field mapping and line rules in docs/import.md);
     framework hookup, staged preview and native VAL-IMPORT-005 remain.
+    import-framework 2026-10-22: hooked into the M1-14 framework (`.xml`
+    without an OpenLyrics root, or no extension with XML content), staged
+    preview and commit done; Linux native run `song-import-x11.py` PASS
+    (extensionless OpenSong file with a repeated `[C]` tag). Open: Windows
+    `song-import-windows.py`, EW comparison PP-IMPF-02.
   - [ ] ChordPro files: parser core `import::chordpro` is
     implemented-unqualified (directive table in docs/import.md); framework
     hookup, staged preview and native VAL-IMPORT-006 remain.
+    import-framework 2026-10-22: hooked in by extension (`.cho`, `.chopro`,
+    `.chordpro`, `.crd`, `.pro`), staged preview and commit done; Linux
+    native run `song-import-x11.py` PASS. Open: Windows
+    `song-import-windows.py`, EW comparison PP-IMPF-02.
 - [ ] Implement read-only source access, staged preview and transactional import;
   do not bypass encryption/DRM or mutate the original installation's database.
 - [ ] Test cross-version, malformed, partially missing assets and duplicate IDs;
@@ -1385,10 +1758,31 @@ Depends on: M1-13, M1-14, M4-06. Tests: U, I, N, L.
 - [ ] Document blocked formats and provide permitted interchange alternatives.
 - [ ] EasyWorship 6-8 library (mission feature `easyworship-library-import`,
   VAL-IMPORT-008..011, 017). Song words RTF parser `import::ew_rtf`:
-  implemented-unqualified (2026-10-22, both dialects, docs/import.md). Open:
-  read-only `Songs.db`/`SongWords.db` copies with `UTF8_U_CI`, metadata
-  mapping, missing `word` row, `song_uid` duplicates, staged UI, source
-  hashes before/after (native), and EW8 non-ASCII words (unobserved).
+  implemented-unqualified (2026-10-22, both dialects, docs/import.md).
+  ew-library-import 2026-10-23: library importer `import::ew_library`
+  implemented-unqualified: File › Import ▸ EasyWorship Library… (folder
+  chooser, UNOBSERVED placement), private copies of `Songs.db`/`SongWords.db`
+  (plus `-wal`/`-journal`) opened `query_only` with `UTF8_U_CI` registered,
+  metadata mapping (title, author, copyright, administrator, CCLI from
+  `vendor_id`; description/tags reported as not imported), `ew_rtf::parse`
+  per newest `word` row, missing `word` row as a failed row, `song_uid`
+  duplicates inside an import, re-import as library duplicates, the
+  framework's staged preview and one-transaction commit. Sources hashed
+  before/after in unit, GPUI and native tests. Linux native
+  `ew-import-x11.py` PASS. Open: every schema detail is an UNOBSERVED guess
+  to check on a copy of the owner's EW 8.0.49 library (PP-EWL-01..08),
+  Windows `ew-import-windows.py` (NOT RUN, PP-EWL-07), EW8 non-ASCII words
+  (PP-IMP-01/PP-EWL-08).
+  - [ ] Libraries over 500 songs: implemented-unqualified (review round
+    2026-10-23). At most 500 songs per import, songs whose titles are not
+    in Sela's library first, so importing again continues with the rest
+    (tested on a synthetic 503-song library); word rows read in one pass
+    (no `word.song_id` index assumed; 500 of 20,000 songs staged in 0.88 s,
+    Linux dev profile). Open: a run on the owner's real library over 500
+    songs (PP-EWL-08); a single preview of more than 500 rows (a larger
+    virtualized preview and commit) is not offered.
+  - [ ] Song description and tags/keywords: Sela songs have no fields for
+    them, so they are reported, not imported.
 
 Acceptance: each claimed importer has a versioned corpus and fidelity report;
 the parent is not closed by one generic parser.
@@ -1506,15 +1900,32 @@ shortcuts, unbounded caches, or skipped work masquerading as optimization.
 
 Depends on: M1-13, M4-06, M4-07, M4-08, M4-09. Tests: U, I, L.
 
-- [ ] Threat-model archives, documents, media, network clients, browser surfaces,
+- [x] Threat-model archives, documents, media, network clients, browser surfaces,
   provider credentials, diagnostics and update/install paths.
+  (fuzz-audit, 2026-10-22: docs/security.md entry-point table; surfaces not
+  built yet are recorded as requirements for their tickets.)
 - [ ] Fuzz real parsers and state-machine sequences with useful seeded corpora,
   resource limits and invariants; retain minimized regression cases.
+  (fuzz-audit, 2026-10-22: every parser and decoder of untrusted input has a
+  seeded suite in src/fuzz/ with a retained corpus in tests/fixtures/fuzz/;
+  review round 1, 2026-10-23: extended to the merged integration code:
+  OSIS/USFX/Zefania modules, bundles and translation files (`bibles`),
+  autosave revisions (`recovery`), themes, v5 schedules, ffprobe reports and
+  showinfo lines, stage frames and settings; state-machine sequences
+  (delivery, schedule editing) and the future EW library importer remain.)
 - [ ] Audit dependency advisories/licenses, unsafe boundaries, secret storage and
   export permissions; remove unused capabilities and unresolved high-risk paths.
+  (fuzz-audit, 2026-10-22: deny.toml + scripts/audit.sh pass with six
+  documented unmaintained notices; unsafe limited to justified sites under
+  `deny(unsafe_code)` (U-01..U-04 after merging the FFmpeg supervisor, review
+  round 1); SQLite hardened on every connection incl. scripture translation
+  files. Export permissions and secret storage wait for M5-05 and the
+  providers.)
 - [ ] Test interruption/disk-full/corruption across each durable write boundary,
   including imports, migrations, backup restore and cache publication.
-- [ ] Document findings, fixes and explicitly accepted residual risks.
+- [x] Document findings, fixes and explicitly accepted residual risks.
+  (fuzz-audit, 2026-10-22: docs/security.md SEC-01..08 and residual risks;
+  review round 1, 2026-10-23: SEC-09..13.)
 
 Acceptance: meaningful malformed/adversarial inputs exercise behavior beyond
 input rejection; no high-risk unresolved issue hidden by green happy-path tests.
@@ -1597,6 +2008,10 @@ Depends on: M1-16, M5-02, M5-04. Tests: I, N, H, L; S08.
 
 - [ ] Produce reproducible versioned packages for the declared release platforms,
   checksums, dependency notices and AGPL source/build availability.
+  (fuzz-audit, 2026-10-22: reproducible THIRD-PARTY-NOTICES generated by
+  scripts/third_party_notices.py and checked by scripts/audit.sh, which also
+  runs scripts/test_third_party_notices.py; packages, checksums and the FFmpeg
+  source offer remain.)
 - [ ] Test clean standard-user install, offline launch, upgrade from supported
   versions, rollback/failure recovery, reinstall and safe uninstall via S08.
 - [ ] Establish signing/notarization and secure credentials for applicable platforms;

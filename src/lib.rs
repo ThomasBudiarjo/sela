@@ -1,10 +1,17 @@
 //! Framework-independent preparation and presentation contracts.
+// Unsafe code is listed and justified in docs/security.md; new unsafe code
+// needs an explicit allow and an entry there.
+#![deny(unsafe_code)]
 pub mod arrangement;
 pub mod arrangement_edit;
+pub mod autosave;
 pub mod background;
+pub mod bundle;
 pub mod delivery;
 pub mod fonts;
 pub mod format;
+#[cfg(test)]
+mod fuzz;
 pub mod i18n;
 pub mod images;
 pub mod import;
@@ -13,8 +20,10 @@ pub mod masks;
 pub mod media;
 pub mod output;
 pub mod pane_layout;
+pub mod playback;
 pub mod preflight;
 pub mod preparation;
+pub mod profile;
 pub mod scene;
 pub mod schedule;
 pub mod schedule_file;
@@ -23,6 +32,9 @@ pub mod search;
 pub mod settings;
 pub mod slides;
 pub mod song_order;
+pub mod stage;
 pub mod storage;
+pub mod theme;
 pub mod timer;
 pub mod transport;
+pub mod videos;

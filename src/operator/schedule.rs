@@ -269,11 +269,18 @@ impl Operator {
     /// Focuses one entry (Preview follows) without touching the selection set.
     fn focus_entry(&mut self, id: EntryId) {
         if let Some(entry) = self.schedule.get(id) {
+            let scripture = entry.scripture.clone();
             self.selected_entry = Some(id);
             self.selected_song = Some(entry.version);
             self.live_on_load = None;
             self.live_entry_on_load = None;
             self.schedule_message = None;
+            // A scripture item carries its own verses: Preview shows them
+            // at once, with no library read.
+            if let Some(snapshot) = scripture {
+                self.selected_song = None;
+                self.preview_snapshot(id, &snapshot);
+            }
         }
     }
 
@@ -364,13 +371,27 @@ impl Operator {
 
     /// Quit and window-close guard: unsaved schedule changes are confirmed
     /// first, and a save in progress finishes before the window closes.
+    /// An open import preview (reading, checking, review or commit) is
+    /// finished or cancelled first: its state lives in that dialog, and an
+    /// Unsaved prompt must never replace it (UNOBSERVED best guess,
+    /// EW8-OBS-IMP-7, PP-IMPF-09).
     pub(crate) fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.saving_file() {
+        if self.song_import.holds_dialog() {
+            let message: String = t!(Msg::ImportQuitBlocked).into();
+            if self.dialog == Some(Dialog::ImportSongs) {
+                self.song_import.quit_note = Some(message);
+            } else {
+                self.song_message = Some((message, true));
+            }
+        } else if self.saving_file() {
             self.schedule_message = Some(t!(Msg::SavingWaitDone).into());
+        } else if self.bundles.running() {
+            // Cancel is on the working dialog; nothing half-written stays.
+            self.schedule_message = Some(t!(Msg::BundleBusy).into());
         } else if self.schedule.is_dirty() {
             self.open_dialog(Dialog::Unsaved(Then::Quit), window, cx);
         } else {
-            return self.settings_allow_close(window, cx);
+            return self.allow_close(window, cx);
         }
         cx.notify();
         false
@@ -473,12 +494,13 @@ impl Operator {
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                            this.schedule_rows[index].focus(window, cx);
                             if !this.is_entry_selected(id) {
                                 this.select_entry(id);
                             }
-                            this.item_menu = Some((id, event.position));
-                            cx.notify();
+                            // The menu takes the keys and the focus, not the row
+                            // (SC2-FOCUS-02).
+                            window.prevent_default();
+                            this.open_item_menu(index, id, event.position, window, cx);
                         }),
                     )
                     .on_drag(EntryDrag(id), move |_, _, _, cx| {
@@ -617,6 +639,7 @@ impl Operator {
                     .truncate()
                     .child(message)
             }))
+            .children(self.autosave_footer())
             .when(self.assets.needs_review(), |d| {
                 d.child(
                     div()

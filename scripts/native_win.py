@@ -65,7 +65,7 @@ gdi32.DeleteDC.argtypes = [w.HDC]
 WNDENUMPROC = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
 user32.EnumWindows.argtypes = [WNDENUMPROC, w.LPARAM]
 
-VK = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "tab": 0x09, "enter": 0x0D, "space": 0x20, "f4": 0x73,
+VK = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "tab": 0x09, "enter": 0x0D, "space": 0x20, "f4": 0x73, "f10": 0x79,
       "pagedown": 0x22, "up": 0x26, "down": 0x28, "delete": 0x2E, "backspace": 0x08, "home": 0x24,
       "end": 0x23, "left": 0x25, "right": 0x27, "escape": 0x1B}
 KEYEVENTF_KEYUP = 0x0002

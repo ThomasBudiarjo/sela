@@ -5,6 +5,7 @@ use crate::{
         Acknowledgment, Counters, Delivery, DeliveryError, Epoch, Lane, LiveState, Outcome, Stamp,
     },
     masks::{Layer, Submission, SubmissionState, Submissions, UNTAGGED},
+    playback::{MediaAction, MediaStatus},
     scene::{ContentVersion, Extent, PreparedCue, RendererCapabilities},
     transport::{Frame, PipeWorkers},
 };
@@ -102,6 +103,12 @@ pub struct Supervisor {
     wanted_logo: Option<Arc<PreparedCue>>,
     logo_in_flight: Option<(Stamp, ContentVersion)>,
     logo_rejected: Option<(ContentVersion, DeliveryError)>,
+    /// Video transport (M2-03): one wanted and one in-flight command on the
+    /// Safety lane after masks, and the renderer's latest report.
+    wanted_media: Option<MediaAction>,
+    media_in_flight: Option<(Stamp, MediaAction)>,
+    media_rejected: Option<(MediaAction, DeliveryError)>,
+    media_status: Option<MediaStatus>,
 }
 
 impl Supervisor {
@@ -138,6 +145,10 @@ impl Supervisor {
             wanted_logo: None,
             logo_in_flight: None,
             logo_rejected: None,
+            wanted_media: None,
+            media_in_flight: None,
+            media_rejected: None,
+            media_status: None,
         };
         if spawned.is_err() {
             this.lose(Loss::Spawn);
@@ -208,6 +219,36 @@ impl Supervisor {
     /// Most recent logo rejection; the prior logo image remains in use.
     pub fn logo_rejected(&self) -> Option<(ContentVersion, DeliveryError)> {
         self.logo_rejected
+    }
+
+    /// The renderer's report about the confirmed live scene's video; `None`
+    /// without one, or while the report is about another scene.
+    pub fn media_status(&self) -> Option<MediaStatus> {
+        let LiveState::Confirmed(live) = self.live() else {
+            return None;
+        };
+        self.media_status.filter(|status| status.scene == live)
+    }
+    /// A transport command not yet acknowledged (wanted or in flight).
+    pub fn media_pending(&self) -> Option<MediaAction> {
+        self.wanted_media
+            .or(self.media_in_flight.map(|(_, action)| action))
+    }
+    /// The most recent rejected transport command (no video applied, or
+    /// the renderer refused it); the video keeps its state.
+    pub fn media_rejected(&self) -> Option<(MediaAction, DeliveryError)> {
+        self.media_rejected
+    }
+    /// Queues a transport command for the live video; a newer command
+    /// replaces one not yet sent.
+    pub fn set_media(&mut self, action: MediaAction, now: Instant) -> Result<(), Refusal> {
+        if !matches!(self.status, Status::Connected { .. }) {
+            return Err(Refusal::NotConnected);
+        }
+        self.media_rejected = None;
+        self.wanted_media = Some(action);
+        self.pump(now);
+        Ok(())
     }
 
     /// Accepted while starting, so the operator's masks carry into a new
@@ -289,6 +330,11 @@ impl Supervisor {
             self.rejected,
             (self.mask(), self.mask_pending(), self.mask_rejected),
             (self.logo(), self.logo_pending(), self.logo_rejected),
+            (
+                self.media_status(),
+                self.media_pending(),
+                self.media_rejected,
+            ),
         )
     }
 
@@ -367,6 +413,12 @@ impl Supervisor {
         } else if frame.is_acknowledgment() {
             let ack = frame.into_acknowledgment().map_err(|_| Loss::Protocol)?;
             self.acknowledge(ack, now)?;
+        } else if frame.is_status() {
+            let (epoch, status) = frame.into_status().map_err(|_| Loss::Protocol)?;
+            if epoch != self.epoch {
+                return Err(Loss::Protocol);
+            }
+            self.media_status = Some(status);
         } else {
             return Err(Loss::Protocol);
         }
@@ -402,6 +454,11 @@ impl Supervisor {
         {
             self.logo_in_flight = None;
             settle(&mut self.logo_rejected, version, ack.outcome);
+        } else if let Some((stamp, action)) = self.media_in_flight
+            && stamp == ack.stamp
+        {
+            self.media_in_flight = None;
+            settle(&mut self.media_rejected, action, ack.outcome);
         }
         Ok(())
     }
@@ -414,11 +471,24 @@ impl Supervisor {
         let logo_busy = self.wanted_logo.is_some() || self.logo_in_flight.is_some();
         // A Logo mask waits for the logo image so the renderer can draw it.
         if self.mask_in_flight.is_none()
+            && self.media_in_flight.is_none()
             && !(self.wanted_mask == Some(Layer::Logo) && logo_busy)
             && let Some(layer) = self.wanted_mask.take()
         {
             match self.delivery.submit_mask(layer, now, deadline) {
                 Ok(stamp) if self.send(now) => self.mask_in_flight = Some((stamp, layer)),
+                Ok(_) => return,
+                Err(error) => return self.lose(Loss::Delivery(error)),
+            }
+        }
+        // Transport commands share the Safety lane after masks.
+        if self.mask_in_flight.is_none()
+            && self.wanted_mask.is_none()
+            && self.media_in_flight.is_none()
+            && let Some(action) = self.wanted_media.take()
+        {
+            match self.delivery.submit_media(action, now, deadline) {
+                Ok(stamp) if self.send(now) => self.media_in_flight = Some((stamp, action)),
                 Ok(_) => return,
                 Err(error) => return self.lose(Loss::Delivery(error)),
             }
@@ -474,6 +544,9 @@ impl Supervisor {
         self.mask_in_flight = None;
         self.wanted_logo = None;
         self.logo_in_flight = None;
+        self.wanted_media = None;
+        self.media_in_flight = None;
+        self.media_status = None;
         self.spawning = None;
         self.pipes = None;
         if let Some(child) = self.child.take() {

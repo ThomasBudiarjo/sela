@@ -4,8 +4,11 @@
 //! that never match an entry from an earlier schedule in the same session.
 //! The schedule's document is a `.selaschedule` file (see `schedule_file`).
 use crate::arrangement::VariantId;
+use crate::scripture::Snapshot;
 use crate::storage::{MAX_ITEMS, Version};
+use crate::theme::Theme;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EntryId(u64);
@@ -19,13 +22,35 @@ pub struct Entry {
     /// belongs to the entry, never to the library song, so a duplicate can
     /// differ from its original.
     pub arrangement: Option<VariantId>,
+    /// The entry's theme snapshot (M1-08). `None` until the entry is first
+    /// shown or saved, when the song's library theme is captured; later
+    /// library theme edits never reach it until a theme is applied again.
+    pub theme: Option<ItemTheme>,
+    /// A scripture item's pinned verses (M4-04); `None` for a song. Its
+    /// `version` is `Snapshot::version`, which no library song has.
+    pub scripture: Option<Arc<Snapshot>>,
 }
+
+/// A schedule entry's own copy of the theme it renders with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemTheme {
+    pub theme: Theme,
+    /// Applied to the item by the operator; otherwise captured from the
+    /// song's library theme. Only explicit themes make the schedule dirty.
+    pub explicit: bool,
+}
+
+/// One entry of an autosaved revision to restore: pin, title, theme
+/// snapshot and a scripture item's verses (see `Schedule::restore`).
+pub type RestoredItem = (Pin, String, Option<ItemTheme>, Option<Arc<Snapshot>>);
 
 /// What a saved schedule remembers about one entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pin {
     pub version: Version,
     pub arrangement: Option<VariantId>,
+    /// `Theme::stamp` of an explicitly applied theme.
+    pub theme: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +124,38 @@ impl Schedule {
                 version,
                 title,
                 arrangement: None,
+                theme: None,
+                scripture: None,
+            },
+        );
+        Ok(id)
+    }
+
+    /// Inserts a scripture item pinning `snapshot`, titled with its
+    /// reference, before the entry at `at` (past the end appends).
+    pub fn insert_scripture(
+        &mut self,
+        at: usize,
+        snapshot: Snapshot,
+        title: String,
+    ) -> Result<EntryId, Error> {
+        if !snapshot.valid() {
+            return Err(Error::Invalid);
+        }
+        if self.entries.len() >= MAX_ITEMS {
+            return Err(Error::Full);
+        }
+        let id = self.allocate();
+        let at = at.min(self.entries.len());
+        self.entries.insert(
+            at,
+            Entry {
+                id,
+                version: snapshot.version(),
+                title,
+                arrangement: None,
+                theme: None,
+                scripture: Some(Arc::new(snapshot)),
             },
         );
         Ok(id)
@@ -234,6 +291,43 @@ impl Schedule {
         }
     }
 
+    /// Applies `theme` to every entry in `ids` as an explicit snapshot, or
+    /// with `None` drops their snapshots so each captures its song's library
+    /// theme again when next shown. Returns how many entries changed.
+    pub fn set_theme(&mut self, ids: &[EntryId], theme: Option<&Theme>) -> usize {
+        let wanted = theme.map(|theme| ItemTheme {
+            theme: theme.clone(),
+            explicit: true,
+        });
+        let mut changed = 0;
+        // Scripture items show the built-in look: themes apply to songs only
+        // so far (M1-08, M4-04).
+        for entry in self
+            .entries
+            .iter_mut()
+            .filter(|e| ids.contains(&e.id) && e.scripture.is_none())
+        {
+            if entry.theme != wanted {
+                entry.theme = wanted.clone();
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Records `theme` as the entry's captured snapshot unless it already
+    /// has one. Returns the snapshot the entry renders with.
+    pub fn capture_theme(&mut self, id: EntryId, theme: &Theme) -> Option<&ItemTheme> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|e| e.id == id && e.scripture.is_none())?;
+        Some(entry.theme.get_or_insert_with(|| ItemTheme {
+            theme: theme.clone(),
+            explicit: false,
+        }))
+    }
+
     /// One step towards the start (`up`) or the end. False at the boundary.
     pub fn move_by(&mut self, id: EntryId, up: bool) -> bool {
         match self.index(id) {
@@ -267,6 +361,11 @@ impl Schedule {
         self.entries.iter().map(|e| Pin {
             version: e.version,
             arrangement: e.arrangement,
+            theme: e
+                .theme
+                .as_ref()
+                .filter(|t| t.explicit)
+                .map(|t| t.theme.stamp()),
         })
     }
 
@@ -277,23 +376,52 @@ impl Schedule {
         self.baseline = pins;
     }
 
-    /// Replaces the contents with a schedule file's items (pin, song title),
-    /// in file order.
-    pub fn open(&mut self, path: PathBuf, items: Vec<(Pin, String)>) -> Result<(), Error> {
-        if items.len() > MAX_ITEMS {
+    /// Replaces the contents with a schedule file's song items (pin, song
+    /// title, theme snapshot), in file order. A pin's theme stamp is derived
+    /// from the snapshot.
+    pub fn open(
+        &mut self,
+        path: PathBuf,
+        items: Vec<(Pin, String, Option<ItemTheme>)>,
+    ) -> Result<(), Error> {
+        self.open_items(
+            path,
+            items
+                .into_iter()
+                .map(|(pin, title, theme)| (pin, title, theme, None))
+                .collect(),
+        )
+    }
+
+    /// `open` for a file that may hold scripture items: each comes with its
+    /// snapshot, whose version must be the pin's.
+    pub fn open_items(
+        &mut self,
+        path: PathBuf,
+        items: Vec<(Pin, String, Option<ItemTheme>, Option<Snapshot>)>,
+    ) -> Result<(), Error> {
+        if items.len() > MAX_ITEMS
+            || items.iter().any(|(pin, _, _, snapshot)| {
+                snapshot
+                    .as_ref()
+                    .is_some_and(|s| !s.valid() || s.version() != pin.version)
+            })
+        {
             return Err(Error::Invalid);
         }
         self.document += 1;
-        self.baseline = items.iter().map(|(pin, _)| *pin).collect();
         self.entries = items
             .into_iter()
-            .map(|(pin, title)| Entry {
+            .map(|(pin, title, theme, snapshot)| Entry {
                 id: self.allocate(),
                 version: pin.version,
                 title,
                 arrangement: pin.arrangement,
+                theme,
+                scripture: snapshot.map(Arc::new),
             })
             .collect();
+        self.baseline = self.pins().collect();
         self.path = Some(path);
         Ok(())
     }
@@ -304,6 +432,47 @@ impl Schedule {
         self.entries.clear();
         self.path = None;
         self.baseline.clear();
+    }
+
+    /// Pins as last saved or opened (empty while untitled).
+    pub fn baseline(&self) -> &[Pin] {
+        &self.baseline
+    }
+
+    /// Replaces the contents with an autosaved revision (M1-12): its entries,
+    /// its file and that file's baseline, so edits that were not saved to
+    /// the file stay unsaved. Fresh entry IDs, like `open`.
+    pub fn restore(
+        &mut self,
+        path: Option<PathBuf>,
+        items: Vec<RestoredItem>,
+        baseline: Vec<Pin>,
+    ) -> Result<(), Error> {
+        if items.len() > MAX_ITEMS
+            || baseline.len() > MAX_ITEMS
+            || items.iter().any(|(pin, _, _, snapshot)| {
+                snapshot
+                    .as_ref()
+                    .is_some_and(|s| !s.valid() || s.version() != pin.version)
+            })
+        {
+            return Err(Error::Invalid);
+        }
+        self.document += 1;
+        self.baseline = baseline;
+        self.entries = items
+            .into_iter()
+            .map(|(pin, title, theme, snapshot)| Entry {
+                id: self.allocate(),
+                version: pin.version,
+                title,
+                arrangement: pin.arrangement,
+                theme,
+                scripture: snapshot,
+            })
+            .collect();
+        self.path = path;
+        Ok(())
     }
 }
 
@@ -323,6 +492,7 @@ mod tests {
         Pin {
             version: v(n, revision),
             arrangement: None,
+            theme: None,
         }
     }
 
@@ -523,11 +693,75 @@ mod tests {
         s.push(v(1, 1), "A".into()).unwrap();
         s.mark_saved("a".into(), s.pins().collect());
         assert_eq!(s.document(), first);
-        s.open("b".into(), vec![(pin(2, 1), "B".into())]).unwrap();
+        s.open("b".into(), vec![(pin(2, 1), "B".into(), None)])
+            .unwrap();
         let opened = s.document();
         assert_ne!(opened, first);
         s.clear();
         assert_ne!(s.document(), opened);
+    }
+
+    fn snapshot(text: &str) -> Snapshot {
+        use crate::scripture::{Book, TranslationInfo, VerseId};
+        let info = TranslationInfo {
+            id: "SYN".into(),
+            name: "Synthetic".into(),
+            language: "en".into(),
+            rights: String::new(),
+            source: String::new(),
+            redistributable: true,
+            bundled: false,
+        };
+        let id = VerseId::new(Book::from_number(43).unwrap(), 3, 16).unwrap();
+        Snapshot::new(&info, &[(id, text.into())])
+    }
+
+    #[test]
+    fn scripture_items_pin_their_snapshot_and_reopen_with_it() {
+        let mut s = Schedule::default();
+        let song = s.push(v(1, 1), "Song".into()).unwrap();
+        let verse = s
+            .insert_scripture(0, snapshot("One"), "John 3:16 (SYN)".into())
+            .unwrap();
+        assert_eq!(order(&s), [verse, song]);
+        let entry = s.get(verse).unwrap().clone();
+        assert_eq!(entry.version, snapshot("One").version());
+        assert_eq!(entry.scripture.as_deref(), Some(&snapshot("One")));
+        assert!(s.get(song).unwrap().scripture.is_none());
+        let copies = s.duplicate(&[verse]).unwrap();
+        assert_eq!(s.get(copies[0]).unwrap().scripture, entry.scripture.clone());
+        let mut bad = snapshot("One");
+        bad.verses.clear();
+        assert_eq!(s.insert_scripture(0, bad, "x".into()), Err(Error::Invalid));
+        // Themes apply to songs only: a scripture item keeps the built-in look.
+        let navy = crate::theme::tests::styled();
+        assert_eq!(s.set_theme(&[verse, song], Some(&navy)), 1);
+        assert!(s.get(verse).unwrap().theme.is_none());
+        assert!(s.capture_theme(verse, &navy).is_none());
+        assert_eq!(s.set_theme(&[song], None), 1);
+
+        let pins: Vec<Pin> = s.pins().collect();
+        s.mark_saved("a.selaschedule".into(), pins.clone());
+        assert!(!s.is_dirty());
+        let items = vec![
+            (
+                pins[0],
+                "John 3:16 (SYN)".into(),
+                None,
+                Some(snapshot("One")),
+            ),
+            (pins[2], "Song".into(), None, None),
+        ];
+        s.open_items("b.selaschedule".into(), items).unwrap();
+        assert_eq!(s.entries().len(), 2);
+        assert_eq!(s.entries()[0].scripture.as_deref(), Some(&snapshot("One")));
+        // A snapshot whose content does not match its pin is refused.
+        let mismatched = vec![(pins[0], "x".into(), None, Some(snapshot("Other")))];
+        assert_eq!(
+            s.open_items("c.selaschedule".into(), mismatched),
+            Err(Error::Invalid)
+        );
+        assert_eq!(s.entries().len(), 2, "a refused open keeps contents");
     }
 
     #[test]
@@ -535,7 +769,7 @@ mod tests {
         let mut s = Schedule::default();
         let old = s.push(v(1, 1), "A".into()).unwrap();
         let too_many = (0..=MAX_ITEMS)
-            .map(|n| (pin(1, 1), n.to_string()))
+            .map(|n| (pin(1, 1), n.to_string(), None))
             .collect();
         assert_eq!(
             s.open(PathBuf::from("a.selaschedule"), too_many),
@@ -545,9 +779,9 @@ mod tests {
         s.open(
             PathBuf::from("Evening.selaschedule"),
             vec![
-                (pin(1, 1), "A".into()),
-                (pin(1, 1), "A".into()),
-                (pin(2, 3), "B".into()),
+                (pin(1, 1), "A".into(), None),
+                (pin(1, 1), "A".into(), None),
+                (pin(2, 3), "B".into(), None),
             ],
         )
         .unwrap();
@@ -565,5 +799,77 @@ mod tests {
         assert_eq!((s.path(), s.name()), (None, None));
         let fresh = s.push(v(1, 1), "A".into()).unwrap();
         assert!(!ids.contains(&fresh));
+    }
+
+    fn themed(name: &str) -> Theme {
+        Theme {
+            background: Some(crate::background::Background::color([1, 2, 3])),
+            ..Theme::new(name)
+        }
+    }
+
+    #[test]
+    fn captured_themes_stick_and_never_dirty_the_schedule() {
+        let mut s = Schedule::default();
+        let a = s.push(v(1, 1), "A".into()).unwrap();
+        s.mark_saved("a.selaschedule".into(), s.pins().collect());
+        let first = themed("First");
+        assert_eq!(s.capture_theme(a, &first).unwrap().theme, first);
+        // A later library theme never replaces the captured snapshot.
+        let second = themed("Second");
+        assert_eq!(s.capture_theme(a, &second).unwrap().theme, first);
+        assert!(!s.capture_theme(a, &second).unwrap().explicit);
+        assert!(!s.is_dirty(), "capturing is not an edit");
+        assert!(s.capture_theme(EntryId(999), &first).is_none());
+    }
+
+    #[test]
+    fn explicit_themes_dirty_duplicate_and_reopen_clean() {
+        let mut s = Schedule::default();
+        let a = s.push(v(1, 1), "A".into()).unwrap();
+        let b = s.push(v(2, 1), "B".into()).unwrap();
+        s.capture_theme(b, &themed("Library"));
+        s.mark_saved("a.selaschedule".into(), s.pins().collect());
+        let navy = themed("Navy");
+        assert_eq!(s.set_theme(&[a, b], Some(&navy)), 2);
+        assert!(s.is_dirty());
+        assert_eq!(s.set_theme(&[a, b], Some(&navy)), 0, "already applied");
+        assert!(s.get(b).unwrap().theme.as_ref().unwrap().explicit);
+        // Another theme with the same look but another name is a change.
+        let renamed = Theme {
+            name: "Navy 2".into(),
+            ..navy.clone()
+        };
+        assert_eq!(s.set_theme(&[a], Some(&renamed)), 1);
+        let copies = s.duplicate(&[a]).unwrap();
+        assert_eq!(
+            s.get(copies[0]).unwrap().theme,
+            s.get(a).unwrap().theme,
+            "a duplicate keeps the theme"
+        );
+        // Clearing drops the snapshot so the library theme is captured again.
+        assert_eq!(s.set_theme(&[b], None), 1);
+        assert_eq!(s.get(b).unwrap().theme, None);
+        // Reopening a file restores snapshots and is clean.
+        let items: Vec<_> = s
+            .entries()
+            .iter()
+            .map(|e| {
+                (
+                    Pin {
+                        version: e.version,
+                        arrangement: e.arrangement,
+                        theme: None,
+                    },
+                    e.title.clone(),
+                    e.theme.clone(),
+                )
+            })
+            .collect();
+        let themes: Vec<_> = s.entries().iter().map(|e| e.theme.clone()).collect();
+        s.open("b.selaschedule".into(), items).unwrap();
+        assert!(!s.is_dirty());
+        let reopened: Vec<_> = s.entries().iter().map(|e| e.theme.clone()).collect();
+        assert_eq!(reopened, themes);
     }
 }
