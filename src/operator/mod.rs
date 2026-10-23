@@ -156,9 +156,10 @@ pub(super) struct Item {
     pub(super) arrangements: Arc<[(VariantId, String)]>,
     /// The entry's stored choice these slides were built for.
     pub(super) chosen: Option<VariantId>,
-    /// The song's copyright strip, drawn on every slide of the item
-    /// (EW8-OBS-063); `None` when the song has no copyright text.
-    pub(super) copyright: Option<Arc<str>>,
+    /// The song's copyright strip (EW8-OBS-063); `None` when the song has no
+    /// copyright text. Its text and the slides that draw it follow the
+    /// Options › Song copyright settings when each cue is built.
+    pub(super) copyright: Option<Arc<slides::CopyrightStrip>>,
     /// Per-slide face resolution, `None` until the background resolver lands.
     /// Until then the current live scene stays and a deferred cue waits.
     pub(super) resolved: Option<Arc<[fonts::Resolved]>>,
@@ -254,6 +255,10 @@ pub(super) struct Operator {
     /// Thumb drag of the Songs scrollbar is in progress.
     pub(super) song_scrolling: bool,
     pub(super) frame_log: Option<frame_log::FrameLog>,
+    /// Test probe: slide index and copyright strip text of each cue handed
+    /// to the renderer, newest last (songs-browser).
+    #[cfg(test)]
+    pub(super) presented_footers: Vec<(usize, Option<String>)>,
     slide_rows: Vec<FocusHandle>,
     pub(super) selected_song: Option<Version>,
     pub(super) preview: Option<Item>,
@@ -558,6 +563,8 @@ impl Operator {
             song_order: SongOrder::default(),
             song_scrolling: false,
             frame_log: frame_log::FrameLog::from_env(),
+            #[cfg(test)]
+            presented_footers: Vec::new(),
             slide_rows: Vec::new(),
             selected_song: None,
             preview: None,

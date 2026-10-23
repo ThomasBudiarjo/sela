@@ -258,6 +258,7 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
 | `song-import-x11.py --display :112` (import-framework, 2026-10-22) | xvfb, audience `window` | PASS (27 s) |
 | `autosave-x11.py --display :113` (2026-10-22, autosave-recovery; review round 1 adds the unanswered-close step) | xvfb `serve --display :113` | PASS (19 s; round 1: 20.5 s) |
+| `songs-browser-x11.py --display :114` (songs-browser, 2026-10-22; re-run 2026-10-23 after review) | xvfb (`serve --display :114`), audience `window` 624x351 | PASS (Sort by keys mouse + keyboard, restart, label search, Options Song tab; since 2026-10-23 a song is Live and typing "bravo." in the search box, "CCLI b." in License Info and OK with changed options leave the audience frame unchanged; this catches leaked Black/Clear/Logo keys but not a re-cue on OK, which re-renders a pixel-identical slide here because the 351 px output draws no copyright strip: the GPUI test `typing_in_license_info_never_toggles_masks_or_cues_live` covers that) |
 
 GTK portal folder chooser notes (song-import-x11.py): it opens on Recent,
 where Enter in the location entry does nothing, so the script first clicks

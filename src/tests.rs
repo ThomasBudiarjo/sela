@@ -26,6 +26,7 @@ mod navigation;
 mod resource_browser;
 mod scrutiny_r2;
 mod song_import;
+mod songs_browser;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,

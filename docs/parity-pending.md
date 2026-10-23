@@ -228,12 +228,13 @@ Common Windows prerequisites are listed once in
   search field. Re-run: `search-windows.py`.
 - [ ] **PP-LIB-02 Search fields** (EW8-OBS-046). Steps: with author and
   copyright filled, search for a word that is only there. Sela now: matches
-  author, copyright, license, administrator and song number; slide labels are
-  not indexed (recorded gap). Re-run: `search-windows.py`,
+  author, copyright, license, administrator and song number; slide labels
+  are indexed since schema 7 (songs-browser). Re-run: `search-windows.py`,
   `song-metadata-windows.py`.
 - [ ] **PP-LIB-03 Sort direction default** (EW8-OBS-064). Steps: read the
   checked direction under Sort by on a fresh profile. Sela now: Ascending;
-  Title and Date modified only. Re-run: `resource-browser-windows.py`.
+  every observed key plus Date modified. Re-run: `resource-browser-windows.py`,
+  `songs-browser-windows.py`.
 - [ ] **PP-LIB-04 Update items in Schedule wording** (EW8-OBS-061). Steps: edit
   and save a scheduled song, choose Update items in Schedule; record the
   dialog (this needs one save in a disposable profile). Sela now (best guess):
@@ -578,6 +579,82 @@ schedule; never on a service in use.
 
 ## Stream: songs-browser
 
+Sela state after the stream (2026-10-22): Sort by Title/Author/Copyright/
+Administrator/Song Number (+ Date modified), schema 7 slide-label search and
+Options › Main Output › Song › Copyright Info. Linux evidence:
+`scripts/songs-browser-x11.py` PASS on Xvfb; nothing below is closed by it.
+
+- [ ] **PP-SB-01 Sort by order rules** (EW8-OBS-064). Steps: in a disposable
+  profile create (or import) four songs: one without an author, two with
+  authors differing only in case ("alpha writer", "Bravo Writer"), Song
+  Numbers 7, 10 and 0042, one Copyright starting "(c)" and one "©". Choose
+  Sort by > Author, Copyright, Administrator, Song Number, each Ascending and
+  Descending; record the order and where empty keys go, and whether Song
+  Number sorts as text or number. Sela now (best guess): empty keys last in
+  both directions, ASCII case ignored, Song Number numeric, ties by Title.
+  Re-run: `songs-browser-windows.py`, `resource-browser-windows.py`.
+- [ ] **PP-SB-02 Sort by with a search active** (EW8-OBS-045/064). Steps: type
+  a query matching several songs, then change Sort by; record whether the
+  results reorder. Sela now: search results stay in relevance order; Sort by
+  applies to the unfiltered list. Re-run: `songs-browser-windows.py`.
+- [ ] **PP-SB-03 Sort key shown in the list** (EW8-OBS-064). Steps: after Sort
+  by Author, record whether the Songs list shows an author column or text.
+  Sela now: titles only. Re-run: `songs-browser-windows.py`.
+- [ ] **PP-SB-04 Label search ranking** (EW8-OBS-046). Steps: with one song
+  titled "Glory Road" and another whose slide label is "Glory", type "glo";
+  record the result order; then type a label number ("verse 2"). Also add a
+  long song (many slides) with "glory" once in its lyrics and record whether
+  it lists above or below the label-only song. Sela now: title match first,
+  then songs with a lyric or metadata hit, and label-only matches after all
+  of them whatever the song lengths; "verse 2" needs both words.
+  Re-run: `songs-browser-windows.py`, `search-windows.py`.
+- [ ] **PP-SB-05 "Show on first displayed slide only"** (EW8-OBS-055/056).
+  Steps: tick it in Options › Main Output › Song; send a song with copyright
+  text Live starting at slide 3 (click slide 3, Go Live), then step to slides
+  4 and 1; record which slides show the strip. Sela now (best guess): only
+  slide 1 of the item shows it, whichever slide went live first. Re-run:
+  `songs-browser-windows.py`.
+- [ ] **PP-SB-06 License Info text on the output** (EW8-OBS-055/063). Steps:
+  type "CCLI License # 1234567" in License Info, OK, send a song with a Song
+  Number and copyright text Live; capture the strip. Sela now (best guess): a
+  third line "CCLI Song # N · CCLI License # 1234567". Re-run:
+  `songs-browser-windows.py`, `song-metadata-windows.py`.
+- [ ] **PP-SB-07 Options change while a song is Live** (EW8-OBS-055). Steps:
+  with a copyright song Live, untick Display Copyright Information and OK;
+  record whether the live slide redraws at once or only on the next slide.
+  Sela now: only the next cue changes; OK sends no renderer cue (GPUI test
+  `typing_in_license_info_never_toggles_masks_or_cues_live`, submission
+  count). The Linux script only shows the frame stays the same, which cannot
+  reveal a re-cue there (no strip on the 351 px xvfb output, so a re-sent
+  slide is identical); the Windows script would see slide 2 gain the strip.
+  Re-run: `songs-browser-windows.py`.
+- [ ] **PP-SB-08 Copyright Font, Song Font and Show Verse/Chorus Label**
+  (EW8-OBS-056). Steps: open each menu in Options › Main Output › Song and
+  record the choices and their effect on output. Sela now: not built (the
+  strip uses the slide face). Re-run: none yet.
+- [ ] **PP-SB-09 Windows run of `songs-browser-windows.py`** (NOT RUN: no
+  Windows host on 2026-10-22). Steps: seed with
+  `seed_library.exe --sort-songs`, run the script with the audience on the
+  secondary monitor; it covers mouse and keyboard Sort by with UIA ticks,
+  label search, the Options Song tab, the strip ink on slides 1 and 2 with
+  first-slide-only, and (since 2026-10-23) a real Options change typed into
+  License Info while slide 2 is Live (zero frame changes expected; a re-cue
+  on OK would add the strip to slide 2). Since review round 2 the License
+  Info text is typed as one virtual-key press per character (B and "." as
+  VK_B and VK_OEM_PERIOD), because `KEYEVENTF_UNICODE` input reaches GPUI
+  (zed a846890 `crates/gpui_windows/src/events.rs`, `VK_PACKET => None`)
+  only as WM_CHAR text and never runs the keymap. Sela now: the Linux script
+  PASSES; since 2026-10-23 it also keeps a song Live and checks that typing
+  in the search box and License Info and OK leave the audience frame
+  unchanged (no strip ink check there, the xvfb output is 351 px tall, so it
+  cannot see a re-cue on OK; the GPUI test counts cues). Re-run: itself.
+- [ ] **PP-SB-10 20k search and sort timings on the reference laptop**
+  (M1-07, M1-04). Steps: `cargo run --locked --release --example search_bench`
+  and `search-windows.py --latency-library` on the Windows machine of the
+  2026-10-13 runs and on the older integrated-GPU laptop. Sela now: only a
+  Linux VM run with opt-level overrides (work log, songs-browser record).
+  Re-run: `search-windows.py`, `resource-browser-windows.py`.
+
 ## Stream: media-core
 
 ## Stream: video-playback
@@ -626,6 +703,7 @@ timing):
 | 18 | `song-metadata-windows.py` | seed (`--metadata-songs`, `--vanished-schedule`); secondary monitor |
 | 19 | `search-windows.py` | seed (`--second-song`); for latency also `cargo build --release` and a 20k library from `cargo run --locked --release --example search_bench -- --keep PATH` (`--binary target\release\sela.exe --latency-library PATH`) |
 | 20 | `resource-browser-windows.py` | seed (`--second-song`, `--extra-songs`); release binary and a 20k library for the scrolling timings |
+| 20a | `songs-browser-windows.py` | seed (`--sort-songs`); audience on the secondary monitor |
 | 21 | `prep-windows.py` | release binary (`--binary target\release\sela.exe`); seed (`--heavy-song`); audience on the laptop panel (`--monitor name:\\.\DISPLAY1`, the default) |
 | 22 | `reference-w03-windows.py` | not a Sela check: EasyWorship 8.0.49 open and maximized with one song previewed from the Songs tab; observation only |
 | 23 | `song-import-windows.py` | seed; secondary monitor; native folder dialog; the batch fixtures in `tests\fixtures\import\batch` |

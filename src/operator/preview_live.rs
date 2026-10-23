@@ -74,6 +74,17 @@ fn tile_text_size(text: &str) -> f32 {
         .max(TILE_MIN_TEXT)
 }
 
+/// The copyright strip text an item's cues carry under the current Options
+/// (EW8-OBS-055): `None` without copyright text or with Display Copyright
+/// Information off. Built per cue, so an Options change reaches the next
+/// cue and never replaces the scene already live.
+fn copyright_footer(item: &Item, options: &slides::CopyrightOptions) -> Option<Arc<str>> {
+    item.copyright
+        .as_ref()
+        .filter(|_| options.display)
+        .map(|strip| strip.text(options).into())
+}
+
 /// Slide thumbnail: the image background when `thumb` has landed, else the
 /// slide's fill color (black while an image is still loading), under the
 /// slide text; not a rendered audience frame.
@@ -841,7 +852,8 @@ impl Operator {
             caps,
             sizing: self.sizing,
             background,
-            footer: item.copyright.clone(),
+            footer: copyright_footer(&item, &self.settings.current.copyright),
+            footer_shown: self.settings.current.copyright.shown_on(index),
         };
         let sizing = job.sizing;
         if self.cue_preparer.is_none() {
@@ -900,6 +912,9 @@ impl Operator {
                         self.unmask.drop_submission(pending.generation);
                         continue;
                     };
+                    #[cfg(test)]
+                    self.presented_footers
+                        .push((pending.index, cue.footer().map(|f| f.content().to_owned())));
                     match output.present_submission(cue, pending.generation, Instant::now()) {
                         Ok(()) => {
                             let version = slides::slide_version(pending.item, pending.index);
