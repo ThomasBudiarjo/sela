@@ -96,6 +96,9 @@ pub(crate) struct ThemeState {
     pub(crate) set: ThemeSet,
     /// A reply has filled `set` at least once.
     pub(crate) loaded: bool,
+    /// The last load failed: `set` may not be the library's (it can be
+    /// empty), so no schedule entry captures a snapshot from it.
+    pub(crate) failed: bool,
     /// The library may have changed: reload when the worker is free.
     pub(crate) stale: bool,
     /// One write waiting for the storage worker.
@@ -120,6 +123,7 @@ impl ThemeState {
         Self {
             set: ThemeSet::default(),
             loaded: false,
+            failed: false,
             stale: true,
             job: None,
             selected: ThemeId::BUILT_IN,
@@ -151,6 +155,12 @@ impl ThemeState {
             return Some(Theme::built_in());
         }
         self.set.get(self.selected).cloned()
+    }
+
+    /// `set` is the library's theme set, so a schedule entry may freeze its
+    /// song's theme from it.
+    pub(crate) fn trusted(&self) -> bool {
+        self.loaded && !self.failed
     }
 
     /// The default song theme's id as rows show it.
@@ -196,15 +206,12 @@ impl Operator {
             Ok(set) => {
                 self.themes.set = set;
                 self.themes.loaded = true;
+                self.themes.failed = false;
                 if self.themes.selected != ThemeId::BUILT_IN
                     && self.themes.set.get(self.themes.selected).is_none()
                 {
                     self.themes.selected = ThemeId::BUILT_IN;
                 }
-                let stamps: HashSet<u64> = self.themes.rows().iter().map(Theme::stamp).collect();
-                self.themes
-                    .thumbs
-                    .retain(|(stamp, _, _), _| stamps.contains(stamp));
                 self.themes.message = match job {
                     ThemeJob::Load => self.themes.message.take(),
                     ThemeJob::Saved(name) => Some((t!(Msg::ThemeSavedNamed, name = name), false)),
@@ -229,6 +236,20 @@ impl Operator {
                         Some((t!(Msg::ThemeAppliedSong, name = name, count = count), false))
                     }
                 };
+            }
+            Err(storage::Error::Missing) if matches!(job, ThemeJob::AppliedSong { .. }) => {
+                // A selected song was deleted meanwhile: nothing changed.
+                self.catalog_stale = true;
+                self.themes.message = Some((t!(Msg::ThemeSongGone).into(), true));
+            }
+            Err(error) if job == ThemeJob::Load => {
+                // Without the library's themes, entries show the default
+                // look with a note and capture nothing (see `themed_item`).
+                self.themes.failed = true;
+                self.themes.message = Some((
+                    t!(Msg::ThemeStorageFailed, error = format!("{error:?}")),
+                    true,
+                ));
             }
             Err(storage::Error::Budget) => {
                 self.themes.message = Some((t!(Msg::ThemeLimit, max = theme::MAX_THEMES), true));
@@ -259,21 +280,43 @@ impl Operator {
         self.themes.set.resolve(song_theme)
     }
 
+    /// The library theme a schedule entry without a snapshot may freeze
+    /// now: `None` while the library's themes are not loaded (or failed to
+    /// load) and when the song names a theme the library no longer has, so
+    /// a substitute look is shown with its note but never captured or saved.
+    pub(crate) fn capturable_theme(&self, song_theme: Option<ThemeId>) -> Option<Theme> {
+        let resolution = self.library_theme(song_theme);
+        (self.themes.trusted() && resolution.missing.is_none()).then_some(resolution.theme)
+    }
+
+    /// What an item without its own snapshot renders with: the library
+    /// theme and its notes (missing song theme, themes not loaded).
+    fn library_view(&self, song_theme: Option<ThemeId>) -> (Theme, bool, bool) {
+        let resolution = self.library_theme(song_theme);
+        (
+            resolution.theme,
+            resolution.missing.is_some(),
+            !self.themes.trusted(),
+        )
+    }
+
     /// Preview item for a loaded song: its schedule entry's theme snapshot
-    /// (captured from the library on first show), else the library theme.
+    /// (captured from the library on first show when it can be, see
+    /// `capturable_theme`), else the library theme with its notes.
     pub(crate) fn themed_item(
         &mut self,
         version: Version,
         song: &storage::Song,
         song_theme: Option<ThemeId>,
     ) -> Item {
-        let resolution = self.library_theme(song_theme);
-        let (applied, missing) = match self.selected_entry {
-            Some(entry) => match self.schedule.capture_theme(entry, &resolution.theme) {
-                Some(item) => (item.theme.clone(), None),
-                None => (resolution.theme, resolution.missing),
-            },
-            None => (resolution.theme, resolution.missing),
+        let capturable = self.capturable_theme(song_theme);
+        let snapshot = self.selected_entry.and_then(|entry| match &capturable {
+            Some(theme) => self.schedule.capture_theme(entry, theme).cloned(),
+            None => self.schedule.get(entry).and_then(|e| e.theme.clone()),
+        });
+        let (applied, missing, unloaded) = match snapshot {
+            Some(snapshot) => (snapshot.theme, false, false),
+            None => self.library_view(song_theme),
         };
         let chosen = schedule::entry_arrangement(&self.schedule, self.selected_entry);
         let themed = theme::apply(song, &applied);
@@ -295,21 +338,27 @@ impl Operator {
             theme_key: applied.key(),
             theme_stamp: applied.stamp(),
             theme_name: theme_name(&applied),
-            theme_missing: missing.is_some(),
+            theme_missing: missing,
+            theme_unloaded: unloaded,
             song_theme,
         }
     }
 
-    /// The theme key the previewed item should have now. A library song
-    /// follows the library; an entry keeps its snapshot.
-    pub(crate) fn wanted_theme_key(&self, item: &Item) -> u64 {
+    /// The theme the previewed item should show now, as `Item::theme_view`
+    /// compares it: whole-value stamp (so a rename or another theme of the
+    /// same look also rebuilds the name, label and badge) and both notes. A
+    /// library song follows the library; an entry keeps its snapshot.
+    pub(crate) fn wanted_theme(&self, item: &Item) -> (u64, bool, bool) {
         match item
             .entry
             .and_then(|id| self.schedule.get(id))
             .and_then(|e| e.theme.as_ref())
         {
-            Some(snapshot) => snapshot.theme.key(),
-            None => self.library_theme(item.song_theme).theme.key(),
+            Some(snapshot) => (snapshot.theme.stamp(), false, false),
+            None => {
+                let (theme, missing, unloaded) = self.library_view(item.song_theme);
+                (theme.stamp(), missing, unloaded)
+            }
         }
     }
 
@@ -327,7 +376,9 @@ impl Operator {
             return Vec::new();
         };
         let mut notes = Vec::new();
-        if item.theme_missing {
+        if item.theme_unloaded {
+            notes.push(t!(Msg::ThemeUnavailable).to_string());
+        } else if item.theme_missing {
             notes.push(t!(Msg::ThemeMissing).to_string());
         }
         if let (Some(resolved), Some(slide)) = (
@@ -356,13 +407,13 @@ impl Operator {
         match action {
             ThemeAction::New => {
                 let theme = Theme::new(t!(Msg::ThemeNewName));
-                self.open_theme_editor(theme, cx);
+                self.open_theme_editor(theme, false, cx);
             }
             ThemeAction::Edit => match selected {
                 Some(theme) if theme.is_built_in() => {
                     self.themes.message = Some((t!(Msg::ThemeBuiltInReadOnly).into(), true));
                 }
-                Some(theme) => self.open_theme_editor(theme, cx),
+                Some(theme) => self.open_theme_editor(theme, true, cx),
                 None => self.themes.message = Some((t!(Msg::ThemeSelectTheme).into(), true)),
             },
             ThemeAction::Duplicate => {
@@ -423,6 +474,12 @@ impl Operator {
                     (_, true) => {
                         self.themes.message = Some((t!(Msg::ThemeSelectSong).into(), true));
                     }
+                    (Some(_), false) if songs.len() > storage::MAX_SONG_THEME_BATCH => {
+                        self.themes.message = Some((
+                            t!(Msg::ThemeTooManySongs, max = storage::MAX_SONG_THEME_BATCH),
+                            true,
+                        ));
+                    }
                     (Some(theme), false) => {
                         let count = songs.len();
                         self.queue_theme(
@@ -467,13 +524,14 @@ impl Operator {
         cx.notify();
     }
 
-    fn open_theme_editor(&mut self, theme: Theme, cx: &mut Context<Self>) {
+    /// `stored`: `theme` is a library theme (Edit), not a new one.
+    fn open_theme_editor(&mut self, theme: Theme, stored: bool, cx: &mut Context<Self>) {
         let opened = self
             .library
             .clone()
             .or_else(crate::song_library::default_path)
             .ok_or_else(|| t!(Msg::NoUserDataDir).to_string())
-            .and_then(|path| crate::song_library::open_theme(path, theme, cx));
+            .and_then(|path| crate::song_library::open_theme(path, theme, stored, cx));
         if let Err(error) = opened {
             self.themes.message = Some((error, true));
         }
@@ -486,6 +544,7 @@ impl Operator {
             return;
         }
         let extent = self.background_extent();
+        self.prune_theme_thumbs(extent, cx);
         let Some(theme) = self.themes.rows().into_iter().find(|t| {
             !self
                 .themes
@@ -514,6 +573,27 @@ impl Operator {
                 cx.notify();
             });
         }));
+    }
+
+    /// Keeps only the listed themes' thumbnails at the current output size,
+    /// so the cache holds at most one per row, and releases each dropped
+    /// image's atlas sprite.
+    fn prune_theme_thumbs(&mut self, extent: Extent, cx: &mut Context<Self>) {
+        let stamps: HashSet<u64> = self.themes.rows().iter().map(Theme::stamp).collect();
+        let stale: Vec<_> = self
+            .themes
+            .thumbs
+            .keys()
+            .filter(|(stamp, w, h)| {
+                !stamps.contains(stamp) || (*w, *h) != (extent.width, extent.height)
+            })
+            .copied()
+            .collect();
+        for key in stale {
+            if let Some(image) = self.themes.thumbs.remove(&key).and_then(|t| t.image) {
+                cx.drop_image(image, None);
+            }
+        }
     }
 
     /// The Themes tab list: one row per theme with its thumbnail, name,
@@ -752,4 +832,12 @@ fn truncate_name(name: &str) -> String {
         end -= 1;
     }
     name[..end].trim().to_owned()
+}
+
+#[cfg(test)]
+impl Operator {
+    /// Stands in for a connected output of another size.
+    pub(crate) fn probe_output_extent(&mut self, extent: Extent) {
+        self.output_extent = Some(extent);
+    }
 }

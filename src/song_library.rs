@@ -25,7 +25,9 @@ use std::{
 mod format_pane;
 mod theme_mode;
 #[cfg(test)]
-pub(crate) use theme_mode::{COPYRIGHT as THEME_COPYRIGHT, RESET as THEME_RESET};
+pub(crate) use theme_mode::{
+    COPYRIGHT as THEME_COPYRIGHT, MARGINS_DEFAULT as THEME_MARGINS_DEFAULT, RESET as THEME_RESET,
+};
 pub(crate) use theme_mode::{open_theme, theme_preview};
 
 actions!(
@@ -595,7 +597,7 @@ pub(crate) struct Library {
     field_edits: [u64; 6],
     /// Label and lyrics cell per section; always parallel to `draft.sections`.
     cells: Vec<[Entity<TextInput>; 2]>,
-    buttons: [FocusHandle; 32],
+    buttons: [FocusHandle; 33],
     subscriptions: Vec<Subscription>,
     task: Option<Task<()>>,
     worker: Option<Worker>,
@@ -724,6 +726,8 @@ impl Library {
             buttons: std::array::from_fn(|i| {
                 cx.focus_handle().tab_stop(true).tab_index(if i == YES {
                     10
+                } else if i == theme_mode::MARGINS_DEFAULT {
+                    theme_mode::MARGINS_DEFAULT_TAB
                 } else {
                     i as isize + 1
                 })
@@ -1222,6 +1226,9 @@ impl Library {
                 }
             }
             (Some(Pending::SaveTheme(song)), Ok(Reply::Themes(_))) => {
+                if let Some(edit) = &mut self.theme {
+                    edit.stored = true;
+                }
                 self.baseline = song;
                 self.set_confirm_close(false, cx);
                 self.set_status(t!(Msg::ThemeSavedStatus));
@@ -1239,6 +1246,13 @@ impl Library {
                 self.begin(blank(), None, cx);
                 self.cursor = None;
                 self.refresh(cx);
+            }
+            (Some(Pending::SaveTheme(_)), Err(Error::Missing)) => {
+                // Deleted in the operator while this editor was open: not
+                // re-inserted (`Repository::update_theme`).
+                self.close_after_save = false;
+                self.status_is_rejection = false;
+                self.status = t!(Msg::ThemeDeletedElsewhere).into();
             }
             (_, Err(e)) => {
                 self.close_after_save = false;

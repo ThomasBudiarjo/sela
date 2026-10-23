@@ -766,7 +766,10 @@ insets, the operator Themes tab (thumbnails, warnings, default, apply to song
 and to schedule items) and the Song Editor theme mode. GPUI tests and
 `scripts/themes-x11.py` pass on Linux; `scripts/themes-windows.py`, the EW
 Themes tab observation and screen-reader checks are open
-([parity pending](parity-pending.md#stream-themes)).
+([parity pending](parity-pending.md#stream-themes)). Review round 1
+(2026-10-23): substitutes are never frozen into schedule items, Apply to Song
+is atomic, the native live-edit step edits the live theme; follow-ups M1-08a
+and M1-08b below.
 
 - [x] Implement font, size, color, alignment, margins, shadow/outline, background
   color/image and copyright position where confirmed by the reference.
@@ -777,9 +780,21 @@ Themes tab observation and screen-reader checks are open
 - [x] Preview changes without applying them live; implement reset/cancel/undo.
 - [x] Validate missing fonts/assets, unsuitable aspect ratios and text contrast;
   make substitutions visible rather than claiming identical output.
-- [x] Render long/short text, landscape variants and override combinations.
-  (Raster/fit unit tests on five landscape sizes and GPUI checks; no golden
-  image or physical display run.)
+- [ ] Render long/short text, landscape variants and override combinations.
+  (Partial: raster/fit unit tests on five landscape sizes and GPUI checks.
+  The R level this ticket lists is not done: no golden image and no physical
+  display run, so this stays open.)
+
+Follow-up tickets found in review (planned, not built; docs/themes.md,
+"Divergences from EasyWorship and missing workflows"):
+
+- [ ] **M1-08a** — Song Editor Layouts tab "Theme - name" selector and the
+  Master-edit scope of EW8-OBS-057 (Master edit as a theme edit with
+  copy-on-write). Sela currently keeps the song master song-local above the
+  theme (TH-BG-09); decide after PP-TH-08. Depends on M1-05h. Tests: U, I, N.
+- [ ] **M1-08b** — Media › Images "Copy to Theme ▸ Song Theme" (EW8-OBS-019):
+  create a song theme from an image item. PP-TH-09. Depends on M1-10. Tests:
+  U, I, N.
 
 Acceptance: theme edits are predictable, serializable and isolated from live;
 advanced shape/layer tooling remains tracked in M4-01.

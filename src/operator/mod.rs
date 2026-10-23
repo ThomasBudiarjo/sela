@@ -166,11 +166,19 @@ pub(super) struct Item {
     pub(super) theme_name: String,
     /// The song named a theme the library no longer has.
     pub(super) theme_missing: bool,
+    /// The library's themes were not loaded (or failed to load) when the
+    /// item was built: it shows the default look and captured nothing.
+    pub(super) theme_unloaded: bool,
     /// The song's library theme when the item was loaded.
     pub(super) song_theme: Option<sela::theme::ThemeId>,
 }
 
 impl Item {
+    /// The theme state `Operator::wanted_theme` compares: stamp and notes.
+    pub(super) fn theme_view(&self) -> (u64, bool, bool) {
+        (self.theme_stamp, self.theme_missing, self.theme_unloaded)
+    }
+
     /// Position of the arrangement these slides follow: the stored choice
     /// when the song has it, else the first.
     pub(super) fn chosen_index(&self) -> usize {

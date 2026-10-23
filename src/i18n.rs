@@ -574,6 +574,14 @@ pub enum Msg {
     ThemeStorageFailed,
     ThemeBusy,
     ThemeMissing,
+    ThemeUnavailable,
+    ThemeSongGone,
+    ThemeTooManySongs,
+    ThemeDeletedElsewhere,
+    MarginLeftField,
+    MarginRightField,
+    MarginTopField,
+    MarginBottomField,
     ThemeWarnFont,
     ThemeWarnContrast,
     ThemeWarnStretch,
@@ -1101,6 +1109,14 @@ impl Msg {
         Msg::ThemeStorageFailed,
         Msg::ThemeBusy,
         Msg::ThemeMissing,
+        Msg::ThemeUnavailable,
+        Msg::ThemeSongGone,
+        Msg::ThemeTooManySongs,
+        Msg::ThemeDeletedElsewhere,
+        Msg::MarginLeftField,
+        Msg::MarginRightField,
+        Msg::MarginTopField,
+        Msg::MarginBottomField,
         Msg::ThemeWarnFont,
         Msg::ThemeWarnContrast,
         Msg::ThemeWarnStretch,
@@ -1704,6 +1720,18 @@ impl Msg {
             Self::ThemeStorageFailed => "Theme change failed: {error}",
             Self::ThemeBusy => "A theme change is still running. Try again in a moment.",
             Self::ThemeMissing => "This song's theme is missing · showing the default theme",
+            Self::ThemeUnavailable => {
+                "Themes are not loaded · showing the default look; nothing is captured until they load"
+            }
+            Self::ThemeSongGone => "A selected song no longer exists · no song was restyled",
+            Self::ThemeTooManySongs => "Select at most {max} songs to restyle at once.",
+            Self::ThemeDeletedElsewhere => {
+                "This theme was deleted in the Themes tab · it was not saved"
+            }
+            Self::MarginLeftField => "Left margin",
+            Self::MarginRightField => "Right margin",
+            Self::MarginTopField => "Top margin",
+            Self::MarginBottomField => "Bottom margin",
             Self::ThemeWarnFont => "Font “{name}” is not installed · showing DejaVu Sans",
             Self::ThemeWarnContrast => "Low contrast {ratio}:1 · text may be hard to read",
             Self::ThemeWarnStretch => {
@@ -2338,6 +2366,16 @@ impl Msg {
             Self::ThemeStorageFailed => "Perubahan tema gagal: {error}",
             Self::ThemeBusy => "Perubahan tema masih berjalan. Coba lagi sebentar lagi.",
             Self::ThemeMissing => "Tema lagu ini tidak ada · menampilkan tema utama",
+            Self::ThemeUnavailable => {
+                "Tema belum dimuat · menampilkan tampilan bawaan; tidak ada yang disimpan sampai tema dimuat"
+            }
+            Self::ThemeSongGone => "Lagu yang dipilih sudah tidak ada · tidak ada lagu yang diubah",
+            Self::ThemeTooManySongs => "Pilih paling banyak {max} lagu untuk diubah sekaligus.",
+            Self::ThemeDeletedElsewhere => "Tema ini sudah dihapus di tab Tema · tidak disimpan",
+            Self::MarginLeftField => "Margin kiri",
+            Self::MarginRightField => "Margin kanan",
+            Self::MarginTopField => "Margin atas",
+            Self::MarginBottomField => "Margin bawah",
             Self::ThemeWarnFont => "Fon “{name}” tidak terpasang · menampilkan DejaVu Sans",
             Self::ThemeWarnContrast => "Kontras rendah {ratio}:1 · teks mungkin sulit dibaca",
             Self::ThemeWarnStretch => {
@@ -2449,7 +2487,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 523);
+        assert_eq!(Msg::ALL.len(), 531);
     }
 
     #[test]

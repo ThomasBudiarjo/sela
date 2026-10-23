@@ -15,6 +15,8 @@ use std::path::Path;
 /// Editor button indexes of the theme-only controls.
 pub(crate) const RESET: usize = 30;
 pub(crate) const COPYRIGHT: usize = 31;
+/// Text › Layout "Use default" (margins back to the renderer's inset).
+pub(crate) const MARGINS_DEFAULT: usize = 32;
 /// Copyright text the sample song carries while the theme shows the element.
 const SAMPLE_COPYRIGHT: &str = "© Sample Publisher";
 /// Theme thumbnails: the preview raster box-filtered by 8 (160x90).
@@ -29,6 +31,8 @@ const NOMINAL: Extent = Extent {
     height: 1080,
 };
 const MARGIN_TAB: isize = 1100;
+/// "Use default" follows the four margin fields in keyboard order.
+pub(super) const MARGINS_DEFAULT_TAB: isize = MARGIN_TAB + 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Side {
@@ -64,6 +68,24 @@ impl Side {
             Side::Bottom => Msg::MarginBottom,
         })
     }
+    /// Accessible name of the side's margin field.
+    fn field_name(self) -> &'static str {
+        t!(match self {
+            Side::Left => Msg::MarginLeftField,
+            Side::Right => Msg::MarginRightField,
+            Side::Top => Msg::MarginTopField,
+            Side::Bottom => Msg::MarginBottomField,
+        })
+    }
+    /// Stable accessibility id of the side's margin field.
+    fn field_id(self) -> &'static str {
+        match self {
+            Side::Left => "theme-margin-left-field",
+            Side::Right => "theme-margin-right-field",
+            Side::Top => "theme-margin-top-field",
+            Side::Bottom => "theme-margin-bottom-field",
+        }
+    }
     fn id(self) -> &'static str {
         match self {
             Side::Left => "theme-margin-left",
@@ -80,6 +102,9 @@ const DEFAULT_MARGIN: u16 = 32;
 
 pub(super) struct ThemeEdit {
     pub(super) id: ThemeId,
+    /// The theme is in the library (opened by Edit, or saved once): saves
+    /// update it and fail rather than re-insert it when it was deleted.
+    pub(super) stored: bool,
     margins: [Entity<TextInput>; 4],
     shown: [Option<String>; 4],
     subscriptions: Vec<Subscription>,
@@ -90,8 +115,14 @@ pub(super) struct ThemeEdit {
     warn_task: Option<Task<()>>,
 }
 
-/// Opens a theme editor window for `theme` (a new or library theme).
-pub(crate) fn open_theme(path: PathBuf, theme: Theme, cx: &mut App) -> Result<(), String> {
+/// Opens a theme editor window for `theme`: a library theme (`stored`) or
+/// a new one.
+pub(crate) fn open_theme(
+    path: PathBuf,
+    theme: Theme,
+    stored: bool,
+    cx: &mut App,
+) -> Result<(), String> {
     let bounds = Bounds::centered(None, size(px(1180.), px(740.)), cx);
     cx.open_window(
         WindowOptions {
@@ -108,7 +139,7 @@ pub(crate) fn open_theme(path: PathBuf, theme: Theme, cx: &mut App) -> Result<()
             let view = cx.new(|cx| {
                 let mut library = Library::new(path, cx);
                 library.window = Some(window_id);
-                library.start_theme(theme, cx);
+                library.start_theme(theme, stored, cx);
                 library
             });
             let weak = view.downgrade();
@@ -163,18 +194,21 @@ pub(super) fn sample(theme: &Theme) -> Song {
 }
 
 impl Library {
-    pub(super) fn start_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+    pub(super) fn start_theme(&mut self, theme: Theme, stored: bool, cx: &mut Context<Self>) {
         let margins = std::array::from_fn(|i| {
             cx.new(|cx| {
                 let mut input = TextInput::new("", false, 4, MARGIN_TAB + i as isize, cx)
                     .expect("empty text is valid");
                 input.set_flow(false);
                 input.use_document_history(|_, _| {});
+                let side = SIDES[i];
+                input.set_accessible(side.field_id(), side.field_name());
                 input
             })
         });
         self.theme = Some(ThemeEdit {
             id: theme.id,
+            stored,
             margins,
             shown: Default::default(),
             subscriptions: Vec::new(),
@@ -222,6 +256,7 @@ impl Library {
                 self.close_after_save = matches!(self.pending, Some(Pending::SaveTheme(_)));
             }
             RESET => self.reset_theme(cx),
+            MARGINS_DEFAULT => self.clear_margins(cx),
             COPYRIGHT => self.toggle_copyright(cx),
             0 | 3 | 7 | 8 | 9 | 12 | 13 | 20..=28 => {}
             _ => return false,
@@ -240,7 +275,13 @@ impl Library {
         } else if !theme.is_valid() || theme.encode().len() > sela::theme::MAX_ENCODED {
             self.reject_status(t!(Msg::FormatOutOfRange));
         } else {
-            self.submit(Command::SaveTheme(theme), Pending::SaveTheme(song), cx);
+            let stored = self.theme.as_ref().is_some_and(|edit| edit.stored);
+            let command = if stored {
+                Command::UpdateTheme(theme)
+            } else {
+                Command::SaveTheme(theme)
+            };
+            self.submit(command, Pending::SaveTheme(song), cx);
         }
     }
 
@@ -509,13 +550,28 @@ impl Library {
                                 div()
                                     .id("theme-margins-default")
                                     .debug_selector(|| "theme-margins-default".into())
+                                    .role(Role::Button)
+                                    .aria_label(t!(Msg::MarginsUseDefault))
+                                    .accessibility_id("theme-margins-default")
+                                    .track_focus(&self.buttons[MARGINS_DEFAULT])
+                                    .key_context("SelaControl")
                                     .px_1()
                                     .rounded(px(4.))
                                     .cursor_pointer()
                                     .text_color(rgb(theme::ACCENT))
                                     .hover(|d| d.bg(rgb(theme::HOVER)))
-                                    .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
-                                    .on_click(cx.listener(|s, _, _, cx| s.clear_margins(cx)))
+                                    .focus(|d| d.bg(rgb(theme::FOCUS_BG)))
+                                    .on_action(cx.listener(|s, _: &ActivateControl, w, cx| {
+                                        w.prevent_default();
+                                        s.action(MARGINS_DEFAULT, w, cx);
+                                    }))
+                                    .on_click(cx.listener(|s, e: &ClickEvent, w, cx| {
+                                        if matches!(e, ClickEvent::Keyboard(_)) {
+                                            return;
+                                        }
+                                        s.buttons[MARGINS_DEFAULT].focus(w, cx);
+                                        s.action(MARGINS_DEFAULT, w, cx);
+                                    }))
                                     .child(t!(Msg::MarginsUseDefault)),
                             )
                         }),
@@ -679,6 +735,22 @@ impl Library {
     }
     pub(crate) fn probe_status(&self) -> String {
         self.status.clone()
+    }
+    /// The margin fields' accessibility ids and names (left .. bottom).
+    pub(crate) fn probe_margin_fields(
+        &self,
+        cx: &App,
+    ) -> Vec<Option<(&'static str, &'static str)>> {
+        self.theme.as_ref().map_or_else(Vec::new, |edit| {
+            edit.margins
+                .iter()
+                .map(|m| m.read(cx).accessible())
+                .collect()
+        })
+    }
+    /// Moves the keyboard focus to an editor button.
+    pub(crate) fn probe_focus_button(&self, index: usize, window: &mut Window, cx: &mut App) {
+        self.buttons[index].focus(window, cx);
     }
     pub(crate) fn probe_close_prompt(&self) -> bool {
         self.confirm_close

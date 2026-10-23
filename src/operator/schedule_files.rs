@@ -227,14 +227,16 @@ impl Operator {
             .zip(&job.pins)
             .zip(&job.themes)
         {
-            // Every saved item carries a theme snapshot (M1-08), so the file
-            // reopens with the same look on any library. One never shown
+            // A saved item carries its theme snapshot (M1-08), so the file
+            // reopens with the same look on another library (image
+            // backgrounds are references: name and SHA-256). One never shown
             // takes its song's library theme now, in the file and in the
-            // session alike.
+            // session alike, unless that cannot be trusted (themes not
+            // loaded, or the song's theme is missing): then it is saved
+            // without a snapshot and resolves again when reopened.
             let theme = match snapshot {
-                Some(snapshot) => snapshot.clone(),
-                None => {
-                    let theme = self.library_theme(song_theme).theme;
+                Some(snapshot) => Some(snapshot.clone()),
+                None => self.capturable_theme(song_theme).map(|theme| {
                     if job.document == self.schedule.document() {
                         self.schedule.capture_theme(*entry, &theme);
                     }
@@ -242,13 +244,13 @@ impl Operator {
                         theme,
                         explicit: false,
                     }
-                }
+                }),
             };
             items.push(schedule_file::Item {
                 source: *source,
                 song,
                 arrangement: pin.arrangement,
-                theme: Some(theme),
+                theme,
             });
         }
         let queued = self

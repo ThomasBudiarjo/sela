@@ -580,3 +580,288 @@ fn missing_fonts_and_themes_are_reported_in_preview_not_hidden(cx: &mut TestAppC
     });
     assert_eq!(operator.read_with(&cx, |o, _| preview_key(o)), Some(0));
 }
+
+/// Saves the schedule with Ctrl+S to `file` and reads it back.
+fn save_schedule_as(
+    cx: &mut VisualTestContext,
+    operator: &Entity<Operator>,
+    file: &std::path::Path,
+) -> sela::schedule_file::ScheduleFile {
+    cx.simulate_keystrokes("ctrl-s");
+    let typed = file.to_owned();
+    cx.simulate_new_path_selection(move |_| Some(typed));
+    settle(cx, operator, "saved", |o| {
+        o.schedule.path().is_some() && !o.schedule.is_dirty()
+    });
+    sela::schedule_file::read(file).unwrap()
+}
+
+#[gpui::test]
+fn a_schedule_item_whose_song_theme_is_missing_is_noted_and_never_frozen(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_themes(&dir);
+    let gone = Theme::new("Gone");
+    let song = {
+        let mut repository = Repository::open(&path).unwrap();
+        let song = repository
+            .catalog(None)
+            .unwrap()
+            .into_iter()
+            .find(|(_, t)| t == "Signal Hymn")
+            .unwrap()
+            .0;
+        repository.save_theme(&gone).unwrap();
+        repository.set_song_theme(song.id, Some(gone.id)).unwrap();
+        repository.delete_theme(gone.id).unwrap();
+        song
+    };
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, "schedule-item-0");
+    settle(&mut cx, &operator, "missing theme noted on the item", |o| {
+        o.preview.as_ref().is_some_and(|p| p.entry.is_some())
+            && o.theme_notes() == ["This song's theme is missing · showing the default theme"]
+    });
+    operator.read_with(&cx, |o, _| {
+        assert!(
+            o.schedule.entries()[0].theme.is_none(),
+            "the substituted default is not frozen into the item"
+        );
+    });
+    // Saved without a snapshot: the file never records the substitute.
+    let stored = save_schedule_as(&mut cx, &operator, &dir.path().join("Gone.selaschedule"));
+    assert!(stored.items[0].theme.is_none());
+    // Once the song names a theme the library has, the item captures it.
+    Repository::open(&path)
+        .unwrap()
+        .set_song_theme(song.id, Some(navy().id))
+        .unwrap();
+    operator.update(&mut cx, |o, _| {
+        if let Some(item) = o.preview.as_mut() {
+            item.song_theme = Some(navy().id);
+        }
+    });
+    settle(
+        &mut cx,
+        &operator,
+        "item captured the resolved theme",
+        |o| preview_key(o) == Some(navy().key()) && o.theme_notes().is_empty(),
+    );
+    operator.read_with(&cx, |o, _| {
+        let snapshot = o.schedule.entries()[0].theme.clone().unwrap();
+        assert_eq!(snapshot.theme, navy());
+        assert!(!snapshot.explicit);
+    });
+}
+
+#[gpui::test]
+fn a_failed_theme_load_is_noted_and_captures_nothing(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_themes(&dir);
+    // One undecodable theme row makes the whole theme set unreadable.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE themes SET payload=X'00' WHERE id=?",
+            [&navy().id.0[..]],
+        )
+        .unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(path), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog and failed theme load", |o| {
+        o.catalog.len() == 2 && o.themes.failed
+    });
+    add_song(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, "schedule-item-0");
+    settle(&mut cx, &operator, "unloaded themes noted", |o| {
+        o.preview.as_ref().is_some_and(|p| p.entry.is_some())
+            && o.theme_notes()
+                == [
+                    "Themes are not loaded · showing the default look; nothing is captured until they load",
+                ]
+    });
+    operator.read_with(&cx, |o, _| {
+        assert!(o.schedule.entries()[0].theme.is_none());
+        assert!(o.themes.message.as_ref().is_some_and(|m| m.1), "reported");
+    });
+    let stored = save_schedule_as(&mut cx, &operator, &dir.path().join("Failed.selaschedule"));
+    assert!(
+        stored.items[0].theme.is_none(),
+        "the built-in look is not persisted as the item's theme"
+    );
+}
+
+#[gpui::test]
+fn apply_to_song_reports_a_song_deleted_meanwhile_and_changes_nothing(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_themes(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    let row = song_row(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, row);
+    let version = operator.read_with(&cx, |o, _| version_of(o, "Signal Hymn"));
+    // Deleted from another window before Apply to Song runs.
+    Repository::open(&path)
+        .unwrap()
+        .delete_song(version)
+        .unwrap();
+    open_themes(&mut cx, &operator, 3);
+    select_theme(&mut cx, &operator, "Evening Navy");
+    click(&mut cx, "theme-apply-song");
+    settle(&mut cx, &operator, "refusal reported", |o| {
+        o.themes.message.as_ref().map(|m| (m.0.as_str(), m.1))
+            == Some((
+                "A selected song no longer exists · no song was restyled",
+                true,
+            ))
+    });
+    let repository = Repository::open(&path).unwrap();
+    assert_eq!(repository.song_theme(version.id).unwrap(), None);
+}
+
+#[gpui::test]
+fn another_theme_of_the_same_look_relabels_the_preview(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_themes(&dir)), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, "schedule-item-0");
+    open_themes(&mut cx, &operator, 3);
+    select_theme(&mut cx, &operator, "Evening Navy");
+    click(&mut cx, "theme-apply-item");
+    settle(&mut cx, &operator, "navy item", |o| {
+        o.theme_label().as_deref() == Some("Theme: Evening Navy")
+    });
+    click(&mut cx, "theme-duplicate");
+    settle(&mut cx, &operator, "duplicate listed", |o| {
+        o.themes.set.themes.len() == 4
+    });
+    let copy = operator.read_with(&cx, |o, _| o.themes.selected_theme().unwrap());
+    assert_eq!(copy.key(), navy().key(), "the same look");
+    assert_ne!(copy.name, "Evening Navy");
+    click(&mut cx, "theme-apply-item");
+    let label = format!("Theme: {}", copy.name);
+    settle(&mut cx, &operator, "label, name and badge follow", |o| {
+        o.theme_label().as_deref() == Some(label.as_str())
+            && o.preview.as_ref().unwrap().theme_stamp == copy.stamp()
+    });
+}
+
+#[gpui::test]
+fn theme_thumbnails_keep_one_per_row_at_the_current_output_size(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_themes(&dir)), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    open_themes(&mut cx, &operator, 3);
+    let rendered = |o: &Operator| {
+        let stamps: Vec<u64> = o.themes.rows().iter().map(Theme::stamp).collect();
+        o.themes.thumbs.len() == stamps.len()
+            && o.themes
+                .thumbs
+                .iter()
+                .all(|((stamp, _, _), t)| stamps.contains(stamp) && t.image.is_some())
+    };
+    settle(&mut cx, &operator, "every thumbnail", rendered);
+    // Another output size: the old size's thumbnails are released.
+    operator.update(&mut cx, |o, cx| {
+        o.probe_output_extent(sela::scene::Extent {
+            width: 1280,
+            height: 1024,
+        });
+        cx.notify();
+    });
+    settle(&mut cx, &operator, "re-rendered at the new size", |o| {
+        rendered(o)
+            && o.themes
+                .thumbs
+                .keys()
+                .all(|(_, w, h)| (*w, *h) == (1280, 1024))
+    });
+    // An edited theme's old thumbnail goes too.
+    select_theme(&mut cx, &operator, "Evening Navy");
+    click(&mut cx, "theme-delete");
+    click(&mut cx, "theme-delete");
+    settle(&mut cx, &operator, "deleted", |o| {
+        o.themes.set.themes.len() == 2
+    });
+    settle(&mut cx, &operator, "pruned to the rows", rendered);
+}
+
+#[gpui::test]
+fn a_theme_editor_save_never_resurrects_a_deleted_theme(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = library_with_themes(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(path.clone()), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    open_themes(&mut cx, &operator, 3);
+    select_theme(&mut cx, &operator, "Evening Navy");
+    let before = editor_windows(&cx);
+    click(&mut cx, "theme-edit");
+    let (mut editor_cx, editor) = opened_editor(&mut cx, &before, |(_, _, busy)| !busy);
+    // Deleted in the operator while the editor is open.
+    click(&mut cx, "theme-delete");
+    click(&mut cx, "theme-delete");
+    settle(&mut cx, &operator, "deleted", |o| {
+        o.themes.set.themes.len() == 2
+    });
+    editor_cx.update(|window, cx| {
+        editor.update(cx, |e, cx| {
+            e.probe_action(crate::song_library::THEME_RESET, window, cx)
+        })
+    });
+    editor_cx.update(|window, cx| editor.update(cx, |e, cx| e.probe_action(15, window, cx)));
+    settle_editor(&mut editor_cx, &editor, |(_, _, busy)| !busy);
+    assert_eq!(
+        editor.read_with(&editor_cx, |e, _| e.probe_status()),
+        "This theme was deleted in the Themes tab · it was not saved"
+    );
+    let stored = Repository::open(&path).unwrap().themes().unwrap();
+    assert!(stored.get(navy().id).is_none(), "not re-inserted");
+    assert_eq!(stored.themes.len(), 2);
+}
+
+#[gpui::test]
+fn theme_margin_fields_are_named_and_use_default_works_from_the_keyboard(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library_with_themes(&dir)), "apply");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 2);
+    open_themes(&mut cx, &operator, 3);
+    let before = editor_windows(&cx);
+    click(&mut cx, "theme-new");
+    let (mut editor_cx, editor) = opened_editor(&mut cx, &before, |(_, _, busy)| !busy);
+    assert_eq!(
+        editor.read_with(&editor_cx, |e, cx| e.probe_margin_fields(cx)),
+        [
+            Some(("theme-margin-left-field", "Left margin")),
+            Some(("theme-margin-right-field", "Right margin")),
+            Some(("theme-margin-top-field", "Top margin")),
+            Some(("theme-margin-bottom-field", "Bottom margin")),
+        ]
+    );
+    editor_cx.update(|_, cx| editor.update(cx, |e, cx| e.probe_margin(0, "200", cx)));
+    editor_cx.run_until_parked();
+    let margins = |cx: &VisualTestContext| {
+        editor
+            .read_with(cx, |e, cx| e.probe_theme(cx))
+            .unwrap()
+            .format
+            .margins
+    };
+    assert_eq!(margins(&editor_cx).map(|m| m.left), Some(200));
+    assert!(editor_cx.debug_bounds("theme-margins-default").is_some());
+    editor_cx.update(|window, cx| {
+        editor.update(cx, |e, cx| {
+            e.probe_focus_button(crate::song_library::THEME_MARGINS_DEFAULT, window, cx)
+        })
+    });
+    editor_cx.simulate_keystrokes("space");
+    editor_cx.run_until_parked();
+    assert_eq!(margins(&editor_cx), None, "Use default from the keyboard");
+}

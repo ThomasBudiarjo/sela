@@ -351,6 +351,11 @@ impl TextInput {
     pub fn set_accessible(&mut self, id: &'static str, name: &'static str) {
         self.accessible = Some((id, name));
     }
+    /// The accessibility id and name `set_accessible` gave the field.
+    #[cfg(test)]
+    pub fn accessible(&self) -> Option<(&'static str, &'static str)> {
+        self.accessible
+    }
     /// Document-cell mode: no border, height follows the rows, wheel scrolling
     /// goes to the enclosing list. Up on the first row, Down on the last row,
     /// Enter in a single-line cell and Backspace at the start are not

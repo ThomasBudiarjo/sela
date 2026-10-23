@@ -29,7 +29,10 @@ setting: only "bottom, shown or hidden" is observed (EW8-OBS-032, -063).
    song, the song's library theme (`song_themes`, by song id); else the
    library default song theme (`theme_default`, EW8-OBS-019 "Set As Default
    Song Theme"); else the built-in theme. A song naming a deleted theme uses
-   the default and the Preview pane says so ("This song's theme is missing").
+   the default and the Preview pane says so ("This song's theme is missing"),
+   for a library song and for a schedule item alike. Until the library's
+   themes have loaded, or when loading them failed, every item shows the
+   default look with the note "Themes are not loaded" (TH-BG-10).
 2. **Text format**: each `SlideFormat` field of the slide wins; every unset
    field takes the theme's value (`SlideFormat::over`); unset in both keeps
    the built-in default. An explicit "off" on the slide (outline disabled)
@@ -48,16 +51,27 @@ preparation, preflight-style substitution and cues use the existing paths.
 
 - **Library songs** follow the library: Apply to Song, a theme edit or a new
   default restyle the *Preview* of a library song on its next load (the
-  preview reloads when its theme key changes).
+  preview reloads when its theme's whole-value stamp or its notes change, so
+  a rename, or another theme of the same look, also updates the "Theme:"
+  label and the In Preview badge).
 - **Schedule items snapshot** their theme (`schedule::ItemTheme`): the first
   time an item is shown (or saved) it captures its song's library theme;
   Apply to Item stores an *explicit* snapshot. Later library edits never
   reach a snapshot; "Item: Song Theme" drops it so the item captures the
   library theme again. Only explicit snapshots make the schedule dirty.
-- **`.selaschedule` version 4** stores every item's snapshot (`theme`, hex
+  A substitute is never captured (`Operator::capturable_theme`): while the
+  themes are not loaded (or failed to load), or while the song names a theme
+  the library no longer has, the item shows the default look with its note
+  and keeps no snapshot until the theme resolves or one is applied to it.
+- **`.selaschedule` version 4** stores each item's snapshot (`theme`, hex
   of `Theme::encode`, and `theme_explicit`), so a file reopens with the same
-  look on any library; versions 1-3 open without snapshots. A damaged
-  snapshot makes the file corrupt (never silently restyled).
+  theme on another library; versions 1-3 open without snapshots. An item
+  that has no trustworthy snapshot (see above) is saved without one and
+  takes its library theme when the file is reopened. Image backgrounds in a
+  snapshot are references (file name and SHA-256), not embedded images: on a
+  machine without that image the item renders black with the usual missing
+  image warning, so "same look" holds only where the images are present.
+  A damaged snapshot makes the file corrupt (never silently restyled).
 - **Live never changes on a theme action.** The Live pane keeps its own item
   copy; applying or editing a theme sends nothing; the new look reaches the
   audience only through Go Live (or Next/Previous of a re-cued item). The
@@ -80,9 +94,15 @@ deleting the default theme returns to the built-in default; the built-in
 theme is never stored but may be named by a song (`song_themes` row of
 zeros) so a library default never overrides it. Applying a theme to a song
 does not create a song revision (`song_themes` is keyed by song id), so
-pinned schedule revisions and search are untouched. Worker commands:
-`ThemedSong`, `ThemedSongs` (schedule save), `Themes`, `SaveTheme`,
-`DeleteTheme`, `SetDefaultTheme`, `SetSongTheme`.
+pinned schedule revisions and search are untouched. Applying a theme to
+several songs is one transaction (`Repository::set_song_themes`): a song
+deleted meanwhile, or a theme gone, leaves every song as it was and the
+operator says "A selected song no longer exists"; one command takes at most
+`MAX_SONG_THEME_BATCH` (10 000) songs and the operator refuses a larger
+selection with its own message. Worker commands: `ThemedSong`, `ThemedSongs`
+(schedule save), `Themes`, `SaveTheme` (insert or replace), `UpdateTheme`
+(replace a theme that must still exist), `DeleteTheme`, `SetDefaultTheme`,
+`SetSongTheme`.
 
 ## Rendering: margins on the wire
 
@@ -99,8 +119,10 @@ elsewhere.
 `src/operator/resources/themes.rs`. Rows: the built-in theme first, then
 library themes by name; each row has a 160x90 thumbnail (sample lyrics over
 the theme background, rendered off the UI thread by the editor's audience
-raster twin, one at a time, cached by theme stamp and output size and pruned
-to the listed themes) and badges (Default, In Preview) and warnings. The
+raster twin, one at a time, cached by theme stamp and output size; before
+each render the cache is pruned to the listed themes at the current output
+size and every dropped image is released with `cx.drop_image`, so it holds
+at most one thumbnail per row) and badges (Default, In Preview) and warnings. The
 accessible name of a row is "name · badges · warnings". Footer (one line,
 stable positions): New Theme, Edit…, Duplicate, Delete (press twice:
 Confirm Delete), Set as Default, Apply to Song (selected Songs rows or the
@@ -128,13 +150,36 @@ is a one-slide sample song carrying the theme's format and background, so the
 Format pane's Text and Slide tabs, undo/redo, the unsaved-changes prompt and
 the off-thread preview are reused unchanged. The title field is the theme
 name; the Slide tab adds Theme Elements › Copyright; the Text tab adds margins
-(EW keeps them under Text › Layout, which is still inert, M1-05k); the footer
-has Reset Look (one undo step back to the built-in look) and the warnings.
-Song-only controls (New, Library, Inspector, Arrangement, +/−, Edit Slide
-Layouts) are hidden. OK/Apply store the theme (`Command::SaveTheme`) and
-notify the operator, which reloads its themes; Cancel with changes asks
-Yes/No/Cancel. The sample lyrics can be edited to try long or short text and
+(EW keeps them under Text › Layout, which is still inert, M1-05k): four
+fields with accessible names ("Left margin" … "Bottom margin", ids
+`theme-margin-<side>-field`) and a "Use default" button reachable with Tab and
+Enter/Space; the footer has Reset Look (one undo step back to the built-in
+look) and the warnings. Song-only controls (New, Library, Inspector,
+Arrangement, +/−, Edit Slide Layouts) are hidden. OK/Apply store the theme
+and notify the operator, which reloads its themes: a new theme with
+`Command::SaveTheme`, a library theme (opened by Edit…, or a new one after
+its first save) with `Command::UpdateTheme`, so a theme deleted in the
+Themes tab while its editor is open is not re-inserted (the editor says
+"This theme was deleted in the Themes tab · it was not saved"). Cancel with
+changes asks Yes/No/Cancel. The sample lyrics can be edited to try long or short text and
 are not saved. Window title: "Theme Editor - <name>".
+
+## Divergences from EasyWorship and missing workflows
+
+- **Song master vs. theme (EW8-OBS-057, TH-BG-09).** EW8-OBS-057 records an
+  implementation rule for Sela: a Song Editor Master edit is a theme-level
+  edit of the theme named by the Layouts tab's "Theme - name" selector, with
+  copy-on-write to keep it song-local. This stream does **not** implement
+  that rule: the song master (M1-05h) stays a song-local layer *above* the
+  theme (slide → song master → theme → black), and theme-wide edits go only
+  through the Themes tab editor. The rule is replaced, not dropped silently:
+  it is tracked as M1-08a in the backlog and PP-TH-08 in parity pending.
+- **Missing: the Layouts tab "Theme - name" selector (EW8-OBS-057).** The
+  Song Editor cannot pick or show a song's theme; Apply to Song in the
+  Themes tab is the only way. Tracked as M1-08a / PP-TH-08.
+- **Missing: "Copy to Theme ▸ Song Theme" on an image (EW8-OBS-019).** A
+  theme can take an image background only through the theme editor's
+  Background controls. Tracked as M1-08b / PP-TH-09.
 
 ## GPUI patterns used
 
@@ -158,10 +203,20 @@ song editor already does.
   `audience::text::tests` (lyrics inside the margin box).
 - I: `storage::tests` (schema 6→7 migration with verified backup, abort
   keeps schema 6, CRUD, default, song themes, bounds, corruption).
-- GPUI: `tests::themes` (six tests: tab rows/thumbnails/warnings/default;
+- I: `storage::tests::song_themes_apply_to_every_song_or_to_none`,
+  `a_theme_update_never_resurrects_a_deleted_theme`.
+- GPUI: `tests::themes` (13 tests: tab rows/thumbnails/warnings/default;
   apply to song restyles Preview while Live waits for Go Live; a theme edit
   while live reaches Live only when re-cued; item snapshots and schedule
   files; editor preview/undo/reset/cancel/OK; missing font and missing theme
-  notes).
-- N: `scripts/themes-x11.py` (PASS on Xvfb), `scripts/themes-windows.py`
+  notes; a schedule item whose song theme is missing is noted and never
+  frozen or saved; a failed theme load is noted and captures nothing; Apply
+  to Song with a song deleted meanwhile changes nothing; another theme of
+  the same look relabels Preview; thumbnails keep one per row at the current
+  output size; an editor save never resurrects a deleted theme; margin
+  fields are named and Use default works from the keyboard).
+- R: none. Long/short text and landscape sizes are covered by raster/fit
+  unit tests only; no golden image and no physical display run.
+- N: `scripts/themes-x11.py` (PASS on Xvfb; step 6 puts Evening Navy itself
+  on the audience before editing that theme), `scripts/themes-windows.py`
   (not run: no Windows host).

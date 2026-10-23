@@ -249,6 +249,7 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
 | `themes-x11.py --display :117` (themes stream, 2026-10-22, binary sha256 `f37bf47ba9dd1ca2…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (40 s) |
+| `themes-x11.py --display :117` (themes review round 1, 2026-10-23, binary sha256 `0e1855b2e1137d1a…`; step 6 now edits the live theme) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (42 s) |
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live

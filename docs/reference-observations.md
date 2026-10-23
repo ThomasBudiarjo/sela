@@ -705,7 +705,7 @@ exists (EW8-OBS-010); the Master is a layout of the song's theme
 Copy to Theme and "Set As Default Song Theme" re-render the song preview
 (EW8-OBS-019); format and margin controls (EW8-OBS-028..030); copyright strip
 (EW8-OBS-063). Everything below is a reversible Sela choice to check
-(docs/parity-pending.md, PP-TH-01..07; design in docs/themes.md).
+(docs/parity-pending.md, PP-TH-01..09; design in docs/themes.md).
 
 | ID | State | Record |
 |---|---|---|
@@ -717,3 +717,5 @@ Copy to Theme and "Set As Default Song Theme" re-render the song preview
 | TH-BG-06 | UNOBSERVED | Default song theme applies to songs without their own; deleting it returns to the built-in theme; a song naming a deleted theme shows the default with a Preview note. |
 | TH-BG-07 | UNOBSERVED (Sela addition) | Warnings for an uninstalled font, a missing/changed image, WCAG contrast below 3:1 (no separating outline) and an image aspect off the output by more than 2%; EW is not known to warn. |
 | TH-BG-08 | UNOBSERVED | Copyright position: only the bottom strip (shown/hidden) is built; EW's free element placement is unobserved. |
+| TH-BG-09 | UNOBSERVED (diverges from the EW8-OBS-057 implementation rule) | The song master (M1-05h) is a song-local layer above the theme (slide → song master → theme → black); a Song Editor Master edit never edits a theme, and there is no copy-on-write. EW8-OBS-057's rule (Master edit = edit of the theme named by the Layouts tab "Theme - name" selector, copied on first edit) is not implemented; the selector itself and image "Copy to Theme ▸ Song Theme" (EW8-OBS-019) are missing. Tracked: backlog M1-08a/M1-08b, PP-TH-08/09. |
+| TH-BG-10 | UNOBSERVED (Sela safety rule) | A substitute theme is shown with a Preview note and never captured into a schedule item or saved in a `.selaschedule`: a song naming a deleted theme, or themes not loaded / failed to load, leave the item without a snapshot until the theme resolves or one is applied. |

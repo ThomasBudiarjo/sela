@@ -100,6 +100,9 @@ pub const MAX_ADMINISTRATOR: usize = 256;
 /// Digit limit of the Song Number property (CCLI song numbers have at most
 /// eight digits today; the margin keeps the field from rejecting real ones).
 pub const MAX_SONG_NUMBER: usize = 12;
+/// Most songs one `Command::SetSongTheme` restyles (Select All in a large
+/// library); the operator refuses a bigger selection with its own message.
+pub const MAX_SONG_THEME_BATCH: usize = 10_000;
 /// Song Number is empty or ASCII digits only.
 pub fn song_number_ok(s: &str) -> bool {
     s.len() <= MAX_SONG_NUMBER && s.bytes().all(|b| b.is_ascii_digit())
@@ -1367,6 +1370,15 @@ impl Repository {
     /// Creates or replaces a library theme. The built-in theme is not
     /// stored; a new theme past `MAX_THEMES` is refused.
     pub fn save_theme(&mut self, theme: &Theme) -> Result<ThemeSet> {
+        self.store_theme(theme, false)
+    }
+    /// `save_theme` for a theme that must still be in the library (a theme
+    /// editor saving a library theme): a theme deleted meanwhile is
+    /// `Missing` and is not re-inserted.
+    pub fn update_theme(&mut self, theme: &Theme) -> Result<ThemeSet> {
+        self.store_theme(theme, true)
+    }
+    fn store_theme(&mut self, theme: &Theme, existing: bool) -> Result<ThemeSet> {
         if !theme.is_valid() || theme.is_built_in() || theme.encode().len() > THEME_ENCODED {
             return Err(Error::Invalid);
         }
@@ -1379,6 +1391,9 @@ impl Repository {
             params![id],
             |r| r.get(0),
         )?;
+        if existing && !exists {
+            return Err(Error::Missing);
+        }
         if exists {
             tx.execute(
                 "UPDATE themes SET revision=revision+1,payload=? WHERE id=?",
@@ -1456,37 +1471,50 @@ impl Repository {
     /// `ThemeId::BUILT_IN`: the built-in look whatever the default). The
     /// song must exist and not be deleted; a library theme must exist.
     pub fn set_song_theme(&mut self, song: Id, theme: Option<ThemeId>) -> Result<()> {
+        self.set_song_themes(&[song], theme)
+    }
+    /// `set_song_theme` for several songs in one transaction: every song
+    /// changes or none does. A deleted or unknown song, or a theme the
+    /// library no longer has, is `Missing` and leaves every song as it was.
+    pub fn set_song_themes(&mut self, songs: &[Id], theme: Option<ThemeId>) -> Result<()> {
+        if songs.len() > MAX_SONG_THEME_BATCH {
+            return Err(Error::Invalid);
+        }
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let live: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM songs WHERE id=? AND deleted=0)",
-            params![&song.0[..]],
-            |r| r.get(0),
-        )?;
-        if !live {
-            return Err(Error::Missing);
-        }
-        match theme {
+        if let Some(id) = theme {
             // The built-in theme is named explicitly, so a library default
             // never overrides a song that chose it.
-            Some(id) => {
-                let exists: bool = id == ThemeId::BUILT_IN
-                    || tx.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM themes WHERE id=?)",
-                        params![&id.0[..]],
-                        |r| r.get(0),
-                    )?;
-                if !exists {
-                    return Err(Error::Missing);
-                }
-                tx.execute(
-                    "INSERT OR REPLACE INTO song_themes VALUES(?,?)",
-                    params![&song.0[..], &id.0[..]],
+            let exists: bool = id == ThemeId::BUILT_IN
+                || tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM themes WHERE id=?)",
+                    params![&id.0[..]],
+                    |r| r.get(0),
                 )?;
+            if !exists {
+                return Err(Error::Missing);
             }
-            None => {
-                tx.execute("DELETE FROM song_themes WHERE song=?", params![&song.0[..]])?;
+        }
+        for song in songs {
+            let live: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM songs WHERE id=? AND deleted=0)",
+                params![&song.0[..]],
+                |r| r.get(0),
+            )?;
+            if !live {
+                return Err(Error::Missing);
+            }
+            match theme {
+                Some(id) => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO song_themes VALUES(?,?)",
+                        params![&song.0[..], &id.0[..]],
+                    )?;
+                }
+                None => {
+                    tx.execute("DELETE FROM song_themes WHERE song=?", params![&song.0[..]])?;
+                }
             }
         }
         tx.commit()?;
@@ -1540,7 +1568,10 @@ pub enum Command {
     ThemedSongs(Vec<Version>),
     /// The library themes and default (M1-08).
     Themes,
+    /// Inserts or replaces a theme.
     SaveTheme(Theme),
+    /// Replaces a theme that must still exist (`Repository::update_theme`).
+    UpdateTheme(Theme),
     DeleteTheme(ThemeId),
     SetDefaultTheme(Option<ThemeId>),
     /// Names a theme for these songs (by id); replies with the theme set.
@@ -1618,12 +1649,11 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         }
         Command::Themes => repo.themes().map(Reply::Themes),
         Command::SaveTheme(theme) => repo.save_theme(&theme).map(Reply::Themes),
+        Command::UpdateTheme(theme) => repo.update_theme(&theme).map(Reply::Themes),
         Command::DeleteTheme(id) => repo.delete_theme(id).map(Reply::Themes),
         Command::SetDefaultTheme(id) => repo.set_default_theme(id).map(Reply::Themes),
         Command::SetSongTheme(songs, theme) => {
-            for song in songs {
-                repo.set_song_theme(song, theme)?;
-            }
+            repo.set_song_themes(&songs, theme)?;
             repo.themes().map(Reply::Themes)
         }
     }
@@ -1714,10 +1744,12 @@ impl Worker {
             Command::Search { query, .. } if query.len() > search::MAX_QUERY_BYTES => {
                 return Err(Error::Invalid);
             }
-            Command::SaveTheme(theme) if !theme.is_valid() || theme.is_built_in() => {
+            Command::SaveTheme(theme) | Command::UpdateTheme(theme)
+                if !theme.is_valid() || theme.is_built_in() =>
+            {
                 return Err(Error::Invalid);
             }
-            Command::SetSongTheme(songs, _) if songs.len() > crate::theme::MAX_THEMES => {
+            Command::SetSongTheme(songs, _) if songs.len() > MAX_SONG_THEME_BATCH => {
                 return Err(Error::Invalid);
             }
             _ => (),
@@ -4266,6 +4298,58 @@ mod tests {
         assert_eq!(repo.song_theme(v.id).unwrap(), None);
         repo.delete_song(v2).unwrap();
         assert_eq!(repo.set_song_theme(v.id, None), Err(Error::Missing));
+    }
+    #[test]
+    fn song_themes_apply_to_every_song_or_to_none() {
+        let (_d, _p, mut repo) = fixture();
+        let a = repo.save_song(None, titled("A")).unwrap();
+        let b = repo.save_song(None, titled("B")).unwrap();
+        let c = repo.save_song(None, titled("C")).unwrap();
+        let navy = crate::theme::tests::styled();
+        repo.save_theme(&navy).unwrap();
+        repo.delete_song(c).unwrap();
+        // C was deleted (say, from a Song Editor) before Apply to Song ran:
+        // A and B keep their themes too.
+        assert_eq!(
+            repo.set_song_themes(&[a.id, b.id, c.id], Some(navy.id)),
+            Err(Error::Missing)
+        );
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        assert_eq!(repo.song_theme(b.id).unwrap(), None);
+        assert_eq!(
+            repo.set_song_themes(&[a.id, b.id], Some(ThemeId([5; 16]))),
+            Err(Error::Missing)
+        );
+        repo.set_song_themes(&[a.id, b.id], Some(navy.id)).unwrap();
+        assert_eq!(repo.song_theme(a.id).unwrap(), Some(navy.id));
+        assert_eq!(repo.song_theme(b.id).unwrap(), Some(navy.id));
+        // A Select All of more songs than there are themes is accepted; the
+        // bound is the batch limit.
+        let many = vec![a.id; MAX_THEMES + 1];
+        repo.set_song_themes(&many, None).unwrap();
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        assert_eq!(
+            repo.set_song_themes(&vec![a.id; MAX_SONG_THEME_BATCH + 1], None),
+            Err(Error::Invalid)
+        );
+    }
+    #[test]
+    fn a_theme_update_never_resurrects_a_deleted_theme() {
+        let (_d, _p, mut repo) = fixture();
+        let navy = crate::theme::tests::styled();
+        assert_eq!(repo.update_theme(&navy), Err(Error::Missing));
+        repo.save_theme(&navy).unwrap();
+        let renamed = Theme {
+            name: "Navy 2".into(),
+            ..navy.clone()
+        };
+        assert_eq!(
+            repo.update_theme(&renamed).unwrap().themes,
+            vec![renamed.clone()]
+        );
+        repo.delete_theme(navy.id).unwrap();
+        assert_eq!(repo.update_theme(&renamed), Err(Error::Missing));
+        assert!(repo.themes().unwrap().themes.is_empty());
     }
     #[test]
     fn theme_rows_are_bounded_and_corruption_is_reported() {

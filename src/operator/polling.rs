@@ -330,7 +330,7 @@ impl Operator {
                             self.selected_entry,
                             schedule::entry_arrangement(&self.schedule, self.selected_entry),
                         )
-                        || p.theme_key != self.wanted_theme_key(p)
+                        || p.theme_view() != self.wanted_theme(p)
                 })
             });
             let request = if let Some(job) = self.followup.take() {

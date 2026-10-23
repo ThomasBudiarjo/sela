@@ -27,11 +27,13 @@ located by their AccessKit ids over AT-SPI. Checks, in order:
    restyles that item only; Go Live shows its pale background; Ctrl+S
    through the GTK portal dialog writes a .selaschedule whose item carries
    the explicit Low Contrast snapshot (theme_explicit true).
-6. Edit… opens "Theme Editor - Evening Navy"; Reset Look turns the editor
-   preview back to the built-in look; OK saves the theme (SQLite payload
-   without format or background) and closes the editor. The audience keeps
-   its slide byte-identical; selecting the library song and Go Live re-cues
-   it in the reset look (white on black).
+6. Theme edit while live: the library song (themed Evening Navy) is re-cued
+   so the audience shows Evening Navy itself. Edit… opens "Theme Editor -
+   Evening Navy"; Reset Look turns the editor preview back to the built-in
+   look; OK saves the theme (SQLite payload without format or background)
+   and closes the editor. The audience keeps the navy slide byte-identical
+   although its theme changed; selecting the library song and Go Live
+   re-cues it in the reset look (white on black).
 7. Ctrl+Q exits cleanly (nothing unsaved) and ends the audience child.
 
 X11 differences (see docs/e2e-linux.md): on the default `xvfb` display the
@@ -256,8 +258,20 @@ def body(session: nx.Session) -> str:
         raise nx.Failure("the saved snapshot is not Low Contrast")
     session.save(operator, "operator-item-theme")
 
-    # 6. Theme editor: Reset Look, OK; Live waits for a new Go Live.
+    # 6. Theme edit while live: put Evening Navy itself on the audience, then
+    # edit that theme; Live waits for a new Go Live.
     summary["centers"] = {k: list(v) for k, v in centers.items()}
+    click("Songs")
+    click("song-0")
+    time.sleep(1.0)
+    click("go-live")
+    nx.wait_for_change(screen, pale, 5.0, "navy re-cued before the edit")
+    image = nx.capture_stable(screen)
+    session.save(image, "audience-navy-before-edit")
+    if not all(nx.near(c, NAVY_RGB, 10) for c in corners(image)):
+        raise nx.Failure(f"Evening Navy not live before the edit: {corners(image)}")
+    live_navy = image.digest()
+    click("Themes")
     click("row:Evening Navy")
     known = app.windows()
     click("theme-edit")
@@ -287,15 +301,17 @@ def body(session: nx.Session) -> str:
     )
     nx.activate(operator)
     time.sleep(1.5)
-    if nx.digest(screen) != pale:
-        raise nx.Failure("saving the theme changed the audience output before Go Live")
+    if nx.digest(screen) != live_navy:
+        raise nx.Failure(
+            "saving the live slide's theme changed the audience output before Go Live"
+        )
     summary["live_unchanged_after_edit"] = True
     # The library song (Evening Navy, now reset) re-cued: the edited look.
     click("Songs")
     click("song-0")
     time.sleep(1.0)
     click("go-live")
-    nx.wait_for_change(screen, pale, 5.0, "re-cued go live")
+    nx.wait_for_change(screen, live_navy, 5.0, "re-cued go live")
     image = nx.capture_stable(screen)
     session.save(image, "audience-recued")
     if image.ink_box() is None or any(max(c) > 20 for c in corners(image)):
@@ -314,8 +330,9 @@ def body(session: nx.Session) -> str:
         "the Themes tab lists the built-in and four library themes with thumbnails and font, contrast "
         "and aspect warnings; Apply to Song restyles Preview while Live stays identical until Go Live "
         "shows navy, gold, left-margined text; a schedule item's own theme goes live and is saved as an "
-        "explicit snapshot; the theme editor's Reset Look and OK save the theme while Live keeps its "
-        "scene until the song is re-cued in the reset look; Ctrl+Q exits cleanly"
+        "explicit snapshot; with Evening Navy live, the theme editor's Reset Look and OK save that "
+        "theme while Live keeps its navy scene until the song is re-cued in the reset look; Ctrl+Q "
+        "exits cleanly"
     )
 
 

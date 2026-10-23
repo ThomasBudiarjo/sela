@@ -357,7 +357,8 @@ reference-observations.md, "Themes — UNOBSERVED best guesses".
   a new Go Live; whether other songs on the theme change. Sela now: nothing
   reaches the audience until a re-cue; library songs show the edit on their
   next Preview; schedule items keep their snapshot. Re-run:
-  `themes-windows.py`.
+  `themes-windows.py` (step 6 re-cues the Evening Navy song so the edited
+  theme itself is live; `themes-x11.py` does the same and passes on Xvfb).
 - [ ] **PP-TH-04 Theme editor controls** (EW8-OBS-030, -032, -043;
   TH-BG-05). Steps: open a theme's editor (Edit Theme or the Layouts tab
   theme selector), record its window title, whether margins (Text › Layout)
@@ -368,9 +369,12 @@ reference-observations.md, "Themes — UNOBSERVED best guesses".
 - [ ] **PP-TH-05 Default song theme and a deleted theme** (EW8-OBS-019;
   TH-BG-06). Steps: Set As Default Song Theme on a theme and check songs
   without their own theme; delete a theme a song uses and record what the
-  song shows and any message. Sela now: the default applies to songs without
-  a theme; a deleted theme falls back to the default with a Preview note.
-  Re-run: `themes-windows.py`.
+  song shows and any message, both for the library song and for that song
+  already in the schedule (and in a saved .ews). Sela now: the default
+  applies to songs without a theme; a deleted theme falls back to the
+  default with a Preview note, for schedule items too, and the substitute is
+  never captured or saved (TH-BG-10). Re-run: `themes-windows.py`; GPUI
+  `tests::themes::a_schedule_item_whose_song_theme_is_missing_is_noted_and_never_frozen`.
 - [ ] **PP-TH-06 Contrast/aspect/missing-font warnings** (TH-BG-07). Steps:
   look for any EW warning when a theme uses an uninstalled font, a 4:3 image
   on a 16:9 output, or white text on a near-white background. Sela now: row
@@ -379,7 +383,24 @@ reference-observations.md, "Themes — UNOBSERVED best guesses".
 - [ ] **PP-TH-07 Windows run of `themes-windows.py`** (NOT RUN: no Windows
   host). Prerequisites as in the run order below; seed `--themes`; secondary
   monitor for the audience. Also re-run `song-editor-windows.py` (editor
-  buttons now carry AccessKit ids `editor-button-N`).
+  buttons now carry AccessKit ids `editor-button-N`; the theme editor's
+  margin fields are `theme-margin-<side>-field`, Use default is
+  `theme-margins-default`).
+- [ ] **PP-TH-08 Song Editor Layouts tab theme selector and Master edit scope**
+  (EW8-OBS-057; TH-BG-09; backlog M1-08a). Steps: open a themed song in the
+  Song Editor › Layouts; record the "Theme - name" selector (which themes it
+  lists, whether changing it changes the song's theme); edit the Master
+  background and save; check whether another song on the same theme changes,
+  whether the theme in Resources › Themes changes, and whether EW copies the
+  theme. Sela now: no selector; the song master is a song-local layer above
+  the theme and never edits a theme; theme-wide edits only through the
+  Themes tab. Re-run: none yet (M1-08a planned).
+- [ ] **PP-TH-09 Copy to Theme ▸ Song Theme from an image** (EW8-OBS-019;
+  TH-BG-09; backlog M1-08b). Steps: right-click an image in Media › Images ›
+  Copy to Theme ▸ Song Theme; record the new theme's name, background mode,
+  text format, whether it is selected or set as default, and where it
+  appears. Sela now: missing; an image background is set in the theme
+  editor's Background controls. Re-run: none yet (M1-08b planned).
 
 ## Stream: stage-display
 

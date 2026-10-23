@@ -24,9 +24,10 @@ scripts/uia-names-windows.ps1):
 5. The song is added to the schedule; Apply to Item with Low Contrast goes
    live (pale background); Ctrl+S through the common Save dialog writes a
    .selaschedule whose item carries the explicit snapshot.
-6. Edit… opens "Theme Editor - Evening Navy"; Reset Look and OK store the
-   reset theme; the audience frame is unchanged until the library song is
-   selected and re-cued (white on black again).
+6. Theme edit while live: the library song is re-cued so Evening Navy itself
+   is on the audience; Edit… opens "Theme Editor - Evening Navy"; Reset Look
+   and OK store the reset theme; the navy audience frame is unchanged until
+   the library song is selected and re-cued (white on black again).
 7. Ctrl+Q exits cleanly and ends the audience child.
 
 Takes over the real keyboard and mouse; never run with EasyWorship open.
@@ -262,7 +263,17 @@ def main() -> int:
         if item.get("theme_explicit") is not True:
             raise nw.Failure("the saved item has no explicit theme snapshot")
 
-        # 6. Theme editor.
+        # 6. Theme edit while live: Evening Navy itself on the audience.
+        click("Songs")
+        click("song-0")
+        time.sleep(1.0)
+        click("go-live")
+        width, height, bgra = changed(screen, pale, "navy re-cued before the edit")
+        nw.write_png(args.out / "audience-navy-before-edit.png", width, height, bgra)
+        if not all(lo.near(c, NAVY_RGB, 10) for c in corners(width, height, bgra)):
+            raise nw.Failure("Evening Navy is not live before the edit")
+        live_navy = lo.digest(screen)
+        click("Themes")
         a11y.click_node(hwnd, named["Evening Navy"])
         known = set(nw.top_windows(app.process.pid))
         click("theme-edit")
@@ -294,13 +305,15 @@ def main() -> int:
         )
         nw.activate(hwnd)
         time.sleep(1.5)
-        if lo.digest(screen) != pale:
-            raise nw.Failure("saving the theme changed the audience output")
+        if lo.digest(screen) != live_navy:
+            raise nw.Failure(
+                "saving the live slide's theme changed the audience output"
+            )
         click("Songs")
         click("song-0")
         time.sleep(1.0)
         click("go-live")
-        width, height, bgra = changed(screen, pale, "re-cued go live")
+        width, height, bgra = changed(screen, live_navy, "re-cued go live")
         nw.write_png(args.out / "audience-recued.png", width, height, bgra)
         if any(max(c) > 20 for c in corners(width, height, bgra)):
             raise nw.Failure("re-cued slide is not in the reset look")
