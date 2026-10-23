@@ -48,7 +48,7 @@ def saved_file(path: Path) -> tuple[str, list[bytes]] | None:
     document = nx.read_schedule(path)
     if document is None:
         return None
-    if document["format"] != "sela-schedule" or document["version"] != 3:
+    if document["format"] != "sela-schedule" or document["version"] != 4:
         raise nx.Failure(f"unexpected schedule document header in {path}")
     return document["title"], [bytes.fromhex(i["song_id"]) for i in document["items"]]
 
