@@ -212,8 +212,10 @@ fn entry_of(version: sela::storage::Version, title: &str) -> Entry {
         pin: Pin {
             version,
             arrangement: None,
+            theme: None,
         },
         title: title.into(),
+        theme: None,
     }
 }
 
@@ -363,6 +365,7 @@ fn a_saved_schedule_restores_with_its_file_and_only_the_unsaved_part_dirty(
         baseline: vec![Pin {
             version: songs[0].0,
             arrangement: None,
+            theme: None,
         }],
     };
     crashed_profile(&library, &committed, 2);
@@ -594,6 +597,7 @@ fn a_file_saved_after_the_last_autosave_is_disclosed_instead_of_never_saved(
         baseline: vec![Pin {
             version: songs[0].0,
             arrangement: None,
+            theme: None,
         }],
     };
     {

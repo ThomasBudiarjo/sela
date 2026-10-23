@@ -26,5 +26,6 @@ pub mod settings;
 pub mod slides;
 pub mod song_order;
 pub mod storage;
+pub mod theme;
 pub mod timer;
 pub mod transport;

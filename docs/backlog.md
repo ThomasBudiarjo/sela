@@ -786,13 +786,47 @@ provisional 30 ms target/100 ms p95 ceiling, not an unqualified speed claim.
 
 Depends on: M1-06, M1-01. Tests: U, R, N.
 
-- [ ] Implement font, size, color, alignment, margins, shadow/outline, background
+Progress (stream "themes", 2026-10-22, **implemented-unqualified**; see
+[themes](themes.md)): `sela::theme` model with field-by-field inheritance
+(slide → song master → theme → built-in), schema 8 (developed as 7, renumbered at integration) behind a verified backup,
+`.selaschedule` v4 item snapshots, margins carried to the audience as cue
+insets, the operator Themes tab (thumbnails, warnings, default, apply to song
+and to schedule items) and the Song Editor theme mode. GPUI tests and
+`scripts/themes-x11.py` pass on Linux; `scripts/themes-windows.py`, the EW
+Themes tab observation and screen-reader checks are open
+([parity pending](parity-pending.md#stream-themes)). Review round 1
+(2026-10-23): substitutes are never frozen into schedule items, Apply to Song
+is atomic, the native live-edit step edits the live theme; follow-ups M1-08a
+and M1-08b below. Review round 2 (2026-10-23): thumbnails are released from
+the operator window's sprite atlas, Apply to Song reaches a previewed
+schedule item, a theme deleted elsewhere is named, a lock-blocked theme load
+is retried, and a theme editor keeps its edits for a theme deleted meanwhile
+(PP-TH-10).
+
+- [x] Implement font, size, color, alignment, margins, shadow/outline, background
   color/image and copyright position where confirmed by the reference.
-- [ ] Specify default/theme/item overrides and snapshot inheritance explicitly.
-- [ ] Preview changes without applying them live; implement reset/cancel/undo.
-- [ ] Validate missing fonts/assets, unsuitable aspect ratios and text contrast;
+  (Copyright: shown/hidden at the bottom, the observed position; free
+  placement is unobserved and not built. Margins live under the Text tab, EW's
+  Text › Layout is M1-05k.)
+- [x] Specify default/theme/item overrides and snapshot inheritance explicitly.
+- [x] Preview changes without applying them live; implement reset/cancel/undo.
+- [x] Validate missing fonts/assets, unsuitable aspect ratios and text contrast;
   make substitutions visible rather than claiming identical output.
 - [ ] Render long/short text, landscape variants and override combinations.
+  (Partial: raster/fit unit tests on five landscape sizes and GPUI checks.
+  The R level this ticket lists is not done: no golden image and no physical
+  display run, so this stays open.)
+
+Follow-up tickets found in review (planned, not built; docs/themes.md,
+"Divergences from EasyWorship and missing workflows"):
+
+- [ ] **M1-08a** — Song Editor Layouts tab "Theme - name" selector and the
+  Master-edit scope of EW8-OBS-057 (Master edit as a theme edit with
+  copy-on-write). Sela currently keeps the song master song-local above the
+  theme (TH-BG-09); decide after PP-TH-08. Depends on M1-05h. Tests: U, I, N.
+- [ ] **M1-08b** — Media › Images "Copy to Theme ▸ Song Theme" (EW8-OBS-019):
+  create a song theme from an image item. PP-TH-09. Depends on M1-10. Tests:
+  U, I, N.
 
 Acceptance: theme edits are predictable, serializable and isolated from live;
 advanced shape/layer tooling remains tracked in M4-01.
@@ -1139,6 +1173,22 @@ folder, never PATH) and the `-buildconf` refusal of `--enable-gpl` and
 the app: discovery off the UI thread, logging the accepted version and the
 missing-FFmpeg warning stay open. No checkbox below is satisfied yet.
 
+Progress (media-core, 2026-10-22; implemented-unqualified): pinned
+`linux64` and `win64` LGPL builds with `scripts/fetch-ffmpeg` and
+`scripts/fetch-ffmpeg.ps1` (size and SHA-256 checked, nothing unpacked on a
+mismatch); the operator locates FFmpeg once on its own thread at startup,
+logs the accepted version or every refusal, and shows a non-blocking
+"Video and audio unavailable" status for a missing, GPL or nonfree build
+(Ubuntu's GPL `/usr/bin/ffmpeg` is the negative case). Process isolation is
+decided (FFmpeg as supervised children: process group on Unix, Job Object on
+Windows; the Job Object and, on Linux, `PR_SET_PDEATHSIG` also end children
+when Sela itself dies; macOS has no such mechanism yet) and
+the CPU frames a decoder holds are bounded by count and by `frame_budget`
+bytes (enforced; review round 1 fixed a reported-only bound); a
+provisional software-decode matrix is in [media](media.md). Checkboxes stay
+open: no hardware decode, GPU/audio budgets or Windows evidence yet.
+Windows runs: parity-pending PP-MC-03.
+
 - [ ] Use the M0 interop findings to compare native/software decode options,
   codec/container coverage, GPU transfer paths and distribution obligations.
 - [ ] Pin a supported format matrix, hardware/software fallback and failure policy.
@@ -1159,6 +1209,20 @@ and accepts only absolute local file paths ([media](media.md)). The
 crafted-playlist runtime check (VAL-MEDIA-038), the Job Object supervisor and
 all decoding stay open.
 
+Progress (media-core, 2026-10-22; implemented-unqualified): framework-free
+`media::decode::Decoder` (ffprobe metadata, then `ffmpeg` to raw RGBA over a
+pipe with per-frame `showinfo` timestamps) delivers `Opened`, frames and one
+terminal event through a bounded queue with backpressure, never blocking the
+caller (`try_next`), with cancellation by drop, a stall watchdog, crash and
+corrupt/unsupported/no-video classification, timestamp repair and
+`VideoFrame::background()` as a `PreparedBackground` for cues
+(`first_frame` for posters). `tests/media_decode.rs` decodes generated clips
+(VFR, odd and 1x1 sizes, short clips, unknown codec, truncated and garbage
+files) and checks VAL-MEDIA-038 (a crafted HLS/ffconcat playlist naming
+`http://` fails with a protocol error and nothing connects). Not done: frames
+are not presented anywhere, so the scene-stability, stale-frame, seek and
+text-over-video items stay open for the video-playback stream.
+
 - [ ] Implement open/probe/preload/decode/frame delivery outside UI/render paths.
 - [ ] Bound packet/frame queues and decide drop/backpressure behavior by timestamps.
 - [ ] Handle cancellation, end-of-stream, bad timestamps, corrupt media and decoder
@@ -1169,6 +1233,12 @@ all decoding stay open.
 - [ ] Video slide backgrounds: a Media Fill video per slide or song master
   (EW8-OBS-032 Volume and Media Usage, EW8-OBS-039 Videos category), with
   the M1-05h resolution, gate and missing-file substitution.
+- [ ] FFmpeg children end when Sela itself crashes or is killed, on every
+  platform (media-core review rounds 1-2). Linux: `PR_SET_PDEATHSIG(SIGKILL)`
+  on the spawning thread, tested (`a_child_dies_when_its_parent_is_sigkilled`).
+  Windows: Job Object `KILL_ON_JOB_CLOSE`, written, not run (PP-MC-03).
+  macOS: open, no parent-death signal (needs a watchdog pipe or kqueue
+  `NOTE_EXIT` helper); only matters if macOS becomes a target.
 
 Acceptance: ready video is cue-addressable and failure leaves live stable.
 

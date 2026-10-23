@@ -43,6 +43,7 @@ mod controls;
 mod dialogs;
 mod frame_log;
 mod layout;
+mod media_backend;
 mod menus;
 mod navigation;
 mod options;
@@ -63,6 +64,7 @@ use controls::{
 };
 use dialogs::DismissDialog;
 pub(super) use dialogs::{Dialog, Then};
+pub(crate) use media_backend::MediaLocator;
 pub(crate) use menus::{BarMenu, TopMenu};
 use menus::{
     BarMenuLeft, BarMenuRight, MenuConfirm, MenuDismiss, MenuNext, MenuPrevious, OpenEditMenu,
@@ -143,6 +145,38 @@ impl Render for DragLabel {
     }
 }
 
+/// Hover hint with the full text of a status-bar item that truncates in a
+/// narrow window (output state, media warning); the accessible name
+/// already carries the same text.
+pub(super) struct StatusHint(SharedString);
+
+impl StatusHint {
+    pub(super) fn builder(
+        text: impl Into<SharedString>,
+    ) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+        let text = text.into();
+        move |_, cx| cx.new(|_| StatusHint(text.clone())).into()
+    }
+}
+
+impl Render for StatusHint {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .debug_selector(|| "status-hint".into())
+            .max_w(px(360.))
+            .px_2()
+            .py_1()
+            .rounded(px(RADIUS))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(SURFACE))
+            .shadow_md()
+            .text_size(px(TEXT_SMALL))
+            .text_color(rgb(TEXT))
+            .child(self.0.clone())
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct Item {
     pub(super) version: Version,
@@ -163,9 +197,26 @@ pub(super) struct Item {
     /// Per-slide face resolution, `None` until the background resolver lands.
     /// Until then the current live scene stays and a deferred cue waits.
     pub(super) resolved: Option<Arc<[fonts::Resolved]>>,
+    /// The theme the slides were built with (M1-08): its rendered-look key
+    /// (0 for the built-in look), whole-value stamp and shown name.
+    pub(super) theme_key: u64,
+    pub(super) theme_stamp: u64,
+    pub(super) theme_name: String,
+    /// The song named a theme the library no longer has.
+    pub(super) theme_missing: bool,
+    /// The library's themes were not loaded (or failed to load) when the
+    /// item was built: it shows the default look and captured nothing.
+    pub(super) theme_unloaded: bool,
+    /// The song's library theme when the item was loaded.
+    pub(super) song_theme: Option<sela::theme::ThemeId>,
 }
 
 impl Item {
+    /// The theme state `Operator::wanted_theme` compares: stamp and notes.
+    pub(super) fn theme_view(&self) -> (u64, bool, bool) {
+        (self.theme_stamp, self.theme_missing, self.theme_unloaded)
+    }
+
     /// Position of the arrangement these slides follow: the stored choice
     /// when the song has it, else the first.
     pub(super) fn chosen_index(&self) -> usize {
@@ -222,6 +273,8 @@ pub(crate) enum Request {
     /// Loading a restored schedule's songs for the open-time file check
     /// (M1-11b); the schedule document it was for.
     RecoveryCheck(u64),
+    /// A theme load or write (M1-08).
+    Themes(resources::ThemeJob),
 }
 
 pub(super) struct Operator {
@@ -305,6 +358,8 @@ pub(super) struct Operator {
     pub(super) selected_image: Option<String>,
     pub(super) image_menu: Option<Point<Pixels>>,
     pub(super) media_message: Option<String>,
+    /// FFmpeg availability, located once off the UI thread (M2-01).
+    pub(super) media_backend: media_backend::MediaBackend,
     /// Not persisted yet.
     pub(super) sizing: Sizing,
     pub(super) size_cap: Option<(Version, Extent, Sizing, Option<u16>)>,
@@ -364,6 +419,8 @@ pub(super) struct Operator {
     bar_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
     /// Songs footer status: text and whether it reports a failure.
     pub(super) song_message: Option<(String, bool)>,
+    /// Themes tab state and the library's themes (M1-08).
+    pub(super) themes: resources::ThemeState,
     /// A library double-click waiting for its song to load.
     live_on_load: Option<Version>,
     /// A PageDown/PageUp to another schedule item waiting for its preview.
@@ -504,6 +561,7 @@ impl Operator {
         let library_changed =
             cx.observe_global::<crate::song_library::LibraryChanged>(|this, cx| {
                 this.catalog_stale = true;
+                this.themes.stale = true;
                 cx.notify();
             });
         let search_input = cx.new(|cx| {
@@ -537,6 +595,7 @@ impl Operator {
         });
         let schedule_writer = config.schedule_writer.clone();
         let layout = config.initial_layout.unwrap_or_default();
+        let media_backend = media_backend::MediaBackend::start(config.media_locator.clone());
         let settings = SettingsState::start(profile.as_deref(), config, cx);
         Self {
             focus: cx.focus_handle(),
@@ -597,6 +656,7 @@ impl Operator {
             selected_image: None,
             image_menu: None,
             media_message,
+            media_backend,
             sizing: Sizing::default(),
             size_cap: None,
             cue_preparer: None,
@@ -630,6 +690,7 @@ impl Operator {
             bar_opened_with_mouse: None,
             bar_bounds: Rc::default(),
             song_message: None,
+            themes: resources::ThemeState::new(cx),
             live_on_load: None,
             live_entry_on_load: None,
             live_focus: cx.focus_handle(),

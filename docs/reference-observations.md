@@ -793,3 +793,39 @@ is a reversible best guess; the steps to observe them are in
   Info shrank the whole strip, to 12 px at 1080p, and hid it below 720p). The
   Copyright Font menu, Song Font and "Show Verse/Chorus Label" controls of
   the same tab are not built.
+## Themes — UNOBSERVED best guesses (themes, 2026-10-22)
+
+EasyWorship 8.0.49 was not run for M1-08. Observed inputs: the Themes tab
+exists (EW8-OBS-010); the Master is a layout of the song's theme
+(EW8-OBS-037, -043); Theme Elements song/scripture/copyright (EW8-OBS-032);
+Copy to Theme and "Set As Default Song Theme" re-render the song preview
+(EW8-OBS-019); format and margin controls (EW8-OBS-028..030); copyright strip
+(EW8-OBS-063). Everything below is a reversible Sela choice to check
+(docs/parity-pending.md, PP-TH-01..09; design in docs/themes.md).
+
+| ID | State | Record |
+|---|---|---|
+| TH-BG-01 | UNOBSERVED | Themes tab content: Sela lists the built-in theme then library themes by name, each with a 160x90 rendered thumbnail, Default/In Preview badges and warnings, and a one-line footer of commands. |
+| TH-BG-02 | UNOBSERVED | Applying a theme to a library song changes that song for every later Preview (by song id, no new song revision); Live changes only on a new Go Live. |
+| TH-BG-03 | UNOBSERVED | Schedule items keep a theme snapshot: captured from the song's library theme when first shown or saved, explicit after Apply to Item; library edits never reach it; `.selaschedule` v4 stores it. |
+| TH-BG-04 | UNOBSERVED | Editing a theme while a song using it is live never changes the audience until a re-cue (consistent with EW8-OBS-057's song-local rule being unverified). |
+| TH-BG-05 | UNOBSERVED | Theme editor = Song Editor in theme mode over a one-slide sample (EW8-OBS-043 shows sample lyrics); margins under the Text tab (EW: Text › Layout); Copyright under Slide › Theme Elements; Reset Look returns to the built-in look as one undo step. |
+| TH-BG-06 | UNOBSERVED | Default song theme applies to songs without their own; deleting it returns to the built-in theme; a song naming a deleted theme shows the default with a Preview note. |
+| TH-BG-07 | UNOBSERVED (Sela addition) | Warnings for an uninstalled font, a missing/changed image, WCAG contrast below 3:1 (no separating outline) and an image aspect off the output by more than 2%; EW is not known to warn. |
+| TH-BG-08 | UNOBSERVED | Copyright position: only the bottom strip (shown/hidden) is built; EW's free element placement is unobserved. |
+| TH-BG-09 | UNOBSERVED (diverges from the EW8-OBS-057 implementation rule) | The song master (M1-05h) is a song-local layer above the theme (slide → song master → theme → black); a Song Editor Master edit never edits a theme, and there is no copy-on-write. EW8-OBS-057's rule (Master edit = edit of the theme named by the Layouts tab "Theme - name" selector, copied on first edit) is not implemented; the selector itself and image "Copy to Theme ▸ Song Theme" (EW8-OBS-019) are missing. Tracked: backlog M1-08a/M1-08b, PP-TH-08/09. |
+| TH-BG-11 | UNOBSERVED (Sela safety rule) | A theme load that fails on a lock held by another connection, or a full storage queue, is retried after 2 s with the status "Themes could not be loaded (Locked) · retrying"; until then TH-BG-10 applies. A corrupt theme row is not retried (it would fail again) and waits for the next library change. |
+| TH-BG-12 | UNOBSERVED | A theme deleted in the Themes tab while its editor is open: OK/Apply reports the failure (failure styling), keeps the edits, and the next OK/Apply saves them as a new theme under a fresh id (never re-inserting the deleted id that songs may still name). EW's behavior is unobserved. |
+| TH-BG-10 | UNOBSERVED (Sela safety rule) | A substitute theme is shown with a Preview note and never captured into a schedule item or saved in a `.selaschedule`: a song naming a deleted theme, or themes not loaded / failed to load, leave the item without a snapshot until the theme resolves or one is applied. |
+
+## Media decoding best guesses (media-core, 2026-10-22)
+
+EasyWorship 8.0.49 was not run for media-core. Each item is a reversible
+best guess; the observations to make are PP-MC-01 and PP-MC-02 in
+[parity-pending.md](parity-pending.md).
+
+- UNOBSERVED best guess: a video file EasyWorship cannot decode (unknown codec, damaged or not media). Sela's decoder reports `UnsupportedCodec` or `Corrupt` before any frame and never replaces what is live; the operator-facing wording and where it shows belong to the video-playback stream.
+- UNOBSERVED best guess: variable frame rate clips. Sela keeps each frame's own timestamp (no resampling to a constant rate), so playback follows the source timing.
+- UNOBSERVED best guess: a local playlist or reference file that points at a network URL. Sela refuses it with a protocol error and makes no network request (offline-first; VAL-MEDIA-038).
+- Sela-only, not a parity item: the "Video and audio unavailable" status when Sela's bundled FFmpeg is missing or is a GPL/nonfree build. EasyWorship has no separate decoder to report. When the narrow Resources header truncates it (or the Live output line), hovering shows the full text in a hint (review round 2); also Sela-only.
+- Not decided here: how a video background is fitted. The decoder can letterbox to the cue extent (`Fit::Exact`); EW8-OBS-032 shows Aspect Ratio Auto/Stretch for slide media, which the video-playback stream maps.

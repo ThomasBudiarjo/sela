@@ -277,7 +277,7 @@ impl Operator {
         let items = snapshot
             .entries
             .iter()
-            .map(|e| (e.pin, e.title.clone()))
+            .map(|e| (e.pin, e.title.clone(), e.theme.clone()))
             .collect();
         if self
             .schedule

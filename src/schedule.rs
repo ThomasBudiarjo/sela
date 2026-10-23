@@ -5,6 +5,7 @@
 //! The schedule's document is a `.selaschedule` file (see `schedule_file`).
 use crate::arrangement::VariantId;
 use crate::storage::{MAX_ITEMS, Version};
+use crate::theme::Theme;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -19,6 +20,19 @@ pub struct Entry {
     /// belongs to the entry, never to the library song, so a duplicate can
     /// differ from its original.
     pub arrangement: Option<VariantId>,
+    /// The entry's theme snapshot (M1-08). `None` until the entry is first
+    /// shown or saved, when the song's library theme is captured; later
+    /// library theme edits never reach it until a theme is applied again.
+    pub theme: Option<ItemTheme>,
+}
+
+/// A schedule entry's own copy of the theme it renders with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemTheme {
+    pub theme: Theme,
+    /// Applied to the item by the operator; otherwise captured from the
+    /// song's library theme. Only explicit themes make the schedule dirty.
+    pub explicit: bool,
 }
 
 /// What a saved schedule remembers about one entry.
@@ -26,6 +40,8 @@ pub struct Entry {
 pub struct Pin {
     pub version: Version,
     pub arrangement: Option<VariantId>,
+    /// `Theme::stamp` of an explicitly applied theme.
+    pub theme: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +115,7 @@ impl Schedule {
                 version,
                 title,
                 arrangement: None,
+                theme: None,
             },
         );
         Ok(id)
@@ -234,6 +251,34 @@ impl Schedule {
         }
     }
 
+    /// Applies `theme` to every entry in `ids` as an explicit snapshot, or
+    /// with `None` drops their snapshots so each captures its song's library
+    /// theme again when next shown. Returns how many entries changed.
+    pub fn set_theme(&mut self, ids: &[EntryId], theme: Option<&Theme>) -> usize {
+        let wanted = theme.map(|theme| ItemTheme {
+            theme: theme.clone(),
+            explicit: true,
+        });
+        let mut changed = 0;
+        for entry in self.entries.iter_mut().filter(|e| ids.contains(&e.id)) {
+            if entry.theme != wanted {
+                entry.theme = wanted.clone();
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Records `theme` as the entry's captured snapshot unless it already
+    /// has one. Returns the snapshot the entry renders with.
+    pub fn capture_theme(&mut self, id: EntryId, theme: &Theme) -> Option<&ItemTheme> {
+        let entry = self.entries.iter_mut().find(|e| e.id == id)?;
+        Some(entry.theme.get_or_insert_with(|| ItemTheme {
+            theme: theme.clone(),
+            explicit: false,
+        }))
+    }
+
     /// One step towards the start (`up`) or the end. False at the boundary.
     pub fn move_by(&mut self, id: EntryId, up: bool) -> bool {
         match self.index(id) {
@@ -267,6 +312,11 @@ impl Schedule {
         self.entries.iter().map(|e| Pin {
             version: e.version,
             arrangement: e.arrangement,
+            theme: e
+                .theme
+                .as_ref()
+                .filter(|t| t.explicit)
+                .map(|t| t.theme.stamp()),
         })
     }
 
@@ -277,23 +327,29 @@ impl Schedule {
         self.baseline = pins;
     }
 
-    /// Replaces the contents with a schedule file's items (pin, song title),
-    /// in file order.
-    pub fn open(&mut self, path: PathBuf, items: Vec<(Pin, String)>) -> Result<(), Error> {
+    /// Replaces the contents with a schedule file's items (pin, song title,
+    /// theme snapshot), in file order. A pin's theme stamp is derived from
+    /// the snapshot.
+    pub fn open(
+        &mut self,
+        path: PathBuf,
+        items: Vec<(Pin, String, Option<ItemTheme>)>,
+    ) -> Result<(), Error> {
         if items.len() > MAX_ITEMS {
             return Err(Error::Invalid);
         }
         self.document += 1;
-        self.baseline = items.iter().map(|(pin, _)| *pin).collect();
         self.entries = items
             .into_iter()
-            .map(|(pin, title)| Entry {
+            .map(|(pin, title, theme)| Entry {
                 id: self.allocate(),
                 version: pin.version,
                 title,
                 arrangement: pin.arrangement,
+                theme,
             })
             .collect();
+        self.baseline = self.pins().collect();
         self.path = Some(path);
         Ok(())
     }
@@ -317,7 +373,7 @@ impl Schedule {
     pub fn restore(
         &mut self,
         path: Option<PathBuf>,
-        items: Vec<(Pin, String)>,
+        items: Vec<(Pin, String, Option<ItemTheme>)>,
         baseline: Vec<Pin>,
     ) -> Result<(), Error> {
         if items.len() > MAX_ITEMS || baseline.len() > MAX_ITEMS {
@@ -327,11 +383,12 @@ impl Schedule {
         self.baseline = baseline;
         self.entries = items
             .into_iter()
-            .map(|(pin, title)| Entry {
+            .map(|(pin, title, theme)| Entry {
                 id: self.allocate(),
                 version: pin.version,
                 title,
                 arrangement: pin.arrangement,
+                theme,
             })
             .collect();
         self.path = path;
@@ -355,6 +412,7 @@ mod tests {
         Pin {
             version: v(n, revision),
             arrangement: None,
+            theme: None,
         }
     }
 
@@ -555,7 +613,8 @@ mod tests {
         s.push(v(1, 1), "A".into()).unwrap();
         s.mark_saved("a".into(), s.pins().collect());
         assert_eq!(s.document(), first);
-        s.open("b".into(), vec![(pin(2, 1), "B".into())]).unwrap();
+        s.open("b".into(), vec![(pin(2, 1), "B".into(), None)])
+            .unwrap();
         let opened = s.document();
         assert_ne!(opened, first);
         s.clear();
@@ -567,7 +626,7 @@ mod tests {
         let mut s = Schedule::default();
         let old = s.push(v(1, 1), "A".into()).unwrap();
         let too_many = (0..=MAX_ITEMS)
-            .map(|n| (pin(1, 1), n.to_string()))
+            .map(|n| (pin(1, 1), n.to_string(), None))
             .collect();
         assert_eq!(
             s.open(PathBuf::from("a.selaschedule"), too_many),
@@ -577,9 +636,9 @@ mod tests {
         s.open(
             PathBuf::from("Evening.selaschedule"),
             vec![
-                (pin(1, 1), "A".into()),
-                (pin(1, 1), "A".into()),
-                (pin(2, 3), "B".into()),
+                (pin(1, 1), "A".into(), None),
+                (pin(1, 1), "A".into(), None),
+                (pin(2, 3), "B".into(), None),
             ],
         )
         .unwrap();
@@ -597,5 +656,77 @@ mod tests {
         assert_eq!((s.path(), s.name()), (None, None));
         let fresh = s.push(v(1, 1), "A".into()).unwrap();
         assert!(!ids.contains(&fresh));
+    }
+
+    fn themed(name: &str) -> Theme {
+        Theme {
+            background: Some(crate::background::Background::color([1, 2, 3])),
+            ..Theme::new(name)
+        }
+    }
+
+    #[test]
+    fn captured_themes_stick_and_never_dirty_the_schedule() {
+        let mut s = Schedule::default();
+        let a = s.push(v(1, 1), "A".into()).unwrap();
+        s.mark_saved("a.selaschedule".into(), s.pins().collect());
+        let first = themed("First");
+        assert_eq!(s.capture_theme(a, &first).unwrap().theme, first);
+        // A later library theme never replaces the captured snapshot.
+        let second = themed("Second");
+        assert_eq!(s.capture_theme(a, &second).unwrap().theme, first);
+        assert!(!s.capture_theme(a, &second).unwrap().explicit);
+        assert!(!s.is_dirty(), "capturing is not an edit");
+        assert!(s.capture_theme(EntryId(999), &first).is_none());
+    }
+
+    #[test]
+    fn explicit_themes_dirty_duplicate_and_reopen_clean() {
+        let mut s = Schedule::default();
+        let a = s.push(v(1, 1), "A".into()).unwrap();
+        let b = s.push(v(2, 1), "B".into()).unwrap();
+        s.capture_theme(b, &themed("Library"));
+        s.mark_saved("a.selaschedule".into(), s.pins().collect());
+        let navy = themed("Navy");
+        assert_eq!(s.set_theme(&[a, b], Some(&navy)), 2);
+        assert!(s.is_dirty());
+        assert_eq!(s.set_theme(&[a, b], Some(&navy)), 0, "already applied");
+        assert!(s.get(b).unwrap().theme.as_ref().unwrap().explicit);
+        // Another theme with the same look but another name is a change.
+        let renamed = Theme {
+            name: "Navy 2".into(),
+            ..navy.clone()
+        };
+        assert_eq!(s.set_theme(&[a], Some(&renamed)), 1);
+        let copies = s.duplicate(&[a]).unwrap();
+        assert_eq!(
+            s.get(copies[0]).unwrap().theme,
+            s.get(a).unwrap().theme,
+            "a duplicate keeps the theme"
+        );
+        // Clearing drops the snapshot so the library theme is captured again.
+        assert_eq!(s.set_theme(&[b], None), 1);
+        assert_eq!(s.get(b).unwrap().theme, None);
+        // Reopening a file restores snapshots and is clean.
+        let items: Vec<_> = s
+            .entries()
+            .iter()
+            .map(|e| {
+                (
+                    Pin {
+                        version: e.version,
+                        arrangement: e.arrangement,
+                        theme: None,
+                    },
+                    e.title.clone(),
+                    e.theme.clone(),
+                )
+            })
+            .collect();
+        let themes: Vec<_> = s.entries().iter().map(|e| e.theme.clone()).collect();
+        s.open("b.selaschedule".into(), items).unwrap();
+        assert!(!s.is_dirty());
+        let reopened: Vec<_> = s.entries().iter().map(|e| e.theme.clone()).collect();
+        assert_eq!(reopened, themes);
     }
 }

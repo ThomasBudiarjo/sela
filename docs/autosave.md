@@ -75,8 +75,9 @@ new storage layout.
   policy forgets that transition, and the store keeps the old marker in
   memory, so the retry really writes `session.json` again.
 
-A revision records the entries (pinned song revision, arrangement, title),
-the schedule file path (UTF-8 only; a non-UTF-8 path is recorded as
+A revision records the entries (pinned song revision, arrangement, title
+and, since format version 2, the entry's theme snapshot), the schedule file
+path (UTF-8 only; a non-UTF-8 path is recorded as
 untitled) and the file's baseline, so a restored schedule keeps its file
 and only the unsaved part shows as unsaved. Revisions pin library song
 revisions instead of embedding songs: committed song revisions are never
@@ -87,9 +88,17 @@ database access.
 ## Files and commit protocol
 
 - `Recovery/autosave-NNNNNNNNNNNN.selarecovery`: one JSON line
-  (`format "sela-recovery"`, `version 1`, `sequence`, `saved_at_ms`, `path`,
-  `items[{song_id, revision, arrangement, title}]`, `baseline[...]`) and a
-  second line `sha256 <hex of the first line>`. A file whose checksum,
+  (`format "sela-recovery"`, `version 2`, `sequence`, `saved_at_ms`, `path`,
+  `items[{song_id, revision, arrangement, theme_stamp?, theme?,
+  theme_explicit?, title}]`, `baseline[{..., theme_stamp?}]`) and a second
+  line `sha256 <hex of the first line>`. Version 2 (themes integration,
+  2026-10-23) adds each item's M1-08 theme snapshot (`theme`, hex of
+  `Theme::encode`, and `theme_explicit`) and each pin's explicit theme stamp
+  (`theme_stamp`, `Theme::stamp`), so a restored schedule keeps applied and
+  captured item themes and compares with its `.selaschedule` baseline
+  exactly; version 1 revisions still restore, without theme snapshots (their
+  items capture the library theme when first shown). A damaged theme blob
+  makes the revision damaged. `session.json` stays version 1. A file whose checksum,
   structure or sequence (name versus body) does not match is **damaged** and
   never restored. At most 512 KiB, 32 items, 1 KiB titles, 4 KiB path.
 - `Recovery/session.json`: `state` (`running` while an operator owns the
@@ -116,7 +125,11 @@ the bounded queue (4) refuses is tried again on a later tick. Nothing is
 written while the recovery prompt is open.
 
 UI-thread cost per tick: one fingerprint of the schedule (ids, revisions,
-arrangements, title lengths, path, baseline). Measured on this container in
+arrangements, applied (explicit) theme snapshots hashed in place, title
+lengths, path, baseline; a theme captured when an entry is first shown is
+not an edit and starts no commit, but the next commit records it; the theme
+part was added at the themes integration and the timing below was not
+re-measured with it). Measured on this container in
 the debug build (sela crate unoptimized) for a full 32-entry schedule with
 1 KiB titles: 8.8 µs per fingerprint and 4.8 µs per commit snapshot (an
 ad-hoc 10 000-iteration loop, not a committed benchmark; hashing whole

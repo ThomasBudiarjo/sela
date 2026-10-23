@@ -44,7 +44,7 @@
 //! All I/O is blocking and runs on [`Worker`]'s thread. `Policy`,
 //! [`fingerprint`] and [`Snapshot::of`] are cheap and run on the caller.
 use crate::arrangement::VariantId;
-use crate::schedule::{Pin, Schedule};
+use crate::schedule::{ItemTheme, Pin, Schedule};
 use crate::storage::{Id, MAX_ITEMS, Version};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -67,7 +67,13 @@ const REVISION_SUFFIX: &str = ".selarecovery";
 const TEMP_SUFFIX: &str = ".tmp";
 const FORMAT: &str = "sela-recovery";
 const SESSION_FORMAT: &str = "sela-recovery-session";
-const VERSION: u64 = 1;
+/// Revision format version. Version 2 (themes integration, M1-08) adds each
+/// item's theme snapshot (`theme`, hex of `Theme::encode`, and
+/// `theme_explicit`) and each pin's explicit theme stamp (`theme_stamp`);
+/// version 1 revisions still read, without snapshots. The session file
+/// keeps version 1.
+const VERSION: u64 = 2;
+const SESSION_VERSION: u64 = 1;
 /// Larger files are damaged, not read: 32 items with 1 KiB titles stay far
 /// below it.
 pub const MAX_REVISION_BYTES: u64 = 512 * 1024;
@@ -270,6 +276,8 @@ impl Config {
 pub struct Entry {
     pub pin: Pin,
     pub title: String,
+    /// The entry's theme snapshot (M1-08), explicit or captured.
+    pub theme: Option<ItemTheme>,
 }
 
 /// The schedule as committed: entries, its file and the file's baseline.
@@ -290,12 +298,11 @@ impl Snapshot {
             entries: schedule
                 .entries()
                 .iter()
-                .map(|e| Entry {
-                    pin: Pin {
-                        version: e.version,
-                        arrangement: e.arrangement,
-                    },
+                .zip(schedule.pins())
+                .map(|(e, pin)| Entry {
+                    pin,
                     title: e.title.clone(),
+                    theme: e.theme.clone(),
                 })
                 .collect(),
             baseline: schedule.baseline().to_vec(),
@@ -320,6 +327,7 @@ pub fn fingerprint(schedule: &Schedule) -> u64 {
         pin.version.id.0.hash(hasher);
         pin.version.revision.hash(hasher);
         pin.arrangement.map(|a| a.0.0).hash(hasher);
+        pin.theme.hash(hasher);
     };
     schedule.path().hash(&mut hasher);
     schedule.entries().len().hash(&mut hasher);
@@ -328,9 +336,20 @@ pub fn fingerprint(schedule: &Schedule) -> u64 {
             &Pin {
                 version: entry.version,
                 arrangement: entry.arrangement,
+                theme: None,
             },
             &mut hasher,
         );
+        // An applied (explicit) theme snapshot, hashed in place: no encode or
+        // digest on the UI thread. A captured snapshot (taken when an entry
+        // is first shown) is not a schedule edit, just as it never makes the
+        // schedule dirty, so it starts no commit; the next commit records it.
+        entry
+            .theme
+            .as_ref()
+            .filter(|t| t.explicit)
+            .map(|t| &t.theme)
+            .hash(&mut hasher);
         // Titles change with the pinned revision (insert, re-pin, open,
         // restore), so their length is enough and keeps a 32-entry
         // fingerprint cheap on the UI thread (whole titles measured 149 us
@@ -455,6 +474,9 @@ fn pin_json(pin: &Pin) -> Map<String, Value> {
         "arrangement".into(),
         pin.arrangement.map_or(Value::Null, |a| hex(&a.0.0).into()),
     );
+    if let Some(stamp) = pin.theme {
+        out.insert("theme_stamp".into(), stamp.into());
+    }
     out
 }
 
@@ -468,7 +490,40 @@ fn pin_from(value: &Value) -> Option<Pin> {
             Value::Null => None,
             other => Some(VariantId(id_from(other)?)),
         },
+        theme: match value.get("theme_stamp") {
+            Some(stamp) => Some(stamp.as_u64()?),
+            None => None,
+        },
     })
+}
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || !text.is_ascii() {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok())
+        .collect()
+}
+
+/// A version 2 item's theme snapshot; a damaged one makes the revision
+/// damaged rather than silently restyling it.
+fn theme_from(item: &Value) -> Option<Option<ItemTheme>> {
+    let Some(value) = item.get("theme") else {
+        return Some(None);
+    };
+    let text = value.as_str()?;
+    if text.len() > 2 * crate::theme::MAX_ENCODED {
+        return None;
+    }
+    Some(Some(ItemTheme {
+        theme: crate::theme::Theme::decode(&unhex(text)?)?,
+        explicit: match item.get("theme_explicit") {
+            Some(flag) => flag.as_bool()?,
+            None => false,
+        },
+    }))
 }
 
 fn revision_name(sequence: u64) -> String {
@@ -494,6 +549,10 @@ pub fn encode_revision(revision: &Revision) -> Vec<u8> {
         .map(|e| {
             let mut item = pin_json(&e.pin);
             item.insert("title".into(), e.title.clone().into());
+            if let Some(theme) = &e.theme {
+                item.insert("theme".into(), hex(&theme.theme.encode()).into());
+                item.insert("theme_explicit".into(), theme.explicit.into());
+            }
             Value::Object(item)
         })
         .collect();
@@ -533,7 +592,8 @@ pub fn decode_revision(bytes: &[u8]) -> Option<Revision> {
         return None;
     }
     let value: Value = serde_json::from_str(body).ok()?;
-    if value.get("format")?.as_str()? != FORMAT || value.get("version")?.as_u64()? != VERSION {
+    let version = value.get("version")?.as_u64()?;
+    if value.get("format")?.as_str()? != FORMAT || !(1..=VERSION).contains(&version) {
         return None;
     }
     let items = value.get("items")?.as_array()?;
@@ -546,13 +606,34 @@ pub fn decode_revision(bytes: &[u8]) -> Option<Revision> {
         .map(|item| {
             let title = item.get("title")?.as_str()?;
             (title.len() <= MAX_TITLE_BYTES).then_some(())?;
+            let (pin, theme) = if version >= 2 {
+                (pin_from(item)?, theme_from(item)?)
+            } else {
+                // Version 1 has no theme fields; ignore any.
+                (
+                    Pin {
+                        theme: None,
+                        ..pin_from(item)?
+                    },
+                    None,
+                )
+            };
             Some(Entry {
-                pin: pin_from(item)?,
+                pin,
                 title: title.to_owned(),
+                theme,
             })
         })
         .collect::<Option<Vec<_>>>()?;
-    let baseline = baseline.iter().map(pin_from).collect::<Option<Vec<_>>>()?;
+    let baseline = baseline
+        .iter()
+        .map(|p| {
+            pin_from(p).map(|pin| Pin {
+                theme: pin.theme.filter(|_| version >= 2),
+                ..pin
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
     let path = match value.get("path")? {
         Value::Null => None,
         Value::String(p) if p.len() <= MAX_PATH_BYTES => Some(PathBuf::from(p)),
@@ -581,7 +662,7 @@ fn encode_session(session: &Session) -> Vec<u8> {
     };
     let mut text = json!({
         "format": SESSION_FORMAT,
-        "version": VERSION,
+        "version": SESSION_VERSION,
         "state": state,
         "started_at_ms": session.started_at,
         "acknowledged": session.acknowledged,
@@ -595,7 +676,7 @@ fn encode_session(session: &Session) -> Vec<u8> {
 fn decode_session(bytes: &[u8]) -> Option<Session> {
     let value: Value = serde_json::from_slice(bytes).ok()?;
     if value.get("format")?.as_str()? != SESSION_FORMAT
-        || value.get("version")?.as_u64()? != VERSION
+        || value.get("version")?.as_u64()? != SESSION_VERSION
     {
         return None;
     }

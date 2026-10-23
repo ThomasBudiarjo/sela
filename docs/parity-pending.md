@@ -667,11 +667,146 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
 
 ## Stream: media-core
 
+- [ ] **PP-MC-01 Undecodable and damaged video in EasyWorship** (M2-02;
+  best guess in reference-observations "Media decoding best guesses").
+  Steps: in a disposable profile, import into Media › Videos (a) a text file
+  renamed `broken.mp4`, (b) an original FFV1-in-AVI clip whose codec tag was
+  renamed (make it with the fetched FFmpeg as `tests/media_decode.rs` does),
+  (c) an original clip cut in half; note any import message, the thumbnail,
+  and what Preview and Go Live do with each (does Live keep the previous
+  item?). Sela now: the decoder fails with `Corrupt`/`UnsupportedCodec`
+  before any frame (a half clip delivers what decodes, then ends); there is
+  no video UI yet. Re-run: `cargo test --locked --test media_decode`, then
+  the video-playback stream's script.
+- [ ] **PP-MC-02 Variable frame rate timing** (M2-02). Steps: play an
+  original clip whose frames 0-9 run at 30 fps followed by a 0.5 s gap (the
+  `setpts` recipe in `tests/media_decode.rs`) with an audible tick per frame
+  as a video background; film or capture the audience and note whether EW
+  holds the frame for the gap or plays at a constant rate. Sela now: every
+  frame keeps its source timestamp (`variable_frame_rate_keeps_each_frames_own_timestamp`).
+  Re-run: that test and the video-playback script.
+- [ ] **PP-MC-03 Windows run of the FFmpeg base** (VAL-MEDIA-004/030/031).
+  Steps: `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts\fetch-ffmpeg.ps1` (expect "size and SHA-256 verified", then
+  "already holds" on a second run), `cargo build --locked` and `cargo build
+  --locked --examples`, then `python scripts\media-backend-windows.py
+  --gpl-dir <a GPL ffmpeg bin folder, e.g. a gyan.dev full build>`. It checks
+  the accepted dev copy and its log line, no console window during the
+  probe, the GPL and missing warnings with Live output/Go Live/Black still
+  working, and runs `cargo test --locked --test media_decode` with
+  `SELA_REQUIRE_FFMPEG=1` (the drop and outside-kill tests exercise the Job
+  Object). Not covered by that Windows run: the stall-watchdog, hanging-probe
+  and `first_frame` timeout tests and the `fetch-ffmpeg` usage test use
+  `cfg(unix)` shell fakes, and the GPL half of the locator test needs
+  `/usr/bin`; check those paths on Windows by hand (a `.cmd` ffprobe that
+  runs `timeout /t 30` must end in `ProbeTimedOut`) or port the fakes.
+  `fetch_ffmpeg_ps1_reports_usage_mistakes_as_exit_2` runs the PowerShell
+  usage checks (exit 2 for `-Platform` without a value, `-Dest -Force`,
+  `-Platform bogus`, `-Bogus x`) under `powershell` on Windows; confirm it
+  ran rather than printed `SKIPPED`, and also run it with
+  `SELA_PWSH=powershell.exe` if `pwsh` is installed, so Windows PowerShell
+  5.1 is covered. Sela now: Linux only (`scripts/media-backend-x11.py`
+  PASS; `fetch-ffmpeg.ps1` ran under PowerShell 7.4.6 on Linux only).
+  Re-run: the same commands.
+- [ ] **PP-MC-04 Mapped network and subst drives** (docs/media.md "Decoder
+  input arguments" known gap). Steps: map a share as `Z:` and `subst Y:` a
+  local folder; start a decode of a clip on each from a worker (or the
+  video-playback UI once it exists) and note that both are accepted today.
+  Decide whether `GetDriveTypeW` should refuse `DRIVE_REMOTE`. Re-run:
+  `cargo test --locked --lib media` after the change.
+
 ## Stream: video-playback
 
 ## Stream: scripture
 
 ## Stream: themes
+
+Sela behavior and every best guess: [themes](themes.md); best-guess IDs are in
+reference-observations.md, "Themes — UNOBSERVED best guesses".
+
+- [ ] **PP-TH-01 Themes tab layout and commands** (EW8-OBS-010 lists the tab;
+  content unobserved; TH-BG-01). Steps: open Resources › Themes in 8.0.49 with
+  the default profile; capture the tab (list or grid, thumbnails, columns,
+  footer + / gear, right-click menu entries); right-click a theme and record
+  every entry (Edit, Duplicate, Delete, "Set As Default Song Theme"…); note
+  which theme carries a default marker. Sela now: list with 160x90 thumbnails
+  and a footer New Theme / Edit… / Duplicate / Delete / Set as Default /
+  Apply to Song / Apply to Item / Item: Song Theme. Re-run:
+  `themes-windows.py`.
+- [ ] **PP-TH-02 Applying a theme to a song and a schedule item** (TH-BG-02,
+  TH-BG-03). Steps: with song A in the schedule and A live, change A's theme
+  from the Songs list (or by dragging a theme onto it) and separately from
+  the schedule item; record whether Preview/Live change before a new Go Live,
+  whether the library song and the schedule item change together, and
+  whether a saved .ews keeps the item's look. Sela now: library songs follow
+  their library theme; schedule items keep a snapshot (captured when first
+  shown or saved, explicit when applied); Live changes only on Go Live.
+  Re-run: `themes-windows.py`, `schedule-windows.py`.
+- [ ] **PP-TH-03 Editing a theme while it is live** (TH-BG-04; EW8-OBS-057).
+  Steps: with a themed song live, edit the theme's background and font and
+  save; record whether the audience changes immediately, on Next, or only on
+  a new Go Live; whether other songs on the theme change. Sela now: nothing
+  reaches the audience until a re-cue; library songs show the edit on their
+  next Preview; schedule items keep their snapshot. Re-run:
+  `themes-windows.py` (step 6 re-cues the Evening Navy song so the edited
+  theme itself is live; `themes-x11.py` does the same and passes on Xvfb).
+- [ ] **PP-TH-04 Theme editor controls** (EW8-OBS-030, -032, -043;
+  TH-BG-05). Steps: open a theme's editor (Edit Theme or the Layouts tab
+  theme selector), record its window title, whether margins (Text › Layout)
+  and Theme Elements show there, how Reset works, and the Save/Cancel
+  wording. Sela now: the Song Editor in theme mode, title "Theme Editor -
+  name", margins under Text, Copyright under Slide › Theme Elements, Reset
+  Look button, OK/Apply/Cancel. Re-run: `themes-windows.py`.
+- [ ] **PP-TH-05 Default song theme and a deleted theme** (EW8-OBS-019;
+  TH-BG-06). Steps: Set As Default Song Theme on a theme and check songs
+  without their own theme; delete a theme a song uses and record what the
+  song shows and any message, both for the library song and for that song
+  already in the schedule (and in a saved .ews). Sela now: the default
+  applies to songs without a theme; a deleted theme falls back to the
+  default with a Preview note, for schedule items too, and the substitute is
+  never captured or saved (TH-BG-10). Re-run: `themes-windows.py`; GPUI
+  `tests::themes::a_schedule_item_whose_song_theme_is_missing_is_noted_and_never_frozen`.
+- [ ] **PP-TH-06 Contrast/aspect/missing-font warnings** (TH-BG-07). Steps:
+  look for any EW warning when a theme uses an uninstalled font, a 4:3 image
+  on a 16:9 output, or white text on a near-white background. Sela now: row
+  and editor warnings (font, image, WCAG contrast < 3:1, aspect mismatch >
+  2%); EW is believed to show none. Re-run: `themes-windows.py`.
+- [ ] **PP-TH-07 Windows run of `themes-windows.py`** (NOT RUN: no Windows
+  host). Prerequisites as in the run order below; seed `--themes`; secondary
+  monitor for the audience. Also re-run `song-editor-windows.py` (editor
+  buttons now carry AccessKit ids `editor-button-N`; the theme editor's
+  margin fields are `theme-margin-<side>-field`, Use default is
+  `theme-margins-default`).
+- [ ] **PP-TH-08 Song Editor Layouts tab theme selector and Master edit scope**
+  (EW8-OBS-057; TH-BG-09; backlog M1-08a). Steps: open a themed song in the
+  Song Editor › Layouts; record the "Theme - name" selector (which themes it
+  lists, whether changing it changes the song's theme); edit the Master
+  background and save; check whether another song on the same theme changes,
+  whether the theme in Resources › Themes changes, and whether EW copies the
+  theme. Sela now: no selector; the song master is a song-local layer above
+  the theme and never edits a theme; theme-wide edits only through the
+  Themes tab. Re-run: none yet (M1-08a planned).
+- [ ] **PP-TH-09 Copy to Theme ▸ Song Theme from an image** (EW8-OBS-019;
+  TH-BG-09; backlog M1-08b). Steps: right-click an image in Media › Images ›
+  Copy to Theme ▸ Song Theme; record the new theme's name, background mode,
+  text format, whether it is selected or set as default, and where it
+  appears. Sela now: missing; an image background is set in the theme
+  editor's Background controls. Re-run: none yet (M1-08b planned).
+- [ ] **PP-TH-10 A theme deleted while its editor is open; a theme busy or
+  deleted elsewhere** (TH-BG-11, TH-BG-12). Steps: in 8.0.49 open a theme's
+  editor, delete that theme from Resources › Themes (if EW allows it while
+  the editor is open), then press OK in the editor; record the message, its
+  styling, and whether EW re-creates the theme, saves a copy, or discards the
+  edits. Separately, with two EW instances or a remote profile on the same
+  library, delete a theme in one and apply it to a song in the other; record
+  the message. Sela now: the editor shows "This theme was deleted in the
+  Themes tab · it was not saved · OK saves it as a new theme" as a failure
+  and the next OK saves a new theme under a fresh id; Apply to Song says
+  "“name” no longer exists · no song was restyled" and drops the theme; a
+  theme load blocked by another connection retries after 2 s. Re-run: GPUI
+  `tests::themes::a_theme_editor_save_never_resurrects_a_deleted_theme`,
+  `apply_to_song_reports_a_theme_deleted_meanwhile_and_drops_it`,
+  `a_theme_load_blocked_by_another_connection_is_retried`; `themes-windows.py`.
 
 ## Stream: stage-display
 
@@ -720,6 +855,8 @@ timing):
 | 24 | `scenario-s01-windows.py` | none seeded (fresh profile); secondary monitor; native Save dialog |
 | 25 | `scenario-s02-windows.py` | seed (`--second-song`); secondary monitor |
 | 26 | `autosave-windows.py` | seed (`--second-song`); secondary monitor; no other Sela instance (it starts a second one on purpose) |
+| 27 | `themes-windows.py` | seed (`--themes`); secondary monitor; native Save dialog (themes stream, PP-TH-07) |
+| 28 | `media-backend-windows.py` | `scripts\fetch-ffmpeg.ps1` first; optional `--gpl-dir` (a GPL FFmpeg bin folder); runs `cargo test --test media_decode` unless `--skip-cargo` (PP-MC-03) |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

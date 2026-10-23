@@ -430,12 +430,20 @@ impl Render for Operator {
                         t!(Msg::ResetLayout),
                         cx,
                     ))
-                    .child(
+                    .child({
+                        let line = self.output_line();
                         div()
+                            .id("output-status")
+                            .debug_selector(|| "output-status".into())
+                            .min_w_0()
+                            .truncate()
                             .text_size(px(TEXT_CAPTION))
                             .text_color(rgb(MUTED))
-                            .child(self.output_line()),
-                    )
+                            // Truncates at the minimum window; hover shows it whole.
+                            .tooltip(StatusHint::builder(line.clone()))
+                            .child(line)
+                    })
+                    .children(self.media_warning())
                     .children(self.settings_note().map(|note| {
                         div()
                             .debug_selector(|| "settings-note".into())
@@ -448,7 +456,7 @@ impl Render for Operator {
                     })),
             )
             .when(!self.collapsed, |d| {
-                let detail = self.resource_detail(cx);
+                let detail = self.resource_detail(window, cx);
                 d.child(
                     div()
                         .flex_1()
@@ -581,6 +589,7 @@ impl Render for Operator {
                             ),
                     )
                 })
+                .when(self.tab == 4, |d| d.child(self.theme_footer(cx)))
                 .when(self.tab == 2, |d| {
                     d.when(!self.assets.import_notes.is_empty(), |d| {
                         d.child(

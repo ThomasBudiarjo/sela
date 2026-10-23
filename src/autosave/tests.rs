@@ -16,6 +16,7 @@ fn pin(n: u8) -> Pin {
     Pin {
         version: v(n, 1),
         arrangement: None,
+        theme: None,
     }
 }
 
@@ -23,6 +24,7 @@ fn entry(n: u8, title: &str) -> Entry {
     Entry {
         pin: pin(n),
         title: title.into(),
+        theme: None,
     }
 }
 
@@ -176,8 +178,10 @@ fn a_revision_round_trips_and_any_damage_is_rejected() {
                     pin: Pin {
                         version: v(3, 9),
                         arrangement: Some(VariantId(Id([5; 16]))),
+                        theme: None,
                     },
                     title: "Line\nbreak \"quoted\"".into(),
+                    theme: None,
                 },
                 entry(3, "Same song twice"),
             ],
@@ -231,7 +235,7 @@ fn snapshot_and_fingerprint_follow_the_schedule() {
             saved
                 .entries
                 .iter()
-                .map(|e| (e.pin, e.title.clone()))
+                .map(|e| (e.pin, e.title.clone(), e.theme.clone()))
                 .collect(),
             saved.baseline.clone(),
         )
@@ -239,9 +243,82 @@ fn snapshot_and_fingerprint_follow_the_schedule() {
     assert_eq!(Snapshot::of(&restored), saved);
     assert!(!restored.is_dirty());
     restored
-        .restore(None, vec![(pin(2), "B".into())], Vec::new())
+        .restore(None, vec![(pin(2), "B".into(), None)], Vec::new())
         .unwrap();
     assert!(restored.is_dirty(), "an untitled restore is unsaved");
+}
+
+/// Themes integration (M1-08 with M1-12): a revision keeps each entry's
+/// theme snapshot and the pins' explicit theme stamps, so a restored
+/// schedule renders and compares with its file exactly as before the crash;
+/// a version 1 revision (no theme fields) still reads.
+#[test]
+fn a_revision_keeps_item_themes_and_version_1_still_reads() {
+    let mut schedule = Schedule::default();
+    let a = schedule.push(v(1, 1), "Morning Light".into()).unwrap();
+    let b = schedule.push(v(2, 1), "Evening Song".into()).unwrap();
+    let navy = crate::theme::tests::styled();
+    let before = fingerprint(&schedule);
+    assert_eq!(schedule.set_theme(&[a], Some(&navy)), 1);
+    let explicit = fingerprint(&schedule);
+    assert_ne!(explicit, before, "an applied theme counts");
+    schedule.capture_theme(b, &crate::theme::Theme::built_in());
+    assert_eq!(
+        fingerprint(&schedule),
+        explicit,
+        "a captured theme is not an edit"
+    );
+    schedule.mark_saved(
+        PathBuf::from("/s/Themed.selaschedule"),
+        schedule.pins().collect(),
+    );
+    let snapshot = Snapshot::of(&schedule);
+    assert!(!snapshot.unsaved(), "theme stamps match the baseline");
+    assert_eq!(snapshot.entries[0].pin.theme, Some(navy.stamp()));
+    let revision = Revision {
+        sequence: 3,
+        saved_at: 9,
+        snapshot: snapshot.clone(),
+    };
+    let decoded = decode_revision(&encode_revision(&revision)).unwrap();
+    assert_eq!(decoded, revision);
+    let mut restored = Schedule::default();
+    restored
+        .restore(
+            decoded.snapshot.path.clone(),
+            decoded
+                .snapshot
+                .entries
+                .iter()
+                .map(|e| (e.pin, e.title.clone(), e.theme.clone()))
+                .collect(),
+            decoded.snapshot.baseline.clone(),
+        )
+        .unwrap();
+    assert!(!restored.is_dirty());
+    assert_eq!(Snapshot::of(&restored), snapshot);
+    assert_eq!(fingerprint(&restored), fingerprint(&schedule));
+    // A damaged theme blob makes the whole revision damaged.
+    let text = String::from_utf8(encode_revision(&revision)).unwrap();
+    let body = text.split_once('\n').unwrap().0;
+    let hexed = hex(&navy.encode());
+    let broken = body.replacen(&hexed, &hexed[..hexed.len() - 2], 1);
+    assert_ne!(broken, body);
+    let digest = hex(&Sha256::digest(broken.as_bytes()));
+    let broken = format!("{broken}\nsha256 {digest}\n");
+    assert_eq!(decode_revision(broken.as_bytes()), None);
+    // Version 1: theme fields are not part of that format and are ignored.
+    let v1 = body.replacen("\"version\":2", "\"version\":1", 1);
+    assert_ne!(v1, body);
+    let digest = hex(&Sha256::digest(v1.as_bytes()));
+    let old = decode_revision(format!("{v1}\nsha256 {digest}\n").as_bytes()).unwrap();
+    assert!(
+        old.snapshot
+            .entries
+            .iter()
+            .all(|e| e.theme.is_none() && e.pin.theme.is_none())
+    );
+    assert!(old.snapshot.baseline.iter().all(|p| p.theme.is_none()));
 }
 
 #[test]

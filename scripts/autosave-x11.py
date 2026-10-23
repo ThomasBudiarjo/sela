@@ -74,7 +74,7 @@ def read_revision(path: Path) -> dict:
     if rest != b"" or trailer != b"sha256 " + hashlib.sha256(body).hexdigest().encode():
         raise nx.Failure(f"{path.name} is not a complete checksummed revision")
     revision = json.loads(body)
-    if revision.get("format") != "sela-recovery" or revision.get("version") != 1:
+    if revision.get("format") != "sela-recovery" or revision.get("version") != 2:
         raise nx.Failure(f"unexpected revision header in {path.name}")
     return revision
 

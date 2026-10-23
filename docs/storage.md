@@ -49,7 +49,7 @@ neither paths nor SQLite messages nor lyric payloads; don't log Commands/Replies
 
 ## Schema and durable meaning
 
-Current schema 7 uses `application_id=0x53454c41`, `user_version=7`, foreign keys on,
+Current schema 8 uses `application_id=0x53454c41`, `user_version=8`, foreign keys on,
 default rollback journal and synchronous FULL. `songs` tracks head/tombstone;
 `song_revisions` stores immutable original UTF-8 payloads. Encoding is repeated
 little-endian u32 byte-length + UTF-8: title, authors, copyright, license, then
@@ -70,9 +70,9 @@ No automatic garbage collection, library-refresh or cascade deletion exists.
 Snapshot occurrence identity currently is `(schedule ID, revision, position)`;
 stable cross-edit/live selection identity belongs to M1-09, not this storage slice.
 
-Fresh schema 0 initializes schema 7. Existing schema 1 to 6 upgrades only after
-the verified backup gate documented below, straight to schema 7 behind exactly
-one `<profile>.schema{N}-backup` (`schema1-backup` to `schema6-backup`, N = the
+Fresh schema 0 initializes schema 8. Existing schema 1 to 7 upgrades only after
+the verified backup gate documented below, straight to schema 8 behind exactly
+one `<profile>.schema{N}-backup` (`schema1-backup` to `schema7-backup`, N = the
 version found on open). A schema-0 database
 with user objects is foreign and rejected. Migration and validation share one
 transaction; failed migration drops/rolls back it. Nonmatching application IDs,
@@ -532,3 +532,23 @@ process aborts after the rebuild, before commit: the file stays schema 6
 without the new columns and the verified backup opens),
 `stale_labels_or_sort_keys_fail_the_check_and_are_repaired`,
 `library_sorts_by_author_copyright_administrator_and_song_number`.
+## M1-08 — schema 8 (themes)
+
+Schema 8 (backup `.schema7-backup` or the older `.schema{N}-backup`, abort
+hook `SELA_ABORT_MIGRATION_SCHEMA8`) adds three tables and changes no existing row: `themes` (id, save revision,
+`Theme::encode` payload of at most 1024 bytes), `song_themes` (a song's theme
+by song id, so applying a theme creates no song revision) and `theme_default`
+(one row: the default song theme). At most 256 themes; deleting the default
+returns to the built-in theme; a song naming a deleted theme falls back to the
+default with a visible note. Schedule files are version 4: each item carries
+its theme snapshot. Design and inheritance rules: [themes](themes.md).
+
+Integration note (2026-10-23): the themes stream developed this as schema 7;
+the integration branch already used schema 7 for the songs-browser search
+index reshape, so the themes tables were renumbered to schema 8 when
+`wave/themes` merged. Because no step after schema 7 rebuilds the search
+index, a schema 7 file being upgraded (like a current file) rebuilds a
+damaged or inconsistent index itself (`SEARCH_SHAPE`). Tests:
+`schema7_migration_adds_empty_themes_behind_a_verified_backup`,
+`schema7_migration_abort_keeps_schema7_and_the_verified_backup`; a schema 1
+to 6 file migrates through both steps behind one backup.

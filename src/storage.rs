@@ -7,6 +7,7 @@ use crate::format::SlideFormat;
 use crate::import::batch::{self, DuplicateKey};
 use crate::search;
 use crate::song_order::{SongOrder, SongSort};
+use crate::theme::{MAX_THEMES, Theme, ThemeId, ThemeSet};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{
@@ -119,6 +120,9 @@ pub const MAX_ADMINISTRATOR: usize = 256;
 /// Digit limit of the Song Number property (CCLI song numbers have at most
 /// eight digits today; the margin keeps the field from rejecting real ones).
 pub const MAX_SONG_NUMBER: usize = 12;
+/// Most songs one `Command::SetSongTheme` restyles (Select All in a large
+/// library); the operator refuses a bigger selection with its own message.
+pub const MAX_SONG_THEME_BATCH: usize = 10_000;
 /// Song Number is empty or ASCII digits only.
 pub fn song_number_ok(s: &str) -> bool {
     s.len() <= MAX_SONG_NUMBER && s.bytes().all(|b| b.is_ascii_digit())
@@ -299,8 +303,23 @@ PRAGMA user_version=6;";
 // Schema 7 only reshapes the derived search index (labels column and sort
 // keys, see `SEARCH`); the migration rebuilds it from the song payloads.
 const SCHEMA7: &str = "PRAGMA user_version=7;";
-const SCHEMA_VERSIONS: [i64; 7] = [1, 2, 3, 4, 5, 6, 7];
-const CURRENT: i64 = 7;
+// Themes (M1-08). `themes` holds library themes (`theme::Theme::encode`,
+// revision counts saves); `song_themes` names a song's theme by song id, not
+// revision, so applying a theme never creates a song revision (schedule items
+// snapshot their theme instead); `theme_default` is the one default song theme.
+// A song naming a deleted theme falls back to the default, with a warning.
+// (Developed as schema 7 on the themes stream; renumbered to 8 at integration
+// because schema 7 is the search index reshape.)
+const SCHEMA8: &str = "CREATE TABLE themes(id BLOB PRIMARY KEY CHECK(length(id)=16), revision INTEGER NOT NULL CHECK(revision>0), payload BLOB NOT NULL CHECK(length(payload)<=1024));
+CREATE TABLE song_themes(song BLOB PRIMARY KEY REFERENCES songs(id), theme BLOB NOT NULL CHECK(length(theme)=16));
+CREATE TABLE theme_default(slot INTEGER PRIMARY KEY CHECK(slot=1), theme BLOB NOT NULL CHECK(length(theme)=16));
+PRAGMA user_version=8;";
+const SCHEMA_VERSIONS: [i64; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+const CURRENT: i64 = 8;
+// The first schema whose search index has the current shape (`SEARCH`); a
+// file at this schema or later rebuilds a damaged index itself, since no later
+// migration step rebuilds it.
+const SEARCH_SHAPE: i64 = 7;
 // bm25 column weights: title, lyrics, metadata, labels. FTS5's bm25
 // normalizes by the length of the whole row, so a low label weight alone does
 // not keep a short song's label hit below a long song's lyric hit. `l` sorts
@@ -648,14 +667,16 @@ impl Repository {
             tx.execute_batch(SEARCH)?;
             tx.execute_batch(SCHEMA6)?;
             tx.execute_batch(SCHEMA7)?;
+            tx.execute_batch(SCHEMA8)?;
             version = CURRENT;
         } else if app != APP || !SCHEMA_VERSIONS.contains(&version) {
             return Err(Error::Unsupported);
         }
         // quick_check also runs the FTS5 index check. When dropping the derived
         // index makes the file pass, only the index was damaged: a current
-        // file rebuilds it, an older one (schema 5 and 6 hold the index too)
-        // leaves the rebuild to the schema 7 migration step. Opening an older
+        // file (or one being upgraded from schema 7) rebuilds it, an older one
+        // (schema 5 and 6 hold the index too) leaves the rebuild to the
+        // schema 7 migration step. Opening an older
         // file without upgrading (verifying its backup copy) keeps the copy as
         // it was and skips the index shape check. Otherwise the transaction
         // rolls the drop back.
@@ -669,7 +690,7 @@ impl Repository {
             if !quick_check(&tx)? {
                 return Err(Error::Corrupt);
             }
-            if version == CURRENT {
+            if version == CURRENT || (upgrade && version >= SEARCH_SHAPE) {
                 tx.execute_batch("RELEASE index_check")?;
                 rebuild_search(&tx)?;
             } else if upgrade {
@@ -678,7 +699,9 @@ impl Repository {
                 tx.execute_batch("ROLLBACK TO index_check; RELEASE index_check")?;
                 damaged_index = true;
             }
-        } else if version == CURRENT && !search_consistent(&tx)? {
+        } else if (version == CURRENT || (upgrade && version >= SEARCH_SHAPE))
+            && !search_consistent(&tx)?
+        {
             rebuild_search(&tx)?;
         }
         if tx.prepare("PRAGMA foreign_key_check")?.exists([])? {
@@ -772,6 +795,13 @@ impl Repository {
                 std::process::abort();
             }
         }
+        if version < 8 && upgrade {
+            tx.execute_batch(SCHEMA8)?;
+            #[cfg(test)]
+            if std::env::var_os("SELA_ABORT_MIGRATION_SCHEMA8").is_some() {
+                std::process::abort();
+            }
+        }
         if version >= 2 || upgrade {
             tx.prepare("SELECT section FROM section_ids")?;
             tx.prepare("SELECT variant,name FROM variants")?;
@@ -797,6 +827,11 @@ impl Repository {
         if version >= 7 || upgrade {
             tx.prepare("SELECT author,copyright,administrator,song_number FROM search_rows")?;
             tx.prepare("SELECT labels FROM song_search")?;
+        }
+        if version >= 8 || upgrade {
+            tx.prepare("SELECT id,revision,payload FROM themes")?;
+            tx.prepare("SELECT song,theme FROM song_themes")?;
+            tx.prepare("SELECT slot,theme FROM theme_default")?;
         }
         tx.commit()?;
         Ok(Self { db })
@@ -1520,6 +1555,200 @@ fn advance(
         }
     }
 }
+/// Themes (schema 8, M1-08). Every write returns the whole new theme set so
+/// the caller never shows a half-applied state.
+impl Repository {
+    /// The library's themes, sorted by name, and its default song theme.
+    pub fn themes(&self) -> Result<ThemeSet> {
+        let mut statement = self
+            .db
+            .prepare("SELECT id,payload FROM themes ORDER BY id LIMIT ?")?;
+        let rows = statement
+            .query_map(params![(MAX_THEMES + 1) as i64], |r| {
+                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if rows.len() > MAX_THEMES {
+            return Err(Error::Corrupt);
+        }
+        let mut set = ThemeSet::default();
+        for (id, payload) in rows {
+            let theme = Theme::decode(&payload).ok_or(Error::Corrupt)?;
+            if theme.id.0[..] != id[..] || theme.is_built_in() {
+                return Err(Error::Corrupt);
+            }
+            set.themes.push(theme);
+        }
+        set.default = self
+            .db
+            .query_row("SELECT theme FROM theme_default WHERE slot=1", [], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
+            .optional()?
+            .map(read_theme_id)
+            .transpose()?;
+        set.sort();
+        Ok(set)
+    }
+    /// Creates or replaces a library theme. The built-in theme is not
+    /// stored; a new theme past `MAX_THEMES` is refused.
+    pub fn save_theme(&mut self, theme: &Theme) -> Result<ThemeSet> {
+        self.store_theme(theme, false)
+    }
+    /// `save_theme` for a theme that must still be in the library (a theme
+    /// editor saving a library theme): a theme deleted meanwhile is
+    /// `Missing` and is not re-inserted.
+    pub fn update_theme(&mut self, theme: &Theme) -> Result<ThemeSet> {
+        self.store_theme(theme, true)
+    }
+    fn store_theme(&mut self, theme: &Theme, existing: bool) -> Result<ThemeSet> {
+        if !theme.is_valid() || theme.is_built_in() || theme.encode().len() > THEME_ENCODED {
+            return Err(Error::Invalid);
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = &theme.id.0[..];
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM themes WHERE id=?)",
+            params![id],
+            |r| r.get(0),
+        )?;
+        if existing && !exists {
+            return Err(Error::Missing);
+        }
+        if exists {
+            tx.execute(
+                "UPDATE themes SET revision=revision+1,payload=? WHERE id=?",
+                params![theme.encode(), id],
+            )?;
+        } else {
+            let count: i64 = tx.query_row("SELECT count(*) FROM themes", [], |r| r.get(0))?;
+            if count >= MAX_THEMES as i64 {
+                return Err(Error::Budget);
+            }
+            tx.execute(
+                "INSERT INTO themes VALUES(?,1,?)",
+                params![id, theme.encode()],
+            )?;
+        }
+        tx.commit()?;
+        self.themes()
+    }
+    /// Removes a library theme. Songs naming it fall back to the default
+    /// (reported by `ThemeSet::resolve`); a removed default becomes built-in.
+    pub fn delete_theme(&mut self, id: ThemeId) -> Result<ThemeSet> {
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.execute("DELETE FROM themes WHERE id=?", params![&id.0[..]])? != 1 {
+            return Err(Error::Missing);
+        }
+        tx.execute(
+            "DELETE FROM theme_default WHERE theme=?",
+            params![&id.0[..]],
+        )?;
+        tx.commit()?;
+        self.themes()
+    }
+    /// The default song theme; `None` (or the built-in id) is the built-in.
+    pub fn set_default_theme(&mut self, id: Option<ThemeId>) -> Result<ThemeSet> {
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        match id.filter(|id| *id != ThemeId::BUILT_IN) {
+            Some(id) => {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM themes WHERE id=?)",
+                    params![&id.0[..]],
+                    |r| r.get(0),
+                )?;
+                if !exists {
+                    return Err(Error::Missing);
+                }
+                tx.execute(
+                    "INSERT OR REPLACE INTO theme_default VALUES(1,?)",
+                    params![&id.0[..]],
+                )?;
+            }
+            None => {
+                tx.execute("DELETE FROM theme_default", [])?;
+            }
+        }
+        tx.commit()?;
+        self.themes()
+    }
+    /// The theme a library song names, if any (by song id: every revision).
+    pub fn song_theme(&self, song: Id) -> Result<Option<ThemeId>> {
+        self.db
+            .query_row(
+                "SELECT theme FROM song_themes WHERE song=?",
+                params![&song.0[..]],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+            .map(read_theme_id)
+            .transpose()
+    }
+    /// Names `theme` as the song's theme (`None`: follow the default;
+    /// `ThemeId::BUILT_IN`: the built-in look whatever the default). The
+    /// song must exist and not be deleted; a library theme must exist.
+    pub fn set_song_theme(&mut self, song: Id, theme: Option<ThemeId>) -> Result<()> {
+        self.set_song_themes(&[song], theme)
+    }
+    /// `set_song_theme` for several songs in one transaction: every song
+    /// changes or none does. A deleted or unknown song, or a theme the
+    /// library no longer has, is `Missing` and leaves every song as it was.
+    pub fn set_song_themes(&mut self, songs: &[Id], theme: Option<ThemeId>) -> Result<()> {
+        if songs.len() > MAX_SONG_THEME_BATCH {
+            return Err(Error::Invalid);
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(id) = theme {
+            // The built-in theme is named explicitly, so a library default
+            // never overrides a song that chose it.
+            let exists: bool = id == ThemeId::BUILT_IN
+                || tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM themes WHERE id=?)",
+                    params![&id.0[..]],
+                    |r| r.get(0),
+                )?;
+            if !exists {
+                return Err(Error::Missing);
+            }
+        }
+        for song in songs {
+            let live: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM songs WHERE id=? AND deleted=0)",
+                params![&song.0[..]],
+                |r| r.get(0),
+            )?;
+            if !live {
+                return Err(Error::Missing);
+            }
+            match theme {
+                Some(id) => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO song_themes VALUES(?,?)",
+                        params![&song.0[..], &id.0[..]],
+                    )?;
+                }
+                None => {
+                    tx.execute("DELETE FROM song_themes WHERE song=?", params![&song.0[..]])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+const THEME_ENCODED: usize = crate::theme::MAX_ENCODED;
+fn read_theme_id(bytes: Vec<u8>) -> Result<ThemeId> {
+    Ok(ThemeId(bytes.try_into().map_err(|_| Error::Corrupt)?))
+}
+
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
@@ -1561,6 +1790,20 @@ pub enum Command {
     /// Saves an import batch in one transaction (`Repository::commit_import`);
     /// cancelling the command rolls back whatever it has not committed.
     CommitImport(Vec<ImportWrite>),
+    /// The song at a revision plus its library theme (M1-08).
+    ThemedSong(Version),
+    /// `Songs` plus each song's library theme, for a schedule file save.
+    ThemedSongs(Vec<Version>),
+    /// The library themes and default (M1-08).
+    Themes,
+    /// Inserts or replaces a theme.
+    SaveTheme(Theme),
+    /// Replaces a theme that must still exist (`Repository::update_theme`).
+    UpdateTheme(Theme),
+    DeleteTheme(ThemeId),
+    SetDefaultTheme(Option<ThemeId>),
+    /// Names a theme for these songs (by id); replies with the theme set.
+    SetSongTheme(Vec<Id>, Option<ThemeId>),
 }
 #[derive(Debug)]
 pub enum Reply {
@@ -1581,6 +1824,12 @@ pub enum Reply {
     Duplicates(Vec<Option<LibraryMatch>>),
     /// The saved version of each import write, in order.
     Committed(Vec<Version>),
+    ThemedSong(Song, Option<ThemeId>),
+    ThemedSongs(Vec<(Song, Option<ThemeId>)>),
+    Themes(ThemeSet),
+    /// `SetSongTheme` named a theme the library no longer has (deleted
+    /// through another connection): no song changed; the current set.
+    ThemeGone(ThemeSet),
 }
 struct Request {
     command: Command,
@@ -1622,6 +1871,40 @@ fn execute(repo: &mut Repository, request: Request) -> Result<Reply> {
         Command::CommitImport(writes) => repo
             .commit_import(writes, &request.canceled)
             .map(Reply::Committed),
+        Command::ThemedSong(v) => {
+            let song = repo.song(v)?;
+            repo.song_theme(v.id)
+                .map(|theme| Reply::ThemedSong(song, theme))
+        }
+        Command::ThemedSongs(versions) => {
+            let songs = repo.songs(&versions)?;
+            versions
+                .iter()
+                .zip(songs)
+                .map(|(v, song)| Ok((song, repo.song_theme(v.id)?)))
+                .collect::<Result<Vec<_>>>()
+                .map(Reply::ThemedSongs)
+        }
+        Command::Themes => repo.themes().map(Reply::Themes),
+        Command::SaveTheme(theme) => repo.save_theme(&theme).map(Reply::Themes),
+        Command::UpdateTheme(theme) => repo.update_theme(&theme).map(Reply::Themes),
+        Command::DeleteTheme(id) => repo.delete_theme(id).map(Reply::Themes),
+        Command::SetDefaultTheme(id) => repo.set_default_theme(id).map(Reply::Themes),
+        Command::SetSongTheme(songs, theme) => match repo.set_song_themes(&songs, theme) {
+            Ok(()) => repo.themes().map(Reply::Themes),
+            // `Missing` is a deleted song or a deleted theme; the operator
+            // words and refreshes them differently.
+            Err(Error::Missing) => {
+                let set = repo.themes()?;
+                match theme {
+                    Some(id) if id != ThemeId::BUILT_IN && set.get(id).is_none() => {
+                        Ok(Reply::ThemeGone(set))
+                    }
+                    _ => Err(Error::Missing),
+                }
+            }
+            Err(error) => Err(error),
+        },
     }
 }
 /// Cancellation only wins before the worker starts a command. Always poll its result.
@@ -1696,7 +1979,9 @@ impl Worker {
             Command::SaveSchedule(_, s) if s.items.len() > MAX_ITEMS || s.title.len() > 1024 => {
                 return Err(Error::Invalid);
             }
-            Command::Songs(v) if v.len() > 2 * MAX_ITEMS => return Err(Error::Invalid),
+            Command::Songs(v) | Command::ThemedSongs(v) if v.len() > 2 * MAX_ITEMS => {
+                return Err(Error::Invalid);
+            }
             Command::ImportSongs(items) if items.len() > MAX_ITEMS => return Err(Error::Invalid),
             // Songs are validated on the storage thread, not here on the UI's.
             Command::CommitImport(writes) if writes.len() > MAX_IMPORT_SONGS => {
@@ -1713,6 +1998,14 @@ impl Worker {
                 return Err(Error::Invalid);
             }
             Command::Search { query, .. } if query.len() > search::MAX_QUERY_BYTES => {
+                return Err(Error::Invalid);
+            }
+            Command::SaveTheme(theme) | Command::UpdateTheme(theme)
+                if !theme.is_valid() || theme.is_built_in() =>
+            {
+                return Err(Error::Invalid);
+            }
+            Command::SetSongTheme(songs, _) if songs.len() > MAX_SONG_THEME_BATCH => {
                 return Err(Error::Invalid);
             }
             _ => (),
@@ -1805,8 +2098,9 @@ mod tests {
             CURRENT
         );
         // One verified backup of the original schema, not one per step.
-        assert!(!d.path().join("legacy.schema6-backup").exists());
+        assert!(!d.path().join("legacy.schema7-backup").exists());
         assert!(!d.path().join("legacy.schema5-backup").exists());
+        assert!(!d.path().join("legacy.schema6-backup").exists());
         assert!(!d.path().join("legacy.schema2-backup").exists());
         assert!(!d.path().join("legacy.schema3-backup").exists());
         assert!(!d.path().join("legacy.schema4-backup").exists());
@@ -2255,7 +2549,7 @@ mod tests {
             );
             assert_eq!(std::fs::read(input).unwrap(), bytes);
         }
-        repo.db.execute_batch("PRAGMA user_version=8").unwrap();
+        repo.db.execute_batch("PRAGMA user_version=9").unwrap();
         drop(repo);
         let before = std::fs::read(&p).unwrap();
         assert_eq!(
@@ -2510,7 +2804,7 @@ mod tests {
     }
     #[test]
     fn rejects_newer_foreign_corrupt_without_replacement() {
-        for sql in ["PRAGMA user_version=8", "PRAGMA application_id=42"] {
+        for sql in ["PRAGMA user_version=9", "PRAGMA application_id=42"] {
             let (_d, p, r) = fixture();
             r.db.execute_batch(sql).unwrap();
             drop(r);
@@ -4648,7 +4942,7 @@ CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='u
             .unwrap();
         assert_eq!(old.song(head).unwrap(), current);
         drop((old, repo));
-        // Reopening at schema 7 neither migrates nor rebuilds again.
+        // Reopening at the current schema neither migrates nor rebuilds again.
         let rows = |path: &std::path::Path| -> Vec<i64> {
             let db = Connection::open(path).unwrap();
             let mut s = db
@@ -4696,5 +4990,292 @@ CREATE VIRTUAL TABLE song_search USING fts5(title, lyrics, metadata, tokenize='u
             .verify_history(&AtomicBool::new(false), std::time::Instant::now())
             .unwrap();
         assert!(matches!(Repository::open(&path), Err(Error::Exists)));
+    }
+    /// A schema 7 library: a current one with the schema 8 tables removed
+    /// (schema 8 only adds tables), holding two songs, one with a revision.
+    fn schema7_without_themes(path: &std::path::Path) -> Version {
+        let mut repo = Repository::open(path).unwrap();
+        let v = repo.save_song(None, titled("Six")).unwrap();
+        let v = repo.save_song(Some(v), titled("Six again")).unwrap();
+        repo.save_song(None, titled("Other")).unwrap();
+        drop(repo);
+        let db = Connection::open(path).unwrap();
+        db.execute_batch(
+            "DROP TABLE themes; DROP TABLE song_themes; DROP TABLE theme_default; PRAGMA user_version=7;",
+        )
+        .unwrap();
+        v
+    }
+    #[test]
+    fn schema7_migration_adds_empty_themes_behind_a_verified_backup() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        let v = schema7_without_themes(&path);
+        let repo = Repository::open(&path).unwrap();
+        assert_eq!(schema_of(&path), 8);
+        assert_eq!(repo.themes().unwrap(), ThemeSet::default());
+        assert_eq!(repo.song_theme(v.id).unwrap(), None);
+        let current = repo.song(v).unwrap();
+        assert_eq!(current.title, "Six again");
+        let backup = d.path().join("library.schema7-backup");
+        assert_eq!(schema_of(&backup), 7);
+        let old = Repository::open_internal(&backup, false).unwrap();
+        old.verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        assert_eq!(old.song(v).unwrap(), current);
+        // Opening again is a no-op: no second backup, same schema.
+        drop((old, repo));
+        std::fs::remove_file(&backup).unwrap();
+        Repository::open(&path).unwrap();
+        assert!(!backup.exists());
+    }
+    #[test]
+    fn schema7_migration_abort_keeps_schema7_and_the_verified_backup() {
+        const CHILD: &str = "SELA_ABORT_MIGRATION_SCHEMA8";
+        if let Some(path) = std::env::var_os(CHILD) {
+            let _ = Repository::open(std::path::Path::new(&path));
+            panic!("schema 8 abort hook did not run");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("library");
+        schema7_without_themes(&path);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::schema7_migration_abort_keeps_schema7_and_the_verified_backup",
+            ])
+            .env(CHILD, &path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success());
+        assert_eq!(schema_of(&path), 7);
+        let db = Connection::open(&path).unwrap();
+        assert!(db.prepare("SELECT 1 FROM themes").is_err());
+        Repository::open_internal(&d.path().join("library.schema7-backup"), false)
+            .unwrap()
+            .verify_history(&AtomicBool::new(false), std::time::Instant::now())
+            .unwrap();
+        // The stale backup is never overwritten: the next open refuses
+        // until it is moved aside, then migrates.
+        drop(db);
+        assert_eq!(Repository::open(&path).err(), Some(Error::Exists));
+        assert_eq!(schema_of(&path), 7);
+        std::fs::rename(
+            d.path().join("library.schema7-backup"),
+            d.path().join("kept-backup"),
+        )
+        .unwrap();
+        Repository::open(&path).unwrap();
+        assert_eq!(schema_of(&path), 8);
+    }
+
+    #[test]
+    fn themes_save_update_default_and_delete_atomically() {
+        let (_d, p, mut repo) = fixture();
+        let navy = crate::theme::tests::styled();
+        let plain = Theme::new("aardvark plain");
+        let set = repo.save_theme(&navy).unwrap();
+        assert_eq!(set.themes, vec![navy.clone()]);
+        let set = repo.save_theme(&plain).unwrap();
+        assert_eq!(set.themes, vec![plain.clone(), navy.clone()], "by name");
+        // Replacing keeps one row and bumps its revision.
+        let renamed = Theme {
+            name: "Navy renamed".into(),
+            ..navy.clone()
+        };
+        repo.save_theme(&renamed).unwrap();
+        let revision: i64 = repo
+            .db
+            .query_row(
+                "SELECT revision FROM themes WHERE id=?",
+                params![&navy.id.0[..]],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(revision, 2);
+        let set = repo.set_default_theme(Some(navy.id)).unwrap();
+        assert_eq!(set.default, Some(navy.id));
+        assert_eq!(set.default_theme(), renamed);
+        // Refusals change nothing.
+        assert_eq!(repo.save_theme(&Theme::built_in()), Err(Error::Invalid));
+        let unnamed = Theme {
+            name: " ".into(),
+            ..plain.clone()
+        };
+        assert_eq!(repo.save_theme(&unnamed), Err(Error::Invalid));
+        assert_eq!(
+            repo.set_default_theme(Some(ThemeId([99; 16]))),
+            Err(Error::Missing)
+        );
+        assert_eq!(repo.delete_theme(ThemeId([99; 16])), Err(Error::Missing));
+        // Deleting the default returns to the built-in default.
+        let set = repo.delete_theme(navy.id).unwrap();
+        assert_eq!(set.themes, vec![plain.clone()]);
+        assert_eq!(set.default, None);
+        let set = repo.set_default_theme(Some(plain.id)).unwrap();
+        assert_eq!(set.default, Some(plain.id));
+        let set = repo.set_default_theme(None).unwrap();
+        assert_eq!(set.default, None);
+        drop(repo);
+        let repo = Repository::open(&p).unwrap();
+        assert_eq!(repo.themes().unwrap().themes, vec![plain]);
+    }
+    #[test]
+    fn song_themes_name_live_songs_and_fall_back_when_a_theme_goes() {
+        let (_d, _p, mut repo) = fixture();
+        let v = repo.save_song(None, titled("Themed")).unwrap();
+        let navy = crate::theme::tests::styled();
+        repo.save_theme(&navy).unwrap();
+        repo.set_song_theme(v.id, Some(navy.id)).unwrap();
+        assert_eq!(repo.song_theme(v.id).unwrap(), Some(navy.id));
+        // Every revision of the song shares it; saving does not drop it.
+        let v2 = repo.save_song(Some(v), titled("Themed 2")).unwrap();
+        assert_eq!(repo.song_theme(v2.id).unwrap(), Some(navy.id));
+        let reply = execute(
+            &mut repo,
+            Request {
+                command: Command::ThemedSong(v),
+                canceled: Arc::default(),
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(reply, Reply::ThemedSong(song, Some(id)) if song.title == "Themed" && id == navy.id)
+        );
+        assert_eq!(
+            repo.set_song_theme(v.id, Some(ThemeId([5; 16]))),
+            Err(Error::Missing)
+        );
+        assert_eq!(
+            repo.set_song_theme(Id([8; 16]), Some(navy.id)),
+            Err(Error::Missing)
+        );
+        // A deleted theme leaves the reference; resolution reports it.
+        let set = repo.delete_theme(navy.id).unwrap();
+        let resolution = set.resolve(repo.song_theme(v.id).unwrap());
+        assert_eq!(resolution.missing, Some(navy.id));
+        assert!(resolution.theme.is_built_in());
+        repo.set_song_theme(v.id, Some(ThemeId::BUILT_IN)).unwrap();
+        assert_eq!(repo.song_theme(v.id).unwrap(), Some(ThemeId::BUILT_IN));
+        repo.set_song_theme(v.id, None).unwrap();
+        assert_eq!(repo.song_theme(v.id).unwrap(), None);
+        repo.delete_song(v2).unwrap();
+        assert_eq!(repo.set_song_theme(v.id, None), Err(Error::Missing));
+    }
+    #[test]
+    fn song_themes_apply_to_every_song_or_to_none() {
+        let (_d, _p, mut repo) = fixture();
+        let a = repo.save_song(None, titled("A")).unwrap();
+        let b = repo.save_song(None, titled("B")).unwrap();
+        let c = repo.save_song(None, titled("C")).unwrap();
+        let navy = crate::theme::tests::styled();
+        repo.save_theme(&navy).unwrap();
+        repo.delete_song(c).unwrap();
+        // C was deleted (say, from a Song Editor) before Apply to Song ran:
+        // A and B keep their themes too.
+        assert_eq!(
+            repo.set_song_themes(&[a.id, b.id, c.id], Some(navy.id)),
+            Err(Error::Missing)
+        );
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        assert_eq!(repo.song_theme(b.id).unwrap(), None);
+        assert_eq!(
+            repo.set_song_themes(&[a.id, b.id], Some(ThemeId([5; 16]))),
+            Err(Error::Missing)
+        );
+        repo.set_song_themes(&[a.id, b.id], Some(navy.id)).unwrap();
+        assert_eq!(repo.song_theme(a.id).unwrap(), Some(navy.id));
+        assert_eq!(repo.song_theme(b.id).unwrap(), Some(navy.id));
+        // A Select All of more songs than there are themes is accepted; the
+        // bound is the batch limit.
+        let many = vec![a.id; MAX_THEMES + 1];
+        repo.set_song_themes(&many, None).unwrap();
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        assert_eq!(
+            repo.set_song_themes(&vec![a.id; MAX_SONG_THEME_BATCH + 1], None),
+            Err(Error::Invalid)
+        );
+    }
+    #[test]
+    fn apply_to_song_tells_a_deleted_theme_from_a_deleted_song() {
+        let (_d, _p, mut repo) = fixture();
+        let a = repo.save_song(None, titled("A")).unwrap();
+        let b = repo.save_song(None, titled("B")).unwrap();
+        let navy = crate::theme::tests::styled();
+        repo.save_theme(&navy).unwrap();
+        let apply = |repo: &mut Repository, songs: Vec<Id>, theme| {
+            execute(
+                repo,
+                Request {
+                    command: Command::SetSongTheme(songs, theme),
+                    canceled: Arc::default(),
+                },
+            )
+        };
+        repo.delete_song(b).unwrap();
+        // A deleted song: `Missing`, nothing changed.
+        assert!(matches!(
+            apply(&mut repo, vec![a.id, b.id], Some(navy.id)),
+            Err(Error::Missing)
+        ));
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        // A deleted theme: the current set without it, nothing changed.
+        repo.delete_theme(navy.id).unwrap();
+        assert!(matches!(
+            apply(&mut repo, vec![a.id], Some(navy.id)),
+            Ok(Reply::ThemeGone(set)) if set.get(navy.id).is_none()
+        ));
+        assert_eq!(repo.song_theme(a.id).unwrap(), None);
+        // The built-in theme always exists.
+        assert!(matches!(
+            apply(&mut repo, vec![a.id], Some(ThemeId::BUILT_IN)),
+            Ok(Reply::Themes(_))
+        ));
+    }
+    #[test]
+    fn a_theme_update_never_resurrects_a_deleted_theme() {
+        let (_d, _p, mut repo) = fixture();
+        let navy = crate::theme::tests::styled();
+        assert_eq!(repo.update_theme(&navy), Err(Error::Missing));
+        repo.save_theme(&navy).unwrap();
+        let renamed = Theme {
+            name: "Navy 2".into(),
+            ..navy.clone()
+        };
+        assert_eq!(
+            repo.update_theme(&renamed).unwrap().themes,
+            vec![renamed.clone()]
+        );
+        repo.delete_theme(navy.id).unwrap();
+        assert_eq!(repo.update_theme(&renamed), Err(Error::Missing));
+        assert!(repo.themes().unwrap().themes.is_empty());
+    }
+    #[test]
+    fn theme_rows_are_bounded_and_corruption_is_reported() {
+        let (_d, _p, mut repo) = fixture();
+        for n in 0..MAX_THEMES {
+            repo.save_theme(&Theme::new(&format!("Theme {n:03}")))
+                .unwrap();
+        }
+        assert_eq!(
+            repo.save_theme(&Theme::new("One too many")),
+            Err(Error::Budget)
+        );
+        let first = repo.themes().unwrap().themes[0].clone();
+        // Replacing an existing theme is still allowed at the limit.
+        repo.save_theme(&Theme {
+            name: "Replaced".into(),
+            ..first.clone()
+        })
+        .unwrap();
+        repo.db
+            .execute(
+                "UPDATE themes SET payload=X'00' WHERE id=?",
+                params![&first.id.0[..]],
+            )
+            .unwrap();
+        assert_eq!(repo.themes(), Err(Error::Corrupt));
     }
 }
