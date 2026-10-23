@@ -16,7 +16,12 @@
 //! `scripts/themes-x11.py`): "Evening Navy" (gold bold left text on navy with
 //! margins, copyright hidden), "Low Contrast" (white on near white), "Missing
 //! Face" (a family no system has) and "Wide Picture" (a 4:1 image, Stretch);
-//! --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
+//! --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py); `--portable-song` seeds
+//! "Harbor Light" for `scripts/bundle-x11.py` (M1-13): slide 1 shows the
+//! profile image `harbor.png`, slide 2 the image `lantern.png`, whose
+//! original is written to `<database folder>/originals/lantern.png` but
+//! not into the profile, and slide 3 names the font "Sela Missing Serif",
+//! which no system has.
 use image::ImageEncoder;
 use sela::{
     arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId},
@@ -26,7 +31,7 @@ use sela::{
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs] [--sort-songs] [--themes]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs] [--sort-songs] [--themes] [--portable-song]";
 
 /// `scripts/themes-x11.py` samples these.
 const NAVY: [u8; 3] = [20, 30, 90];
@@ -80,6 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut metadata = false;
     let mut sort = false;
     let mut themes = false;
+    let mut portable = false;
     let mut extra = 0usize;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -99,6 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             flag if flag == "--metadata-songs" => metadata = true,
             flag if flag == "--sort-songs" => sort = true,
             flag if flag == "--themes" => themes = true,
+            flag if flag == "--portable-song" => portable = true,
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -337,6 +344,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let bytes = sela::schedule_file::encode(&document).map_err(|e| format!("{e:?}"))?;
         std::fs::write(folder.join("Sunday.selaschedule"), bytes)?;
+        return Ok(());
+    }
+    if portable {
+        let folder = path.parent().ok_or("database has no folder")?;
+        let solid = |rgb: [u8; 3]| -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+            let (width, height) = (320u32, 180u32);
+            let pixels: Vec<u8> = (0..width * height)
+                .flat_map(|_| [rgb[0], rgb[1], rgb[2], 255])
+                .collect();
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png).write_image(
+                &pixels,
+                width,
+                height,
+                image::ExtendedColorType::Rgba8,
+            )?;
+            Ok(png)
+        };
+        let images = sela::images::images_dir(folder);
+        std::fs::create_dir_all(&images)?;
+        let harbor = solid([20, 120, 160])?;
+        std::fs::write(images.join("harbor.png"), &harbor)?;
+        let lantern = solid([200, 150, 30])?;
+        let originals = folder.join("originals");
+        std::fs::create_dir_all(&originals)?;
+        std::fs::write(originals.join("lantern.png"), &lantern)?;
+        let pin = |name: &str, bytes: &[u8]| {
+            Some(Background::image(ImageRef {
+                name: name.into(),
+                sha256: sha2::Sha256::digest(bytes).into(),
+            }))
+        };
+        repository
+            .save_song(
+                None,
+                Song {
+                    title: "Harbor Light".into(),
+                    authors: "Original fixture".into(),
+                    copyright: String::new(),
+                    license: String::new(),
+                    administrator: String::new(),
+                    song_number: String::new(),
+                    variants: Vec::new(),
+                    sections: vec![
+                        Section {
+                            background: pin("harbor.png", &harbor),
+                            ..section("Verse 1", "Harbor original line")
+                        },
+                        Section {
+                            background: pin("lantern.png", &lantern),
+                            ..section("Chorus", "Lantern original line")
+                        },
+                        formatted_section(
+                            "Bridge",
+                            "Serif original line",
+                            SlideFormat {
+                                font: Some("Sela Missing Serif".into()),
+                                ..SlideFormat::default()
+                            },
+                        ),
+                    ],
+                    master: Some(Background::color(MASTER)),
+                },
+            )
+            .map_err(|e| format!("{e:?}"))?;
         return Ok(());
     }
     if background {

@@ -686,7 +686,9 @@ pub(crate) fn bundle_lines(id: &'static str, lines: &[(String, bool)]) -> gpui::
                     let line_id = line_id.clone();
                     move || line_id.clone()
                 })
-                .role(Role::Label)
+                // A list item, so assistive technology reads the line itself
+                // (an AccessKit Label exposes no name over AT-SPI here).
+                .role(Role::ListItem)
                 .aria_label(text.clone())
                 .accessibility_id(line_id)
                 .text_size(px(TEXT_SMALL))

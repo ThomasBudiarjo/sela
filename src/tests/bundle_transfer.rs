@@ -258,6 +258,17 @@ fn opening_a_standalone_schedule_unpacks_it_and_preflight_explains_what_is_missi
             .join("Gone.png")
             .is_file()
     );
+    // Closing the report leaves the keyboard working: the working dialog
+    // that vanished from `poll` did not keep the focus (found by
+    // scripts/bundle-x11.py, where Ctrl+O then did nothing).
+    click(&mut cx, "dialog-cancel");
+    assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
+    cx.simulate_keystrokes("ctrl-o");
+    assert!(
+        cx.did_prompt_for_paths(),
+        "Ctrl+O still reaches the operator"
+    );
+    cx.simulate_path_prompt_response(|_| None);
 }
 
 #[gpui::test]

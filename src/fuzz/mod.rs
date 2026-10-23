@@ -22,6 +22,7 @@ mod codecs;
 mod fonts;
 mod images;
 mod media;
+mod portable;
 mod recovery;
 mod schedule;
 mod scripture;
