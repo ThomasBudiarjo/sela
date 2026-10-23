@@ -356,9 +356,14 @@ Common Windows prerequisites are listed once in
   and `first_frame` timeout tests and the `fetch-ffmpeg` usage test use
   `cfg(unix)` shell fakes, and the GPL half of the locator test needs
   `/usr/bin`; check those paths on Windows by hand (a `.cmd` ffprobe that
-  runs `timeout /t 30` must end in `ProbeTimedOut`; `fetch-ffmpeg.ps1
-  -Platform` without a value must fail as a usage error) or port the fakes.
-  Sela now: Linux only (`scripts/media-backend-x11.py` PASS).
+  runs `timeout /t 30` must end in `ProbeTimedOut`) or port the fakes.
+  `fetch_ffmpeg_ps1_reports_usage_mistakes_as_exit_2` runs the PowerShell
+  usage checks (exit 2 for `-Platform` without a value, `-Dest -Force`,
+  `-Platform bogus`, `-Bogus x`) under `powershell` on Windows; confirm it
+  ran rather than printed `SKIPPED`, and also run it with
+  `SELA_PWSH=powershell.exe` if `pwsh` is installed, so Windows PowerShell
+  5.1 is covered. Sela now: Linux only (`scripts/media-backend-x11.py`
+  PASS; `fetch-ffmpeg.ps1` ran under PowerShell 7.4.6 on Linux only).
   Re-run: the same commands.
 - [ ] **PP-MC-04 Mapped network and subst drives** (docs/media.md "Decoder
   input arguments" known gap). Steps: map a share as `Z:` and `subst Y:` a

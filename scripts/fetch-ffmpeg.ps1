@@ -22,14 +22,40 @@ Policy and obligations: docs/media.md.
 .EXAMPLE
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\fetch-ffmpeg.ps1
 #>
-[CmdletBinding()]
-param(
-    [ValidateSet('win64', 'linux64')]
-    [string]$Platform = 'win64',
-    [string]$Dest = '',
-    [switch]$KeepArchive,
-    [switch]$Force
-)
+# Arguments are parsed here rather than in a param() block: PowerShell's own
+# binding errors (a flag without its value, an unknown flag, a value outside
+# a ValidateSet) end the script before it runs, with exit 1, the code for a
+# failed download. Every usage mistake must exit 2 instead.
+$Platform = 'win64'
+$Dest = ''
+$KeepArchive = $false
+$Force = $false
+function Exit-Usage([string]$Message) {
+    [Console]::Error.WriteLine("fetch-ffmpeg: $Message")
+    [Console]::Error.WriteLine('usage: fetch-ffmpeg.ps1 [-Platform win64|linux64] [-Dest <dir>] [-KeepArchive] [-Force]')
+    exit 2
+}
+$i = 0
+while ($i -lt $args.Count) {
+    $arg = [string]$args[$i]
+    switch -Regex ($arg) {
+        '^-(Platform|Dest)$' {
+            if ($i + 1 -ge $args.Count -or ([string]$args[$i + 1]).StartsWith('-')) {
+                Exit-Usage "$arg needs a value"
+            }
+            $value = [string]$args[$i + 1]
+            if ($Matches[1] -eq 'Platform') { $Platform = $value } else { $Dest = $value }
+            $i += 2
+            continue
+        }
+        '^-KeepArchive$' { $KeepArchive = $true; $i += 1; continue }
+        '^-Force$' { $Force = $true; $i += 1; continue }
+        default { Exit-Usage "unknown argument: $arg" }
+    }
+}
+if ($Platform -notin @('win64', 'linux64')) {
+    Exit-Usage "unknown platform '$Platform' (win64 or linux64)"
+}
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -91,7 +117,13 @@ try {
     Write-Output "fetch-ffmpeg: downloading $Base/$Asset"
     try {
         $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri "$Base/$Asset" -OutFile $Archive -UseBasicParsing
+        $Uri = [System.Uri]::new("$Base/$Asset")
+        if ($Uri.IsFile) {
+            # PowerShell 7's Invoke-WebRequest has no file:// support.
+            Copy-Item -LiteralPath $Uri.LocalPath -Destination $Archive
+        } else {
+            Invoke-WebRequest -Uri $Uri -OutFile $Archive -UseBasicParsing
+        }
     } catch {
         Write-Error "fetch-ffmpeg: download failed: $_" -ErrorAction Continue
         exit 1

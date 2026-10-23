@@ -1042,7 +1042,8 @@ logs the accepted version or every refusal, and shows a non-blocking
 "Video and audio unavailable" status for a missing, GPL or nonfree build
 (Ubuntu's GPL `/usr/bin/ffmpeg` is the negative case). Process isolation is
 decided (FFmpeg as supervised children: process group on Unix, Job Object on
-Windows; only the Job Object also ends children when Sela itself dies) and
+Windows; the Job Object and, on Linux, `PR_SET_PDEATHSIG` also end children
+when Sela itself dies; macOS has no such mechanism yet) and
 the CPU frames a decoder holds are bounded by count and by `frame_budget`
 bytes (enforced; review round 1 fixed a reported-only bound); a
 provisional software-decode matrix is in [media](media.md). Checkboxes stay
@@ -1093,6 +1094,12 @@ text-over-video items stay open for the video-playback stream.
 - [ ] Video slide backgrounds: a Media Fill video per slide or song master
   (EW8-OBS-032 Volume and Media Usage, EW8-OBS-039 Videos category), with
   the M1-05h resolution, gate and missing-file substitution.
+- [ ] FFmpeg children end when Sela itself crashes or is killed, on every
+  platform (media-core review rounds 1-2). Linux: `PR_SET_PDEATHSIG(SIGKILL)`
+  on the spawning thread, tested (`a_child_dies_when_its_parent_is_sigkilled`).
+  Windows: Job Object `KILL_ON_JOB_CLOSE`, written, not run (PP-MC-03).
+  macOS: open, no parent-death signal (needs a watchdog pipe or kqueue
+  `NOTE_EXIT` helper); only matters if macOS becomes a target.
 
 Acceptance: ready video is cue-addressable and failure leaves live stable.
 

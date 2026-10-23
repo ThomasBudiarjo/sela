@@ -1006,3 +1006,51 @@ fn fetch_ffmpeg_reports_a_missing_flag_value_as_usage() {
         assert!(stderr.contains("needs a value"), "{args:?}: {stderr}");
     }
 }
+
+/// `scripts/fetch-ffmpeg.ps1` exits 2 on every usage mistake, as its help
+/// says, instead of PowerShell's parameter-binding failure (exit 1, the code
+/// for a failed download; review finding). Runs under `SELA_PWSH`, else
+/// `pwsh`, else (Windows) `powershell`; prints `SKIPPED` when none starts.
+/// Nothing is downloaded on these paths.
+#[test]
+fn fetch_ffmpeg_ps1_reports_usage_mistakes_as_exit_2() {
+    let mut candidates: Vec<std::ffi::OsString> =
+        std::env::var_os("SELA_PWSH").into_iter().collect();
+    candidates.push("pwsh".into());
+    if cfg!(windows) {
+        candidates.push("powershell".into());
+    }
+    let Some(shell) = candidates.into_iter().find(|shell| {
+        Command::new(shell)
+            .args(["-NoProfile", "-Command", "exit 0"])
+            .stdin(Stdio::null())
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }) else {
+        eprintln!(
+            "SKIPPED fetch_ffmpeg_ps1_reports_usage_mistakes_as_exit_2: no PowerShell (set SELA_PWSH)"
+        );
+        return;
+    };
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/fetch-ffmpeg.ps1");
+    for (args, says) in [
+        (&["-Platform"][..], "needs a value"),
+        (&["-Dest"], "needs a value"),
+        (&["-Dest", "-Force"], "needs a value"),
+        (&["-Platform", ""], "unknown platform"),
+        (&["-Platform", "bogus"], "unknown platform"),
+        (&["-Bogus", "x"], "unknown argument"),
+    ] {
+        let output = Command::new(&shell)
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .args(args)
+            .env("SELA_FFMPEG_BASE_URL", "file:///nonexistent")
+            .stdin(Stdio::null())
+            .output()
+            .expect("run PowerShell");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
+        assert!(stderr.contains(says), "{args:?}: {stderr}");
+    }
+}

@@ -250,3 +250,47 @@ fn the_longest_warning_fits_the_minimum_window_without_squeezing_controls(cx: &m
     );
     assert!(warning.size.width > px(0.));
 }
+
+/// Hover shows the full text of the truncated status items at the minimum
+/// window, so a sighted operator can read the media warning and the Live
+/// output state (review finding: only the accessible name had it).
+#[gpui::test]
+fn hovering_truncated_status_items_shows_their_full_text(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = open_with(cx, &dir, Arc::new(|| Err(refused(Refusal::Nonfree))));
+    settle(&mut cx, &operator, "refused", |o| {
+        o.media_backend.availability == Availability::Unavailable(Unavailable::Nonfree)
+    });
+    sela::i18n::set_language(sela::i18n::Language::Indonesian);
+    let (width, height) = sela::pane_layout::MIN_WINDOW;
+    cx.simulate_resize(size(px(width as f32), px(height as f32)));
+    operator.update(&mut cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let mut hints = Vec::new();
+    for item in ["media-unavailable", "output-status"] {
+        let bounds = cx.debug_bounds(item).expect(item);
+        cx.simulate_mouse_move(point(px(0.), px(0.)), None, Default::default());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("status-hint").is_none(),
+            "no hint before {item}"
+        );
+        cx.simulate_mouse_move(bounds.center(), None, Default::default());
+        cx.executor().advance_clock(Duration::from_millis(800));
+        cx.run_until_parked();
+        let hint = cx.debug_bounds("status-hint");
+        hints.push((item, bounds, hint));
+    }
+    sela::i18n::set_language(sela::i18n::Language::English);
+    for (item, bounds, hint) in hints {
+        let hint = hint.unwrap_or_else(|| panic!("hovering {item} shows a hint"));
+        assert!(
+            hint.size.width > bounds.size.width,
+            "the {item} hint is wider than the truncated item: {hint:?} {bounds:?}"
+        );
+        assert!(
+            hint.left() >= px(0.) && hint.right() <= px(width as f32),
+            "{hint:?}"
+        );
+    }
+}

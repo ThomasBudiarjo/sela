@@ -6,12 +6,16 @@
 //!
 //! - Unix: the child leads a new process group (`process_group(0)`) and
 //!   [`Supervised::kill`] sends `SIGKILL` to the group before the leader is
-//!   reaped, so the group id cannot have been reused. There is no
-//!   parent-death signal: if Sela crashes or is `SIGKILL`ed, nothing kills
-//!   the group. A decoder then ends when its next write to the closed pipe
-//!   fails, but a child blocked on a slow read (a hung network mount) or a
-//!   sleeping ffprobe lingers, and its timeout died with Sela. Open gap,
-//!   tracked in docs/work-log.md (media-core).
+//!   reaped, so the group id cannot have been reused.
+//! - Linux: the child also gets `PR_SET_PDEATHSIG(SIGKILL)`, so it dies when
+//!   Sela crashes or is `SIGKILL`ed. The signal follows the *thread* that
+//!   spawned it, so a [`Supervised`] must not outlive its spawning thread:
+//!   the decoder spawns ffmpeg on its supervisor thread, which owns the
+//!   decode until the child is reaped, and `probe` waits for ffprobe on the
+//!   calling thread. Only the direct child is covered (ffmpeg and ffprobe do
+//!   not fork). Other Unixes (macOS) have no parent-death signal: there a
+//!   child blocked on a slow read (a hung network mount) or a sleeping
+//!   ffprobe outlives a crashed Sela (backlog M2-02 open item).
 //! - Windows: the child is assigned to a Job Object with
 //!   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; closing the job handle (on drop,
 //!   or when Sela's process ends for any reason) terminates every process in
@@ -41,6 +45,28 @@ impl Supervised {
         {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::process::CommandExt;
+            let parent = std::process::id() as i32;
+            // SAFETY: the hook runs in the forked child before exec and only
+            // makes async-signal-safe calls (prctl, getppid) and builds an
+            // error from a raw code without allocating.
+            unsafe {
+                command.pre_exec(move || {
+                    if unix::prctl(unix::PR_SET_PDEATHSIG, unix::SIGKILL as std::ffi::c_ulong) != 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    // Sela died between fork and prctl: the signal is lost,
+                    // so do not start an orphan.
+                    if unix::getppid() != parent {
+                        return Err(io::Error::from_raw_os_error(unix::ESRCH));
+                    }
+                    Ok(())
+                });
+            }
         }
         #[cfg(windows)]
         {
@@ -139,8 +165,16 @@ impl Drop for Supervised {
 #[cfg(unix)]
 mod unix {
     pub const SIGKILL: i32 = 9;
+    #[cfg(target_os = "linux")]
+    pub const PR_SET_PDEATHSIG: i32 = 1;
+    #[cfg(target_os = "linux")]
+    pub const ESRCH: i32 = 3;
     unsafe extern "C" {
         pub fn kill(pid: i32, signal: i32) -> i32;
+        #[cfg(target_os = "linux")]
+        pub fn prctl(option: i32, ...) -> i32;
+        #[cfg(target_os = "linux")]
+        pub fn getppid() -> i32;
     }
 }
 
@@ -341,5 +375,56 @@ mod tests {
         assert_eq!(status.code(), Some(3));
         child.kill();
         assert_eq!(child.kill_and_wait().unwrap().code(), Some(3));
+    }
+
+    /// A child is SIGKILLed when Sela itself is SIGKILLed (Linux
+    /// `PR_SET_PDEATHSIG`; review finding: it used to keep running). The
+    /// test binary re-runs itself as the "Sela" that spawns `sleep 30`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_child_dies_when_its_parent_is_sigkilled() {
+        use std::io::{BufRead, BufReader};
+        const NAME: &str = "media::process::tests::a_child_dies_when_its_parent_is_sigkilled";
+        if std::env::var_os("SELA_PDEATH_HELPER").is_some() {
+            let mut command = Command::new("sleep");
+            command
+                .arg("30")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let child = Supervised::spawn(command).unwrap();
+            println!("SELA-PDEATH-CHILD {}", child.id());
+            std::thread::sleep(Duration::from_secs(60));
+            return;
+        }
+        let mut helper = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env("SELA_PDEATH_HELPER", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let grandchild = BufReader::new(helper.stdout.take().unwrap())
+            .lines()
+            .map_while(Result::ok)
+            .find_map(|line| {
+                // libtest prints the test name on the same line first.
+                line.split_once("SELA-PDEATH-CHILD ")
+                    .and_then(|(_, pid)| pid.trim().parse::<u32>().ok())
+            })
+            .expect("the helper reported its child");
+        assert!(alive(grandchild));
+        helper.kill().unwrap();
+        helper.wait().unwrap();
+        let end = Instant::now() + Duration::from_secs(5);
+        while alive(grandchild) && !zombie(grandchild) {
+            if Instant::now() >= end {
+                // SAFETY: plain integers; clean up before failing.
+                unsafe { unix::kill(-(grandchild as i32), unix::SIGKILL) };
+                panic!("child {grandchild} outlived its SIGKILLed parent");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

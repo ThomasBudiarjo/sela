@@ -414,14 +414,19 @@ impl Render for Operator {
                         t!(Msg::ResetLayout),
                         cx,
                     ))
-                    .child(
+                    .child({
+                        let line = self.output_line();
                         div()
+                            .id("output-status")
+                            .debug_selector(|| "output-status".into())
                             .min_w_0()
                             .truncate()
                             .text_size(px(TEXT_CAPTION))
                             .text_color(rgb(MUTED))
-                            .child(self.output_line()),
-                    )
+                            // Truncates at the minimum window; hover shows it whole.
+                            .tooltip(StatusHint::builder(line.clone()))
+                            .child(line)
+                    })
                     .children(self.media_warning())
                     .children(self.settings_note().map(|note| {
                         div()

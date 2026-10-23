@@ -40,7 +40,12 @@ so the unpacked folder runs in place.
 
 1. Download the asset with curl or `Invoke-WebRequest` into a temporary
    folder next to the destination. `SELA_FFMPEG_BASE_URL` replaces the
-   download folder (a mirror or `file://` in tests); the pins still apply.
+   download folder (a mirror or `file://` in tests; the PowerShell script
+   copies a `file://` source itself, since PowerShell 7's `Invoke-WebRequest`
+   refuses that scheme); the pins still apply. Usage mistakes (a flag without
+   its value, an unknown flag or platform) exit 2 in both scripts; the
+   PowerShell script parses its own arguments because a `param()` binding
+   error exits 1.
 2. Refuse unless the size and then the SHA-256 match; nothing is unpacked
    on a mismatch (exit 1).
 3. Unpack, check the `<asset>/bin` layout, write `SELA-PIN.txt` (source
@@ -267,10 +272,12 @@ How it works:
    -fps_mode passthrough -f rawvideo -pix_fmt rgba pipe:1` in its own kill
    domain (`media::process::Supervised`: a new process group killed with
    `SIGKILL` on Unix; a Job Object with `KILL_ON_JOB_CLOSE` and
-   `CREATE_NO_WINDOW` on Windows). Only the Job Object also ends the tree
-   when Sela itself dies: Unix has no parent-death signal here, so after a
-   Sela crash or `SIGKILL` a child blocked on a slow read, or a hanging
-   ffprobe, lingers (open gap).
+   `CREATE_NO_WINDOW` on Windows). The Job Object also ends the tree when
+   Sela itself dies, and on Linux the child gets `PR_SET_PDEATHSIG(SIGKILL)`
+   (set in a `pre_exec` hook; it follows the spawning thread, which owns the
+   decode or probe until the child is reaped). macOS has no parent-death
+   signal, so there a child blocked on a slow read, or a hanging ffprobe,
+   outlives a crashed Sela (open gap, backlog M2-02).
 3. `showinfo`, last in the chain, prints each output frame's number,
    timestamp, duration and size on stderr before the frame's bytes reach
    stdout. A stderr thread parses those lines (bounded line length, last 32
@@ -353,11 +360,20 @@ profile showing it matters.
   Ubuntu's GPL build, plus `SELA_FFMPEG_NO_DEV_COPY=1`: warning, then Live
   output, Go Live and Ctrl+B on the real audience), "missing" and
   "narrow-id" (Indonesian GPL warning at 720x440: truncated inside the window,
-  header buttons unchanged).
+  header buttons unchanged; hovering the warning and the output line shows
+  each one's full text in a hint).
 - Windows: `scripts/media-backend-windows.py` (adds the console-window check
   and runs `tests/media_decode.rs` on Windows, which exercises the Job
-  Object) and `scripts/fetch-ffmpeg.ps1`: written and linted, **not run**
-  (no Windows host).
+  Object): written and linted, **not run** (no Windows host).
+  `scripts/fetch-ffmpeg.ps1` ran under PowerShell 7.4.6 **on Linux**
+  (`-Platform linux64`: download, size and SHA-256 verified, unpack, then
+  "already holds"; usage mistakes exit 2, covered by
+  `fetch_ffmpeg_ps1_reports_usage_mistakes_as_exit_2` with `SELA_PWSH`),
+  not under Windows PowerShell 5.1 or on Windows.
+- Narrow window: at 720x440 the Live output line and the warning truncate;
+  hovering either shows its full text in a hint (`StatusHint`; GPUI test
+  `hovering_truncated_status_items_shows_their_full_text`, x11 run
+  "narrow-id").
 
 ## Open
 

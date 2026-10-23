@@ -109,7 +109,9 @@ impl Operator {
                 .aria_label(text)
                 .accessibility_id("media-unavailable")
                 // Shrinks and truncates in a narrow header (the accessible
-                // name keeps the full text) so the controls keep their size.
+                // name keeps the full text, hover shows it in a hint) so the
+                // controls keep their size.
+                .tooltip(StatusHint::builder(text))
                 .min_w_0()
                 .overflow_hidden()
                 .flex()

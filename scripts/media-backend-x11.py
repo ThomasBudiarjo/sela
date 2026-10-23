@@ -30,7 +30,9 @@ Three operator launches on the same seeded library with a private profile:
    `language=id`, resized to the 720x440 minimum. The Indonesian warning
    ("Video dan audio tidak tersedia: ...") must stay inside the window and
    right of the Resources header controls, which keep their wide-window
-   width (it truncates instead of squeezing them).
+   width (it truncates instead of squeezing them). Hovering the truncated
+   warning, then the truncated output line, shows a hint wider than the
+   item with dark text in it (the full text for a sighted operator).
 
 The warning must appear within 20 s of the window (the probe bound) while
 the window already responds; Ctrl+Q then exits cleanly each time.
@@ -106,6 +108,65 @@ def amber_in(image: nx.Image, control: nx.Control) -> int:
         control.y + control.height,
     )
     return image.count(AMBER_RGB, tolerance=40, region=region)
+
+
+# `TEXT` of the hover hint.
+TEXT_RGB = (0x29, 0x2C, 0x30)
+
+
+def changed_box(
+    before: nx.Image, after: nx.Image, step: int = 2
+) -> tuple[int, int, int, int] | None:
+    """Bounding box (x0, y0, x1, y1) of the pixels that differ."""
+    box = None
+    width = min(before.width, after.width)
+    height = min(before.height, after.height)
+    for y in range(0, height, step):
+        row = y * before.width * 3
+        other = y * after.width * 3
+        for x in range(0, width, step):
+            a = before.rgb[row + x * 3 : row + x * 3 + 3]
+            b = after.rgb[other + x * 3 : other + x * 3 + 3]
+            if a != b:
+                if box is None:
+                    box = [x, y, x, y]
+                else:
+                    box = [
+                        min(box[0], x),
+                        min(box[1], y),
+                        max(box[2], x),
+                        max(box[3], y),
+                    ]
+    return None if box is None else tuple(box)
+
+
+def hover_hint(
+    session: nx.Session, operator: int, name: str, at: tuple[int, int], item_width: int
+) -> list[int]:
+    """Hovers `at` and returns the hint's changed box; fails without a hint.
+
+    The pointer first rests on the static Resources label in the same row,
+    so the only change is the hint itself (no menu or button hover)."""
+    nx.mouse_move(operator, 6, at[1])
+    time.sleep(0.8)
+    before = nx.capture_stable(operator)
+    nx.mouse_move(operator, *at)
+    # GPUI shows a tooltip after 500 ms of hover.
+    time.sleep(1.2)
+    after = session.save(nx.capture_stable(operator), f"narrow-id-hint-{name}")
+    box = changed_box(before, after)
+    if box is None:
+        raise nx.Failure(f"narrow-id: hovering the {name} shows no hint")
+    x0, y0, x1, y1 = box
+    ink = after.count(TEXT_RGB, tolerance=40, region=(x0, y0, x1 + 1, y1 + 1))
+    if x1 - x0 <= item_width or ink < 5:
+        raise nx.Failure(
+            f"narrow-id: the {name} hint is not wider than the item or has no "
+            f"text: box {box}, item width {item_width}, {ink} text samples"
+        )
+    if x0 < 0 or x1 >= after.width or y1 >= after.height:
+        raise nx.Failure(f"narrow-id: the {name} hint leaves the window: {box}")
+    return [x0, y0, x1 - x0, y1 - y0, ink]
 
 
 def quit_cleanly(session: nx.Session, app: nx.App, operator: int, name: str) -> None:
@@ -263,6 +324,20 @@ def narrow_indonesian(session: nx.Session, library: Path) -> None:
     summary["narrow_id_amber_samples"] = amber
     if amber < 5:
         raise nx.Failure(f"narrow-id: the truncated warning is not drawn ({amber})")
+    # The full text on hover (review round 2): the warning, then the output
+    # line between Reset layout and the warning.
+    summary["narrow_id_warning_hint"] = hover_hint(
+        session, operator, "warning", warn.center, warn.width
+    )
+    gap = warn.x - (reset.x + reset.width)
+    summary["narrow_id_output_hint"] = hover_hint(
+        session,
+        operator,
+        "output",
+        (reset.x + reset.width + gap // 2, warn.y + warn.height // 2),
+        gap,
+    )
+    nx.mouse_move(operator, 6, warn.y + warn.height // 2)
     quit_cleanly(session, app, operator, "narrow-id")
 
 
@@ -279,7 +354,8 @@ def body(session: nx.Session) -> str:
         f"FFmpeg {version} accepted without a warning; the GPL system build and a "
         "missing FFmpeg each show the media-unavailable status while Live output, "
         "Go Live and Black keep working; the Indonesian warning truncates at the "
-        "minimum window without squeezing the header controls"
+        "minimum window without squeezing the header controls and hover shows "
+        "the full warning and output text"
     )
 
 

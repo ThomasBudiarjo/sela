@@ -142,6 +142,38 @@ impl Render for DragLabel {
     }
 }
 
+/// Hover hint with the full text of a status-bar item that truncates in a
+/// narrow window (output state, media warning); the accessible name
+/// already carries the same text.
+pub(super) struct StatusHint(SharedString);
+
+impl StatusHint {
+    pub(super) fn builder(
+        text: impl Into<SharedString>,
+    ) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+        let text = text.into();
+        move |_, cx| cx.new(|_| StatusHint(text.clone())).into()
+    }
+}
+
+impl Render for StatusHint {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .debug_selector(|| "status-hint".into())
+            .max_w(px(360.))
+            .px_2()
+            .py_1()
+            .rounded(px(RADIUS))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(SURFACE))
+            .shadow_md()
+            .text_size(px(TEXT_SMALL))
+            .text_color(rgb(TEXT))
+            .child(self.0.clone())
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct Item {
     pub(super) version: Version,
