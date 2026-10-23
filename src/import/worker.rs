@@ -41,6 +41,9 @@ pub enum Event {
     },
     /// Last event of a job. `canceled`: it stopped early on request.
     Done { job: u64, canceled: bool },
+    /// Last event of a job whose thread ended without finishing it (a
+    /// panic). The importer cannot take another job; start a new one.
+    Failed { job: u64 },
 }
 
 struct Job {
@@ -132,13 +135,10 @@ impl Importer {
             Ok(event) => event,
             Err(mpsc::TryRecvError::Empty) => return None,
             Err(mpsc::TryRecvError::Disconnected) => {
-                // The thread ended (it panicked): finish the job as canceled
-                // so the operator is never left waiting.
+                // The thread ended (it panicked): finish the job as failed
+                // so the operator is never left waiting and is told.
                 let (job, _) = self.running.take()?;
-                return Some(Event::Done {
-                    job,
-                    canceled: true,
-                });
+                return Some(Event::Failed { job });
             }
         };
         if let Event::Done { job, .. } = &event
@@ -336,6 +336,29 @@ mod tests {
                 canceled: true
             })
         ));
+    }
+
+    #[test]
+    fn a_panicked_worker_reports_the_job_failed_not_canceled() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.cho"), "Line\n").unwrap();
+        let pace: Pace = Arc::new(|_| panic!("a parser bug"));
+        let mut importer = Importer::start_paced(Some(pace)).unwrap();
+        importer.submit(3, vec![dir.path().to_path_buf()]).unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        let last = loop {
+            match importer.poll() {
+                Some(Event::Found { .. }) => {}
+                Some(event) => break event,
+                None => {
+                    assert!(Instant::now() < end, "bounded wait");
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+        };
+        assert!(matches!(last, Event::Failed { job: 3 }), "{last:?}");
+        assert!(!importer.busy());
+        assert_eq!(importer.submit(4, vec![]), Err(SubmitError::Closed));
     }
 
     #[test]

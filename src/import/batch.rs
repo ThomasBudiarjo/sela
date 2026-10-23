@@ -9,7 +9,9 @@
 //!   `<song>` in the OpenLyrics namespace, otherwise OpenSong.
 //! - Anything else chosen as a file is reported as unsupported; inside a
 //!   chosen folder it is only counted, because song folders hold pictures
-//!   and notes too.
+//!   and notes too. Files without an extension are the exception: OpenSong
+//!   songs have none, so each one is read, and one whose content is not a
+//!   song gets an unsupported row (`FileError::Unsupported`).
 use super::{MAX_FILE_BYTES, ParsedSong, Rejected, Warning, chordpro, openlyrics, opensong, song};
 use crate::storage::Song;
 use sha2::{Digest, Sha256};

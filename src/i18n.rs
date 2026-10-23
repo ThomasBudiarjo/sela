@@ -593,6 +593,7 @@ pub enum Msg {
     ImportDoneLate,
     ImportFailedStart,
     ImportBusy,
+    ImportStopped,
     ImportWarnElement,
     ImportWarnDirective,
     ImportWarnOrder,
@@ -1171,6 +1172,7 @@ impl Msg {
         Msg::ImportDoneLate,
         Msg::ImportFailedStart,
         Msg::ImportBusy,
+        Msg::ImportStopped,
         Msg::ImportWarnElement,
         Msg::ImportWarnDirective,
         Msg::ImportWarnOrder,
@@ -1830,6 +1832,9 @@ impl Msg {
             }
             Self::ImportFailedStart => "Import could not start: {error}",
             Self::ImportBusy => "Another import is still finishing. Try again in a moment.",
+            Self::ImportStopped => {
+                "The import stopped unexpectedly while reading the files. Nothing was imported; try again."
+            }
             Self::ImportWarnElement => "Not imported: <{name}>",
             Self::ImportWarnDirective => "Directive not imported: {name}",
             Self::ImportWarnOrder => "The order names a missing section: {name}",
@@ -2536,6 +2541,9 @@ impl Msg {
             Self::ImportDoneLate => "Impor selesai sebelum dapat dibatalkan. Diimpor: {count}",
             Self::ImportFailedStart => "Impor tidak dapat dimulai: {error}",
             Self::ImportBusy => "Impor lain masih berjalan. Coba lagi sebentar lagi.",
+            Self::ImportStopped => {
+                "Impor berhenti tanpa diduga saat membaca berkas. Tidak ada yang diimpor; coba lagi."
+            }
             Self::ImportWarnElement => "Tidak diimpor: <{name}>",
             Self::ImportWarnDirective => "Direktif tidak diimpor: {name}",
             Self::ImportWarnOrder => "Urutan menyebut bagian yang tidak ada: {name}",

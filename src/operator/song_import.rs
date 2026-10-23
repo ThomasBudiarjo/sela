@@ -13,7 +13,7 @@ use super::*;
 use sela::import::{
     Rejected, Warning,
     batch::{self, FileError, Format, Staged},
-    worker::{Event, Importer, Pace},
+    worker::{Event, Importer, Pace, SubmitError},
 };
 use sela::storage::{ImportWrite, LibraryMatch};
 
@@ -378,9 +378,18 @@ impl Operator {
         self.song_import.job += 1;
         let job = self.song_import.job;
         let importer = self.song_import.importer.as_mut().expect("started above");
-        if importer.submit(job, paths).is_err() {
-            self.song_message = Some((t!(Msg::ImportBusy).into(), true));
-            return;
+        match importer.submit(job, paths) {
+            Ok(()) => {}
+            Err(SubmitError::Busy) => {
+                self.song_message = Some((t!(Msg::ImportBusy).into(), true));
+                return;
+            }
+            Err(SubmitError::Closed) => {
+                // Its thread is gone: the next import starts a new one.
+                self.song_import.importer = None;
+                self.song_message = Some((t!(Msg::ImportStopped).into(), true));
+                return;
+            }
         }
         if !self.show_dialog_later(Dialog::ImportSongs) {
             // Another dialog opened while the chooser was up: say so, not
@@ -448,6 +457,15 @@ impl Operator {
                         self.song_import.reset();
                     } else {
                         self.check_import_duplicates();
+                    }
+                }
+                Event::Failed { job } => {
+                    // A new thread for the next import.
+                    self.song_import.importer = None;
+                    if job == current && reading {
+                        self.song_import.reset();
+                        self.close_import_dialog_later();
+                        self.song_message = Some((t!(Msg::ImportStopped).into(), true));
                     }
                 }
                 // A cancelled or older job: its results are dropped.

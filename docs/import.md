@@ -423,7 +423,10 @@ UI never waits on it). Both items are disabled while an import runs.
   well-formed file with another root is "not a song file".
 - A chosen file of any other type is listed as unsupported. Inside a chosen
   folder, other files are only counted ("Not song files, skipped: N"),
-  because song folders hold pictures and notes too. Folders are walked three
+  because song folders hold pictures and notes too. A file without an
+  extension is the exception, in a folder too: OpenSong songs have none, so
+  it is read, and one whose content is not a song gets a row "Not an
+  OpenLyrics, OpenSong or ChordPro song file". Folders are walked three
   levels deep without following symbolic links; hidden entries are skipped;
   only regular files are candidates (a named pipe, socket or device is
   counted as not a song file, and a chosen one is refused from its metadata
@@ -450,7 +453,10 @@ One long-lived thread, started on first use. Its job channel holds one job
 and its event channel `EVENT_DEPTH` (16) results; when the UI does not read,
 the worker blocks instead of queueing more (tested). Events carry the job
 number, so results of a cancelled job are dropped. Cancel is checked before
-every file; `Done { canceled }` always ends a job. The UI handles at most 64
+every file; `Done { canceled }` ends a job, or `Failed` when the thread ended
+without finishing it (a panic): the operator closes the preview, says "The
+import stopped unexpectedly …" and starts a new thread for the next import
+(pr1-review). The UI handles at most 64
 events per 16 ms poll. Nothing in the worker touches the library.
 
 ### Staged preview
@@ -542,7 +548,8 @@ keyboard focus moves to its row. Live is never touched.
 - `import::batch` (format choice, unsupported and hostile files, library
   limit, title from the file name, duplicate keys, bounded folder walk, file
   limit), `import::worker` (ordered results with partial failure, cancel
-  before the next file, back-pressure), `storage` (one transaction with the
+  before the next file, back-pressure, a panicked thread reported as
+  `Failed`), `storage` (one transaction with the
   index and Replace, failure injection by trigger, Conflict, cancel, invalid
   batch, duplicate lookup through the worker),
   `operator::song_import::tests` (batch duplicates, choices, every warning

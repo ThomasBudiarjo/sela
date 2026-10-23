@@ -449,6 +449,38 @@ fn cancel_while_files_are_read_commits_nothing(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_worker_that_stops_unexpectedly_is_reported_and_replaced(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = batch_dir(&dir);
+    let (mut cx, operator) = open(cx, library_with_songs(&dir), 2);
+    operator.update(&mut cx, |o, _| {
+        o.song_import.pace = Some(Arc::new(|_| panic!("a parser bug")));
+    });
+    import_folder(&mut cx, &operator, folder.clone());
+    settle(&mut cx, &operator, "the failure", |o| {
+        o.song_import.phase == Phase::Idle && o.song_message.is_some()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(
+            o.song_message.clone(),
+            Some((
+                "The import stopped unexpectedly while reading the files. Nothing was imported; try again."
+                    .into(),
+                true
+            )),
+            "not reported as a cancel"
+        );
+        assert!(o.dialog.is_none());
+        assert_eq!(o.catalog.len(), 2);
+    });
+    // The next import gets a new worker instead of "another import".
+    operator.update(&mut cx, |o, _| o.song_import.pace = None);
+    import_folder(&mut cx, &operator, folder);
+    settle_review(&mut cx, &operator);
+    assert_eq!(operator.read_with(&cx, |o, _| o.song_import.rows.len()), 5);
+}
+
+#[gpui::test]
 fn cancel_before_the_commit_reaches_storage_saves_nothing(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let folder = batch_dir(&dir);
