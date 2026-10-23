@@ -517,7 +517,7 @@ impl Operator {
                             this.may_close(window, cx)
                         };
                         if close {
-                            window.remove_window();
+                            this.remove_for_close(window);
                         }
                         true
                     });
@@ -531,7 +531,7 @@ impl Operator {
         false
     }
 
-    #[cfg(test)]
+    /// A close waits for a settings write (`settings_allow_close`).
     pub(crate) fn close_pending(&self) -> bool {
         self.settings.closing.is_some()
     }

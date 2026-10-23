@@ -479,8 +479,14 @@ fn main() {
             });
             let weak = operator.downgrade();
             window.on_window_should_close(cx, move |window, cx| {
-                weak.update(cx, |operator, cx| operator.may_close(window, cx))
-                    .unwrap_or(true)
+                weak.update(cx, |operator, cx| {
+                    let close = operator.may_close(window, cx);
+                    if close {
+                        operator.window_will_close();
+                    }
+                    close
+                })
+                .unwrap_or(true)
             });
             operator.read(cx).focus.clone().focus(window, cx);
             operator

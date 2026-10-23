@@ -48,7 +48,7 @@ pub(crate) struct AutosaveState {
     pub(crate) offer: Option<Offer>,
     /// The offer still has to be shown (another dialog was open).
     prompt_pending: bool,
-    /// The close flush ended and the window is being removed: the Recovery
+    /// A close was granted and the window is being removed: the Recovery
     /// prompt may not open in it, even if a poll runs before it goes.
     window_closing: bool,
     pub(crate) last: Option<save::Committed>,
@@ -151,13 +151,12 @@ impl Operator {
             changed = true;
             self.autosave_reply(reply, now);
         }
-        // A close in progress keeps the prompt back: the window is going
+        // Any close in progress keeps the prompt back: the window is going
         // away, and a cancelled close shows it on the next poll. Once the
         // window is being removed, a poll that still runs (the window goes
         // after the task returns) shows nothing; the next start asks again.
         if self.autosave.prompt_pending
-            && self.autosave.closing.is_none()
-            && !self.autosave.window_closing
+            && !self.close_in_progress()
             && self.show_dialog_later(Dialog::Recovery)
         {
             self.autosave.prompt_pending = false;
@@ -475,6 +474,30 @@ impl Operator {
         )
     }
 
+    /// A close is on its way: a guard waits for a settings write, the
+    /// autosave flush or a Save chosen in the quit's Unsaved prompt, or the
+    /// window is being removed. An open dialog (the Unsaved prompt itself,
+    /// an import preview) already keeps the Recovery prompt back; a close
+    /// the operator cancels there, or one a guard refuses with a message,
+    /// is no longer in progress.
+    pub(crate) fn close_in_progress(&self) -> bool {
+        self.autosave.window_closing
+            || self.autosave.closing.is_some()
+            || self.close_pending()
+            || self.quitting_after_save()
+    }
+
+    /// Removes the window once a close path allowed it.
+    pub(crate) fn remove_for_close(&mut self, window: &mut Window) {
+        self.window_will_close();
+        window.remove_window();
+    }
+
+    /// The platform or a close path is about to remove the window.
+    pub(crate) fn window_will_close(&mut self) {
+        self.autosave.window_closing = true;
+    }
+
     /// Every close path ends here once the schedule guard has passed.
     pub(crate) fn allow_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.settings_allow_close(window, cx) && self.autosave_allow_close(window, cx)
@@ -536,8 +559,7 @@ impl Operator {
                             this.may_close(window, cx)
                         };
                         if close {
-                            this.autosave.window_closing = true;
-                            window.remove_window();
+                            this.remove_for_close(window);
                         }
                         cx.notify();
                         true
@@ -564,6 +586,16 @@ impl Operator {
             .worker
             .as_ref()
             .is_some_and(|worker| worker.submit(Job::Close(last)));
+    }
+
+    /// Work on a real thread that a close waits for: a settings write, or
+    /// the autosave worker's start-up open or close flush.
+    #[cfg(test)]
+    pub(crate) fn close_work_outstanding(&self) -> bool {
+        let state = &self.autosave;
+        !self.settings_idle()
+            || state.worker.is_some()
+                && (state.health == Health::Starting || state.close_sent && !state.closed)
     }
 
     #[cfg(test)]

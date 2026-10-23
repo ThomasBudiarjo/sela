@@ -570,6 +570,24 @@ fn settle(
     }
 }
 
+/// One step of a close that waits on real worker threads (the settings
+/// writer, the autosave worker) while its bound, `CLOSE_WAIT`, runs on the
+/// fake GPUI clock. While such work is outstanding the clock stands still
+/// and replies are polled in real time, so a slow disk (a loaded Windows CI
+/// runner) never runs out the bound; otherwise the clock moves on by `by`
+/// and the close waits run. Returns whether fake time advanced.
+fn close_step(cx: &mut VisualTestContext, operator: &Entity<Operator>, by: Duration) -> bool {
+    let outstanding = operator.read_with(cx, |o, _| o.close_work_outstanding());
+    if outstanding {
+        operator.update(cx, |o, cx| o.poll(cx));
+    } else {
+        cx.executor().advance_clock(by);
+    }
+    cx.run_until_parked();
+    std::thread::sleep(Duration::from_millis(5));
+    !outstanding
+}
+
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
     let bounds = cx
         .debug_bounds(selector)
@@ -2739,16 +2757,23 @@ mod settings_ui {
             assert!(Instant::now() < end, "bounded wait for the write");
             std::thread::sleep(Duration::from_millis(5));
         }
-        // The close also writes the layout, a second 2 s write.
+        assert!(
+            !file(&dir).unwrap().contains("pane_ratios="),
+            "the layout comes with the close"
+        );
+        // The close also writes the layout, a second 2 s write; the fake
+        // clock waits for it in real time, so the bound is not run out.
         while windows(&mut vcx) > 0 {
             assert!(Instant::now() < end, "bounded wait for the layout write");
-            vcx.executor().advance_clock(Duration::from_millis(200));
-            vcx.run_until_parked();
-            std::thread::sleep(Duration::from_millis(5));
+            close_step(&mut vcx, &operator, Duration::from_millis(200));
         }
         assert_eq!(windows(&mut vcx), 0, "closed once the write landed");
         let text = file(&dir).unwrap();
         assert!(text.contains("DISPLAY6") && text.contains("language=id"));
+        assert!(
+            text.contains("pane_ratios="),
+            "the close waited for the layout write: {text}"
+        );
         i18n::set_language(Language::English);
     }
 
@@ -2810,9 +2835,7 @@ mod settings_ui {
         }
         while !operator.read_with(vcx, |o, _| o.settings_idle() && !o.close_pending()) {
             assert!(Instant::now() < end, "bounded wait for the reply");
-            vcx.executor().advance_clock(Duration::from_millis(200));
-            vcx.run_until_parked();
-            std::thread::sleep(Duration::from_millis(5));
+            close_step(vcx, operator, Duration::from_millis(200));
         }
         vcx.run_until_parked();
     }
@@ -2862,9 +2885,7 @@ mod settings_ui {
         let end = Instant::now() + Duration::from_secs(10);
         while windows(&mut vcx) > 0 {
             assert!(Instant::now() < end, "Don't Save closes the window");
-            vcx.executor().advance_clock(Duration::from_millis(200));
-            vcx.run_until_parked();
-            std::thread::sleep(Duration::from_millis(5));
+            close_step(&mut vcx, &operator, Duration::from_millis(200));
         }
     }
 

@@ -127,12 +127,17 @@ fn start_with(
 fn close_window(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
     let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
     assert!(!closed, "the close waits for the autosave worker");
+    wait_closed(cx, operator);
+}
+
+/// Runs a close in progress until the window is gone, bounded in real time.
+/// The fake clock never passes a close's bound while the worker threads
+/// still owe a reply (`close_step`).
+fn wait_closed(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
     let end = Instant::now() + Duration::from_secs(10);
     while cx.read(|cx| cx.windows().len()) > 0 {
         assert!(Instant::now() < end, "the window closes after the flush");
-        cx.executor().advance_clock(Duration::from_millis(100));
-        cx.run_until_parked();
-        std::thread::sleep(Duration::from_millis(5));
+        close_step(cx, operator, Duration::from_millis(100));
     }
 }
 
@@ -466,13 +471,7 @@ fn closing_while_the_start_up_scan_runs_keeps_the_previous_offer(cx: &mut TestAp
     let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
     assert!(!closed);
     scan.store(true, Ordering::SeqCst);
-    let end = Instant::now() + Duration::from_secs(10);
-    while cx.read(|cx| cx.windows().len()) > 0 {
-        assert!(Instant::now() < end, "the window closes");
-        cx.executor().advance_clock(Duration::from_millis(100));
-        cx.run_until_parked();
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_closed(&mut cx, &operator);
     assert_eq!(session(dir.path())["state"], "offered");
     assert_eq!(session(dir.path())["acknowledged"], 0);
     assert!(!session(dir.path())["uncommitted"].is_null());
@@ -661,10 +660,9 @@ fn a_close_waiting_for_a_start_up_open_that_fails_closes_at_once(cx: &mut TestAp
             Some(Dialog::Recovery),
             "no prompt pops up in a window that is closing"
         );
-        cx.executor().advance_clock(Duration::from_millis(100));
-        waited += Duration::from_millis(100);
-        cx.run_until_parked();
-        std::thread::sleep(Duration::from_millis(5));
+        if close_step(&mut cx, &operator, Duration::from_millis(100)) {
+            waited += Duration::from_millis(100);
+        }
     }
     assert!(
         waited < Duration::from_secs(1),
@@ -675,6 +673,208 @@ fn a_close_waiting_for_a_start_up_open_that_fails_closes_at_once(cx: &mut TestAp
         before,
         "nothing could be recorded, so the next start asks again"
     );
+}
+
+/// Gates for the settings writer and the schedule file writer: each write
+/// waits on its disk until the test releases it.
+struct HeldWriters {
+    settings: Arc<AtomicBool>,
+    schedule: Arc<AtomicBool>,
+}
+
+/// Like `start`, with the settings and schedule file writes held at gates.
+fn start_held(
+    cx: &mut TestAppContext,
+    library: PathBuf,
+    fs: Arc<TestFs>,
+) -> (VisualTestContext, Entity<Operator>, HeldWriters) {
+    let held = HeldWriters {
+        settings: Arc::default(),
+        schedule: Arc::default(),
+    };
+    let (settings_gate, schedule_gate) = (held.settings.clone(), held.schedule.clone());
+    let schedule_writer = sela::schedule_file::default_writer();
+    let writers = crate::operator::SettingsConfig {
+        writer: Arc::new(move |path, settings| {
+            wait_for(Some(settings_gate.clone()));
+            sela::settings::save(path, settings)
+        }),
+        schedule_writer: Arc::new(move |path, bytes| {
+            wait_for(Some(schedule_gate.clone()));
+            schedule_writer(path, bytes)
+        }),
+        ..Default::default()
+    };
+    cx.update(|cx| cx.set_global(AutosaveSetup(config(fs))));
+    let (mut vcx, operator, _) = with_settings(cx, Some(library), "apply", writers);
+    vcx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut vcx, &operator, "catalog", |o| o.catalog.len() == 2);
+    (vcx, operator, held)
+}
+
+/// A crashed profile whose start-up scan is held, so its offer can be made
+/// to arrive while a close is in progress.
+fn crashed_with_held_scan(dir: &tempfile::TempDir) -> (PathBuf, Arc<TestFs>, Arc<AtomicBool>) {
+    let library = library_with_songs(dir);
+    let songs = versions(&library);
+    let committed = Snapshot {
+        path: None,
+        entries: vec![entry_of(songs[0].0, &songs[0].1)],
+        baseline: Vec::new(),
+    };
+    crashed_profile(&library, &committed, 2);
+    let fs = Arc::new(TestFs::default());
+    let scan = Arc::new(AtomicBool::new(false));
+    *fs.hold_scan.lock().unwrap() = Some(scan.clone());
+    (library, fs, scan)
+}
+
+fn recovery_shown(cx: &VisualTestContext, operator: &Entity<Operator>) -> bool {
+    operator.read_with(cx, |o, _| o.dialog == Some(Dialog::Recovery))
+}
+
+/// Releases the held start-up scan, waits for its offer and polls on for a
+/// while (within every close bound): the prompt stays back.
+fn offer_arrives_held_back(
+    cx: &mut VisualTestContext,
+    operator: &Entity<Operator>,
+    scan: &AtomicBool,
+    why: &str,
+) {
+    scan.store(true, Ordering::SeqCst);
+    settle(cx, operator, "the offer", |o| o.autosave.offer.is_some());
+    for _ in 0..10 {
+        assert!(!recovery_shown(cx, operator), "{why}");
+        advance(cx, operator, Duration::from_millis(100));
+    }
+    assert!(!recovery_shown(cx, operator), "{why}");
+}
+
+/// Runs the close until the window is gone; the prompt never shows.
+fn closes_without_the_prompt(cx: &mut VisualTestContext, operator: &Entity<Operator>) {
+    let end = Instant::now() + Duration::from_secs(10);
+    while cx.read(|cx| cx.windows().len()) > 0 {
+        assert!(Instant::now() < end, "the window closes");
+        assert!(
+            !recovery_shown(cx, operator),
+            "no prompt pops up in a window that is closing"
+        );
+        close_step(cx, operator, Duration::from_millis(100));
+    }
+}
+
+/// CI on Windows (ci-windows-autosave-races): the close stores the layout
+/// first, so the settings guard held the close while the write was on the
+/// disk; the autosave close wait had not started, and the offer that landed
+/// meanwhile opened the prompt in a window about to close.
+#[gpui::test]
+fn the_recovery_prompt_stays_back_while_a_settings_write_holds_the_close(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (library, fs, scan) = crashed_with_held_scan(&dir);
+    let (mut cx, operator, held) = start_held(cx, library, fs);
+    settle(&mut cx, &operator, "settings loaded", |o| {
+        o.settings.loaded_for_test()
+    });
+    let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+    assert!(!closed);
+    assert!(
+        operator.read_with(&cx, |o, _| o.close_pending()),
+        "the layout write holds the close"
+    );
+    offer_arrives_held_back(&mut cx, &operator, &scan, "the settings wait is a close");
+    held.settings.store(true, Ordering::SeqCst);
+    closes_without_the_prompt(&mut cx, &operator);
+    assert_eq!(session(dir.path())["state"], "offered", "not marked clean");
+    assert_eq!(session(dir.path())["acknowledged"], 0);
+    let (_, startup) = Store::open(dir.path(), &config(Arc::default())).unwrap();
+    assert!(startup.offer.expect("asked again next start").unanswered);
+}
+
+/// A close the operator cancels is over: the held prompt shows then.
+#[gpui::test]
+fn cancelling_the_close_shows_the_recovery_prompt_it_held_back(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (library, fs, scan) = crashed_with_held_scan(&dir);
+    let (mut cx, operator, held) = start_held(cx, library, fs);
+    settle(&mut cx, &operator, "settings loaded", |o| {
+        o.settings.loaded_for_test()
+    });
+    let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+    assert!(!closed);
+    // An edit during the settings wait: the close asks about it first.
+    add_song(&mut cx, &operator, "Signal Hymn");
+    offer_arrives_held_back(&mut cx, &operator, &scan, "the settings wait is a close");
+    held.settings.store(true, Ordering::SeqCst);
+    let end = Instant::now() + Duration::from_secs(10);
+    while operator.read_with(&cx, |o, _| o.dialog.clone()) != Some(Dialog::Unsaved(Then::Quit)) {
+        assert!(Instant::now() < end, "the close asks about the edit");
+        assert!(!recovery_shown(&cx, &operator));
+        close_step(&mut cx, &operator, Duration::from_millis(100));
+    }
+    click(&mut cx, "dialog-cancel");
+    settle(&mut cx, &operator, "the recovery prompt", |o| {
+        o.dialog == Some(Dialog::Recovery)
+    });
+    assert_eq!(
+        cx.read(|cx| cx.windows().len()),
+        1,
+        "Cancel keeps the window"
+    );
+}
+
+/// Save in a quit's Unsaved prompt: the Save As picker and the write are
+/// part of the close, which ends with the window once the file is written.
+#[gpui::test]
+fn the_recovery_prompt_stays_back_during_a_save_then_quit(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (library, fs, scan) = crashed_with_held_scan(&dir);
+    let (mut cx, operator, held) = start_held(cx, library, fs);
+    held.settings.store(true, Ordering::SeqCst);
+    settle(&mut cx, &operator, "settings loaded", |o| {
+        o.settings.loaded_for_test()
+    });
+    add_song(&mut cx, &operator, "Signal Hymn");
+    let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+    assert!(!closed);
+    click(&mut cx, "dialog-save");
+    assert!(cx.did_prompt_for_new_path());
+    offer_arrives_held_back(&mut cx, &operator, &scan, "the Save As picker is a close");
+    let file = dir.path().join("Quit.selaschedule");
+    let chosen = file.clone();
+    cx.simulate_new_path_selection(move |_| Some(chosen));
+    settle(&mut cx, &operator, "save in flight", |o| o.saving_file());
+    for _ in 0..5 {
+        advance(&mut cx, &operator, Duration::from_millis(100));
+        assert!(!recovery_shown(&cx, &operator), "the save is a close");
+    }
+    held.schedule.store(true, Ordering::SeqCst);
+    closes_without_the_prompt(&mut cx, &operator);
+    assert!(file.exists(), "saved before the window closed");
+    assert_eq!(session(dir.path())["state"], "offered");
+}
+
+/// Cancelling the quit's Save As picker cancels the quit: the prompt shows.
+#[gpui::test]
+fn a_cancelled_save_as_of_a_quit_shows_the_recovery_prompt(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (library, fs, scan) = crashed_with_held_scan(&dir);
+    let (mut cx, operator, held) = start_held(cx, library, fs);
+    held.settings.store(true, Ordering::SeqCst);
+    held.schedule.store(true, Ordering::SeqCst);
+    settle(&mut cx, &operator, "settings loaded", |o| {
+        o.settings.loaded_for_test()
+    });
+    add_song(&mut cx, &operator, "Signal Hymn");
+    let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+    assert!(!closed);
+    click(&mut cx, "dialog-save");
+    assert!(cx.did_prompt_for_new_path());
+    offer_arrives_held_back(&mut cx, &operator, &scan, "the Save As picker is a close");
+    cx.simulate_new_path_selection(|_| None);
+    settle(&mut cx, &operator, "the recovery prompt", |o| {
+        o.dialog == Some(Dialog::Recovery)
+    });
+    assert_eq!(cx.read(|cx| cx.windows().len()), 1);
 }
 
 #[gpui::test]
@@ -791,13 +991,7 @@ fn quit_with_dont_save_flushes_the_last_state_and_marks_the_run_clean(cx: &mut T
         Some(Dialog::Unsaved(Then::Quit))
     );
     click(&mut cx, "dialog-confirm"); // Don't Save
-    let end = Instant::now() + Duration::from_secs(10);
-    while cx.read(|cx| cx.windows().len()) > 0 {
-        assert!(Instant::now() < end, "the window closes after the flush");
-        cx.executor().advance_clock(Duration::from_millis(100));
-        cx.run_until_parked();
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_closed(&mut cx, &operator);
     assert_eq!(session(dir.path())["state"], "clean");
     let flushed = newest_revision(dir.path()).expect("the close committed the last state");
     assert_eq!(flushed.snapshot.entries[0].title, "Signal Hymn");
@@ -850,9 +1044,7 @@ fn an_import_preview_opened_while_the_close_flush_waits_keeps_the_window(cx: &mu
         if operator.read_with(&cx, |o, _| o.autosave.closed) {
             after += 1;
         }
-        cx.executor().advance_clock(Duration::from_millis(100));
-        cx.run_until_parked();
-        std::thread::sleep(Duration::from_millis(5));
+        close_step(&mut cx, &operator, Duration::from_millis(100));
     }
     assert_eq!(
         cx.read(|cx| cx.windows().len()),
