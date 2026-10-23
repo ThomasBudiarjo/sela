@@ -246,7 +246,11 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
    record the exact command, display kind, result and artifact path in the
    work log. A pass here never closes a Windows, hardware or reference item.
 
-## Results (2026-10-22, HEAD f05e27a binary, `:100` = `serve --display :100`)
+## Results (2026-10-22 onward; `:N` = `serve --display :N`)
+
+The first six rows ran the HEAD f05e27a debug binary on 2026-10-22; each
+later row names its stream and date and ran the debug binary of that
+stream's tree (commits in the work log record of the same name).
 
 | Script | Display | Result |
 | --- | --- | --- |

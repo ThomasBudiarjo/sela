@@ -767,8 +767,7 @@ Truncation hint added in focus-scopes-resource-browser. Open: slide-label search
 - [x] Define normalization, escaping, ranking and deterministic tie handling;
   keep display text unchanged.
 - [x] Maintain indexes transactionally on edits/deletes/imports and support rebuild.
-  (Edits, deletes and rebuild done in M1-07a; no importer exists yet, so
-  import maintenance is unproven until M1-14 saves through `save_song`.
+  (Edits, deletes and rebuild done in M1-07a; imports since
   import-framework 2026-10-22: `Repository::commit_import` writes every
   imported song through `write_song`, the `save_song` path, in one transaction;
   `storage::tests::an_import_commits_every_song_in_one_transaction_and_indexes_it`

@@ -367,6 +367,12 @@ Common Windows prerequisites are listed once in
   Bahasa Indonesia, add an item to an untitled schedule, read the title bar.
   Sela now: "Sela — Pratinjau teknis" and "Jadwal tanpa judul* — Sela"
   (EW8-OBS-067 itself is still unobserved). Re-run: `i18n-windows.py`.
+- [ ] **PP-SC2-07 Run the S01 and S02 Windows scenarios** (not run: no
+  Windows host on 2026-10-22). Steps: `python scripts\scenario-s01-windows.py`
+  then `python scripts\scenario-s02-windows.py` with a secondary monitor and
+  the keyboard idle; attach `.amp/in/artifacts/scenario-s0{1,2}-windows/`.
+  Sela now: both PASS on Linux/X11 (`scenario-s0{1,2}-x11.py`, xvfb `:111`,
+  2026-10-22). Re-run: these two scripts.
 - [ ] **PP-SC2-08 Normalize text size while a Go Live is in flight**
   (SC2-LIVE-04; EW8-OBS-014). Steps: with item A live, select item B, press
   Go Live and immediately click "Normalize text size across slides"; record
@@ -387,12 +393,6 @@ Common Windows prerequisites are listed once in
   menutup?"), Yes saves and closes, No discards, Cancel or Esc keeps editing;
   it said "Close without saving?", which inverted Yes and No. Re-run:
   `scenario-s01-windows.py`, `song-metadata-windows.py`.
-- [ ] **PP-SC2-07 Run the S01 and S02 Windows scenarios** (not run: no
-  Windows host on 2026-10-22). Steps: `python scripts\scenario-s01-windows.py`
-  then `python scripts\scenario-s02-windows.py` with a secondary monitor and
-  the keyboard idle; attach `.amp/in/artifacts/scenario-s0{1,2}-windows/`.
-  Sela now: both PASS on Linux/X11 (`scenario-s0{1,2}-x11.py`, xvfb `:111`,
-  2026-10-22). Re-run: these two scripts.
 
 ## Stream: import-framework
 
@@ -513,6 +513,32 @@ schedule; never on a service in use.
   asks about recovery again. Sela now: the normal unsaved guard; Don't Save
   marks the run clean and the next start asks nothing. Re-run:
   `autosave-windows.py`.
+- [ ] **PP-AUTO-06 Run `autosave-windows.py`** (M1-12, S03; NOT RUN: no
+  Windows host on 2026-10-22). Checks LockFileEx as the profile lock and
+  TerminateProcess as the kill, which the Linux run (`autosave-x11.py`,
+  PASS) cannot. Prerequisites: seed (`--second-song`), secondary monitor.
+- [ ] **PP-AUTO-07 Real Windows failure conditions** (M1-12 checklist 5).
+  Steps: on a disposable profile, (a) put the profile on a small nearly full
+  VHD and edit until autosave fails, then free space; (b) deny write on
+  `Recovery\` with an ACL; (c) hold `Recovery\session.json` open with a
+  sharing lock (e.g. PowerShell `[IO.File]::Open(..., 'Open', 'Read', 'None')`);
+  record the footer notes and that editing and Live continue; (d) end Sela
+  with TerminateProcess after an unsaved edit has been autosaved, then
+  relaunch while (c)'s lock is held: the recovery prompt must still appear
+  with the "Autosave is off (…), so this answer cannot be recorded" line and
+  Restore must work read-only. Sela now: fault-adapter tests only
+  (`autosave::tests`, `tests::autosave_recovery`).
+  Re-run: the same steps after any fix.
+- [ ] **PP-AUTO-08 Power loss and the autosave hitch** (M1-12 acceptance,
+  P/H). Steps: (a) pull power (or hard-reset a VM) during repeated
+  autosaves on a disposable profile, then reopen and record the prompt and
+  restored schedule; (b) during the 90-minute rehearsal on the older
+  integrated-GPU laptop, edit the schedule every few seconds while Live
+  output runs a slide sequence and record frame pacing around commits
+  (`frame_log`). Sela now: process-kill tests (SIGKILL, Linux) and a GPUI
+  check that Live receipts arrive while a commit is held; no physical
+  power-loss or hardware timing evidence. Re-run: `autosave-windows.py`,
+  `prep-windows.py`.
 - [ ] **PP-AUTO-09 EW closed with a recovery prompt unanswered**
   (EW8-OBS-076). Steps: after a forced termination as in PP-AUTO-02, if EW
   shows a recovery prompt, close EW (title-bar X, and once Alt+F4) without
@@ -548,32 +574,6 @@ schedule; never on a service in use.
   instead of "never saved". Re-run: `cargo test --bin sela
   a_file_saved_after_the_last_autosave`, `cargo test --lib
   a_file_saved_after_the_offered_revision`.
-- [ ] **PP-AUTO-06 Run `autosave-windows.py`** (M1-12, S03; NOT RUN: no
-  Windows host on 2026-10-22). Checks LockFileEx as the profile lock and
-  TerminateProcess as the kill, which the Linux run (`autosave-x11.py`,
-  PASS) cannot. Prerequisites: seed (`--second-song`), secondary monitor.
-- [ ] **PP-AUTO-07 Real Windows failure conditions** (M1-12 checklist 5).
-  Steps: on a disposable profile, (a) put the profile on a small nearly full
-  VHD and edit until autosave fails, then free space; (b) deny write on
-  `Recovery\` with an ACL; (c) hold `Recovery\session.json` open with a
-  sharing lock (e.g. PowerShell `[IO.File]::Open(..., 'Open', 'Read', 'None')`);
-  record the footer notes and that editing and Live continue; (d) end Sela
-  with TerminateProcess after an unsaved edit has been autosaved, then
-  relaunch while (c)'s lock is held: the recovery prompt must still appear
-  with the "Autosave is off (…), so this answer cannot be recorded" line and
-  Restore must work read-only. Sela now: fault-adapter tests only
-  (`autosave::tests`, `tests::autosave_recovery`).
-  Re-run: the same steps after any fix.
-- [ ] **PP-AUTO-08 Power loss and the autosave hitch** (M1-12 acceptance,
-  P/H). Steps: (a) pull power (or hard-reset a VM) during repeated
-  autosaves on a disposable profile, then reopen and record the prompt and
-  restored schedule; (b) during the 90-minute rehearsal on the older
-  integrated-GPU laptop, edit the schedule every few seconds while Live
-  output runs a slide sequence and record frame pacing around commits
-  (`frame_log`). Sela now: process-kill tests (SIGKILL, Linux) and a GPUI
-  check that Live receipts arrive while a commit is held; no physical
-  power-loss or hardware timing evidence. Re-run: `autosave-windows.py`,
-  `prep-windows.py`.
 
 ## Stream: bundle-backup-restore
 
