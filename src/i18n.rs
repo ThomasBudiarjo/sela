@@ -874,6 +874,12 @@ pub enum Msg {
     BundleErrTooLarge,
     BundleErrExists,
     BundleErrLibrary,
+    BundleLibBusy,
+    BundleLibDamaged,
+    BundleLibUnsupported,
+    BundleLibUnreadable,
+    BundleErrInternal,
+    BundleOpenedTooLate,
     BundleErrImage,
     BundleErrEmpty,
     BundleErrDiskFull,
@@ -1677,6 +1683,12 @@ impl Msg {
         Msg::BundleErrTooLarge,
         Msg::BundleErrExists,
         Msg::BundleErrLibrary,
+        Msg::BundleLibBusy,
+        Msg::BundleLibDamaged,
+        Msg::BundleLibUnsupported,
+        Msg::BundleLibUnreadable,
+        Msg::BundleErrInternal,
+        Msg::BundleOpenedTooLate,
         Msg::BundleErrImage,
         Msg::BundleErrEmpty,
         Msg::BundleErrDiskFull,
@@ -2591,7 +2603,7 @@ impl Msg {
                 "An export, backup or restore is still running; wait for it to finish"
             }
             Self::BundleNoProfile => "No profile folder is open",
-            Self::BundleExported => "Saved “{name}”: {items} items, {size}",
+            Self::BundleExported => "Saved “{name}”: {items} item(s), {size}",
             Self::BundleEmbedded => "Images included: {names}",
             Self::BundleNotEmbedded => {
                 "Not included because they are missing or changed in this profile: {names}. The other computer needs its own copies."
@@ -2602,7 +2614,7 @@ impl Msg {
             Self::BundleFontsMissingHere => "Not installed on this computer either: {names}",
             Self::BundleOmitted => "Left out because their translation may not be shared: {names}",
             Self::BundleOpened => {
-                "Opened “{title}” from “{name}” ({items} items), saved as “{file}” in Schedules"
+                "Opened “{title}” from “{name}” ({items} item(s)), saved as “{file}” in Schedules"
             }
             Self::BundleAdded => "Images added to this profile: {names}",
             Self::BundleReused => "Images this profile already had: {names}",
@@ -2664,6 +2676,16 @@ impl Msg {
                 "“{name}” already exists; a restore never writes into an existing folder or file. Choose a new name"
             }
             Self::BundleErrLibrary => "The song library could not be copied or used ({detail})",
+            Self::BundleLibBusy => "it is busy; wait a moment, then try again",
+            Self::BundleLibDamaged => "it is damaged",
+            Self::BundleLibUnsupported => "it is not a Sela library, or a newer Sela made it",
+            Self::BundleLibUnreadable => "it could not be read or written",
+            Self::BundleErrInternal => {
+                "“{name}” stopped because of an internal error in Sela; its unfinished files were removed"
+            }
+            Self::BundleOpenedTooLate => {
+                "Cancel came too late: “{name}” was already saved as “{file}” in Schedules. It was not opened; open it with File › Open Schedule."
+            }
             Self::BundleErrImage => "The image “{image}” cannot be used: {detail}",
             Self::BundleErrEmpty => "The schedule has nothing that can be exported",
             Self::BundleErrDiskFull => "The disk is full; free some space, then try again",
@@ -3695,6 +3717,18 @@ impl Msg {
                 "“{name}” sudah ada; pemulihan tidak pernah menulis ke folder atau berkas yang sudah ada. Pilih nama baru"
             }
             Self::BundleErrLibrary => "Pustaka lagu tidak dapat disalin atau dipakai ({detail})",
+            Self::BundleLibBusy => "pustaka sedang dipakai; tunggu sebentar, lalu coba lagi",
+            Self::BundleLibDamaged => "pustaka rusak",
+            Self::BundleLibUnsupported => {
+                "bukan pustaka Sela, atau dibuat oleh Sela yang lebih baru"
+            }
+            Self::BundleLibUnreadable => "pustaka tidak dapat dibaca atau ditulis",
+            Self::BundleErrInternal => {
+                "“{name}” berhenti karena galat internal di Sela; berkas yang belum selesai sudah dihapus"
+            }
+            Self::BundleOpenedTooLate => {
+                "Pembatalan terlambat: “{name}” sudah disimpan sebagai “{file}” di Schedules. Jadwal itu tidak dibuka; buka melalui Berkas › Buka Jadwal."
+            }
             Self::BundleErrImage => "Gambar “{image}” tidak dapat dipakai: {detail}",
             Self::BundleErrEmpty => "Jadwal tidak berisi apa pun yang dapat diekspor",
             Self::BundleErrDiskFull => "Disk penuh; kosongkan sebagian ruang, lalu coba lagi",
@@ -3777,7 +3811,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 799);
+        assert_eq!(Msg::ALL.len(), 805);
     }
 
     #[test]

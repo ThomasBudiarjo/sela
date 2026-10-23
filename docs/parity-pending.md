@@ -595,7 +595,10 @@ by it.
   scripture text); record whether the title bar or unsaved marker changed.
   Sela now (best guess): `.selapackage` ZIP with schedule snapshots and
   profile images, fonts listed only, restricted scripture left out, no
-  options dialog, schedule not saved. Re-run: `bundle-windows.py`.
+  options dialog (images are always embedded from the menu; the library's
+  `embed_images: false` waits for the backlog M1-13 item "Operator export
+  options", which this record decides), schedule not saved. Re-run:
+  `bundle-windows.py`.
 - [ ] **PP-BUN-02 Opening a standalone schedule** (EW8-OBS-BUN-2; menu rows
   `bar-profiles-backup`/`-restore` are a tracked deviation in
   `menu_contents_match_the_captures_plus_tracked_deviations`). Steps: copy the
@@ -624,7 +627,11 @@ by it.
   Steps: export a large schedule package and back up a large profile;
   record any progress indicator, Cancel, and what Exit does meanwhile.
   Sela now: modal progress with Cancel (Esc), Quit held back with a footer
-  note. Re-run: `cargo test --bin sela a_running_job_can_be_cancelled`.
+  note; a standalone schedule whose import finished before it saw Cancel
+  is kept in Schedules but not opened ("Cancel came too late …"); a job
+  that fails internally reports it and frees the menu and Quit. Re-run:
+  `cargo test --bin sela a_running_job_can_be_cancelled`,
+  `cargo test --bin sela an_import_that_finishes_after_cancel`.
 - [ ] **PP-BUN-06 Damaged, foreign and newer packages** (EW8-OBS-BUN-7).
   Steps: truncate a copy of the PP-BUN-01 file; rename a plain ZIP to the
   package extension; open both; record EW's messages and whether anything

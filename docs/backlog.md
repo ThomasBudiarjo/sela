@@ -1059,6 +1059,11 @@ folder; switching to it from the menu waits for M1-12b.
 - [x] Document format and recovery steps; never overwrite original data on failure.
   (docs/bundle.md "Recovery steps"; exports replace only when complete,
   restore never writes into an existing place.)
+- [ ] Operator export options: let the operator leave images out of a
+  standalone schedule (list them only). The library supports it
+  (`ExportOptions::embed_images`, tested); File › Export Standalone
+  Schedule… always embeds. Shape the dialog (or its absence) after
+  PP-BUN-01's record of EW's export options; found by review round 1.
 
 Acceptance: S04 passes; portability does not imply permission to redistribute assets.
 

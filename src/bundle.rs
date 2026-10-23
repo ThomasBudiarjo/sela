@@ -128,6 +128,10 @@ pub enum Error {
     PermissionDenied,
     Io(io::ErrorKind),
     Cancelled,
+    /// The job stopped on an internal error (a panic in Sela or a library
+    /// it uses); its temporary files were removed. Images an import stored
+    /// before it stay, as with `Image`.
+    Internal,
 }
 
 impl From<io::Error> for Error {
@@ -235,15 +239,35 @@ fn nonce() -> String {
     )
 }
 
-fn private_file(path: &Path) -> io::Result<File> {
+/// Who may read a new file on Unix (Windows files inherit the folder's
+/// access list either way).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Access {
+    /// Owner only (`0600`): profile backups, staging, files inside a profile.
+    Private,
+    /// What the user's umask allows (`0666 & !umask`, usually `0644`): a
+    /// standalone schedule is meant to be handed to other people.
+    Shared,
+}
+
+fn new_file(path: &Path, access: Access) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(match access {
+            Access::Private => 0o600,
+            Access::Shared => 0o666,
+        });
     }
+    #[cfg(not(unix))]
+    let _ = access;
     options.open(path)
+}
+
+fn private_file(path: &Path) -> io::Result<File> {
+    new_file(path, Access::Private)
 }
 
 /// Opens a profile file for reading without following a symbolic link at
@@ -281,9 +305,9 @@ struct TempFile {
 }
 
 impl TempFile {
-    fn create(destination: &Path, prefix: &str) -> Result<(Self, File), Error> {
+    fn create(destination: &Path, prefix: &str, access: Access) -> Result<(Self, File), Error> {
         let path = parent_of(destination).join(format!("{prefix}{}.partial", nonce()));
-        let file = private_file(&path)?;
+        let file = new_file(&path, access)?;
         Ok((
             Self {
                 path,
@@ -360,8 +384,24 @@ struct Opened {
     indexes: Vec<usize>,
 }
 
+/// Opens the bundle the operator picked. The open never waits
+/// (`O_NONBLOCK`): a named pipe or device given a bundle's name would
+/// otherwise hold the worker inside `open(2)` forever, where Cancel cannot
+/// reach it, and Quit would wait for good. Reading a regular file is not
+/// affected by the flag. A link the operator picked is followed.
+fn open_picked(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    options.open(path)
+}
+
 fn open_bundle(path: &Path, limits: Limits, cancel: &AtomicBool) -> Result<Opened, Error> {
-    let file = File::open(path)?;
+    let file = open_picked(path)?;
     if !file.metadata()?.is_file() {
         return Err(Error::NotBundle);
     }
@@ -610,7 +650,7 @@ pub fn export_schedule(
             family,
         })
         .collect();
-    let (temp, out) = TempFile::create(destination, ".sela-export-")?;
+    let (temp, out) = TempFile::create(destination, ".sela-export-", Access::Shared)?;
     let mut writer = Writer::new(out);
     let mut files = Vec::new();
     let digest = writer.add_bytes(manifest::SCHEDULE_PATH, true, &document)?;
@@ -1067,7 +1107,7 @@ pub fn backup_profile(
         library_schema: storage::library_schema(&copy).map_err(library_error)?,
         ..BackupSummary::default()
     };
-    let (temp, out) = TempFile::create(destination, ".sela-backup-")?;
+    let (temp, out) = TempFile::create(destination, ".sela-backup-", Access::Private)?;
     let mut writer = Writer::new(out);
     let mut records = Vec::new();
     let mut add = |writer: &mut Writer,
@@ -1318,12 +1358,85 @@ pub enum Done {
 }
 
 /// One thread running one bundle job at a time for one profile. `submit`
-/// never blocks: it refuses while a job is queued or running.
+/// never blocks: it refuses while a job is queued, running, or its reply is
+/// not yet polled. A job that panics replies `Error::Internal`; the thread
+/// stays up for the next job.
 pub struct Worker {
     jobs: SyncSender<(Job, Arc<AtomicBool>)>,
     replies: Receiver<Done>,
-    running: Arc<AtomicBool>,
+    /// Set by `submit`, cleared by the `poll` that hands over the reply
+    /// (both on the caller's thread, so a polled reply is never followed by
+    /// a stale "busy").
+    running: bool,
     cancel: Option<Arc<AtomicBool>>,
+}
+
+/// Where a test hook runs inside a job.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// Before the job starts.
+    Before,
+    /// After the job finished, before its reply is sent.
+    After,
+}
+
+/// Test hook run at each `Stage` of every job, inside the job's panic
+/// guard (tests catch a job while it runs, or make it panic).
+#[doc(hidden)]
+pub type Hook = Arc<dyn Fn(Stage) + Send + Sync>;
+
+/// Runs `job` (and the hook around it), turning a panic into
+/// `Error::Internal`. Temporary files and staging folders are removed by
+/// their `Drop` while the panic unwinds.
+fn guarded<T>(hook: Option<&Hook>, job: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(hook) = hook {
+            hook(Stage::Before);
+        }
+        let result = job();
+        if let Some(hook) = hook {
+            hook(Stage::After);
+        }
+        result
+    }))
+    .unwrap_or(Err(Error::Internal))
+}
+
+fn run_job(
+    profile: &Path,
+    fonts: &Fonts,
+    job: Job,
+    cancel: &AtomicBool,
+    hook: Option<&Hook>,
+) -> Done {
+    match job {
+        Job::ExportSchedule {
+            file,
+            destination,
+            options,
+        } => {
+            let result = guarded(hook, || {
+                export_schedule(profile, &file, &destination, fonts, options, cancel)
+            });
+            Done::Exported(destination, result)
+        }
+        Job::ImportSchedule { package } => {
+            let result = guarded(hook, || import_schedule(profile, &package, cancel));
+            Done::Imported(package, result)
+        }
+        Job::BackupProfile { destination } => {
+            let result = guarded(hook, || backup_profile(profile, &destination, cancel));
+            Done::BackedUp(destination, result)
+        }
+        Job::RestoreProfile {
+            backup,
+            destination,
+        } => {
+            let result = guarded(hook, || restore_profile(&backup, &destination, cancel));
+            Done::Restored(destination, result)
+        }
+    }
 }
 
 impl Worker {
@@ -1332,7 +1445,7 @@ impl Worker {
     }
 
     pub fn start_with(profile: PathBuf, fonts: &'static Fonts) -> io::Result<Self> {
-        Self::start_gated(profile, fonts, None)
+        Self::start_hooked(profile, fonts, None)
     }
 
     /// `start_with` whose thread waits while `hold` is true before each job
@@ -1343,52 +1456,31 @@ impl Worker {
         fonts: &'static Fonts,
         hold: Option<Arc<AtomicBool>>,
     ) -> io::Result<Self> {
+        let hook = hold.map(|hold| -> Hook {
+            Arc::new(move |stage| {
+                while stage == Stage::Before && hold.load(Ordering::Acquire) {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            })
+        });
+        Self::start_hooked(profile, fonts, hook)
+    }
+
+    /// `start_with` that runs `hook` at each `Stage` of every job.
+    #[doc(hidden)]
+    pub fn start_hooked(
+        profile: PathBuf,
+        fonts: &'static Fonts,
+        hook: Option<Hook>,
+    ) -> io::Result<Self> {
         let (jobs, incoming) = mpsc::sync_channel::<(Job, Arc<AtomicBool>)>(1);
         let (outgoing, replies) = mpsc::sync_channel(1);
-        let running = Arc::new(AtomicBool::new(false));
-        let busy = running.clone();
         std::thread::Builder::new()
             .name("sela-bundle".into())
             .spawn(move || {
                 while let Ok((job, cancel)) = incoming.recv() {
-                    while hold.as_ref().is_some_and(|h| h.load(Ordering::Acquire)) {
-                        std::thread::sleep(std::time::Duration::from_millis(2));
-                    }
-                    let done = match job {
-                        Job::ExportSchedule {
-                            file,
-                            destination,
-                            options,
-                        } => {
-                            let result = export_schedule(
-                                &profile,
-                                &file,
-                                &destination,
-                                fonts,
-                                options,
-                                &cancel,
-                            );
-                            Done::Exported(destination, result)
-                        }
-                        Job::ImportSchedule { package } => {
-                            let result = import_schedule(&profile, &package, &cancel);
-                            Done::Imported(package, result)
-                        }
-                        Job::BackupProfile { destination } => {
-                            let result = backup_profile(&profile, &destination, &cancel);
-                            Done::BackedUp(destination, result)
-                        }
-                        Job::RestoreProfile {
-                            backup,
-                            destination,
-                        } => {
-                            let result = restore_profile(&backup, &destination, &cancel);
-                            Done::Restored(destination, result)
-                        }
-                    };
-                    let failed = outgoing.send(done).is_err();
-                    busy.store(false, Ordering::Release);
-                    if failed {
+                    let done = run_job(&profile, fonts, job, &cancel, hook.as_ref());
+                    if outgoing.send(done).is_err() {
                         break;
                     }
                 }
@@ -1396,27 +1488,26 @@ impl Worker {
         Ok(Self {
             jobs,
             replies,
-            running,
+            running: false,
             cancel: None,
         })
     }
 
     /// Whether a job is queued or running (its reply not yet polled).
     pub fn busy(&self) -> bool {
-        self.running.load(Ordering::Acquire)
+        self.running
     }
 
     /// Queues `job`; false (and nothing queued) while another is running.
     pub fn submit(&mut self, job: Job) -> bool {
-        if self.busy() {
+        if self.running {
             return false;
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        self.running.store(true, Ordering::Release);
         if self.jobs.try_send((job, cancel.clone())).is_err() {
-            self.running.store(false, Ordering::Release);
             return false;
         }
+        self.running = true;
         self.cancel = Some(cancel);
         true
     }
@@ -1432,6 +1523,7 @@ impl Worker {
     pub fn poll(&mut self) -> Option<Done> {
         match self.replies.try_recv() {
             Ok(done) => {
+                self.running = false;
                 self.cancel = None;
                 Some(done)
             }

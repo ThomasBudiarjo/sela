@@ -1646,3 +1646,142 @@ fn file_stems_are_portable() {
     );
     assert!(is_bundle(Path::new("x.SelaBackup")) && !is_bundle(Path::new("x.selaschedule")));
 }
+
+/// Polls `worker` until it replies (bounded).
+fn wait_done(worker: &mut Worker) -> Done {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if let Some(done) = worker.poll() {
+            return done;
+        }
+        assert!(std::time::Instant::now() < deadline, "bounded wait");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+static TEST_FONTS: std::sync::OnceLock<Fonts> = std::sync::OnceLock::new();
+
+#[cfg(unix)]
+#[test]
+fn a_named_pipe_given_a_bundle_name_is_refused_without_waiting() {
+    let target = machine(&["p"]);
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["x.selapackage", "x.selabackup"] {
+        let fifo = dir.path().join(name);
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (profile, picked) = (target.profile.clone(), fifo.clone());
+        let restored = dir.path().join("restored");
+        std::thread::spawn(move || {
+            let _ = tx.send((
+                import_schedule(&profile, &picked, &no()),
+                restore_profile(&picked, &restored, &no()),
+                inspect(&picked),
+            ));
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(10));
+        if result.is_err() {
+            // Release the blocked open so the thread ends, then fail.
+            let _ = fs::OpenOptions::new().write(true).open(&fifo);
+            panic!("opening the pipe {name} waited for a writer");
+        }
+        let (import, restore, inspected) = result.unwrap();
+        assert_eq!(import.unwrap_err(), Error::NotBundle, "{name}");
+        assert_eq!(restore.unwrap_err(), Error::NotBundle, "{name}");
+        assert_eq!(inspected.unwrap_err(), Error::NotBundle, "{name}");
+        assert!(!dir.path().join("restored").exists());
+        assert!(!target.profile.join("Schedules").exists());
+    }
+}
+
+#[test]
+fn a_panicking_job_replies_failed_and_the_worker_takes_the_next() {
+    let source = machine(&["p"]);
+    let (file, _, _) = sunday(&source);
+    let panics = Arc::new(AtomicBool::new(true));
+    let hook: Hook = {
+        let panics = panics.clone();
+        Arc::new(move |stage| {
+            if stage == Stage::Before && panics.swap(false, Ordering::AcqRel) {
+                panic!("a bug inside a bundle job");
+            }
+        })
+    };
+    let mut worker = Worker::start_hooked(
+        source.profile.clone(),
+        TEST_FONTS.get_or_init(Fonts::new),
+        Some(hook),
+    )
+    .unwrap();
+    let package = source.profile.parent().unwrap().join("w.selapackage");
+    let export = |file: &ScheduleFile| Job::ExportSchedule {
+        file: Box::new(file.clone()),
+        destination: package.clone(),
+        options: ExportOptions::default(),
+    };
+    assert!(worker.submit(export(&file)));
+    match wait_done(&mut worker) {
+        Done::Exported(path, Err(Error::Internal)) => assert_eq!(path, package),
+        other => panic!("{other:?}"),
+    }
+    assert!(!worker.busy(), "the panicked job is over");
+    assert!(!package.exists());
+    // The next job runs on the same worker.
+    assert!(worker.submit(export(&file)));
+    assert!(matches!(wait_done(&mut worker), Done::Exported(_, Ok(_))));
+    assert!(inspect(&package).is_ok());
+}
+
+#[test]
+fn a_polled_reply_is_never_followed_by_a_stale_busy() {
+    let source = machine(&["p"]);
+    let mut worker =
+        Worker::start_with(source.profile.clone(), TEST_FONTS.get_or_init(Fonts::new)).unwrap();
+    let missing = source.profile.join("missing.selapackage");
+    // A job that fails at once, so the reply races the poll many times.
+    for round in 0..2000 {
+        assert!(
+            worker.submit(Job::ImportSchedule {
+                package: missing.clone(),
+            }),
+            "round {round}: the polled reply left the worker busy"
+        );
+        let done = loop {
+            if let Some(done) = worker.poll() {
+                break done;
+            }
+            std::hint::spin_loop();
+        };
+        assert!(!worker.busy(), "round {round}");
+        assert!(matches!(done, Done::Imported(_, Err(_))), "{done:?}");
+    }
+}
+
+/// The process umask (Linux reports it in /proc/self/status).
+#[cfg(target_os = "linux")]
+fn umask() -> u32 {
+    let status = fs::read_to_string("/proc/self/status").unwrap();
+    let line = status.lines().find(|l| l.starts_with("Umask:")).unwrap();
+    u32::from_str_radix(line["Umask:".len()..].trim(), 8).unwrap()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_standalone_schedule_is_readable_as_the_umask_allows_and_a_backup_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let source = machine(&["p"]);
+    let (file, _, _) = sunday(&source);
+    full_profile(&source);
+    let out = source.profile.parent().unwrap();
+    let package = out.join("Shared.selapackage");
+    export(&source, &file, &package);
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&package), 0o666 & !umask());
+    let backup = out.join("Private.selabackup");
+    backup_profile(&source.profile, &backup, &no()).unwrap();
+    assert_eq!(mode(&backup), 0o600);
+}

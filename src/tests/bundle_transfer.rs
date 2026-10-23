@@ -14,6 +14,7 @@ use sela::{
 };
 use sha2::Digest;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn result_shown(o: &Operator) -> bool {
@@ -165,7 +166,7 @@ fn export_standalone_schedule_writes_a_package_without_saving_the_schedule(
     cx.run_until_parked();
     let lines = operator.read_with(&cx, |o, _| result_lines(o));
     assert!(
-        has(&lines, "Saved “Sunday.selapackage”: 1 items"),
+        has(&lines, "Saved “Sunday.selapackage”: 1 item(s)"),
         "{lines:?}"
     );
     assert!(has(&lines, "Images included: backdrop.png"), "{lines:?}");
@@ -448,4 +449,122 @@ fn a_running_job_can_be_cancelled_and_holds_back_quit(cx: &mut TestAppContext) {
         0,
         "no temporary file or staging folder"
     );
+}
+
+/// Waits (bounded) until `flag` is set by the worker thread.
+fn wait_for(flag: &AtomicBool, what: &str) {
+    let end = Instant::now() + Duration::from_secs(10);
+    while !flag.load(Ordering::Acquire) {
+        assert!(Instant::now() < end, "bounded wait for {what}");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[gpui::test]
+fn an_import_that_finishes_after_cancel_never_replaces_the_schedule(cx: &mut TestAppContext) {
+    let package = package_from_elsewhere();
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_song(&dir);
+    let (mut cx, operator, _) = with_library(cx, Some(library), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    // The import runs to the end, then its reply is held back until the
+    // operator has pressed Cancel and edited the schedule.
+    let (finished, release) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let hook: bundle::Hook = {
+        let (finished, release) = (finished.clone(), release.clone());
+        Arc::new(move |stage| {
+            if stage == bundle::Stage::After {
+                finished.store(true, Ordering::Release);
+                while !release.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+        })
+    };
+    let profile = dir.path().to_path_buf();
+    operator.update(&mut cx, |o, _| o.bundles.hook(&profile, hook));
+    open_path(&mut cx, &package.path);
+    assert!(operator.read_with(&cx, |o, _| o.bundles.running()));
+    wait_for(&finished, "the import to finish");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(operator.read_with(&cx, |o, _| o.dialog.clone()), None);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    operator.read_with(&cx, |o, _| assert!(o.schedule.is_dirty()));
+    release.store(true, Ordering::Release);
+    settle(&mut cx, &operator, "late reply", |o| !o.bundles.running());
+    cx.run_until_parked();
+    let unpacked = dir
+        .path()
+        .join("Schedules")
+        .join("Evening Service.selaschedule");
+    assert!(unpacked.is_file(), "the complete schedule file stays");
+    settle(&mut cx, &operator, "too-late note", result_shown);
+    // No schedule read was queued behind the note.
+    settle(&mut cx, &operator, "idle", |o| !o.schedule_busy());
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(entry_titles(o), ["Signal Hymn"], "the edit is kept");
+        assert!(o.schedule.is_dirty());
+        assert_eq!(o.schedule.path(), None, "the package was not opened");
+        assert!(o.package_notes().is_none());
+    });
+    let lines = operator.read_with(&cx, |o, _| result_lines(o));
+    assert!(
+        has(
+            &lines,
+            "Cancel came too late: “Evening.selapackage” was already saved as “Evening Service.selaschedule”"
+        ),
+        "{lines:?}"
+    );
+    assert!(!has(&lines, "Opened “"), "{lines:?}");
+}
+
+#[gpui::test]
+fn a_job_that_panics_reports_failure_and_frees_the_worker(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_song(&dir);
+    let other = tempfile::tempdir().unwrap();
+    let (mut cx, operator, _) = with_library(cx, Some(library), "apply");
+    cx.simulate_resize(size(px(1280.), px(800.)));
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    let panics = Arc::new(AtomicBool::new(true));
+    let hook: bundle::Hook = {
+        let panics = panics.clone();
+        Arc::new(move |stage| {
+            if stage == bundle::Stage::Before && panics.swap(false, Ordering::AcqRel) {
+                panic!("a bug inside a bundle job");
+            }
+        })
+    };
+    let profile = dir.path().to_path_buf();
+    operator.update(&mut cx, |o, _| o.bundles.hook(&profile, hook));
+    menu_item(&mut cx, "alt-p", "bar-profiles-backup");
+    let typed = other.path().join("Church");
+    cx.simulate_new_path_selection(move |_| Some(typed));
+    settle(&mut cx, &operator, "failure", result_shown);
+    let lines = operator.read_with(&cx, |o, _| result_lines(o));
+    assert!(
+        has(
+            &lines,
+            "“Church.selabackup” stopped because of an internal error in Sela"
+        ),
+        "{lines:?}"
+    );
+    assert!(!other.path().join("Church.selabackup").exists());
+    cx.simulate_keystrokes("enter");
+    // Nothing is left running: the menu works and Quit is not held.
+    assert!(operator.read_with(&cx, |o, _| o.bundle_enabled(false)));
+    assert!(
+        !operator.read_with(&cx, |o, _| o.bundles.running()),
+        "Quit is not held by the failed job"
+    );
+    menu_item(&mut cx, "alt-p", "bar-profiles-backup");
+    let typed = other.path().join("Church");
+    cx.simulate_new_path_selection(move |_| Some(typed));
+    settle(&mut cx, &operator, "second backup", result_shown);
+    let lines = operator.read_with(&cx, |o, _| result_lines(o));
+    assert!(has(&lines, "Backed up to “Church.selabackup”"), "{lines:?}");
 }

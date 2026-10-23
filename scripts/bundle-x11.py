@@ -135,7 +135,7 @@ def machine_a(session: nx.Session, data: Path) -> tuple[Path, Path, Path]:
     lines = dialog_lines(app, operator, "bundle-result", lambda ls: has(ls, "Saved"))
     summary["export_lines"] = lines
     session.save(operator, "a-export-result")
-    if not has(lines, "Saved “Sunday.selapackage”: 1 items"):
+    if not has(lines, "Saved “Sunday.selapackage”: 1 item(s)"):
         raise nx.Failure(f"unexpected export result {lines}")
     if not has(lines, "lantern.png") or not has(lines, FONT):
         raise nx.Failure(

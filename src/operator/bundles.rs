@@ -61,6 +61,14 @@ impl Bundles {
         self.running.is_some()
     }
 
+    /// Test hook: a worker that runs `hook` at each stage of every job.
+    #[cfg(test)]
+    pub(crate) fn hook(&mut self, profile: &Path, hook: bundle::Hook) {
+        self.worker =
+            bundle::Worker::start_hooked(profile.to_path_buf(), sela::fonts::shared(), Some(hook))
+                .ok();
+    }
+
     /// Test hook: a worker that waits before each job while the returned
     /// flag is true, so a job can be caught while it runs.
     #[cfg(test)]
@@ -120,7 +128,7 @@ fn error_line(error: &bundle::Error, name: &str) -> String {
         E::Damaged(detail) => t!(Msg::BundleErrDamaged, name = name, detail = detail),
         E::TooLarge(detail) => t!(Msg::BundleErrTooLarge, name = name, detail = detail),
         E::DestinationExists => t!(Msg::BundleErrExists, name = name),
-        E::Library(error) => t!(Msg::BundleErrLibrary, detail = format!("{error:?}")),
+        E::Library(error) => library_line(*error),
         E::Image(image, error) => {
             t!(
                 Msg::BundleErrImage,
@@ -133,7 +141,23 @@ fn error_line(error: &bundle::Error, name: &str) -> String {
         E::PermissionDenied => t!(Msg::BundleErrDenied).into(),
         E::Io(kind) => t!(Msg::BundleErrIo, detail = kind),
         E::Cancelled => t!(Msg::BundleCancelled).into(),
+        E::Internal => t!(Msg::BundleErrInternal, name = name),
     }
+}
+
+/// A library failure in the operator's language (never a Rust name).
+fn library_line(error: sela::storage::Error) -> String {
+    use sela::storage::Error as S;
+    let reason = match error {
+        S::Full => return t!(Msg::BundleErrDiskFull).into(),
+        S::Locked | S::Busy => Msg::BundleLibBusy,
+        S::Corrupt | S::Invalid => Msg::BundleLibDamaged,
+        S::Unsupported => Msg::BundleLibUnsupported,
+        S::Missing | S::Io | S::Conflict | S::Canceled | S::Closed | S::Exists | S::Budget => {
+            Msg::BundleLibUnreadable
+        }
+    };
+    t!(Msg::BundleErrLibrary, detail = t!(reason))
 }
 
 fn export_lines(path: &Path, summary: &ExportSummary) -> Vec<(String, bool)> {
@@ -396,24 +420,16 @@ impl Operator {
     }
 
     /// Where the bundle dialogs start: beside the current schedule file,
-    /// else the profile's `Schedules` folder, else the profile's parent.
+    /// else the profile's `Schedules` folder.
     fn bundle_dir(&self) -> PathBuf {
         self.schedule
             .path()
             .and_then(Path::parent)
             .map(Path::to_path_buf)
-            .or_else(|| {
-                self.profile
-                    .as_ref()
-                    .map(|p| p.join("Schedules"))
-                    .filter(|p| p.is_dir())
-            })
-            .or_else(|| {
-                self.profile
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .map(Path::to_path_buf)
-            })
+            // No `is_dir` check: that would stat the folder on the UI
+            // thread (a slow share stalls the operator); the native dialog
+            // copes with a folder that does not exist yet, as Save As does.
+            .or_else(|| self.profile.as_ref().map(|p| p.join("Schedules")))
             .unwrap_or_else(|| PathBuf::from("."))
     }
 
@@ -573,7 +589,7 @@ impl Operator {
         let Some(running) = self.bundles.running.take() else {
             return true;
         };
-        self.bundles.cancelling = false;
+        let cancel_requested = std::mem::take(&mut self.bundles.cancelling);
         // A working view is replaced by the result (or dropped on cancel).
         // A job that finished before it saw the cancel shows its result:
         // the file exists, so "nothing was changed" would be untrue.
@@ -588,7 +604,8 @@ impl Operator {
                 return;
             }
             let mut lines = vec![(error_line(&error, &file_name(path)), true)];
-            if unchanged {
+            // A panic may come after an import stored some images.
+            if unchanged && error != bundle::Error::Internal {
                 lines.push((t!(Msg::BundleUnchanged).into(), false));
             }
             this.schedule_message = Some(lines[0].0.clone());
@@ -605,6 +622,23 @@ impl Operator {
                 self.show_bundle_result(&running, export_lines(&path, &summary));
             }
             Done::Exported(path, Err(error)) => failed(self, error, &path, false),
+            Done::Imported(package, Ok(summary)) if cancel_requested => {
+                // It finished before it saw the Cancel. The Cancel closed
+                // the dialog, so the operator may have edited the schedule
+                // since: it is never replaced. The new file stays in
+                // Schedules (it is complete) and the operator is told.
+                let mut lines = open_lines(&package, &summary);
+                lines[0] = (
+                    t!(
+                        Msg::BundleOpenedTooLate,
+                        name = file_name(&package),
+                        file = file_name(&summary.schedule)
+                    ),
+                    false,
+                );
+                self.schedule_message = Some(lines[0].0.clone());
+                self.show_bundle_result(&running, lines);
+            }
             Done::Imported(package, Ok(summary)) => {
                 // The schedule file is new and complete; it opens like any
                 // other, and the preflight report follows.
@@ -697,4 +731,48 @@ pub(crate) fn bundle_lines(id: &'static str, lines: &[(String, bool)]) -> gpui::
         );
     }
     list.into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sela::i18n::{Language, set_language};
+    use sela::storage::Error as S;
+
+    #[test]
+    fn library_failures_are_explained_in_the_operator_language() {
+        let all = [
+            S::Invalid,
+            S::Conflict,
+            S::Missing,
+            S::Unsupported,
+            S::Corrupt,
+            S::Locked,
+            S::Full,
+            S::Io,
+            S::Busy,
+            S::Canceled,
+            S::Closed,
+            S::Exists,
+            S::Budget,
+        ];
+        for language in Language::ALL {
+            set_language(language);
+            for error in all {
+                let line = error_line(&bundle::Error::Library(error), "x");
+                let debug = format!("{error:?}");
+                assert!(!line.contains(&debug), "{language:?}: {line} names {debug}");
+            }
+        }
+        set_language(Language::Indonesian);
+        assert_eq!(
+            error_line(&bundle::Error::Library(S::Busy), "x"),
+            "Pustaka lagu tidak dapat disalin atau dipakai (pustaka sedang dipakai; tunggu sebentar, lalu coba lagi)"
+        );
+        set_language(Language::English);
+        assert_eq!(
+            error_line(&bundle::Error::Library(S::Locked), "x"),
+            "The song library could not be copied or used (it is busy; wait a moment, then try again)"
+        );
+    }
 }
