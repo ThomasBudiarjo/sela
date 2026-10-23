@@ -229,7 +229,7 @@ impl Worker {
                 while self.replies.try_recv().is_ok() {}
                 std::thread::yield_now();
             }
-            let _ = thread.join();
+            thread.join().expect("scripture worker thread panicked");
         }
     }
 }
