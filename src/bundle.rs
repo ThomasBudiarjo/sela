@@ -369,8 +369,19 @@ fn under(root: &Path, path: &str) -> PathBuf {
         .fold(root.to_path_buf(), |dir, part| dir.join(part))
 }
 
+/// Whether the job was asked to stop. Every cancellation check of a job
+/// goes through here, so a test hook also runs here (`Stage::Check`), at
+/// points where the job's temporary file or staging folder may exist.
+fn stop(cancel: &AtomicBool) -> bool {
+    let hook = CHECK_HOOK.with(|hook| hook.borrow().clone());
+    if let Some(hook) = hook {
+        hook(Stage::Check);
+    }
+    cancel.load(Ordering::Acquire)
+}
+
 fn cancelled(cancel: &AtomicBool) -> impl Fn() -> bool + '_ {
-    move || cancel.load(Ordering::Acquire)
+    move || stop(cancel)
 }
 
 // ---------------------------------------------------------------------------
@@ -669,7 +680,7 @@ pub fn export_schedule(
     let mut records = Vec::new();
     let mut embedded_names = HashSet::new();
     for image in refs {
-        if cancel.load(Ordering::Acquire) {
+        if stop(cancel) {
             return Err(Error::Cancelled);
         }
         let mut embedded = false;
@@ -850,7 +861,7 @@ pub fn import_schedule(
         let name = image_name(&opened.manifest.files[record]);
         images::check_embedded(&bytes).map_err(|error| Error::Image(name, error))?;
     }
-    if cancel.load(Ordering::Acquire) {
+    if stop(cancel) {
         return Err(Error::Cancelled);
     }
     let mut summary = ImportSummary {
@@ -1153,7 +1164,7 @@ pub fn backup_profile(
         }
     }
     for (rel, path, role) in profile_files(profile, &mut summary) {
-        if cancel.load(Ordering::Acquire) {
+        if stop(cancel) {
             return Err(Error::Cancelled);
         }
         match open_regular(&path, role_limit(role)) {
@@ -1263,7 +1274,7 @@ pub fn restore_profile(
     // The library first: the most likely to be refused.
     order.sort_by_key(|&i| opened.manifest.files[i].role != Role::Library);
     for (done, record) in order.into_iter().enumerate() {
-        if cancel.load(Ordering::Acquire) {
+        if stop(cancel) {
             return Err(Error::Cancelled);
         }
         #[cfg(test)]
@@ -1312,7 +1323,7 @@ pub fn restore_profile(
     }
     let library = staging.path.join(manifest::LIBRARY_PATH);
     summary.library_schema = storage::library_schema(&library).map_err(library_error)?;
-    if cancel.load(Ordering::Acquire) {
+    if stop(cancel) {
         return Err(Error::Cancelled);
     }
     // A rename never replaces a non-empty folder or a file (and on Windows
@@ -1377,8 +1388,27 @@ pub struct Worker {
 pub enum Stage {
     /// Before the job starts.
     Before,
+    /// At each cancellation check inside the job (between archive chunks,
+    /// files and images), including while its temporary file or staging
+    /// folder exists.
+    Check,
     /// After the job finished, before its reply is sent.
     After,
+}
+
+thread_local! {
+    /// The running job's hook, for `Stage::Check` (set by `guarded` on the
+    /// worker thread for the duration of one job).
+    static CHECK_HOOK: std::cell::RefCell<Option<Hook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Clears `CHECK_HOOK` when a job ends, also when it panics.
+struct CheckHookReset;
+
+impl Drop for CheckHookReset {
+    fn drop(&mut self) {
+        CHECK_HOOK.with(|hook| *hook.borrow_mut() = None);
+    }
 }
 
 /// Test hook run at each `Stage` of every job, inside the job's panic
@@ -1390,6 +1420,8 @@ pub type Hook = Arc<dyn Fn(Stage) + Send + Sync>;
 /// `Error::Internal`. Temporary files and staging folders are removed by
 /// their `Drop` while the panic unwinds.
 fn guarded<T>(hook: Option<&Hook>, job: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+    CHECK_HOOK.with(|slot| *slot.borrow_mut() = hook.cloned());
+    let _reset = CheckHookReset;
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if let Some(hook) = hook {
             hook(Stage::Before);

@@ -1064,6 +1064,12 @@ folder; switching to it from the menu waits for M1-12b.
   (`ExportOptions::embed_images`, tested); File › Export Standalone
   Schedule… always embeds. Shape the dialog (or its absence) after
   PP-BUN-01's record of EW's export options; found by review round 1.
+- [ ] Localize image errors: `images::Error`'s `Display` is English only,
+  so "The image “…” cannot be used: …" (`BundleErrImage`) and the Media
+  tab's image messages show English detail in Indonesian. Give
+  `images::Error` EN/ID `Msg` reasons as done for library and file system
+  failures (`src/operator/bundles.rs` `library_line`/`io_line`); found by
+  review round 2.
 
 Acceptance: S04 passes; portability does not imply permission to redistribute assets.
 

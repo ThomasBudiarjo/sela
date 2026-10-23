@@ -631,12 +631,20 @@ by it.
   is kept in Schedules but not opened ("Cancel came too late …"); a job
   that fails internally reports it and frees the menu and Quit. Re-run:
   `cargo test --bin sela a_running_job_can_be_cancelled`,
-  `cargo test --bin sela an_import_that_finishes_after_cancel`.
+  `cargo test --bin sela an_import_that_finishes_after_cancel`,
+  `cargo test --lib a_job_panicking_mid_write`.
 - [ ] **PP-BUN-06 Damaged, foreign and newer packages** (EW8-OBS-BUN-7).
   Steps: truncate a copy of the PP-BUN-01 file; rename a plain ZIP to the
   package extension; open both; record EW's messages and whether anything
   was imported. Sela now: refused before any change, with the reason and
-  "Nothing was changed." Re-run: `bundle-windows.py` (hostile package step).
+  "Nothing was changed." Also export to a nearly full USB stick, to a
+  network share unplugged mid-export, and back up a song library over
+  256 MB; record EW's wording. Sela now (UNOBSERVED best guess): a
+  localized reason in EN and ID ("the disk is full", "the connection to
+  the drive or network share was lost", "it is larger than 256 MB, or
+  copying it took too long"), never the system's English error text, and
+  no unfinished file left. Re-run: `bundle-windows.py` (hostile package
+  step), `cargo test --bin sela operator::bundles`.
 - [ ] **PP-BUN-07 Restore onto an existing folder (Windows dialogs).** Steps:
   run `bundle-windows.py`; its second restore types an existing folder name,
   answers the Save dialog's replace prompt with Yes and expects Sela's

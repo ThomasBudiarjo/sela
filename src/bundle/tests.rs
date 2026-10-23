@@ -1736,6 +1736,108 @@ fn a_panicking_job_replies_failed_and_the_worker_takes_the_next() {
     assert!(inspect(&package).is_ok());
 }
 
+/// Names in `dir` that a bundle job uses for its unfinished work.
+fn unfinished(dir: &Path) -> Vec<String> {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with(".sela-"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_job_panicking_mid_write_leaves_no_temp_file_or_staging_folder() {
+    let source = machine(&["p"]);
+    let (file, _, _) = sunday(&source);
+    full_profile(&source);
+    let out = tempfile::tempdir().unwrap();
+    let watched = out.path().to_path_buf();
+    // Armed: panic at the first cancellation check that finds the job's
+    // temporary file or staging folder in `out` (so mid-write).
+    let armed = Arc::new(AtomicBool::new(false));
+    let hook: Hook = {
+        let armed = armed.clone();
+        Arc::new(move |stage| {
+            if stage == Stage::Check
+                && armed.load(Ordering::Acquire)
+                && !unfinished(&watched).is_empty()
+                && armed.swap(false, Ordering::AcqRel)
+            {
+                panic!("a bug in the middle of a bundle job");
+            }
+        })
+    };
+    let mut worker = Worker::start_hooked(
+        source.profile.clone(),
+        TEST_FONTS.get_or_init(Fonts::new),
+        Some(hook),
+    )
+    .unwrap();
+    let package = out.path().join("w.selapackage");
+    let backup = out.path().join("b.selabackup");
+    let restored = out.path().join("restored");
+    type MakeJob<'a> = Box<dyn Fn() -> Job + 'a>;
+    let jobs: [(&str, &Path, MakeJob); 3] = [
+        (
+            "export",
+            &package,
+            Box::new(|| Job::ExportSchedule {
+                file: Box::new(file.clone()),
+                destination: package.clone(),
+                options: ExportOptions::default(),
+            }),
+        ),
+        (
+            "backup",
+            &backup,
+            Box::new(|| Job::BackupProfile {
+                destination: backup.clone(),
+            }),
+        ),
+        (
+            "restore",
+            &restored,
+            Box::new(|| Job::RestoreProfile {
+                backup: backup.clone(),
+                destination: restored.clone(),
+            }),
+        ),
+    ];
+    for (name, destination, job) in &jobs {
+        armed.store(true, Ordering::Release);
+        assert!(worker.submit(job()), "{name}");
+        let failed = match wait_done(&mut worker) {
+            Done::Exported(_, result) => result.map(drop),
+            Done::BackedUp(_, result) => result.map(drop),
+            Done::Restored(_, result) => result.map(drop),
+            other => panic!("{name}: {other:?}"),
+        };
+        assert!(
+            !armed.load(Ordering::Acquire),
+            "{name}: no check ran while unfinished work existed"
+        );
+        assert_eq!(failed, Err(Error::Internal), "{name}");
+        assert_eq!(unfinished(out.path()), Vec::<String>::new(), "{name}");
+        assert!(!destination.exists(), "{name}");
+        // The same job then succeeds on the same worker.
+        assert!(worker.submit(job()), "{name}");
+        let done = wait_done(&mut worker);
+        assert!(
+            matches!(
+                &done,
+                Done::Exported(_, Ok(_)) | Done::BackedUp(_, Ok(_)) | Done::Restored(_, Ok(_))
+            ),
+            "{name}: {done:?}"
+        );
+        assert!(destination.exists(), "{name}");
+        assert_eq!(unfinished(out.path()), Vec::<String>::new(), "{name}");
+    }
+}
+
 #[test]
 fn a_polled_reply_is_never_followed_by_a_stale_busy() {
     let source = machine(&["p"]);

@@ -878,6 +878,11 @@ pub enum Msg {
     BundleLibDamaged,
     BundleLibUnsupported,
     BundleLibUnreadable,
+    BundleLibMissing,
+    BundleLibTooLarge,
+    BundleLibExists,
+    BundleLibChanged,
+    BundleLibClosed,
     BundleErrInternal,
     BundleOpenedTooLate,
     BundleErrImage,
@@ -885,6 +890,13 @@ pub enum Msg {
     BundleErrDiskFull,
     BundleErrDenied,
     BundleErrIo,
+    BundleIoNotFound,
+    BundleIoExists,
+    BundleIoInUse,
+    BundleIoConnection,
+    BundleIoName,
+    BundleIoTooBig,
+    BundleIoOther,
     BundlePackageNotes,
     BundleSkipLink,
     BundleSkipTooLarge,
@@ -1687,6 +1699,11 @@ impl Msg {
         Msg::BundleLibDamaged,
         Msg::BundleLibUnsupported,
         Msg::BundleLibUnreadable,
+        Msg::BundleLibMissing,
+        Msg::BundleLibTooLarge,
+        Msg::BundleLibExists,
+        Msg::BundleLibChanged,
+        Msg::BundleLibClosed,
         Msg::BundleErrInternal,
         Msg::BundleOpenedTooLate,
         Msg::BundleErrImage,
@@ -1694,6 +1711,13 @@ impl Msg {
         Msg::BundleErrDiskFull,
         Msg::BundleErrDenied,
         Msg::BundleErrIo,
+        Msg::BundleIoNotFound,
+        Msg::BundleIoExists,
+        Msg::BundleIoInUse,
+        Msg::BundleIoConnection,
+        Msg::BundleIoName,
+        Msg::BundleIoTooBig,
+        Msg::BundleIoOther,
         Msg::BundlePackageNotes,
         Msg::BundleSkipLink,
         Msg::BundleSkipTooLarge,
@@ -2680,6 +2704,13 @@ impl Msg {
             Self::BundleLibDamaged => "it is damaged",
             Self::BundleLibUnsupported => "it is not a Sela library, or a newer Sela made it",
             Self::BundleLibUnreadable => "it could not be read or written",
+            Self::BundleLibMissing => "it is not in the profile",
+            Self::BundleLibTooLarge => "it is larger than 256 MB, or copying it took too long",
+            Self::BundleLibExists => "a file is already where its copy goes; try again",
+            Self::BundleLibChanged => "it changed while it was copied; try again",
+            Self::BundleLibClosed => {
+                "Sela's connection to it was closed; restart Sela, then try again"
+            }
             Self::BundleErrInternal => {
                 "“{name}” stopped because of an internal error in Sela; its unfinished files were removed"
             }
@@ -2691,6 +2722,13 @@ impl Msg {
             Self::BundleErrDiskFull => "The disk is full; free some space, then try again",
             Self::BundleErrDenied => "Sela is not allowed to write there; choose another folder",
             Self::BundleErrIo => "The file could not be read or written ({detail})",
+            Self::BundleIoNotFound => "the file or folder was not found",
+            Self::BundleIoExists => "a file or folder with that name already exists",
+            Self::BundleIoInUse => "another program is using it",
+            Self::BundleIoConnection => "the connection to the drive or network share was lost",
+            Self::BundleIoName => "that name is not allowed there",
+            Self::BundleIoTooBig => "the drive cannot hold a file this large",
+            Self::BundleIoOther => "the system reported an unexpected file error",
             Self::BundlePackageNotes => "From the standalone schedule",
             Self::BundleSkipLink => "a link",
             Self::BundleSkipTooLarge => "too large",
@@ -3723,6 +3761,15 @@ impl Msg {
                 "bukan pustaka Sela, atau dibuat oleh Sela yang lebih baru"
             }
             Self::BundleLibUnreadable => "pustaka tidak dapat dibaca atau ditulis",
+            Self::BundleLibMissing => "pustaka tidak ada di profil",
+            Self::BundleLibTooLarge => {
+                "pustaka lebih besar dari 256 MB, atau penyalinannya terlalu lama"
+            }
+            Self::BundleLibExists => "sudah ada berkas di tempat salinannya; coba lagi",
+            Self::BundleLibChanged => "pustaka berubah saat disalin; coba lagi",
+            Self::BundleLibClosed => {
+                "sambungan Sela ke pustaka tertutup; mulai ulang Sela, lalu coba lagi"
+            }
             Self::BundleErrInternal => {
                 "“{name}” berhenti karena galat internal di Sela; berkas yang belum selesai sudah dihapus"
             }
@@ -3734,6 +3781,13 @@ impl Msg {
             Self::BundleErrDiskFull => "Disk penuh; kosongkan sebagian ruang, lalu coba lagi",
             Self::BundleErrDenied => "Sela tidak diizinkan menulis di sana; pilih folder lain",
             Self::BundleErrIo => "Berkas tidak dapat dibaca atau ditulis ({detail})",
+            Self::BundleIoNotFound => "berkas atau folder tidak ditemukan",
+            Self::BundleIoExists => "sudah ada berkas atau folder dengan nama itu",
+            Self::BundleIoInUse => "sedang dipakai program lain",
+            Self::BundleIoConnection => "sambungan ke drive atau folder jaringan terputus",
+            Self::BundleIoName => "nama itu tidak diizinkan di sana",
+            Self::BundleIoTooBig => "drive tidak dapat menyimpan berkas sebesar ini",
+            Self::BundleIoOther => "sistem melaporkan galat berkas yang tidak terduga",
             Self::BundlePackageNotes => "Dari jadwal mandiri",
             Self::BundleSkipLink => "sebuah tautan",
             Self::BundleSkipTooLarge => "terlalu besar",
@@ -3811,7 +3865,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 805);
+        assert_eq!(Msg::ALL.len(), 817);
     }
 
     #[test]

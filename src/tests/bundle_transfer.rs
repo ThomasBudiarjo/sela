@@ -530,11 +530,25 @@ fn a_job_that_panics_reports_failure_and_frees_the_worker(cx: &mut TestAppContex
     let (mut cx, operator, _) = with_library(cx, Some(library), "apply");
     cx.simulate_resize(size(px(1280.), px(800.)));
     settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    // Panics once, mid-write: at the first cancellation check that finds
+    // the backup's temporary file or staging folder beside the destination.
     let panics = Arc::new(AtomicBool::new(true));
+    let unfinished = |dir: &std::path::Path| -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".sela-"))
+            .collect()
+    };
     let hook: bundle::Hook = {
-        let panics = panics.clone();
+        let (panics, watched) = (panics.clone(), other.path().to_path_buf());
         Arc::new(move |stage| {
-            if stage == bundle::Stage::Before && panics.swap(false, Ordering::AcqRel) {
+            if stage == bundle::Stage::Check
+                && panics.load(Ordering::Acquire)
+                && !unfinished(&watched).is_empty()
+                && panics.swap(false, Ordering::AcqRel)
+            {
                 panic!("a bug inside a bundle job");
             }
         })
@@ -553,7 +567,12 @@ fn a_job_that_panics_reports_failure_and_frees_the_worker(cx: &mut TestAppContex
         ),
         "{lines:?}"
     );
+    assert!(
+        !panics.load(Ordering::Acquire),
+        "the job panicked mid-write"
+    );
     assert!(!other.path().join("Church.selabackup").exists());
+    assert_eq!(unfinished(other.path()), Vec::<String>::new());
     cx.simulate_keystrokes("enter");
     // Nothing is left running: the menu works and Quit is not held.
     assert!(operator.read_with(&cx, |o, _| o.bundle_enabled(false)));

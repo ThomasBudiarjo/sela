@@ -139,10 +139,37 @@ fn error_line(error: &bundle::Error, name: &str) -> String {
         E::Empty => t!(Msg::BundleErrEmpty).into(),
         E::DiskFull => t!(Msg::BundleErrDiskFull).into(),
         E::PermissionDenied => t!(Msg::BundleErrDenied).into(),
-        E::Io(kind) => t!(Msg::BundleErrIo, detail = kind),
+        E::Io(kind) => io_line(*kind),
         E::Cancelled => t!(Msg::BundleCancelled).into(),
         E::Internal => t!(Msg::BundleErrInternal, name = name),
     }
+}
+
+/// A file system failure in the operator's language (never the Rust
+/// `io::ErrorKind` text, which is English).
+fn io_line(kind: std::io::ErrorKind) -> String {
+    use std::io::ErrorKind as K;
+    let reason = match kind {
+        K::StorageFull | K::QuotaExceeded => return t!(Msg::BundleErrDiskFull).into(),
+        K::PermissionDenied | K::ReadOnlyFilesystem => return t!(Msg::BundleErrDenied).into(),
+        K::NotFound | K::NotADirectory => Msg::BundleIoNotFound,
+        K::AlreadyExists | K::IsADirectory | K::DirectoryNotEmpty => Msg::BundleIoExists,
+        K::ResourceBusy | K::ExecutableFileBusy | K::WouldBlock => Msg::BundleIoInUse,
+        K::StaleNetworkFileHandle
+        | K::NetworkDown
+        | K::NetworkUnreachable
+        | K::HostUnreachable
+        | K::ConnectionRefused
+        | K::ConnectionReset
+        | K::ConnectionAborted
+        | K::NotConnected
+        | K::BrokenPipe
+        | K::TimedOut => Msg::BundleIoConnection,
+        K::InvalidFilename => Msg::BundleIoName,
+        K::FileTooLarge => Msg::BundleIoTooBig,
+        _ => Msg::BundleIoOther,
+    };
+    t!(Msg::BundleErrIo, detail = t!(reason))
 }
 
 /// A library failure in the operator's language (never a Rust name).
@@ -150,12 +177,16 @@ fn library_line(error: sela::storage::Error) -> String {
     use sela::storage::Error as S;
     let reason = match error {
         S::Full => return t!(Msg::BundleErrDiskFull).into(),
+        S::Canceled => return t!(Msg::BundleCancelled).into(),
         S::Locked | S::Busy => Msg::BundleLibBusy,
         S::Corrupt | S::Invalid => Msg::BundleLibDamaged,
         S::Unsupported => Msg::BundleLibUnsupported,
-        S::Missing | S::Io | S::Conflict | S::Canceled | S::Closed | S::Exists | S::Budget => {
-            Msg::BundleLibUnreadable
-        }
+        S::Missing => Msg::BundleLibMissing,
+        S::Budget => Msg::BundleLibTooLarge,
+        S::Exists => Msg::BundleLibExists,
+        S::Conflict => Msg::BundleLibChanged,
+        S::Closed => Msg::BundleLibClosed,
+        S::Io => Msg::BundleLibUnreadable,
     };
     t!(Msg::BundleErrLibrary, detail = t!(reason))
 }
@@ -764,7 +795,29 @@ mod tests {
                 assert!(!line.contains(&debug), "{language:?}: {line} names {debug}");
             }
         }
+        // Each failure gets its own reason, not one catch-all.
+        set_language(Language::English);
+        let mut reasons: Vec<String> = all
+            .iter()
+            .map(|&error| error_line(&bundle::Error::Library(error), "x"))
+            .collect();
+        reasons.sort();
+        reasons.dedup();
+        // Locked/Busy and Corrupt/Invalid share a reason.
+        assert_eq!(reasons.len(), all.len() - 2, "{reasons:#?}");
+        assert_eq!(
+            error_line(&bundle::Error::Library(S::Budget), "x"),
+            "The song library could not be copied or used (it is larger than 256 MB, or copying it took too long)"
+        );
+        assert_eq!(
+            error_line(&bundle::Error::Library(S::Canceled), "x"),
+            "Cancelled; nothing was changed"
+        );
         set_language(Language::Indonesian);
+        assert_eq!(
+            error_line(&bundle::Error::Library(S::Budget), "x"),
+            "Pustaka lagu tidak dapat disalin atau dipakai (pustaka lebih besar dari 256 MB, atau penyalinannya terlalu lama)"
+        );
         assert_eq!(
             error_line(&bundle::Error::Library(S::Busy), "x"),
             "Pustaka lagu tidak dapat disalin atau dipakai (pustaka sedang dipakai; tunggu sebentar, lalu coba lagi)"
@@ -773,6 +826,62 @@ mod tests {
         assert_eq!(
             error_line(&bundle::Error::Library(S::Locked), "x"),
             "The song library could not be copied or used (it is busy; wait a moment, then try again)"
+        );
+    }
+
+    #[test]
+    fn file_system_failures_never_show_the_english_error_kind() {
+        use std::io::ErrorKind as K;
+        let kinds = [
+            K::NotFound,
+            K::NotADirectory,
+            K::AlreadyExists,
+            K::IsADirectory,
+            K::DirectoryNotEmpty,
+            K::ResourceBusy,
+            K::StaleNetworkFileHandle,
+            K::NetworkDown,
+            K::ConnectionReset,
+            K::BrokenPipe,
+            K::TimedOut,
+            K::InvalidFilename,
+            K::FileTooLarge,
+            K::QuotaExceeded,
+            K::CrossesDevices,
+            K::Unsupported,
+            K::UnexpectedEof,
+            K::Interrupted,
+            K::InvalidData,
+            K::Other,
+        ];
+        for language in Language::ALL {
+            set_language(language);
+            for kind in kinds {
+                let line = error_line(&bundle::Error::Io(kind), "x");
+                let english = kind.to_string();
+                assert!(
+                    !line.contains(&english),
+                    "{language:?}: {line} shows {english:?}"
+                );
+            }
+        }
+        set_language(Language::Indonesian);
+        assert_eq!(
+            error_line(&bundle::Error::Io(K::StaleNetworkFileHandle), "x"),
+            "Berkas tidak dapat dibaca atau ditulis (sambungan ke drive atau folder jaringan terputus)"
+        );
+        assert_eq!(
+            error_line(&bundle::Error::Io(K::QuotaExceeded), "x"),
+            "Disk penuh; kosongkan sebagian ruang, lalu coba lagi"
+        );
+        set_language(Language::English);
+        assert_eq!(
+            error_line(&bundle::Error::Io(K::CrossesDevices), "x"),
+            "The file could not be read or written (the system reported an unexpected file error)"
+        );
+        assert_eq!(
+            error_line(&bundle::Error::Io(K::NotFound), "x"),
+            "The file could not be read or written (the file or folder was not found)"
         );
     }
 }
