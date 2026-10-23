@@ -805,6 +805,65 @@ fn quit_with_dont_save_flushes_the_last_state_and_marks_the_run_clean(cx: &mut T
 }
 
 #[gpui::test]
+fn an_import_preview_opened_while_the_close_flush_waits_keeps_the_window(cx: &mut TestAppContext) {
+    use crate::operator::song_import::Phase;
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_songs(&dir);
+    let fs = Arc::new(TestFs::default());
+    let gate = Arc::new(AtomicBool::new(false));
+    *fs.hold.lock().unwrap() = Some(gate.clone());
+    let (mut cx, operator) = start(cx, library, fs, "apply");
+    settle(&mut cx, &operator, "autosave ready", ready);
+    settle(&mut cx, &operator, "settings loaded", |o| {
+        o.settings.loaded_for_test()
+    });
+    // Layout stored first, so the close goes straight to the autosave flush.
+    cx.update(|window, cx| operator.update(cx, |o, _| o.save_layout(window)));
+    settle(&mut cx, &operator, "layout stored", |o| o.settings_idle());
+    add_song(&mut cx, &operator, "Signal Hymn");
+    let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+    assert!(!closed);
+    click(&mut cx, "dialog-confirm"); // Don't Save
+    // The close flush is held at the disk; meanwhile an import preview opens
+    // (integration of PP-IMPF-09 with the M1-12 close flush).
+    assert!(
+        !operator.read_with(&cx, |o, _| o.autosave.closed),
+        "the flush is held"
+    );
+    operator.update(&mut cx, |o, cx| {
+        o.song_import.phase = Phase::Review;
+        o.dialog = Some(Dialog::ImportSongs);
+        cx.notify();
+    });
+    gate.store(true, Ordering::SeqCst);
+    let end = Instant::now() + Duration::from_secs(10);
+    // Both close waiters (settings and autosave) decide once their work
+    // lands; neither may close the window over the preview.
+    let mut after = 0;
+    while after < 10 && cx.read(|cx| !cx.windows().is_empty()) {
+        assert!(Instant::now() < end, "the close flush lands");
+        if operator.read_with(&cx, |o, _| o.autosave.closed) {
+            after += 1;
+        }
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        cx.read(|cx| cx.windows().len()),
+        1,
+        "the preview keeps the window"
+    );
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.dialog, Some(Dialog::ImportSongs));
+        assert_eq!(
+            o.song_import.quit_note.as_deref(),
+            Some("Finish or cancel the import before quitting.")
+        );
+    });
+}
+
+#[gpui::test]
 fn a_full_disk_is_reported_and_retried_until_space_returns(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let library = library_with_songs(&dir);

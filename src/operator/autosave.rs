@@ -475,7 +475,11 @@ impl Operator {
                         if let Some(task) = this.autosave.closing.take() {
                             task.detach();
                         }
-                        let close = if this.discard_still_holds() {
+                        // An import preview opened during the wait still
+                        // holds the close back (PP-IMPF-09).
+                        let discarded =
+                            !this.song_import.holds_dialog() && this.discard_still_holds();
+                        let close = if discarded {
                             true
                         } else {
                             this.may_close(window, cx)
