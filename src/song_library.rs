@@ -431,12 +431,15 @@ type Backdrop = ((ImageRef, Aspect), Arc<[u8]>);
 
 /// Background preparation for previews and thumbnails, shared by their
 /// background tasks; the UI thread never locks it.
+/// A video's first frame at the preview size, by video and aspect.
+type Poster = ((sela::background::VideoRef, Aspect), Arc<[u8]>);
+
 struct Backdrops {
     profile: Option<PathBuf>,
     /// Least recently fitted first.
     fitted: Mutex<VecDeque<Backdrop>>,
     /// Video posters (first frames) at the preview size, same bound.
-    posters: Mutex<VecDeque<((sela::background::VideoRef, Aspect), Arc<[u8]>)>>,
+    posters: Mutex<VecDeque<Poster>>,
 }
 
 impl Backdrops {
@@ -4935,6 +4938,87 @@ mod tests {
         click(cx, &format!("format-menu-{row}"));
     }
 
+    /// video-playback: Select Media… › Videos sets a video Media Fill that
+    /// repeats, the Slide pane's Repeating turns it off as one undo step,
+    /// and the song saves it (EW8-OBS-032, EW8-OBS-039, SRC-10).
+    #[gpui::test]
+    fn select_media_videos_sets_a_repeating_video_fill_that_saves(cx: &mut TestAppContext) {
+        use sela::background::{Background, Fill};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let videos = sela::videos::videos_dir(dir.path());
+        std::fs::create_dir_all(&videos).unwrap();
+        std::fs::write(videos.join("Waves.mp4"), b"original wave clip bytes").unwrap();
+        let pinned = sela::videos::video_ref(dir.path(), "Waves.mp4").unwrap();
+        let (mut cx, view) = format_fixture(cx, path.clone());
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Media Fill");
+        let count = undo_len(&cx, &view);
+        click(&mut cx, "format-SelectMedia");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(vec!["Waves.mp4".to_owned()]))
+        );
+        let rows = view.read_with(&cx, |v, _| v.menu_rows(format_pane::Menu::Media));
+        assert_eq!(rows[0].0, "Waves", "named without the extension");
+        // Right and Left switch the category from the keyboard.
+        cx.simulate_keystrokes("right");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.kind),
+            format_pane::MediaKind::Images
+        );
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(Vec::new()))
+        );
+        cx.simulate_keystrokes("left");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(vec!["Waves.mp4".to_owned()]))
+        );
+        click(&mut cx, "media-item-0");
+        cx.run_until_parked();
+        assert_eq!(
+            backgrounds(&cx, &view)[0],
+            Some(Background::video(pinned.clone()))
+        );
+        assert!(matches!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| &b.fill),
+            Some(Fill::Video { repeat: true, .. })
+        ));
+        assert_eq!(undo_len(&cx, &view), count + 1);
+        // The pane names it and offers Repeating for a video.
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("format-repeat").is_some());
+        click(&mut cx, "format-repeat");
+        assert!(matches!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| &b.fill),
+            Some(Fill::Video { repeat: false, .. })
+        ));
+        assert_eq!(undo_len(&cx, &view), count + 2);
+        // Media Fill again keeps the chosen video (EW keeps the current media).
+        fill(&mut cx, &view, "Media Fill");
+        assert!(matches!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| &b.fill),
+            Some(Fill::Video { repeat: false, .. })
+        ));
+        cx.simulate_keystrokes("ctrl-s");
+        wait(&mut cx, &view);
+        let version = view.read_with(&cx, |v, _| v.version.unwrap());
+        let saved = Repository::open(&path).unwrap().song(version).unwrap();
+        assert_eq!(saved.sections[0].background, backgrounds(&cx, &view)[0]);
+        assert_eq!(
+            saved.sections[0]
+                .background
+                .as_ref()
+                .and_then(|b| b.video_ref().cloned()),
+            Some(pinned)
+        );
+    }
+
     #[gpui::test]
     fn slide_tab_sets_color_image_and_aspect_as_undo_steps(cx: &mut TestAppContext) {
         use sela::background::{Background, Fill};
@@ -4985,6 +5069,14 @@ mod tests {
             Some(Fill::Media(None))
         );
         click(&mut cx, "format-SelectMedia");
+        cx.run_until_parked();
+        // EW8-OBS-039: the picker opens on Videos (empty here); Images is
+        // the next category.
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(Vec::new()))
+        );
+        click(&mut cx, "media-images");
         cx.run_until_parked();
         assert_eq!(
             view.read_with(&cx, |v, _| v.pane.media.names.clone()),

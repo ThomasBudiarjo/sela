@@ -25,7 +25,7 @@ Bold on, Ctrl+S stores exactly that format for slide 1 only. Ctrl+A on slide
 1's thumbnail selects the whole song; the same Color path then stores green
 for both slides. Slide backgrounds (M1-05h3), by keyboard in the Slide tab:
 Fill Color Fill #FFAA00 turns slide 1's preview orange; Media Fill, Select
-Media... and Enter pick a seeded 4:1 profile image (Zoom covers the preview),
+Media... (Right from Videos to Images) and Enter pick a seeded 4:1 profile image (Zoom covers the preview),
 Aspect Ratio Maintain letterboxes it in black; Edit Slide Layouts sets the
 master to #2040A0, which slide 2's thumbnail then shows; each step is saved
 and decoded from SQLite. A double click on the preview returns to Words, where
@@ -284,7 +284,10 @@ def body(session: nx.Session) -> str:
 
     # Back to Fill, Down skips Gradient Fill to Media Fill; Select Media...
     # lists the profile image and Enter picks it (Zoom).
+    # It opens on Videos (EW8-OBS-039, empty here); Right shows Images.
     keys("shift+tab", "enter", "down", "enter", "tab", "enter")
+    time.sleep(1.0)
+    keys("right")
     time.sleep(1.5)
     capture("17-select-media")
     keys("enter")

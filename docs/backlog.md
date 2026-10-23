@@ -1223,16 +1223,38 @@ files) and checks VAL-MEDIA-038 (a crafted HLS/ffconcat playlist naming
 are not presented anywhere, so the scene-stability, stale-frame, seek and
 text-over-video items stay open for the video-playback stream.
 
-- [ ] Implement open/probe/preload/decode/frame delivery outside UI/render paths.
-- [ ] Bound packet/frame queues and decide drop/backpressure behavior by timestamps.
+Progress (video-playback, 2026-10-23; implemented-unqualified): video Media
+Fill per slide or song master (`Fill::Video`, codec tag 4, Repeating),
+managed profile videos (`src/videos.rs`: probe-checked import, fingerprint
+pins), pin checks off the UI thread with the image substitution rule, a
+video cue background (wire tag 2) that the renderer decodes itself, primed
+on its first frame before the cue can be accepted (failure keeps the live
+scene), presented at frame timestamps by a playback thread that writes a
+texture (no decode or upload in the redraw), shared across slides of the
+same video, looping with `-stream_loop`. Evidence: U/I/R tests
+(`audience::video::tests` on a real adapter), GPUI `tests::video_playback`,
+`scripts/video-x11.py` PASS (docs/media.md "Video backgrounds and
+playback"). Windows (`video-windows.py`, PP-VP-12), hardware decode and EW
+observations (PP-VP-01..11) are open. The boxes below are ticked from
+Linux evidence only.
+
+- [x] Implement open/probe/preload/decode/frame delivery outside UI/render paths.
+  (Preparation worker primes; `audience-video` thread presents; video-playback.)
+- [x] Bound packet/frame queues and decide drop/backpressure behavior by timestamps.
+  (Four frames per playback; late frames skipped to the newest due one.)
 - [ ] Handle cancellation, end-of-stream, bad timestamps, corrupt media and decoder
   stalls without replacing a valid scene with partially prepared content.
-- [ ] Recycle resources safely on cue switch; prevent stale frames after seek/restart.
-- [ ] Test variable frame rate, multiple resolutions, short clips, unsupported codecs
+- [x] Recycle resources safely on cue switch; prevent stale frames after seek/restart.
+  (A replaced playback drops its decoder; Restart reopens it; no seek yet.)
+- [x] Test variable frame rate, multiple resolutions, short clips, unsupported codecs
   and failed first-frame preparation; inspect text overlay on playing video.
-- [ ] Video slide backgrounds: a Media Fill video per slide or song master
+  (media-core decode tests; `failures_before_the_first_frame_never_give_a_playback`;
+  overlay captures in `.amp/in/artifacts/video-x11/`.)
+- [x] Video slide backgrounds: a Media Fill video per slide or song master
   (EW8-OBS-032 Volume and Media Usage, EW8-OBS-039 Videos category), with
-  the M1-05h resolution, gate and missing-file substitution.
+  the M1-05h resolution, gate and missing-file substitution. (Linux; Volume
+  and Media Usage are not built; the Go Live missing-file dialog is
+  images-only.)
 - [ ] FFmpeg children end when Sela itself crashes or is killed, on every
   platform (media-core review rounds 1-2). Linux: `PR_SET_PDEATHSIG(SIGKILL)`
   on the spawning thread, tested (`a_child_dies_when_its_parent_is_sigkilled`).
@@ -1246,13 +1268,26 @@ Acceptance: ready video is cue-addressable and failure leaves live stable.
 
 Depends on: M2-02, M1-10, M0-02. Tests: U, I, N, H.
 
+Progress (video-playback, 2026-10-23; implemented-unqualified): Play, Pause
+and Restart from a Live pane transport row (wire kind 8 MEDIA on the Safety
+lane), the renderer's reports (wire kind 9 STATUS: state, presented frame
+time, length) shown in that row, looping (Repeating, SRC-10) and play-once
+holding the last frame, masks never pausing a video (best guess). Rules are
+UNOBSERVED best guesses (EW8-OBS-VP-4..10); seek, a start position and stop
+are not built. Evidence: `playback::tests`, `tests/output_process.rs`,
+GPUI `tests::video_playback`, `scripts/video-x11.py`.
+
 - [ ] Implement observed play/pause/stop/seek, looping, start position and replay rules.
-- [ ] Specify preview versus live transport ownership and behavior on Go Live.
+- [x] Specify preview versus live transport ownership and behavior on Go Live.
+  (Only Live plays; Preview tiles show the first frame; a new video starts
+  at its first frame when its cue applies; docs/media.md.)
 - [ ] Complete M0-08 video cases and specify audio transport intent for
   Black/Clear/Logo continuation/restore; actual audio qualification belongs to M2-04.
 - [ ] Test seek while loading, repeated toggles, loop boundary, end-of-stream under
   mask, rapid cue change and failed seek while previous scene is active.
-- [ ] Inspect transport feedback against actual presented position, not only requests.
+- [x] Inspect transport feedback against actual presented position, not only requests.
+  (STATUS carries the presented frame's time; `video-x11.py` checks Paused
+  holds the picture and Restart shows the first frames.)
 
 Acceptance: media controls match observations and cannot leak preview playback
 into audience/audio unexpectedly.
@@ -1274,6 +1309,16 @@ silent/headless tests alone do not qualify audio.
 ### M2-05 — Thumbnails, preload scheduler and cache budgets
 
 Depends on: M2-02, M1-04, M1-11. Tests: U, I, P.
+
+Progress (video-playback, 2026-10-23; basic slice, implemented-unqualified):
+video posters and pin checks run on latest-wins worker threads with
+in-flight deduplication (`videos::Lookups`), cached in a byte- and
+entry-bounded LRU (16 MiB / 256 posters) keyed by content identity, so a
+changed file gets new keys and a rescan drops stale posters and their GPUI
+atlas sprites. The live video never waits for them (it decodes in the
+renderer process). Open: next-cue preload, the shared preparation
+scheduler, GPU and disk budgets, scrolling/import storm and allocation
+profiling.
 
 - [ ] Share bounded preparation ownership where appropriate; prioritize live-ready
   cues over visible previews and background thumbnails.

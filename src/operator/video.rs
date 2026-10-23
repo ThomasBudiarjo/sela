@@ -58,10 +58,9 @@ pub(crate) struct VideoState {
     /// Decoded posters (BGRA images for GPUI); `None` = could not be made.
     pub(crate) thumb_cache: Lru<ThumbKey, Option<Arc<gpui::RenderImage>>>,
     /// The list last handed to the thumbnailer, so an unchanged list is
-    /// not re-sent every poll.
+    /// not re-sent every poll (the worker itself never repeats the poster
+    /// it is making: the in-flight deduplication of M2-05).
     wanted_thumbs: Vec<ThumbKey>,
-    /// Thumbnails being made (the in-flight deduplication of M2-05).
-    asked_thumbs: Vec<ThumbKey>,
     checks: Option<videos::Checker>,
     pub(crate) checked: Lru<VideoRef, Result<PathBuf, Substitute>>,
     wanted_checks: Vec<VideoRef>,
@@ -88,7 +87,6 @@ impl VideoState {
             thumbs: None,
             thumb_cache: Lru::new(videos::THUMB_BUDGET, videos::THUMB_ENTRIES),
             wanted_thumbs: Vec::new(),
-            asked_thumbs: Vec::new(),
             checks,
             checked: Lru::new(usize::MAX, CHECKS),
             wanted_checks: Vec::new(),
@@ -151,11 +149,20 @@ fn position_text(position: Duration, duration: Option<Duration>) -> String {
 
 impl Operator {
     /// The slide on the audience now (acknowledged), if its background is a video.
-    /// A video that could not be played went out as black (a warning
-    /// substituted it), so it has no transport.
+    /// The video of the slide the renderer acknowledged. A video that could
+    /// not be played went out as black (a warning substituted it), so it has
+    /// no transport.
     pub(crate) fn live_video(&self) -> Option<(VideoRef, Aspect, bool)> {
         let item = self.on_air.as_ref()?;
         let index = self.on_air_slide?;
+        // Acknowledged, not requested: a refused video cue left the
+        // previous scene on the audience, so it has no transport either.
+        let LiveState::Confirmed(confirmed) = self.output.as_ref()?.live() else {
+            return None;
+        };
+        if slides::slide_version(item.version, index) != Some(confirmed) {
+            return None;
+        }
         if !self
             .presented
             .is_some_and(|(_, presented, clean)| clean && presented == index)
@@ -397,7 +404,6 @@ impl Operator {
                 break;
             };
             changed = true;
-            self.video.asked_thumbs.retain(|k| *k != key);
             let extent = key.extent();
             let rendered = thumb
                 .ok()
@@ -422,16 +428,12 @@ impl Operator {
         let thumbs: Vec<ThumbKey> = self
             .wanted_video_thumbs()
             .into_iter()
-            .filter(|k| !self.video.thumb_cache.contains(k) && !self.video.asked_thumbs.contains(k))
+            .filter(|k| !self.video.thumb_cache.contains(k))
             .collect();
         if thumbs != self.video.wanted_thumbs
             && let Some(thumbnailer) = &self.video.thumbs
         {
             thumbnailer.want(thumbs.clone());
-            // Whatever the worker takes from this list is in flight until
-            // it replies; a later list never asks for it again meanwhile.
-            self.video.asked_thumbs.extend(thumbs.iter().cloned());
-            self.video.asked_thumbs.dedup();
             self.video.wanted_thumbs = thumbs;
         }
         changed

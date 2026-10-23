@@ -47,6 +47,7 @@ category placement and mask continuation are best guesses).
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -63,9 +64,7 @@ GREEN = (0, 255, 0)
 
 def make_clip(out: Path) -> Path:
     if not FFMPEG.is_file():
-        raise nx.EnvironmentProblem(
-            f"missing {FFMPEG}; run scripts/fetch-ffmpeg first"
-        )
+        raise nx.EnvironmentProblem(f"missing {FFMPEG}; run scripts/fetch-ffmpeg first")
     graph = (
         "color=c=0x203060:size=640x360:rate=30:d=8[bg];"
         "color=c=0x00ff00:size=80x80:rate=30[box];"
@@ -126,6 +125,25 @@ def ffmpeg_pids(app: nx.App) -> list[int]:
         if name == "ffmpeg":
             found.append(pid)
     return found
+
+
+def cpu_seconds(pid: int) -> float:
+    """User plus system CPU time of a process, from /proc (0 when gone)."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except OSError:
+        return 0.0
+    return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+
+
+def rss_mib(pid: int) -> float:
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    return 0.0
 
 
 def body(session: nx.Session) -> str:
@@ -189,7 +207,11 @@ def body(session: nx.Session) -> str:
     for _ in range(2):
         songs = app.controls(operator)
         hymn = next(
-            (c for aid, c in songs.items() if aid.startswith("song-") and "Motion" in c.name),
+            (
+                c
+                for aid, c in songs.items()
+                if aid.startswith("song-") and "Motion" in c.name
+            ),
             None,
         )
         if hymn:
@@ -205,7 +227,7 @@ def body(session: nx.Session) -> str:
     found = app.audience(20)
     if not found:
         raise nx.Failure(f"no audience window within 20s: {app.log()}")
-    _, screen = found
+    audience_pid, screen = found
     time.sleep(1.5)
     nx.activate(operator)
     blank = nx.digest(screen)
@@ -221,6 +243,18 @@ def body(session: nx.Session) -> str:
     summary["ffmpeg_playing"] = len(ffmpeg_pids(app))
     if not ffmpeg_pids(app):
         raise nx.Failure("no FFmpeg decoder runs for the live video")
+    # This VM only (software Vulkan, debug build): CPU share of the audience
+    # and its decoder over 2 s of playback, and the audience's RSS.
+    watched = [audience_pid, *ffmpeg_pids(app)]
+    before = {pid: cpu_seconds(pid) for pid in watched}
+    time.sleep(2.0)
+    summary["playback_cpu_percent"] = {
+        ("audience" if pid == audience_pid else f"ffmpeg-{pid}"): round(
+            (cpu_seconds(pid) - before[pid]) / 2.0 * 100, 1
+        )
+        for pid in watched
+    }
+    summary["audience_rss_mib"] = round(rss_mib(audience_pid), 1)
     first = nx.capture(screen)
     session.save(first, "02-verse-video")
     if first.ink_box(threshold=235) is None:

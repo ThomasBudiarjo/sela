@@ -3,7 +3,7 @@
 //! file from another machine, or a damaged database row, reaches them with
 //! arbitrary bytes.
 use super::{config, corpus};
-use crate::background::{Aspect, Background, Fill, ImageRef};
+use crate::background::{Aspect, Background, Fill, ImageRef, VideoRef};
 use crate::format::{
     Align, MAX_FIXED_SIZE, MAX_MARGIN, MAX_OPACITY, MAX_OUTLINE_SIZE, MAX_SHADOW_BLUR,
     MAX_SHADOW_OFFSET, Margins, Outline, Shadow, Size, SlideFormat, VAlign,
@@ -152,6 +152,22 @@ pub(crate) fn backgrounds() -> impl Strategy<Value = Background> {
                 name: format!("{}.{}", stem.trim(), ["png", "jpg", "JPEG"][ext]),
                 sha256,
             }))),
+        // Video fills (video-playback): any length, either repeat choice.
+        (
+            "[a-zA-Z0-9 _()\u{e9}\u{8056}-]{1,60}",
+            any::<u64>(),
+            any::<[u8; 32]>(),
+            0usize..4,
+            any::<bool>()
+        )
+            .prop_map(|(stem, bytes, fingerprint, ext, repeat)| Fill::Video {
+                video: VideoRef {
+                    name: format!("{}.{}", stem.trim(), ["mp4", "webm", "MOV", "mkv"][ext]),
+                    bytes,
+                    fingerprint,
+                },
+                repeat,
+            }),
     ];
     let aspect = prop_oneof![
         Just(Aspect::Maintain),

@@ -241,6 +241,48 @@ fn the_thumbnailer_serves_the_latest_wanted_list_in_order_off_the_caller() {
 }
 
 #[test]
+fn a_key_being_worked_is_never_queued_again_by_a_newer_list() {
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let open = gate.clone();
+    let made = Arc::new(Mutex::new(Vec::new()));
+    let log = made.clone();
+    let lookups = Lookups::start_with("test-dedup", move |key: &u32| {
+        let (lock, ready) = &*open;
+        let mut opened = lock.lock().unwrap();
+        while !*opened {
+            opened = ready.wait(opened).unwrap();
+        }
+        log.lock().unwrap().push(*key);
+        *key * 10
+    })
+    .unwrap();
+    lookups.want([1, 2]);
+    std::thread::sleep(Duration::from_millis(50));
+    // 1 is being worked: a newer list that still wants it (a poll before
+    // its reply landed) must not decode it twice; 2 was dropped and is
+    // wanted again later, so it is queued again.
+    lookups.want([1, 3]);
+    lookups.want([1, 3, 2]);
+    {
+        let (lock, ready) = &*gate;
+        *lock.lock().unwrap() = true;
+        ready.notify_all();
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut got = Vec::new();
+    while got.len() < 3 && Instant::now() < deadline {
+        match lookups.poll() {
+            Some(reply) => got.push(reply),
+            None => std::thread::sleep(Duration::from_millis(5)),
+        }
+    }
+    assert_eq!(got, [(1, 10), (3, 30), (2, 20)]);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(*made.lock().unwrap(), [1, 3, 2], "nothing worked twice");
+    assert!(lookups.poll().is_none());
+}
+
+#[test]
 fn the_worker_lists_with_metadata_reports_import_errors_and_never_blocks() {
     let profile = temp();
     fs::create_dir_all(videos_dir(profile.path())).unwrap();
@@ -326,7 +368,7 @@ fn import_copies_a_playable_video_and_reuses_an_identical_one() {
     let other = import(profile.path(), &path, &tools, &mut || false).unwrap();
     assert_eq!(other.name, "Waves (2).mp4");
     assert_eq!(fs::read(&stored).unwrap(), original);
-    assert_eq!(verify(profile.path(), &first.video).is_ok(), true);
+    assert!(verify(profile.path(), &first.video).is_ok());
     // No temporary is left behind.
     assert_eq!(
         list(profile.path()).unwrap(),

@@ -337,6 +337,8 @@ impl Player {
         let mut decoder = Some(decoder);
         // A decoded frame not yet due.
         let mut next: Option<VideoFrame> = None;
+        // A terminal event read while looking for later frames.
+        let mut held: Option<DecodeEvent> = None;
         loop {
             let mut inner = self.shared.lock();
             if inner.stop {
@@ -349,6 +351,7 @@ impl Player {
                     // Reopening waits for FFmpeg: never under the lock.
                     decoder = None;
                     next = None;
+                    held = None;
                     match open(&self.tools, &self.key, Instant::now() + RESTART_TIMEOUT) {
                         Ok((fresh, first, _)) => {
                             decoder = Some(fresh);
@@ -380,7 +383,10 @@ impl Player {
             }
             drop(inner);
             if next.is_none() {
-                match decoder.as_ref().and_then(Decoder::try_next) {
+                let event = held
+                    .take()
+                    .or_else(|| decoder.as_ref().and_then(Decoder::try_next));
+                match event {
                     Some(DecodeEvent::Frame(frame)) => next = Some(frame),
                     Some(DecodeEvent::Opened(_)) => continue,
                     Some(DecodeEvent::End { .. }) => {
@@ -414,14 +420,19 @@ impl Player {
                     drop(inner);
                     let mut frame = next.take().expect("matched");
                     // Late: skip to the newest frame that is already due.
-                    while let Some(DecodeEvent::Frame(later)) =
-                        decoder.as_ref().and_then(Decoder::try_next)
-                    {
-                        if self.shared.lock().timeline.due(later.pts, Instant::now()) {
-                            frame = later;
-                        } else {
-                            next = Some(later);
-                            break;
+                    // Anything else (the end, a failure) waits in `held`.
+                    while held.is_none() {
+                        match decoder.as_ref().and_then(Decoder::try_next) {
+                            Some(DecodeEvent::Frame(later)) => {
+                                if self.shared.lock().timeline.due(later.pts, Instant::now()) {
+                                    frame = later;
+                                } else {
+                                    next = Some(later);
+                                    break;
+                                }
+                            }
+                            Some(other) => held = Some(other),
+                            None => break,
                         }
                     }
                     if !self.present(&frame) {
@@ -445,5 +456,293 @@ impl Player {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sela::background::Aspect;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    const EXTENT: Extent = Extent {
+        width: 160,
+        height: 90,
+    };
+
+    /// A real compositor and FFmpeg, or `None` with a SKIPPED line (unless
+    /// `SELA_REQUIRE_FFMPEG=1` / `SELA_REQUIRE_GPU=1`).
+    fn setup(test: &str) -> Option<(Arc<Compositor>, Tools)> {
+        let skip = |why: String, flag: &str| {
+            let message = format!("SKIPPED {test}: {why}");
+            assert!(
+                std::env::var_os(flag).is_none_or(|v| v != "1"),
+                "{message} ({flag}=1)"
+            );
+            eprintln!("{message}");
+            None
+        };
+        let tools = match sela::media::ffmpeg::locate() {
+            Ok(found) => Tools::from(&found),
+            Err(error) => return skip(format!("no FFmpeg ({error:?})"), "SELA_REQUIRE_FFMPEG"),
+        };
+        match Compositor::new(wgpu::Backends::all()) {
+            Ok(compositor) => Some((Arc::new(compositor), tools)),
+            Err(error) => skip(format!("no GPU adapter ({error})"), "SELA_REQUIRE_GPU"),
+        }
+    }
+
+    /// An original clip: a green 20x20 box moving right at 100 px/s over navy.
+    fn clip(tools: &Tools, dir: &Path, seconds: &str) -> PathBuf {
+        let out = dir.join("motion.mkv");
+        let graph = format!(
+            "color=c=0x203060:size=160x90:rate=20:d={seconds}[bg];\
+             color=c=0x00ff00:size=20x20:rate=20[box];\
+             [bg][box]overlay=x='t*100':y=10:shortest=1"
+        );
+        let status = Command::new(&tools.ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"])
+            .args(["-filter_complex", &graph, "-c:v", "ffv1"])
+            .arg(&out)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        out
+    }
+
+    fn key(path: &Path, repeat: bool) -> Key {
+        Key {
+            source: VideoSource {
+                path: path.to_owned(),
+                aspect: Aspect::Stretch,
+                repeat,
+            },
+            extent: EXTENT,
+            version: ContentVersion { id: 1, revision: 1 },
+        }
+    }
+
+    /// Left edge of the green box in row 20, if any.
+    fn box_x(compositor: &Compositor, playback: &Playback) -> Option<u32> {
+        let rgba = compositor.read_texture(playback.texture()).unwrap();
+        let row = 20 * EXTENT.width as usize * 4;
+        (0..EXTENT.width).find(|x| {
+            let at = row + *x as usize * 4;
+            rgba[at] < 60 && rgba[at + 1] > 200 && rgba[at + 2] < 60
+        })
+    }
+
+    fn wait(what: &str, mut done: impl FnMut() -> bool) {
+        let end = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(Instant::now() < end, "bounded wait for {what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn noop() -> Arc<dyn Fn() + Send + Sync> {
+        Arc::new(|| {})
+    }
+
+    #[test]
+    fn a_primed_video_holds_its_first_frame_until_applied_then_plays_pauses_and_restarts() {
+        let Some((compositor, tools)) = setup("a_primed_video_holds_its_first_frame") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = clip(&tools, dir.path(), "3");
+        let registry = Registry::default();
+        let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = woken.clone();
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
+        let playback = prime(
+            &ToolsCell::ready(Some(tools)),
+            &registry,
+            &compositor,
+            key(&path, true),
+            Instant::now() + Duration::from_secs(5),
+            wake,
+        )
+        .unwrap();
+        let scene = ContentVersion { id: 7, revision: 1 };
+        assert_eq!(playback.status(scene).state, PlayState::Primed);
+        assert_eq!(box_x(&compositor, &playback), Some(0), "the first frame");
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(box_x(&compositor, &playback), Some(0), "primed: no clock");
+        assert_eq!(woken.load(std::sync::atomic::Ordering::Relaxed), 0);
+        // Applied: frames are presented at their timestamps.
+        playback.start();
+        wait("the box to move", || {
+            box_x(&compositor, &playback).is_some_and(|x| x >= 30)
+        });
+        assert!(
+            woken.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "redraws asked"
+        );
+        assert_eq!(playback.status(scene).state, PlayState::Playing);
+        // Pause holds the presented frame.
+        playback.command(MediaAction::Pause);
+        wait("paused", || playback.state() == PlayState::Paused);
+        std::thread::sleep(Duration::from_millis(100));
+        let held = box_x(&compositor, &playback);
+        let position = playback.status(scene).position;
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(box_x(&compositor, &playback), held);
+        assert_eq!(playback.status(scene).position, position);
+        // Play continues from there, not from the start.
+        playback.command(MediaAction::Play);
+        wait("moving again", || {
+            box_x(&compositor, &playback).is_some_and(|x| x > held.unwrap() + 10)
+        });
+        // Restart presents the first frames again.
+        playback.command(MediaAction::Restart);
+        wait("restarted", || {
+            playback.state() == PlayState::Playing
+                && box_x(&compositor, &playback).is_some_and(|x| x < 20)
+        });
+        // Past the 3 s clip it loops: playing, the position wraps.
+        std::thread::sleep(Duration::from_millis(3300));
+        let status = playback.status(scene);
+        assert_eq!(status.state, PlayState::Playing);
+        assert!(status.position < Duration::from_secs(1), "{status:?}");
+        assert_eq!(status.duration, Some(Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn the_same_video_is_shared_and_stops_with_its_last_handle() {
+        let Some((compositor, tools)) = setup("the_same_video_is_shared") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = clip(&tools, dir.path(), "2");
+        let registry = Registry::default();
+        let cell = ToolsCell::ready(Some(tools));
+        let deadline = || Instant::now() + Duration::from_secs(5);
+        let first = prime(
+            &cell,
+            &registry,
+            &compositor,
+            key(&path, true),
+            deadline(),
+            noop(),
+        )
+        .unwrap();
+        let again = prime(
+            &cell,
+            &registry,
+            &compositor,
+            key(&path, true),
+            deadline(),
+            noop(),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(&first, &again), "a later slide keeps the video");
+        let other = prime(
+            &cell,
+            &registry,
+            &compositor,
+            key(&path, false),
+            deadline(),
+            noop(),
+        )
+        .unwrap();
+        assert!(
+            !Arc::ptr_eq(&first, &other),
+            "another repeat choice is another video"
+        );
+        assert_eq!(registry.live(), 2);
+        drop((first, again, other));
+        assert_eq!(registry.live(), 0);
+    }
+
+    #[test]
+    fn a_video_that_plays_once_ends_on_its_last_frame() {
+        let Some((compositor, tools)) = setup("a_video_that_plays_once_ends") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = clip(&tools, dir.path(), "0.5");
+        let playback = prime(
+            &ToolsCell::ready(Some(tools)),
+            &Registry::default(),
+            &compositor,
+            key(&path, false),
+            Instant::now() + Duration::from_secs(5),
+            noop(),
+        )
+        .unwrap();
+        playback.start();
+        wait("the end", || playback.state() == PlayState::Ended);
+        let last = box_x(&compositor, &playback);
+        assert!(last.is_some_and(|x| x >= 40), "{last:?}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(box_x(&compositor, &playback), last, "the last frame stays");
+        // Play replays it from the start.
+        playback.command(MediaAction::Play);
+        wait("replaying", || playback.state() == PlayState::Playing);
+    }
+
+    #[test]
+    fn failures_before_the_first_frame_never_give_a_playback() {
+        let Some((compositor, tools)) = setup("failures_before_the_first_frame") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Registry::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let missing = dir.path().join("gone.mkv");
+        let cell = ToolsCell::ready(Some(tools.clone()));
+        assert!(matches!(
+            prime(
+                &cell,
+                &registry,
+                &compositor,
+                key(&missing, true),
+                deadline,
+                noop()
+            ),
+            Err(Failure::Decode(sela::media::MediaError::Missing))
+        ));
+        let garbage = dir.path().join("garbage.mkv");
+        std::fs::write(&garbage, b"not a video").unwrap();
+        assert!(matches!(
+            prime(
+                &cell,
+                &registry,
+                &compositor,
+                key(&garbage, true),
+                deadline,
+                noop()
+            ),
+            Err(Failure::Decode(_))
+        ));
+        let path = clip(&tools, dir.path(), "1");
+        // A deadline already inside the margin: no time to wait.
+        assert!(matches!(
+            prime(
+                &cell,
+                &registry,
+                &compositor,
+                key(&path, true),
+                Instant::now(),
+                noop()
+            ),
+            Err(Failure::TimedOut | Failure::Unavailable)
+        ));
+        assert!(matches!(
+            prime(
+                &ToolsCell::none(),
+                &registry,
+                &compositor,
+                key(&path, true),
+                deadline,
+                noop()
+            ),
+            Err(Failure::Unavailable)
+        ));
+        assert_eq!(registry.live(), 0);
     }
 }

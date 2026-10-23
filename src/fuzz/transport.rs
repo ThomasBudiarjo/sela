@@ -107,6 +107,55 @@ fn seeds() -> Vec<Vec<u8>> {
         )
         .unwrap(),
     ));
+    // video-playback: a video cue (background tag 2), a transport command
+    // (kind 8) and the renderer's status report (kind 9).
+    let video = PreparedCue::from_owned(
+        version,
+        extent,
+        crate::scene::PreparedBackground::Video {
+            version,
+            source: Arc::new(crate::scene::VideoSource {
+                path: if cfg!(windows) {
+                    "C:\\Media\\clip.mp4".into()
+                } else {
+                    "/media/clip.mp4".into()
+                },
+                aspect: crate::background::Aspect::Zoom,
+                repeat: true,
+            }),
+        },
+        None,
+        CAPS,
+    )
+    .unwrap();
+    seeds.push(encoded(
+        &Frame::command(
+            &Command::from_wire(
+                stamp(),
+                Lane::Cue,
+                Payload::Scene(Arc::new(video)),
+                deadline,
+            ),
+            now,
+        )
+        .unwrap(),
+    ));
+    let media = Command::from_wire(
+        stamp(),
+        Lane::Safety,
+        Payload::Media(crate::playback::MediaAction::Restart),
+        deadline,
+    );
+    seeds.push(encoded(&Frame::command(&media, now).unwrap()));
+    seeds.push(encoded(&Frame::status(
+        Epoch(7),
+        crate::playback::MediaStatus {
+            scene: version,
+            state: crate::playback::PlayState::Paused,
+            position: Duration::from_millis(1500),
+            duration: Some(Duration::from_secs(9)),
+        },
+    )));
     seeds
 }
 
@@ -140,12 +189,18 @@ fn check(bytes: &[u8]) {
                 .unwrap()
                 .into_acknowledgment();
         }
+        if frame.is_status() {
+            let _ = Frame::read(Cursor::new(&written)).unwrap().into_status();
+        }
         if let Ok(command) = frame.into_command(Instant::now(), CAPS) {
             if let Payload::Scene(cue) | Payload::Logo(cue) = command.payload() {
                 assert!(cue.extent().width <= CAPS.max_texture_dimension);
                 assert!(cue.extent().height <= CAPS.max_texture_dimension);
                 if let Some(stage) = cue.stage() {
                     assert!(stage.panel().is_valid(), "a stage panel within its bounds");
+                }
+                if let crate::scene::PreparedBackground::Video { source, .. } = cue.background() {
+                    assert!(source.is_valid(), "only playable local paths become cues");
                 }
             }
             // What was accepted is sent on unchanged by the same encoder.

@@ -32,6 +32,7 @@ mod song_import;
 mod songs_browser;
 mod stage_display;
 mod themes;
+mod video_playback;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,

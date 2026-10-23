@@ -899,3 +899,31 @@ Steps and re-runs are the PP-STG items in [parity-pending.md](parity-pending.md#
 | EW8-OBS-STG-5 | UNOBSERVED | Foldback lifecycle and menu. Sela: with Foldback enabled the stage starts and stops with Live › Show Live Output; Sela adds Live › Show Stage Output (stop a running stage, restart a lost one in one activation, start one while Live output is on; inert while Live output is off) and Live › Stage Message… (EW8-OBS-053 lists neither). |
 | EW8-OBS-STG-6 | UNOBSERVED | Stage-only message. Sela: one line (≤ 160 characters) typed privately in a dialog and sent only on Show on Stage; never drawn on the audience. EW's Alerts (EW8-OBS-056 Main Output › Alerts) are M3-04 and may own this. |
 | EW8-OBS-STG-7 | UNOBSERVED | Foldback monitor default with no free monitor. Sela: "Automatic" picks a monitor that is neither primary nor the audience's; with none, the stage is not started and the Live pane says so; an explicit choice (even the audience or primary monitor) is honoured. Only Foldback › General is built; Song, Scripture and Alerts and Clocks tabs show "not available". |
+
+### Video playback — UNOBSERVED best guesses (2026-10-23, video-playback)
+
+EasyWorship 8.0.49 was not run for the video-playback stream (no Windows
+host). Observed facts it builds on: EW8-OBS-032 (the Slide pane's Background
+has Media Fill, Select Media…, Media Usage, Aspect Ratio, Repeating Auto,
+Volume, disabled for an image), EW8-OBS-038 (Fill list), EW8-OBS-039 (Select
+Media… lists Videos first, thumbnails named without extensions) and SRC-10
+(Repeating loops "until you stop it or until you go live to something
+else"; "Set as Logo Background" for a video). Everything below is a
+reversible Sela best guess; steps and re-runs are the PP-VP items in
+[parity-pending.md](parity-pending.md#stream-video-playback). Design:
+[media.md](media.md#video-backgrounds-and-playback-m2-02-m2-03-m2-05-basic).
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-VP-1 | UNOBSERVED | Media tab: Sela has Videos and Images as two categories in the tab's left column (Images stays the tab's first view); EW's Media tab categories and their order are unobserved (EW8-OBS-019 saw Media › Images only). Rows show a poster and the name without its extension. |
+| EW8-OBS-VP-2 | UNOBSERVED | Video thumbnails and Preview tiles show the clip's first frame; which frame EW shows is unobserved. |
+| EW8-OBS-VP-3 | UNOBSERVED | A new video Media Fill repeats ("Repeating Auto" read as on for a background) and uses the aspect default (Zoom, like images); Repeating off plays once and holds the last frame. Volume is not built (no audio yet). |
+| EW8-OBS-VP-4 | UNOBSERVED | Go Live on a slide with a video background starts the video at its first frame when the slide appears; the renderer prepares (primes) it before, and a video that does not open never replaces the live slide (Sela failure policy). |
+| EW8-OBS-VP-5 | UNOBSERVED | Next/Previous between slides that share the same background video keep it running (no restart); a slide with another background stops it. |
+| EW8-OBS-VP-6 | UNOBSERVED | Masks over a playing video (EW8-OBS-006): Black and Logo hide it while it keeps running; Clear shows it without the text; turning the mask off shows the current position. Masks never pause, restart or mute it. |
+| EW8-OBS-VP-7 | UNOBSERVED | Live transport: a row under the Live pane with Play/Pause, Restart and "state · position / length" while a video background is live; no keyboard shortcuts. EW's own media controls (placement, a seek bar, shortcuts) are unobserved. |
+| EW8-OBS-VP-8 | UNOBSERVED | Restart plays from the first frame, also from Paused or after the end; Play after the end replays. |
+| EW8-OBS-VP-9 | UNOBSERVED | A missing or replaced background video shows black behind the text with the warning "Background video ‘NAME’ is missing; showing black" (the image rule of M1-05h); no Go Live dialog for videos yet. |
+| EW8-OBS-VP-10 | UNOBSERVED | Preview never plays a video (its tiles show the first frame); only Live does. |
+| EW8-OBS-VP-11 | UNOBSERVED | Importing a video copies it into the profile (like images); a file FFmpeg cannot play is refused with the reason; the same name with other bytes gets "name (2)". EW's copy-versus-reference choice is unobserved. |
+| EW8-OBS-VP-12 | UNOBSERVED (order seen) | Select Media… opens on Videos unless the current media is an image (EW8-OBS-039 showed Videos first and empty). |

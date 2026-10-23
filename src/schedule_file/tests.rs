@@ -311,10 +311,58 @@ fn bad_scripture_items_are_refused_on_write_and_read() {
 }
 
 #[test]
+fn video_backgrounds_round_trip_as_version_6_and_only_they_raise_it() {
+    use crate::background::VideoRef;
+    let video = Background::video(VideoRef {
+        name: "Waves.mp4".into(),
+        bytes: 123_456_789,
+        fingerprint: [5; 32],
+    });
+    for place in ["master", "slide"] {
+        let mut s = song("Motion");
+        match place {
+            "master" => s.master = Some(video.clone()),
+            _ => s.sections[0].background = Some(video.clone()),
+        }
+        let original = file(vec![
+            item(1, "Plain"),
+            Item {
+                source: Version {
+                    id: Id([6; 16]),
+                    revision: 1,
+                },
+                song: s,
+                arrangement: None,
+                theme: None,
+            },
+        ]);
+        let v = value(&original);
+        assert_eq!(v["version"], 6, "{place}");
+        assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
+    }
+    // A theme snapshot with a video background raises it too.
+    let mut theme = crate::theme::Theme::new("Motion");
+    theme.background = Some(video);
+    let mut themed = file(vec![item(1, "Plain")]);
+    themed.items[0].theme = Some(crate::schedule::ItemTheme {
+        theme,
+        explicit: true,
+    });
+    assert_eq!(value(&themed)["version"], 6);
+    assert_eq!(decode(&encode(&themed).unwrap()).unwrap(), themed);
+    // Without video the older versions stay.
+    assert_eq!(value(&file(vec![item(1, "Plain")]))["version"], 4);
+}
+
+#[test]
 fn newer_version_is_rejected_with_its_number() {
     let mut v = value(&file(Vec::new()));
-    v["version"] = 6.into();
-    assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Newer(6)));
+    let newer = u64::from(VERSION) + 1;
+    v["version"] = newer.into();
+    assert_eq!(
+        decode(v.to_string().as_bytes()),
+        Err(ReadError::Newer(newer))
+    );
     v["version"] = 0.into();
     assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Corrupt));
 }

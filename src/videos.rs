@@ -663,6 +663,8 @@ pub fn list_entries(profile: &Path) -> Result<Vec<Listed>, Error> {
 struct Wanted<K> {
     /// Most urgent first; replaced as a whole by every `want`.
     keys: VecDeque<K>,
+    /// The key being worked now; a `want` never queues it again.
+    working: Option<K>,
     closed: bool,
 }
 
@@ -670,8 +672,9 @@ struct Wanted<K> {
 /// time, never more than the replies buffer holds ahead of the caller.
 /// Requests are a latest-wins list, so scrolling a long list never queues
 /// stale work; a key is worked at most once per `want` list it stays on
-/// (in-flight deduplication: the caller wants only keys its cache lacks),
-/// and results go to the caller's [`Lru`]. Used for poster thumbnails
+/// (in-flight deduplication: a key being worked is never queued again, and
+/// the caller wants only keys its cache lacks), and results go to the
+/// caller's [`Lru`]. Used for poster thumbnails
 /// ([`Thumbnailer`]) and pin checks ([`Checker`]). Audience playback runs
 /// in another process with its own decoder, so this work never takes a
 /// live slot; one FFmpeg child at a time bounds the CPU it takes.
@@ -708,12 +711,13 @@ impl Lookups<VideoRef, Result<PathBuf, Substitute>> {
     }
 }
 
-impl<K: Send + 'static, V: Send + 'static> Lookups<K, V> {
+impl<K: Clone + PartialEq + Send + 'static, V: Send + 'static> Lookups<K, V> {
     /// `make` turns one key into its value on the worker thread.
     pub fn start_with(name: &str, make: impl Fn(&K) -> V + Send + 'static) -> io::Result<Self> {
         let queue = Arc::new((
-            Mutex::new(Wanted {
+            Mutex::new(Wanted::<K> {
                 keys: VecDeque::new(),
+                working: None,
                 closed: false,
             }),
             Condvar::new(),
@@ -732,6 +736,7 @@ impl<K: Send + 'static, V: Send + 'static> Lookups<K, V> {
                                 return;
                             }
                             if let Some(key) = state.keys.pop_front() {
+                                state.working = Some(key.clone());
                                 break key;
                             }
                             state = match ready.wait(state) {
@@ -744,6 +749,11 @@ impl<K: Send + 'static, V: Send + 'static> Lookups<K, V> {
                     if sender.send((key, value)).is_err() {
                         return;
                     }
+                    // Cleared once the reply is queued, so a `want` in
+                    // between cannot ask for it again.
+                    if let Ok(mut state) = shared.0.lock() {
+                        state.working = None;
+                    }
                 }
             })?;
         Ok(Self { queue, replies })
@@ -754,7 +764,11 @@ impl<K: Send + 'static, V: Send + 'static> Lookups<K, V> {
     pub fn want(&self, keys: impl IntoIterator<Item = K>) {
         let (lock, ready) = &*self.queue;
         if let Ok(mut state) = lock.lock() {
-            state.keys = keys.into_iter().collect();
+            let working = state.working.clone();
+            state.keys = keys
+                .into_iter()
+                .filter(|key| working.as_ref() != Some(key))
+                .collect();
             ready.notify_one();
         }
     }

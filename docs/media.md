@@ -9,11 +9,17 @@ Status (media-core, 2026-10-22): the locator, the build check, the input
 argument rules, the fetch scripts, startup availability with its warning,
 ffprobe metadata and the supervised decoder are implemented and tested on
 Linux against the real pinned build (`src/media/`, `tests/media_decode.rs`,
-`src/tests/media_backend.rs`, `scripts/media-backend-x11.py`). No video is
-shown to the operator or the audience yet: playback, the video background
-and its UI are the video-playback stream. M2-01 and M2-02 are
-**implemented-unqualified** for this slice (Windows, hardware and
+`src/tests/media_backend.rs`, `scripts/media-backend-x11.py`). M2-01 and
+M2-02 are **implemented-unqualified** for this slice (Windows, hardware and
 EasyWorship checks open).
+
+Status (video-playback, 2026-10-23): videos are shown. Profile videos,
+video slide and song-master backgrounds, renderer playback with the
+first-frame gate, the Live transport and the Media tab's Videos list are
+described in [Video backgrounds and playback](#video-backgrounds-and-playback-m2-02-m2-03-m2-05-basic).
+Implemented and tested on Linux (GPUI, unit, GPU and
+`scripts/video-x11.py`); Windows, hardware, audio and EasyWorship checks
+are open, so M2-02, M2-03 and M2-05 stay **implemented-unqualified**.
 
 ## Pinned build
 
@@ -348,9 +354,189 @@ MPEG-2, ProRes, MJPEG, FFV1. Only FFV1 (generated clips) has been decoded
 here. Hardware decode, 4K/60 performance and memory per resolution are not
 measured.
 
-Not used: hardware decode, audio (M2-04 with `cpal`), seeking/looping
-(M2-03), a frame pool. Each frame allocates its buffer; pooling waits for a
+Not used: hardware decode, audio (M2-04 with `cpal`), seeking (M2-03), a
+frame pool. Looping is `DecodeOptions::looping` (video-playback). Each frame allocates its buffer; pooling waits for a
 profile showing it matters.
+
+## Video backgrounds and playback (M2-02, M2-03, M2-05 basic)
+
+video-playback stream, 2026-10-23. EasyWorship sources: EW8-OBS-032 (Slide
+pane: Media Fill, Aspect Ratio, Repeating, Volume), EW8-OBS-038/039 (Media
+Fill and Select Media… with Videos first), SRC-10 (Repeating loops "until you
+stop it or until you go live to something else"). Everything else below is
+an UNOBSERVED best guess listed in reference-observations.md ("Video
+playback best guesses") and parity-pending.md (Stream: video-playback).
+
+### Model and profile videos
+
+- `background::Fill::Video { video: VideoRef, repeat }`: a Media Fill whose
+  media is a profile video (codec tag 4 in the background codec: name, byte
+  length u64, 32-byte fingerprint, repeat byte). The editor shows it as
+  "Media Fill" like an image (EW8-OBS-038). New video fills repeat; the
+  Slide pane's Repeating button turns it off (play once, hold the last
+  frame). Aspect Ratio applies as for images: Zoom covers and crops
+  (`decode::Fit::Cover`), Stretch distorts (`Fit::Stretch`), Maintain
+  letterboxes (`Fit::Exact`), all to the cue's exact extent in FFmpeg's
+  scaler.
+- `src/videos.rs` (no GPUI): videos are copied (managed, like images) into
+  `<profile>/Resources/Videos/`, names `*.mp4|m4v|mov|mkv|webm|avi|mpg|mpeg`
+  (the provisional format matrix), at most 4,096 listed, 16 GiB per file.
+  Import probes the chosen file with ffprobe first (no video stream, unknown
+  codec or damage refuses it with a reason), copies it in 1 MiB chunks
+  (cancellable, a dot-prefixed temporary, hard link to the final name so an
+  existing video is never replaced), then checks the copy's fingerprint.
+  Same name with other bytes gets "name (2).mp4"; identical bytes are
+  reused.
+- Pinning: `VideoRef` holds the name, the length and a SHA-256 over a tag,
+  the length and the first and last MiB (`videos::fingerprint`). A video of
+  gigabytes is not hashed whole; a change only in the middle is not noticed
+  (documented limit). `videos::verify` reads at most 2 MiB.
+- Schema: no SQLite schema change (backgrounds are codec blobs);
+  `.selaschedule` version 6 is written only when an item holds a video
+  background (`schedule_file::VIDEO_VERSION`), so an older Sela says
+  "newer" instead of "damaged". A library opened by a Sela before video
+  reports a song with a video background as damaged (no shipped release
+  predates this; no schema marker was added).
+
+### From Go Live to the audience
+
+1. Operator (`src/operator/video.rs`): a video slide's pin is checked off the
+   UI thread by `videos::Checker` (latest-wins list: a deferred cue, the live
+   slide, the previewed slide and their neighbours). While a check or the
+   FFmpeg lookup is still running, the cue is deferred ("Preparing
+   background…") and the live scene stays. A missing, changed or unreadable
+   file, or no usable FFmpeg, substitutes black behind the text with the
+   warning "Background video ‘NAME’ is missing; showing black" (the M1-05h
+   image rule; no Go Live dialog for videos yet).
+2. Wire: background tag 2 in the version-2 command body: content version,
+   aspect, flags (bit 0 repeat), the absolute UTF-8 path (at most 4,096
+   bytes). `scene::VideoSource::is_valid` applies `ffmpeg::input_args` rules
+   on both ends; this is the first path that crosses the pipe (decision: the
+   renderer decodes the video itself, in its own process, rather than
+   receiving frames over the pipe; it still never opens the file in-process,
+   only its supervised FFmpeg child does).
+3. Renderer (`src/audience/video.rs`): the preparation worker primes the
+   video: a `Decoder` (Fit for the aspect, `-stream_loop -1` when repeating,
+   at most 4 frames held) must deliver its first frame before the cue's
+   deadline less 150 ms; the frame is uploaded into a texture the
+   composition samples. Failure (no FFmpeg in the renderer, missing,
+   damaged, unsupported, too slow) rejects the cue (RenderFailed) and the
+   live scene stays. A primed video stands on its first frame until its
+   scene is applied, then a `audience-video` thread presents frames at their
+   timestamps (late frames are skipped to the newest one due), writes each
+   into the texture (`queue.write_texture` plus an empty submit, so staging
+   never piles up) and wakes the event loop; the redraw only encodes a pass
+   over existing bindings. The renderer locates FFmpeg itself at start
+   (`audience-media-locate`, same rules and environment as the operator;
+   the stage renderer does not).
+4. A later slide of the same song over the same video shares the running
+   playback (`video::Registry`, keyed by path, aspect, repeat, extent and
+   version), so Next keeps the video running; a slide with another
+   background drops it, which kills its FFmpeg child without waiting.
+
+### Transport, masks and reports
+
+- `playback::MediaAction` Play, Pause, Restart travel as wire kind 8 MEDIA on
+  the Safety lane (after masks: a mask wanted at the same time goes first),
+  never waiting for a slide in preparation. The renderer applies them to the
+  applied scene's video and acknowledges Applied; with no video applied it
+  answers RenderFailed. Restart reopens the decoder on the playback thread
+  (bounded 5 s) and plays from the first frame; Play after the end replays.
+- `playback::Timeline` is the media clock (fake-clock unit tests). Masks
+  never touch it: under Black and Logo the video runs on, Clear shows it
+  without text, lifting the mask shows the current position (best guess,
+  EW8-OBS-006 unobserved).
+- Reports: the renderer offers wire kind 9 STATUS (scene version, state,
+  presented frame time, duration) on a change of state and every 250 ms
+  while playing, through a one-slot latest-wins status slot of the pipe
+  writer, never in a receipt's queue slot. A repeating video reports its
+  place in the clip. `output::Supervisor::media_status` returns it only for
+  the confirmed live scene.
+- Live pane: a transport row (`video-transport`: Play/Pause `video-play-pause`
+  with its toggle state, Restart `video-restart`, status `video-position`
+  "Playing · 0:03 / 0:08") shows while the acknowledged live slide plays a
+  video; never for a substituted or refused one. Its text is the renderer's
+  report, not the request. GPUI actions `ToggleVideoPlayback` and
+  `RestartVideo` have no default keys (EW media shortcuts are unobserved).
+  Preview never plays a video: its tiles show the first frame.
+
+### Thumbnails and caches (M2-05 basic)
+
+- `videos::Lookups<K, V>`: one worker thread per purpose with a latest-wins
+  wanted list (scrolling or switching items never queues stale work), at
+  most two finished replies ahead of the UI, and in-flight deduplication
+  (a key being worked is never queued again by a newer list; the operator
+  asks only for keys it has not cached).
+  `Thumbnailer` decodes poster frames (the first frame, `Fit` by aspect) one
+  FFmpeg child at a time; `Checker` verifies pins.
+- `videos::Lru`: least recently used values with a byte budget and an entry
+  cap. Posters: 16 MiB / 256 entries (`THUMB_BUDGET`, `THUMB_ENTRIES`);
+  pin checks: 32 entries. Keys carry the identity (a listed file's name,
+  length and mtime; a pin's fingerprint), so a changed file gets new keys;
+  a rescan of the Videos folder drops posters of files that changed or left
+  (and releases their GPUI atlas sprites) and clears the pin checks.
+- Priority: the live video is decoded in the renderer process by its own
+  child, so posters never delay it; the operator wants posters for the
+  previewed and live items' tiles first, then at most the first 64 list
+  rows. Next-cue preload, GPU budgets and the shared preparation scheduler
+  of M2-05 are open.
+
+### Media tab and editor
+
+- Media tab sidebar: Videos and Images categories (`media-category-videos`,
+  `media-category-images`, AccessKit tabs; Images stays the first view, as
+  before). The Videos list (`video-N` rows) shows a poster and the name
+  without its extension (EW8-OBS-039), Import video… with Cancel and a
+  status line.
+- Song Editor Slide pane: Select Media… has Videos and Images categories
+  (`media-videos`, `media-images`); it opens on the chosen media's category,
+  else Videos (EW8-OBS-039 lists Videos first). A video fill shows its
+  poster and name, Aspect Ratio and Repeating (EW8-OBS-032). Editor
+  previews and theme thumbnails show the poster frame.
+
+### Measurements (this VM only)
+
+Debug build, 4 vCPU cloud container, lavapipe software Vulkan, Xvfb,
+`scripts/video-x11.py` on `:123`, 624x351 audience window, VP9 640x360
+30 fps clip: Go Live to the first audience change 159-418 ms across runs
+(capture polling included); while playing, the audience process used 48%
+of one CPU and its FFmpeg child 7% (2 s sample), audience RSS 131 MiB.
+Outside Sela, the pinned FFmpeg decodes a 1080p30 VP9 clip to RGBA at
+about 140 frames/s on this VM. None of this is a frame pacing, GPU, 1080p60
+or hardware claim (M2-08).
+
+### Tests
+
+- U: `background::tests` (video fill codec), `playback::tests` (clock,
+  commands, clock text), `videos::tests` (names, list, fingerprint, verify,
+  LRU, latest-wins worker; import, refusals, cancel and real posters with
+  FFmpeg), `transport::tests` (video tag, MEDIA, STATUS, status slot),
+  `media::decode::tests` (cover/stretch chains, `-stream_loop`),
+  `schedule_file::tests` (version 6), fuzz strategies for video fills and the
+  new frames.
+- I: `tests/media_decode.rs` (`cover_and_stretch_fill_the_cue_extent_without_bars`,
+  `looping_continues_past_the_end_with_increasing_timestamps`),
+  `tests/output_process.rs` (`media_commands_need_a_scene_and_the_status_follows_the_live_scene`).
+- R (real GPU adapter, lavapipe here; skipped without one unless
+  `SELA_REQUIRE_GPU=1`): `audience::video::tests` (primed first frame, start,
+  pause, play, restart, loop; shared playback; play once and end; failures
+  before the first frame).
+- GPUI: `tests::video_playback` (7) and
+  `song_library::tests::select_media_videos_sets_a_repeating_video_fill_that_saves`.
+- N: `scripts/video-x11.py` (PASS on `:123`); `scripts/video-windows.py`
+  NOT RUN (no Windows host).
+
+### Open
+
+- Audio of a video background (M2-04), volume (EW8-OBS-032 Volume).
+- Seek and a position slider; a start position; videos as logo (SRC-10 "Set
+  as Logo Background"); videos as schedule items of their own; the Videos
+  list context menu (delete, rename, relink) and Locate… for videos; videos
+  in the schedule preflight report and the Go Live missing-file dialog.
+- Resizing the audience restarts a background video (the new extent is a new
+  playback).
+- Next-cue preload, GPU memory budgets, hardware decode, 1080p60 and 4K
+  pacing (M2-05, M2-08); the EasyWorship observations PP-VP-01..12.
 
 ## Native checks
 
@@ -382,6 +568,6 @@ profile showing it matters.
 - Mapped network and `subst` drives look local (`GetDriveTypeW` needed).
 - Decoder memory limit inside the Job Object (`JOB_OBJECT_LIMIT_PROCESS_MEMORY`)
   is not set: untested limits could break legitimate decodes.
-- Playback scheduling (presenting frames at their timestamps), the video
-  background, preload and the Go Live gate, audio, the format matrix on
-  hardware, notices in the installer and an About screen.
+- Preload, audio, the format matrix on hardware, notices in the installer
+  and an About screen (playback, the video background and the Go Live gate
+  are in "Video backgrounds and playback").

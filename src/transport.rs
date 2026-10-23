@@ -1947,8 +1947,16 @@ mod tests {
         bytes
     }
 
+    /// An absolute local path on this platform.
+    fn local(path: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{}", path.replace('/', "\\"))
+        } else {
+            path.to_owned()
+        }
+    }
+
     #[test]
-    #[cfg(not(windows))]
     fn video_backgrounds_round_trip_their_path_aspect_and_repeat() {
         let caps = RendererCapabilities {
             max_texture_dimension: 2048,
@@ -1958,7 +1966,8 @@ mod tests {
             (crate::background::Aspect::Maintain, false),
             (crate::background::Aspect::Stretch, true),
         ] {
-            let command = video_command("/profile/Resources/Videos/Wäves.mp4", aspect, repeat);
+            let path = local("/profile/Resources/Videos/Wäves.mp4");
+            let command = video_command(&path, aspect, repeat);
             let bytes = wire(&Frame::command(&command, Instant::now()).unwrap());
             let decoded = Frame::read(&bytes[..])
                 .unwrap()
@@ -1982,7 +1991,7 @@ mod tests {
             assert_eq!((source.aspect, source.repeat), (aspect, repeat));
         }
         // Bad aspect or repeat bytes and a refused path fail framing.
-        let command = video_command("/v.mp4", crate::background::Aspect::Zoom, true);
+        let command = video_command(&local("/v.mp4"), crate::background::Aspect::Zoom, true);
         let bytes = wire(&Frame::command(&command, Instant::now()).unwrap());
         // Body: 8 header + 4 length + 61 metadata, tag 2, 24 version bytes.
         let aspect_at = 8 + 4 + 61 + 1 + 24;
@@ -1999,7 +2008,7 @@ mod tests {
         }
         let path_at = aspect_at + 2 + 4;
         let mut relative = bytes.clone();
-        relative[path_at] = b'v';
+        relative[path_at..path_at + 2].copy_from_slice(b"vv");
         assert!(
             Frame::read(&relative[..])
                 .unwrap()
@@ -2111,9 +2120,7 @@ mod tests {
         workers.offer_status(Frame::status(Epoch(1), status(2)));
         // Receipts keep all four queue slots.
         for _ in 0..4 {
-            workers
-                .try_send(Frame::ready(Epoch(1), 8))
-                .unwrap_or_else(|_| ());
+            let _ = workers.try_send(Frame::ready(Epoch(1), 8));
         }
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {

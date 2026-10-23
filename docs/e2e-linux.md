@@ -37,7 +37,9 @@ Files:
   library, docs/import.md "EasyWorship library"; Windows counterpart
   `ew-import-windows.py`; both build a synthetic library with
   `scripts/ew_library_fixture.py` and reuse song-import's folder chooser
-  driver).
+  driver). `video-x11.py` (M2-02/M2-03/M2-05 basic, docs/media.md "Video
+  backgrounds and playback"; Windows counterpart `video-windows.py`; makes
+  its clip with the fetched LGPL FFmpeg, so it needs `scripts/fetch-ffmpeg`).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -278,6 +280,7 @@ stream's tree (commits in the work log record of the same name).
 | `ew-import-x11.py --display :121` (ew-library-import, 2026-10-23, binary sha256 `9b7bc1893541af33…`) | xvfb `:121` (own Xvfb + openbox), no audience | PASS (18 s) |
 | `ew-import-x11.py --display :121` (ew-library-import review round 2, 2026-10-23, binary sha256 `b560f23fe0c0eafb…`, revision `6f70639` plus the uncommitted fix) | xvfb `:121` (own Xvfb + openbox), no audience | PASS (19 s; same summary and rows) |
 | `ew-import-x11.py --display :121` (ew-library-import review round 2 after merging `c0df21e`, 2026-10-23, binary sha256 `bccea19e0295d5f6…`) | xvfb `:121` (own Xvfb + openbox), no audience | PASS (18.4 s; same summary and rows) |
+| `video-x11.py --display :123` (video-playback, 2026-10-23; own `native_x11.py serve --display :123`) | xvfb, audience `window` 624x351 | PASS (41 s; Go Live to first audience change 159-418 ms, audience 48% CPU and its FFmpeg child 7% while playing, this VM only) |
 | `autosave-x11.py --display :113` (2026-10-22, autosave-recovery; review round 1 adds the unanswered-close step) | xvfb `serve --display :113` | PASS (19 s; round 1: 20.5 s) |
 | `songs-browser-x11.py --display :114` (songs-browser, 2026-10-22; re-run 2026-10-23 after review) | xvfb (`serve --display :114`), audience `window` 624x351 | PASS (Sort by keys mouse + keyboard, restart, label search, Options Song tab; since 2026-10-23 a song is Live and typing "bravo." in the search box, "CCLI b." in License Info and OK with changed options leave the audience frame unchanged; this catches leaked Black/Clear/Logo keys but not a re-cue on OK, which re-renders a pixel-identical slide here because the 351 px output draws no copyright strip: the GPUI test `typing_in_license_info_never_toggles_masks_or_cues_live` covers that) |
 | `themes-x11.py --display :117` (themes stream, 2026-10-22, binary sha256 `f37bf47ba9dd1ca2…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (40 s) |

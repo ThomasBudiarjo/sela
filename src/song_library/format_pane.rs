@@ -49,7 +49,16 @@ const MEDIA_THUMBS: usize = 256;
 
 actions!(
     format_pane,
-    [MenuUp, MenuDown, MenuConfirm, MenuDismiss, StepDown, StepUp]
+    [
+        MenuUp,
+        MenuDown,
+        MenuConfirm,
+        MenuDismiss,
+        StepDown,
+        StepUp,
+        MenuPreviousCategory,
+        MenuNextCategory
+    ]
 );
 
 pub(super) fn bind_keys(cx: &mut App) {
@@ -58,6 +67,9 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", MenuDown, Some("SelaMenu")),
         KeyBinding::new("enter", MenuConfirm, Some("SelaMenu")),
         KeyBinding::new("escape", MenuDismiss, Some("SelaMenu")),
+        // Select Media… categories (Videos, Images) from the keyboard.
+        KeyBinding::new("left", MenuPreviousCategory, Some("SelaMenu")),
+        KeyBinding::new("right", MenuNextCategory, Some("SelaMenu")),
         KeyBinding::new("left", StepDown, Some("SelaSlider")),
         KeyBinding::new("down", StepDown, Some("SelaSlider")),
         KeyBinding::new("right", StepUp, Some("SelaSlider")),
@@ -1707,6 +1719,16 @@ impl Library {
                                 }
                             }))
                             .on_action(cx.listener(|s, _: &MenuDismiss, w, cx| s.close_menu(w, cx)))
+                            .on_action(cx.listener(|s, _: &MenuPreviousCategory, _, cx| {
+                                if s.pane.menu.as_ref().is_some_and(|o| o.menu == Menu::Media) {
+                                    s.media_category(MediaKind::Videos, cx);
+                                }
+                            }))
+                            .on_action(cx.listener(|s, _: &MenuNextCategory, _, cx| {
+                                if s.pane.menu.as_ref().is_some_and(|o| o.menu == Menu::Media) {
+                                    s.media_category(MediaKind::Images, cx);
+                                }
+                            }))
                             // Capture phase: the clicked element still
                             // takes focus afterwards if it accepts it.
                             .on_mouse_down_out(cx.listener(|s, e: &MouseDownEvent, w, cx| {

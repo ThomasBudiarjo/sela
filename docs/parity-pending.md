@@ -272,7 +272,8 @@ Common Windows prerequisites are listed once in
   observe Media › Images/Videos lists, thumbnails, import and relink of a
   missing file, and an image item live with Clear. Sela now: Media › Images
   imports pictures for the logo, with the preflight report and Locate…;
-  image items cannot go live yet. Re-run:
+  image items cannot go live yet; Media › Videos lists and imports videos
+  (video-playback, PP-VP-01). Re-run:
   `preflight-windows.py`, `live-output-windows.py`.
 - [ ] **PP-MED-02 Native Locate… and large imports** (M1-11b record). Steps:
   run Locate… through the native file chooser, import a 24 MP photo and
@@ -805,6 +806,77 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
 
 ## Stream: video-playback
 
+Observe each in EasyWorship 8.0.49 on a disposable profile with an original
+timecoded clip with audible ticks (PP-REF-02) imported into Media › Videos,
+and a song whose master background is that clip (Slide pane › Media Fill ›
+Select Media… › Videos). Record the audience with a camera or capture with a
+visible time marker. Design and best guesses:
+[media.md](media.md#video-backgrounds-and-playback-m2-02-m2-03-m2-05-basic),
+reference-observations "Video playback — UNOBSERVED best guesses".
+
+- [ ] **PP-VP-01 Media tab Videos** (EW8-OBS-VP-1, VP-2, VP-11). Steps: open
+  Media, note the categories and their order, import the clip (+), note
+  whether the file is copied into the profile, the thumbnail's frame, the
+  row name, and what importing a renamed text file `broken.mp4` says. Sela
+  now: Videos and Images in the left column (Images first view), poster =
+  first frame, copied into Resources/Videos, unplayable files refused with
+  the reason. Re-run: `video-windows.py` step 1, `cargo test --lib videos::`.
+- [ ] **PP-VP-02 New video fill defaults** (EW8-OBS-VP-3, EW8-OBS-032).
+  Steps: choose the clip as Media Fill; record Aspect Ratio, Repeating
+  (Auto? on?), Volume and Media Usage; turn Repeating off and on. Sela now:
+  Zoom, repeating on, a Repeating button, no Volume. Re-run:
+  `cargo test --bin sela song_library::tests::select_media_videos`.
+- [ ] **PP-VP-03 Go Live on a video background** (EW8-OBS-VP-4). Steps: Go
+  Live on slide 1; note whether the video starts at its first frame, any
+  delay or black flash, and what happens if the clip file was deleted
+  first. Sela now: primed first frame, then plays; a file that does not open
+  keeps the previous slide. Re-run: `video-windows.py` step 2.
+- [ ] **PP-VP-04 Next slide over the same video** (EW8-OBS-VP-5). Steps: with
+  the video playing, Next and Previous between slides that inherit the
+  master; then go to a slide with a color background and back. Sela now:
+  continues across the shared slides; another background stops it; coming
+  back starts it again. Re-run: `video-windows.py` step 3.
+- [ ] **PP-VP-05 Loop and play-once** (EW8-OBS-VP-3, VP-8, SRC-10). Steps: let
+  the clip pass its end with Repeating on and off; note the loop seam and
+  what stays on screen at the end. Sela now: seamless loop (`-stream_loop`);
+  play once holds the last frame. Re-run: `video-windows.py` step 3,
+  `cargo test --bin sela audience::video`.
+- [ ] **PP-VP-06 Masks over a playing video** (EW8-OBS-006, EW8-OBS-VP-6).
+  Steps: Black for 5 s, then off: does the video resume where it would have
+  been, or where it was? Same for Logo and Clear (is the text hidden, the
+  video still moving?). Listen for the ticks under each mask. Sela now:
+  keeps running under every mask; Clear shows it without text. Re-run:
+  `video-windows.py` steps 5-6.
+- [ ] **PP-VP-07 Live media controls** (EW8-OBS-VP-7, VP-8). Steps: find EW's
+  play/pause/restart/seek controls for a live video background (Live pane,
+  right-click, toolbar), their shortcuts and what they show (position,
+  length). Pause, then Go Live to the next slide: does it stay paused?
+  Sela now: transport row with Play/Pause and Restart, no shortcuts, no
+  seek; a new playback starts playing. Re-run: `video-windows.py` step 4,
+  `cargo test --bin sela tests::video_playback`.
+- [ ] **PP-VP-08 Missing and replaced videos** (EW8-OBS-VP-9). Steps: delete
+  the clip from EW's media folder (or rename it), open the service and Go
+  Live; then replace it with another clip of the same name. Sela now: black
+  plus the warning, the transport hidden; a replaced file counts as changed
+  (fingerprint). Re-run: `video-windows.py` step 7.
+- [ ] **PP-VP-09 Preview of a video slide** (EW8-OBS-VP-10, VP-2). Steps:
+  select the song in Preview: does the Preview thumbnail play? Which frame
+  shows? Sela now: never plays, first frame. Re-run: none (GPUI tests).
+- [ ] **PP-VP-10 Select Media… categories** (EW8-OBS-VP-12, EW8-OBS-039).
+  Steps: open Select Media… for a slide with no media, with an image and
+  with a video; note the category shown first each time. Sela now: Videos,
+  Images, Videos. Re-run:
+  `cargo test --bin sela song_library::tests::slide_tab_sets_color_image`.
+- [ ] **PP-VP-11 Video as logo** (SRC-10). Steps: right-click the clip ›
+  Set as Logo Background; press Logo while a song is live. Sela now: not
+  built (images only). Re-run: none yet (open, media.md "Open").
+- [ ] **PP-VP-12 Windows run of `scripts/video-windows.py`**. Steps: as in
+  [Windows script run order](#windows-script-run-order) row 32. Sela now:
+  Linux only (`scripts/video-x11.py` PASS on `:123`, 2026-10-23). Re-run:
+  the same script; also `cargo test --locked --bin sela audience::video`
+  with `SELA_REQUIRE_GPU=1 SELA_REQUIRE_FFMPEG=1` (the real-GPU playback
+  tests) and `tests::video_playback`.
+
 ## Stream: scripture
 
 Observe each in EasyWorship 8.0.49 on a disposable profile with a
@@ -1121,6 +1193,7 @@ timing):
 | 29 | `scripture-windows.py` | seed only (the script seeds); secondary monitor; first run installs the bundled KJV/WEB |
 | 30 | `stage-display-windows.py` | seed; three monitors (primary plus two non-primary); optional `--stage \\.\DISPLAYn` |
 | 31 | `ew-import-windows.py` | seed; native folder dialog; writes its own synthetic EasyWorship library to a temporary folder (never point it at a real one; PP-EWL-07) |
+| 32 | `video-windows.py` | `scripts\fetch-ffmpeg.ps1` first (it makes its clip with the pinned FFmpeg); seed (`--video-song`, done by the script); secondary monitor (PP-VP-12) |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

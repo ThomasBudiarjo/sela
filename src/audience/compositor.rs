@@ -406,7 +406,10 @@ impl Compositor {
         self.texture(
             size,
             wgpu::TextureFormat::Rgba8UnormSrgb,
-            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            // COPY_SRC: diagnostics read the presented frame back.
+            wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
         )
     }
 
@@ -552,6 +555,55 @@ impl Compositor {
             }
         }
         self.queue.submit([encoder.finish()]);
+    }
+
+    /// Blocking copy of a video texture's RGBA, for diagnostics and tests on
+    /// a worker only; never the redraw.
+    #[allow(dead_code)] // Tests and diagnostics only.
+    pub fn read_texture(&self, texture: &wgpu::Texture) -> Result<Vec<u8>> {
+        let size = Extent {
+            width: texture.width(),
+            height: texture.height(),
+        };
+        let stride = (size.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(stride) * u64::from(size.height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(size.height),
+                },
+            },
+            texture.size(),
+        );
+        let submission = self.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        readback.map_async(wgpu::MapMode::Read, .., move |result| {
+            let _ = tx.send(result);
+        });
+        self.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: Some(Duration::from_secs(10)),
+        })?;
+        rx.recv_timeout(Duration::from_secs(1))??;
+        let mapped = readback.get_mapped_range(..);
+        let mut rgba = Vec::with_capacity(size.width as usize * size.height as usize * 4);
+        for row in mapped.chunks_exact(stride as usize) {
+            rgba.extend_from_slice(&row[..size.width as usize * 4]);
+        }
+        drop(mapped);
+        readback.unmap();
+        Ok(rgba)
     }
 
     /// Blocking GPU completion/readback, for diagnostics on a worker only.
