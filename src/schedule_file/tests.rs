@@ -47,6 +47,7 @@ fn item(n: u8, title: &str) -> Item {
         },
         song: song(title),
         arrangement: None,
+        theme: None,
     }
 }
 
@@ -54,6 +55,7 @@ fn file(items: Vec<Item>) -> ScheduleFile {
     ScheduleFile {
         title: "Sunday".into(),
         items,
+        scripture: Vec::new(),
     }
 }
 
@@ -100,7 +102,7 @@ fn round_trips_empty_schedule() {
 fn document_declares_format_and_version() {
     let v = value(&file(vec![item(1, "A")]));
     assert_eq!(v["format"], "sela-schedule");
-    assert_eq!(v["version"], 3);
+    assert_eq!(v["version"], 4);
     assert_eq!(v["items"][0]["kind"], "song");
     assert_eq!(v["items"][0]["song"]["title"], "A");
 }
@@ -118,8 +120,49 @@ fn background_and_master_round_trip() {
         },
         song: s,
         arrangement: None,
+        theme: None,
     }]);
     assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
+}
+
+#[test]
+fn theme_snapshots_round_trip_and_older_files_open_without_them() {
+    use crate::schedule::ItemTheme;
+    use crate::theme::Theme;
+    let themed = Theme {
+        background: Some(Background::color([10, 20, 70])),
+        ..Theme::new("Snapshot theme")
+    };
+    let mut explicit = item(1, "Explicit");
+    explicit.theme = Some(ItemTheme {
+        theme: themed.clone(),
+        explicit: true,
+    });
+    let mut captured = item(2, "Captured");
+    captured.theme = Some(ItemTheme {
+        theme: themed.clone(),
+        explicit: false,
+    });
+    let original = file(vec![explicit, captured, item(3, "None")]);
+    let v = value(&original);
+    assert_eq!(v["items"][0]["theme_explicit"], true);
+    assert_eq!(v["items"][1]["theme_explicit"], false);
+    assert!(v["items"][2].get("theme").is_none());
+    assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
+
+    // A version 3 file never carries a theme; one written there is ignored.
+    let mut old = v.clone();
+    old["version"] = 3.into();
+    let opened = decode(old.to_string().as_bytes()).unwrap();
+    assert!(opened.items.iter().all(|i| i.theme.is_none()));
+
+    // A damaged snapshot or flag is corrupt, never silently dropped.
+    let mut bad = v.clone();
+    bad["items"][0]["theme"] = "00ff".into();
+    assert_eq!(decode(bad.to_string().as_bytes()), Err(ReadError::Corrupt));
+    let mut flag = v;
+    flag["items"][0]["theme_explicit"] = "yes".into();
+    assert_eq!(decode(flag.to_string().as_bytes()), Err(ReadError::Corrupt));
 }
 
 #[test]
@@ -169,11 +212,109 @@ fn extension_is_added_once() {
     );
 }
 
+fn scripture(position: usize, translation: &str, redistributable: bool) -> ScriptureItem {
+    use crate::scripture::Book;
+    let john = Book::from_number(43).unwrap();
+    ScriptureItem {
+        position,
+        title: format!("John 3:16, 18 ({translation})"),
+        snapshot: Snapshot {
+            translation: translation.into(),
+            name: "Synthetic “Bible”".into(),
+            language: "id".into(),
+            redistributable,
+            verses: vec![
+                (VerseId::new(john, 3, 16).unwrap(), "Pertama ünïcode".into()),
+                (
+                    VerseId::new(john, 3, 18).unwrap(),
+                    "Third \"quoted\"".into(),
+                ),
+            ],
+        },
+    }
+}
+
+#[test]
+fn songs_only_schedules_stay_version_4_for_older_readers() {
+    let v = value(&file(vec![item(1, "Alpha")]));
+    assert_eq!(v["version"], 4);
+}
+
+#[test]
+fn scripture_items_round_trip_in_place_as_version_5() {
+    let mut original = file(vec![item(1, "Alpha"), item(2, "Beta")]);
+    original.scripture = vec![scripture(0, "SYA", true), scripture(2, "USER", false)];
+    let v = value(&original);
+    assert_eq!(v["version"], 5);
+    let kinds: Vec<&str> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["scripture", "song", "scripture", "song"]);
+    assert_eq!(v["items"][0]["verses"][0][0], 43_003_016);
+    assert_eq!(v["items"][2]["redistributable"], false);
+    assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
+    // Only scripture is fine too.
+    let mut only = file(Vec::new());
+    only.scripture = vec![scripture(0, "SYA", true)];
+    assert_eq!(decode(&encode(&only).unwrap()).unwrap(), only);
+}
+
+#[test]
+fn bad_scripture_items_are_refused_on_write_and_read() {
+    let mut misplaced = file(vec![item(1, "Alpha")]);
+    misplaced.scripture = vec![scripture(5, "SYA", true)];
+    assert_eq!(encode(&misplaced), Err(WriteError::Invalid));
+    let mut unordered = file(Vec::new());
+    unordered.scripture = vec![scripture(1, "SYA", true), scripture(0, "SYA", true)];
+    assert_eq!(encode(&unordered), Err(WriteError::Invalid));
+    let mut empty = file(Vec::new());
+    empty.scripture = vec![scripture(0, "SYA", true)];
+    empty.scripture[0].snapshot.verses.clear();
+    assert_eq!(encode(&empty), Err(WriteError::Invalid));
+
+    let mut good = file(Vec::new());
+    good.scripture = vec![scripture(0, "SYA", true)];
+    let base = value(&good);
+    let corrupt = |edit: &dyn Fn(&mut Value)| {
+        let mut v = base.clone();
+        edit(&mut v);
+        decode(v.to_string().as_bytes())
+    };
+    assert_eq!(
+        corrupt(&|v| v["items"][0]["verses"][0][0] = 99_001_001.into()),
+        Err(ReadError::Corrupt),
+        "a verse outside the canon"
+    );
+    assert_eq!(
+        corrupt(&|v| v["items"][0]["verses"].as_array_mut().unwrap().reverse()),
+        Err(ReadError::Corrupt),
+        "verses out of order"
+    );
+    assert_eq!(
+        corrupt(&|v| v["items"][0]["translation"] = "../x".into()),
+        Err(ReadError::Corrupt)
+    );
+    assert_eq!(
+        corrupt(&|v| v["items"][0]["verses"][0] = Value::from("x")),
+        Err(ReadError::Corrupt)
+    );
+    // A version 3 or 4 file cannot carry scripture items.
+    for version in [3, 4] {
+        assert_eq!(
+            corrupt(&|v| v["version"] = version.into()),
+            Err(ReadError::Corrupt)
+        );
+    }
+}
+
 #[test]
 fn newer_version_is_rejected_with_its_number() {
     let mut v = value(&file(Vec::new()));
-    v["version"] = 4.into();
-    assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Newer(4)));
+    v["version"] = 6.into();
+    assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Newer(6)));
     v["version"] = 0.into();
     assert_eq!(decode(v.to_string().as_bytes()), Err(ReadError::Corrupt));
 }

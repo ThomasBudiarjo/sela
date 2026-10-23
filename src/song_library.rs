@@ -23,6 +23,12 @@ use std::{
 };
 
 mod format_pane;
+mod theme_mode;
+#[cfg(test)]
+pub(crate) use theme_mode::{
+    COPYRIGHT as THEME_COPYRIGHT, MARGINS_DEFAULT as THEME_MARGINS_DEFAULT, RESET as THEME_RESET,
+};
+pub(crate) use theme_mode::{open_theme, theme_preview};
 
 actions!(
     song_library,
@@ -165,6 +171,8 @@ enum Pending {
     Load(Version),
     Save(Song),
     Delete,
+    /// A theme save from the theme editor (M1-08); the draft it saved.
+    SaveTheme(Song),
 }
 
 fn blank() -> Song {
@@ -589,7 +597,7 @@ pub(crate) struct Library {
     field_edits: [u64; 6],
     /// Label and lyrics cell per section; always parallel to `draft.sections`.
     cells: Vec<[Entity<TextInput>; 2]>,
-    buttons: [FocusHandle; 32],
+    buttons: [FocusHandle; 33],
     subscriptions: Vec<Subscription>,
     task: Option<Task<()>>,
     worker: Option<Worker>,
@@ -654,6 +662,8 @@ pub(crate) struct Library {
     variant: usize,
     entry: Option<usize>,
     entry_focus: Vec<FocusHandle>,
+    /// Theme mode (M1-08): this window edits a theme, not a song.
+    theme: Option<theme_mode::ThemeEdit>,
 }
 
 impl Library {
@@ -716,6 +726,8 @@ impl Library {
             buttons: std::array::from_fn(|i| {
                 cx.focus_handle().tab_stop(true).tab_index(if i == YES {
                     10
+                } else if i == theme_mode::MARGINS_DEFAULT {
+                    theme_mode::MARGINS_DEFAULT_TAB
                 } else {
                     i as isize + 1
                 })
@@ -764,6 +776,7 @@ impl Library {
             variant: 0,
             entry: None,
             entry_focus: Vec::new(),
+            theme: None,
         };
         this.load_fields(cx);
         this.sync_input_lock(cx);
@@ -1212,11 +1225,40 @@ impl Library {
                     self.refresh(cx);
                 }
             }
+            (Some(Pending::SaveTheme(song)), Ok(Reply::Themes(_))) => {
+                if let Some(edit) = &mut self.theme {
+                    edit.stored = true;
+                }
+                self.baseline = song;
+                self.set_confirm_close(false, cx);
+                self.set_status(t!(Msg::ThemeSavedStatus));
+                library_changed(cx);
+                if self.close_after_save {
+                    self.committed_close = !self.dirty(cx);
+                    self.close_after_save = false;
+                    if !self.committed_close {
+                        self.set_status(t!(Msg::SavedEditsRemain));
+                    }
+                }
+            }
             (Some(Pending::Delete), Ok(Reply::Deleted)) => {
                 library_changed(cx);
                 self.begin(blank(), None, cx);
                 self.cursor = None;
                 self.refresh(cx);
+            }
+            (Some(Pending::SaveTheme(_)), Err(Error::Missing)) => {
+                // Deleted in the operator while this editor was open: not
+                // re-inserted (`Repository::update_theme`). The edits stay
+                // and the next OK saves them as a new theme under a fresh
+                // id, so songs that named the deleted theme are not
+                // silently restyled by it.
+                self.close_after_save = false;
+                if let Some(edit) = &mut self.theme {
+                    edit.id = sela::theme::ThemeId::allocate();
+                    edit.stored = false;
+                }
+                self.reject_status(t!(Msg::ThemeDeletedElsewhere));
             }
             (_, Err(e)) => {
                 self.close_after_save = false;
@@ -1232,6 +1274,10 @@ impl Library {
             return;
         }
         self.record(self.current(cx));
+        if self.theme_button_action(index, window, cx) {
+            cx.notify();
+            return;
+        }
         match index {
             12 => {
                 self.inspector = !self.inspector;
@@ -2258,6 +2304,10 @@ impl Library {
         }
         div()
             .id(("library-button", index))
+            // Stable automation id and name (M1-08 theme editor scripts).
+            .role(Role::Button)
+            .aria_label(label.to_owned())
+            .accessibility_id(format!("editor-button-{index}"))
             .track_focus(&self.buttons[index])
             .key_context("SelaControl")
             .flex_shrink_0()
@@ -2482,9 +2532,15 @@ impl Render for Library {
         }
         let title = self.fields[0].read(cx).text().to_owned();
         if title != self.title {
-            window.set_window_title(&window_title(&title));
+            window.set_window_title(&if self.theme.is_some() {
+                theme_mode::theme_window_title(&title)
+            } else {
+                window_title(&title)
+            });
             self.title = title;
         }
+        self.sync_theme(window, cx);
+        let themed = self.theme.is_some();
         self.ensure_preview(cx);
         self.ensure_thumbnails(cx);
         let busy = self.pending.is_some();
@@ -2578,7 +2634,7 @@ impl Render for Library {
                             .gap(px(2.))
                             .child(self.fields[0].clone())
                             .child(div().flex().when(!busy, |d| {
-                                d.child(self.button(0, t!(Msg::EditorNew), cx))
+                                d.when(!themed, |d| d.child(self.button(0, t!(Msg::EditorNew), cx)))
                                     .child(self.button(5, t!(Msg::EditorUndo), cx))
                                     .child(self.button(6, t!(Msg::EditorRedo), cx))
                             })),
@@ -2605,7 +2661,7 @@ impl Render for Library {
                     })
                     .children([t!(Msg::EditorAnimate), t!(Msg::EditorPresentation)].map(inert))
                     .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgb(theme::BORDER)))
-                    .when(!busy, |d| {
+                    .when(!busy && !themed, |d| {
                         d.child(self.button(13, t!(Msg::EditorLibrary), cx))
                             .child(self.button(12, t!(Msg::EditorInspector), cx))
                     }),
@@ -2760,6 +2816,8 @@ impl Render for Library {
                                                 self.arrangement && !self.layouts,
                                             ),
                                         ]
+                                        .into_iter()
+                                        .filter(|(index, _, _)| !themed || *index != 20)
                                         .map(
                                             |(index, label, active)| {
                                                 div()
@@ -2856,9 +2914,17 @@ impl Render for Library {
                                     .items_center()
                                     .border_t_1()
                                     .border_color(rgb(theme::BORDER))
-                                    .when(!busy, |d| {
+                                    .when(!busy && !themed, |d| {
                                         d.child(self.button(7, "+", cx))
                                             .child(self.button(8, "−", cx))
+                                    })
+                                    .when(themed, |d| {
+                                        d.child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(rgb(theme::MUTED))
+                                                .child(t!(Msg::ThemeSampleHint)),
+                                        )
                                     }),
                             ),
                     )
@@ -3010,22 +3076,42 @@ impl Render for Library {
                         .px_3()
                         .border_t_1()
                         .border_color(rgb(theme::BORDER))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .text_size(px(12.))
-                                .text_color(rgb(theme::FAINT))
+                        .when(!themed, |d| {
+                            d.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(theme::FAINT))
+                                    .child(
+                                        div()
+                                            .size(px(13.))
+                                            .border_1()
+                                            .rounded(px(2.))
+                                            .border_color(rgb(theme::BORDER)),
+                                    )
+                                    .child(t!(Msg::ApplyToSchedule)),
+                            )
+                        })
+                        .when(themed, |d| {
+                            let warnings = self
+                                .theme
+                                .as_ref()
+                                .map(|t| t.warnings.join(" · "))
+                                .unwrap_or_default();
+                            d.child(self.framed(theme_mode::RESET, t!(Msg::ThemeReset), true, cx))
                                 .child(
                                     div()
-                                        .size(px(13.))
-                                        .border_1()
-                                        .rounded(px(2.))
-                                        .border_color(rgb(theme::BORDER)),
+                                        .id("theme-warnings")
+                                        .debug_selector(|| "theme-warnings".into())
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(0xb36b00))
+                                        .child(warnings),
                                 )
-                                .child(t!(Msg::ApplyToSchedule)),
-                        )
+                        })
                         .child(div().flex_1())
                         .child(self.framed(1, t!(Msg::EditorApply), dirty, cx))
                         .child(self.framed(15, t!(Msg::EditorOk), true, cx))
@@ -3037,6 +3123,12 @@ impl Render for Library {
             })
     }
 }
+
+/// The close prompt's question. Yes saves and closes and No discards
+/// (EW8-OBS-012: "Would you like to save changes before closing?"), so the
+/// question asks whether to save; "Close without saving?" inverted both
+/// answers, also for screen readers that announce it (SC2-I18N-02).
+const CLOSE_PROMPT_QUESTION: Msg = Msg::SaveBeforeClosing;
 
 impl Library {
     /// The Yes/No/Cancel close prompt (EW8-OBS-012): a full-window backdrop
@@ -3076,7 +3168,13 @@ impl Library {
             )
             .child(
                 div()
+                    .id("close-prompt-panel")
                     .debug_selector(|| "close-prompt-panel".into())
+                    // Announced as a dialog with its question (SC2-A11Y-01).
+                    .role(Role::Dialog)
+                    .aria_label(t!(CLOSE_PROMPT_QUESTION))
+                    .aria_description(t!(Msg::UnsavedChanges))
+                    .accessibility_id("close-prompt")
                     .w(px(380.))
                     .max_w_full()
                     .p(px(theme::DIALOG_PAD))
@@ -3091,7 +3189,7 @@ impl Library {
                     .child(
                         div()
                             .font_weight(FontWeight::MEDIUM)
-                            .child(t!(Msg::CloseWithoutSaving)),
+                            .child(t!(CLOSE_PROMPT_QUESTION)),
                     )
                     .child(
                         div()
@@ -5283,6 +5381,19 @@ mod tests {
             "7654321"
         );
         assert!(!view.read_with(&cx, |v, cx| v.dirty(cx)));
+    }
+
+    /// SC2-I18N-02: the question matches its answers (Yes saves, No discards).
+    #[test]
+    fn the_close_prompt_asks_whether_to_save() {
+        assert_eq!(
+            CLOSE_PROMPT_QUESTION.english(),
+            "Save changes before closing?"
+        );
+        assert_eq!(
+            CLOSE_PROMPT_QUESTION.indonesian(),
+            "Simpan perubahan sebelum menutup?"
+        );
     }
 
     #[gpui::test]

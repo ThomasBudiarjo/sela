@@ -15,6 +15,8 @@ sha2 = "=0.10.9"
 serde_json = "=1.0.151"
 ttf-parser = "=0.25.1"
 roxmltree = "=0.21.1"
+# Inflates the bundled public-domain Bible texts (already a transitive dependency of png).
+miniz_oxide = "=0.8.9"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false }
 zlog = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
@@ -23,6 +25,14 @@ cosmic-text = { version = "=0.19.0", default-features = false, features = ["std"
 winit = "=0.30.12"
 wgpu = "=29.0.4"
 pollster = "=0.4.0"
+# Stage clock (M3-02): local time of day in the stage renderer. Already in the
+# graph through gpui with the same version and a superset of these features.
+chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
+
+# O_NONBLOCK for opening import files: a named pipe swapped in must not
+# block the `sela-import` thread (already in the tree through gpui).
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.190"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["wayland", "x11"] }

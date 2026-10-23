@@ -504,3 +504,15 @@ dispatcher.rs` (threadpool timers, `increase_timer_resolution`),
 blocking), `crates/gpui_windows/src/platform.rs` (`WM_GPUI_TASK_DISPATCHED_ON_
 MAIN_THREAD` wake), `crates/gpui/src/platform/test/platform.rs` (Noop text
 system; test scheduler panics on foreign-thread activity).
+
+## M3-01/M3-02 — Stage output on the same wire (stage-display, 2026-10-22)
+
+A second renderer session (`sela --stage`, its own supervisor and epoch)
+uses this protocol unchanged except for one new version-2 command kind:
+**7 STAGE**, the owned-resource command metadata and an opaque color
+background followed by a stage panel (flags, face, five bounded UTF-8
+fields). It decodes to `Payload::Scene` with `PreparedCue::stage()` set; an
+audience renderer rejects it (RenderFailed, scene kept) and a stage renderer
+rejects every non-stage scene and logo. Receipts, lanes, ordering, deadlines
+and loss handling are those above, per session. Field layout, bounds and the
+renderer-drawn clock: [stage-display.md](stage-display.md).

@@ -148,9 +148,15 @@ impl Operator {
     /// Called from `render`, where the window is available.
     pub(crate) fn focus_pending_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.assets.focus_dialog) && self.dialog.is_some() {
-            self.dialog_return = window.focused(cx);
+            self.dialog_return = self.focus_to_return(window, cx);
             // The non-destructive choice, so Enter never confirms by accident.
-            self.controls[Control::DialogCancel].focus(window, cx);
+            // For the recovery prompt that is Restore: declining hides the
+            // autosaved work (best guess, EW unobserved; M1-12).
+            if self.dialog == Some(Dialog::Recovery) && self.recovery_restorable() {
+                self.controls[Control::DialogConfirm].focus(window, cx);
+            } else {
+                self.controls[Control::DialogCancel].focus(window, cx);
+            }
         }
     }
 

@@ -153,10 +153,16 @@ fn schedules() -> impl Strategy<Value = ScheduleFile> {
                 },
                 song,
                 arrangement,
+                theme: None,
             }
         });
-    ("[^\\x00]{0,40}", proptest::collection::vec(item, 0..4))
-        .prop_map(|(title, items)| ScheduleFile { title, items })
+    ("[^\\x00]{0,40}", proptest::collection::vec(item, 0..4)).prop_map(|(title, items)| {
+        ScheduleFile {
+            title,
+            items,
+            scripture: Vec::new(),
+        }
+    })
 }
 
 const JSON_TOKENS: &[&str] = &[

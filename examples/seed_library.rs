@@ -8,7 +8,15 @@
 //! four slides exercise M1-05h backgrounds: a 4:1 profile image (red, green,
 //! blue bands) with Zoom, the same image with Maintain, a missing image, and
 //! the song master's color; `--metadata-songs` seeds "Metadata Hymn" (author,
-//! copyright, administrator, song number) and "Plain Hymn" (none); --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
+//! copyright, administrator, song number) and "Plain Hymn" (none);
+//! `--sort-songs` seeds five songs whose Author, Copyright, Administrator
+//! and Song Number orders all differ, one with the slide label "Etsaer"
+//! (`scripts/songs-browser-x11.py`); `--themes`
+//! adds four library themes to the default library (M1-08,
+//! `scripts/themes-x11.py`): "Evening Navy" (gold bold left text on navy with
+//! margins, copyright hidden), "Low Contrast" (white on near white), "Missing
+//! Face" (a family no system has) and "Wide Picture" (a 4:1 image, Stretch);
+//! --heavy-song seeds one 100-slide song of\n//! 28-line slides (scripts/prep-windows.py).
 use image::ImageEncoder;
 use sela::{
     arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId},
@@ -18,7 +26,11 @@ use sela::{
 };
 use sha2::Digest;
 
-const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs]";
+const USAGE: &str = "usage: seed_library <new-database-path> [--second-song] [--extra-songs N] [--formatted-song] [--background-song] [--heavy-song] [--vanished-schedule] [--arranged-song] [--metadata-songs] [--sort-songs] [--themes]";
+
+/// `scripts/themes-x11.py` samples these.
+const NAVY: [u8; 3] = [20, 30, 90];
+const GOLD: [u8; 3] = [255, 214, 90];
 
 /// `scripts/live-output-windows.py` samples these.
 const BANDS: [[u8; 3]; 3] = [[200, 40, 40], [40, 160, 60], [40, 60, 200]];
@@ -66,6 +78,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut second, mut formatted, mut background, mut heavy, mut vanished, mut arranged) =
         (false, false, false, false, false, false);
     let mut metadata = false;
+    let mut sort = false;
+    let mut themes = false;
     let mut extra = 0usize;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -83,6 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             flag if flag == "--vanished-schedule" => vanished = true,
             flag if flag == "--arranged-song" => arranged = true,
             flag if flag == "--metadata-songs" => metadata = true,
+            flag if flag == "--sort-songs" => sort = true,
+            flag if flag == "--themes" => themes = true,
             arg if path.is_none() && !arg.to_string_lossy().starts_with("--") => path = Some(arg),
             _ => return Err(USAGE.into()),
         }
@@ -109,6 +125,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format,
         background: None,
     };
+    if sort {
+        /// Title, authors, copyright, administrator, song number, labels.
+        type Keyed = (
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static [&'static str],
+        );
+        let songs: [Keyed; 5] = [
+            (
+                "Delta Hymn",
+                "bravo writer",
+                "© 2001 Zeta",
+                "Northwind",
+                "900",
+                &["Verse 1"],
+            ),
+            ("Alpha Hymn", "", "", "", "", &["Verse 1"]),
+            (
+                "Echo Hymn",
+                "Alpha Writer",
+                "(c) 1999 Omega",
+                "acme",
+                "10",
+                &["Verse 1", "Etsaer"],
+            ),
+            (
+                "Bravo Hymn",
+                "Charlie Writer",
+                "© 2001 Zeta",
+                "",
+                "0042",
+                &["Verse 1"],
+            ),
+            (
+                "Etsaer Praise",
+                "Delta Writer",
+                "© 2010 Kappa",
+                "Bureau",
+                "77",
+                &["Verse 1"],
+            ),
+        ];
+        for (title, authors, copyright, admin, number, labels) in songs {
+            let song = Song {
+                title: title.into(),
+                authors: authors.into(),
+                copyright: copyright.into(),
+                license: String::new(),
+                administrator: admin.into(),
+                song_number: number.into(),
+                variants: Vec::new(),
+                sections: labels
+                    .iter()
+                    .map(|label| section(label, &format!("{title} original line")))
+                    .collect(),
+                master: None,
+            };
+            repository
+                .save_song(None, song)
+                .map_err(|e| format!("{e:?}"))?;
+        }
+        return Ok(());
+    }
     if metadata {
         // "Metadata Hymn" carries every song property; "Plain Hymn" has no
         // copyright text, so it must show no strip (VAL-SONG-002).
@@ -245,10 +327,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let song = repository.song(version).map_err(|e| format!("{e:?}"))?;
         let document = sela::schedule_file::ScheduleFile {
             title: "Sunday".into(),
+            scripture: Vec::new(),
             items: vec![sela::schedule_file::Item {
                 source: version,
                 song,
                 arrangement: None,
+                theme: None,
             }],
         };
         let bytes = sela::schedule_file::encode(&document).map_err(|e| format!("{e:?}"))?;
@@ -383,6 +467,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )
         .map_err(|e| format!("{e:?}"))?;
+    if themes {
+        use sela::theme::Theme;
+        let image = backdrop(path)?;
+        for theme in [
+            Theme {
+                format: SlideFormat {
+                    bold: Some(true),
+                    color: Some(GOLD),
+                    align: Some(Align::Left),
+                    margins: Some(sela::format::Margins {
+                        left: 160,
+                        right: 160,
+                        top: 90,
+                        bottom: 90,
+                    }),
+                    ..Default::default()
+                },
+                background: Some(Background::color(NAVY)),
+                show_copyright: false,
+                ..Theme::new("Evening Navy")
+            },
+            Theme {
+                format: SlideFormat {
+                    color: Some([255, 255, 255]),
+                    ..Default::default()
+                },
+                background: Some(Background::color([240, 240, 236])),
+                ..Theme::new("Low Contrast")
+            },
+            Theme {
+                format: SlideFormat {
+                    font: Some("Sela Missing Face".into()),
+                    ..Default::default()
+                },
+                ..Theme::new("Missing Face")
+            },
+            Theme {
+                background: Some(Background {
+                    aspect: Aspect::Stretch,
+                    ..Background::image(image)
+                }),
+                ..Theme::new("Wide Picture")
+            },
+        ] {
+            repository
+                .save_theme(&theme)
+                .map_err(|e| format!("{e:?}"))?;
+        }
+    }
     if second {
         repository
             .save_song(

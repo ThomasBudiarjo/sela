@@ -2087,7 +2087,15 @@ impl Library {
                     .px_3()
                     .pb_3()
                     .children(slide)
-                    .children(text),
+                    .children(text)
+                    // Theme mode (M1-08): Theme Elements under the Slide
+                    // tab, margins under the Text tab.
+                    .children(
+                        (tab == Tab::Slide)
+                            .then(|| self.theme_elements(cx))
+                            .flatten(),
+                    )
+                    .children((tab == Tab::Text).then(|| self.theme_margins(cx)).flatten()),
             )
             .into_any_element()
     }
@@ -2273,7 +2281,7 @@ impl Library {
                         )),
                 )
             })
-            .when(!self.layouts, |d| {
+            .when(!self.layouts && self.theme.is_none(), |d| {
                 d.child(div().mt_3().flex().child(self.pane_button(
                     Ctl::EditLayouts,
                     t!(Msg::EditSlideLayouts),

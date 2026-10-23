@@ -10,6 +10,9 @@ mod song_select;
 mod songs;
 mod themes;
 
+#[cfg(test)]
+pub(crate) use scriptures::translation_label;
+pub(crate) use scriptures::{ScriptureTab, bind_scripture_keys};
 pub(super) use song_search::SongSearch;
 pub(super) use song_select::{SONG_ROW_H, SongSelection};
 pub(super) use songs::{
@@ -17,6 +20,7 @@ pub(super) use songs::{
     ExtendPreviousSongRow, FirstSongRow, LastSongRow, NextSongRow, PageDownSongRow, PageUpSongRow,
     PreviousSongRow, SEARCH_TAB_INDEX, SelectAllSongRows,
 };
+pub(crate) use themes::{ThemeJob, ThemeState};
 
 /// Tab labels, translated at render time.
 pub(crate) const TABS: [Msg; 5] = [
@@ -51,13 +55,17 @@ pub(crate) fn empty_detail(title: impl Into<SharedString>, text: &'static str) -
 
 impl Operator {
     /// The detail area of the selected resource tab.
-    pub(crate) fn resource_detail(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn resource_detail(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         match self.tab {
             0 => self.song_list(cx),
-            1 => scriptures::detail(),
+            1 => self.scripture_detail(cx),
             2 => self.image_list(cx),
             3 => presentations::detail(),
-            _ => themes::detail(),
+            _ => self.theme_list(window, cx),
         }
     }
 }

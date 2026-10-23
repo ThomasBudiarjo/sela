@@ -99,6 +99,7 @@ pub(crate) fn slide_formats() -> impl Strategy<Value = SlideFormat> {
                     valign,
                     outline,
                     shadow,
+                    margins: None,
                 }
             },
         )

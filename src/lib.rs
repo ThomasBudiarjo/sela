@@ -4,6 +4,7 @@
 #![deny(unsafe_code)]
 pub mod arrangement;
 pub mod arrangement_edit;
+pub mod autosave;
 pub mod background;
 pub mod delivery;
 pub mod fonts;
@@ -20,6 +21,7 @@ pub mod output;
 pub mod pane_layout;
 pub mod preflight;
 pub mod preparation;
+pub mod profile;
 pub mod scene;
 pub mod schedule;
 pub mod schedule_file;
@@ -28,6 +30,8 @@ pub mod search;
 pub mod settings;
 pub mod slides;
 pub mod song_order;
+pub mod stage;
 pub mod storage;
+pub mod theme;
 pub mod timer;
 pub mod transport;

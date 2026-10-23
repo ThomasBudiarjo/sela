@@ -38,10 +38,12 @@ use std::{
 };
 
 mod assets;
+mod autosave;
 mod controls;
 mod dialogs;
 mod frame_log;
 mod layout;
+mod media_backend;
 mod menus;
 mod navigation;
 mod options;
@@ -50,9 +52,12 @@ mod preview_live;
 mod resources;
 mod schedule;
 mod schedule_files;
+pub(super) mod song_import;
+mod stage;
 mod update_items;
 
 use assets::{Assets, PREFLIGHT_DIALOG_W};
+pub(super) use autosave::{AutosaveRefused, AutosaveSetup};
 pub(super) use controls::Control;
 use controls::{
     ControlSet, DIALOG_TAB_INDEX, IMAGE_TAB_INDEX, SCHEDULE_TAB_INDEX, SLIDE_TAB_INDEX,
@@ -60,6 +65,7 @@ use controls::{
 };
 use dialogs::DismissDialog;
 pub(super) use dialogs::{Dialog, Then};
+pub(crate) use media_backend::MediaLocator;
 pub(crate) use menus::{BarMenu, TopMenu};
 use menus::{
     BarMenuLeft, BarMenuRight, MenuConfirm, MenuDismiss, MenuNext, MenuPrevious, OpenEditMenu,
@@ -71,11 +77,16 @@ use menus::{MenuCloseSub, MenuOpenSub};
 pub(super) use menus::{SONG_MENU, SongItem, TOP_MENUS};
 pub(super) use options::{MonitorSlot, SettingsConfig};
 use options::{RecentChange, SettingsState};
+#[cfg(test)]
+pub(crate) use resources::ScriptureTab;
+#[cfg(test)]
+pub(crate) use resources::translation_label;
 use resources::{
     ClearSongSearch, DeleteSongRow, ExtendFirstSongRow, ExtendLastSongRow, ExtendNextSongRow,
     ExtendPreviousSongRow, FirstSongRow, LastSongRow, NextSongRow, PageDownSongRow, PageUpSongRow,
     PreviousSongRow, SelectAllSongRows, SongSearch, SongSelection, TAB_IDS, TABS,
 };
+pub(super) use stage::StageLauncher;
 
 const POLL: Duration = Duration::from_millis(16);
 const LABELS: usize = 8;
@@ -140,6 +151,38 @@ impl Render for DragLabel {
     }
 }
 
+/// Hover hint with the full text of a status-bar item that truncates in a
+/// narrow window (output state, media warning); the accessible name
+/// already carries the same text.
+pub(super) struct StatusHint(SharedString);
+
+impl StatusHint {
+    pub(super) fn builder(
+        text: impl Into<SharedString>,
+    ) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+        let text = text.into();
+        move |_, cx| cx.new(|_| StatusHint(text.clone())).into()
+    }
+}
+
+impl Render for StatusHint {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .debug_selector(|| "status-hint".into())
+            .max_w(px(360.))
+            .px_2()
+            .py_1()
+            .rounded(px(RADIUS))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(SURFACE))
+            .shadow_md()
+            .text_size(px(TEXT_SMALL))
+            .text_color(rgb(TEXT))
+            .child(self.0.clone())
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct Item {
     pub(super) version: Version,
@@ -153,15 +196,37 @@ pub(super) struct Item {
     pub(super) arrangements: Arc<[(VariantId, String)]>,
     /// The entry's stored choice these slides were built for.
     pub(super) chosen: Option<VariantId>,
-    /// The song's copyright strip, drawn on every slide of the item
-    /// (EW8-OBS-063); `None` when the song has no copyright text.
-    pub(super) copyright: Option<Arc<str>>,
+    /// The song's copyright strip (EW8-OBS-063); `None` when the song has no
+    /// copyright text. Its text and the slides that draw it follow the
+    /// Options › Song copyright settings when each cue is built.
+    pub(super) copyright: Option<Arc<slides::CopyrightStrip>>,
     /// Per-slide face resolution, `None` until the background resolver lands.
     /// Until then the current live scene stays and a deferred cue waits.
     pub(super) resolved: Option<Arc<[fonts::Resolved]>>,
+    /// The theme the slides were built with (M1-08): its rendered-look key
+    /// (0 for the built-in look), whole-value stamp and shown name.
+    pub(super) theme_key: u64,
+    pub(super) theme_stamp: u64,
+    pub(super) theme_name: String,
+    /// The song named a theme the library no longer has.
+    pub(super) theme_missing: bool,
+    /// The library's themes were not loaded (or failed to load) when the
+    /// item was built: it shows the default look and captured nothing.
+    pub(super) theme_unloaded: bool,
+    /// The song's library theme when the item was loaded.
+    pub(super) song_theme: Option<sela::theme::ThemeId>,
+    /// Per-slide footer replacing `copyright` (a scripture slide's own
+    /// reference and translation, EW "Reference Location: After Each
+    /// Slide", EW8-OBS-056); `None` for songs.
+    pub(super) footers: Option<Arc<[Arc<str>]>>,
 }
 
 impl Item {
+    /// The theme state `Operator::wanted_theme` compares: stamp and notes.
+    pub(super) fn theme_view(&self) -> (u64, bool, bool) {
+        (self.theme_stamp, self.theme_missing, self.theme_unloaded)
+    }
+
     /// Position of the arrangement these slides follow: the stored choice
     /// when the song has it, else the first.
     pub(super) fn chosen_index(&self) -> usize {
@@ -212,6 +277,14 @@ pub(crate) enum Request {
         pairs: Vec<(EntryId, Version, Version)>,
         versions: Vec<Version>,
     },
+    /// A song import's duplicate check or commit (`song_import`), for the
+    /// import job that asked; a reply for an older job is dropped.
+    SongImport(u64),
+    /// Loading a restored schedule's songs for the open-time file check
+    /// (M1-11b); the schedule document it was for.
+    RecoveryCheck(u64),
+    /// A theme load or write (M1-08).
+    Themes(resources::ThemeJob),
 }
 
 pub(super) struct Operator {
@@ -223,7 +296,7 @@ pub(super) struct Operator {
     drag: Option<(usize, Point<gpui::Pixels>, f32)>,
     activation: Option<Subscription>,
     pub(super) library_error: Option<String>,
-    new_menu: bool,
+    pub(super) new_menu: bool,
     library: Option<PathBuf>,
     pub(super) worker: Option<Worker>,
     request: Option<Request>,
@@ -245,12 +318,21 @@ pub(super) struct Operator {
     /// Thumb drag of the Songs scrollbar is in progress.
     pub(super) song_scrolling: bool,
     pub(super) frame_log: Option<frame_log::FrameLog>,
+    /// Test probe: slide index and copyright strip text of each cue handed
+    /// to the renderer, newest last (songs-browser).
+    #[cfg(test)]
+    pub(super) presented_footers: Vec<(usize, Option<String>)>,
     slide_rows: Vec<FocusHandle>,
     pub(super) selected_song: Option<Version>,
     pub(super) preview: Option<Item>,
     pub(super) preview_slide: usize,
     pub(super) live: Option<Item>,
     pub(super) live_slide: Option<usize>,
+    /// The item `live_slide` belongs to: replaced only when one of its cues
+    /// is handed to the audience supervisor. `live` already names a newly
+    /// requested item while its cue is still preparing (or failed), so the
+    /// stage panel is built from this, never from `live` (M3-02).
+    pub(super) on_air: Option<Item>,
     launcher: Launcher,
     pub(super) output: Option<Supervisor>,
     output_extent: Option<Extent>,
@@ -284,11 +366,15 @@ pub(super) struct Operator {
     image_worker: Option<images::Worker>,
     /// Preflight worker and report, Go Live hold, import notes (M1-11b).
     pub(super) assets: Assets,
+    /// File › Import › Songs: worker, staged preview and commit (M1-14).
+    pub(super) song_import: song_import::SongImport,
     pub(super) images: Vec<String>,
-    image_rows: Vec<FocusHandle>,
+    pub(super) image_rows: Vec<FocusHandle>,
     pub(super) selected_image: Option<String>,
-    image_menu: Option<Point<Pixels>>,
+    pub(super) image_menu: Option<Point<Pixels>>,
     pub(super) media_message: Option<String>,
+    /// FFmpeg availability, located once off the UI thread (M2-01).
+    pub(super) media_backend: media_backend::MediaBackend,
     /// Not persisted yet.
     pub(super) sizing: Sizing,
     pub(super) size_cap: Option<(Version, Extent, Sizing, Option<u16>)>,
@@ -302,7 +388,7 @@ pub(super) struct Operator {
     pub(super) selected_entry: Option<EntryId>,
     /// Multi-selection, drag and update-review state of the Schedule pane.
     pub(super) view: schedule::ScheduleView,
-    schedule_rows: Vec<FocusHandle>,
+    pub(super) schedule_rows: Vec<FocusHandle>,
     pub(super) schedule_message: Option<String>,
     /// One schedule storage job waiting for the worker.
     queued: Option<(storage::Command, Request)>,
@@ -326,7 +412,14 @@ pub(super) struct Operator {
     /// Ancestor of every modal dialog control; Tab wraps inside it.
     pub(super) dialog_scope: FocusHandle,
     pub(super) dialog_message: Option<String>,
-    item_menu: Option<(EntryId, Point<Pixels>)>,
+    pub(super) item_menu: Option<(EntryId, Point<Pixels>)>,
+    /// Where keyboard focus returns when the New, Schedule item or image
+    /// popup menu closes (SC2-FOCUS-02).
+    popup_origin: Option<FocusHandle>,
+    /// A pointer press outside the New menu closed it at this position; the
+    /// same press on the New button must not reopen it.
+    new_menu_closed_at: Option<Point<Pixels>>,
+    new_menu_swallow_click: bool,
     pub(super) song_menu: Option<SongMenu>,
     song_menu_focus: FocusHandle,
     /// Open main-menu-bar popup, if any (File/Edit/Live/Profiles/View/Help).
@@ -341,6 +434,8 @@ pub(super) struct Operator {
     bar_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
     /// Songs footer status: text and whether it reports a failure.
     pub(super) song_message: Option<(String, bool)>,
+    /// Themes tab state and the library's themes (M1-08).
+    pub(super) themes: resources::ThemeState,
     /// A library double-click waiting for its song to load.
     live_on_load: Option<Version>,
     /// A PageDown/PageUp to another schedule item waiting for its preview.
@@ -370,6 +465,12 @@ pub(super) struct Operator {
     pub(super) _search_waker: Option<Task<()>>,
     _poller: Option<Task<()>>,
     _receipt_waker: Option<Task<()>>,
+    /// Schedule autosave and recovery (M1-12).
+    pub(super) autosave: autosave::AutosaveState,
+    /// Scriptures tab state and its provider worker (M4-03/M4-04).
+    pub(super) scripture: resources::ScriptureTab,
+    /// Stage (Foldback) output session, message and Options draft (M3-01/02).
+    pub(super) stage: stage::StageState,
 }
 
 impl Operator {
@@ -390,6 +491,7 @@ impl Operator {
             .filter(|p| !p.as_os_str().is_empty())
             .map(Path::to_path_buf);
         let assets = Assets::start(profile.as_deref());
+        let autosave = autosave::AutosaveState::start(profile.as_deref(), cx);
         let mut media_message = None;
         let image_worker = profile.clone().and_then(|profile| {
             let worker = images::Worker::start(profile).ok();
@@ -446,8 +548,13 @@ impl Operator {
             KeyBinding::new("enter", MenuConfirm, Some("SelaSongMenu")),
             KeyBinding::new("space", MenuConfirm, Some("SelaSongMenu")),
             KeyBinding::new("escape", MenuDismiss, Some("SelaSongMenu")),
+            // New, Schedule item and image popups (SC2-FOCUS-02).
+            KeyBinding::new("down", MenuNext, Some("SelaPopupMenu")),
+            KeyBinding::new("up", MenuPrevious, Some("SelaPopupMenu")),
+            KeyBinding::new("escape", MenuDismiss, Some("SelaPopupOpen")),
             KeyBinding::new("escape", ClearSongSearch, Some("SelaSongSearch")),
         ]);
+        song_import::bind_keys(cx);
         // Main menu bar (M1-02/M1-03): Alt+mnemonics open the six menus
         // (EW8-OBS-010; only Alt+L observed, the rest are first-letter best
         // guesses). `!SelaTextInput` keeps plain typing from opening menus.
@@ -473,6 +580,7 @@ impl Operator {
         let library_changed =
             cx.observe_global::<crate::song_library::LibraryChanged>(|this, cx| {
                 this.catalog_stale = true;
+                this.themes.stale = true;
                 cx.notify();
             });
         let search_input = cx.new(|cx| {
@@ -504,8 +612,11 @@ impl Operator {
                 }
             }
         });
+        resources::bind_scripture_keys(cx);
+        let scripture = resources::ScriptureTab::new(cx);
         let schedule_writer = config.schedule_writer.clone();
         let layout = config.initial_layout.unwrap_or_default();
+        let media_backend = media_backend::MediaBackend::start(config.media_locator.clone());
         let settings = SettingsState::start(profile.as_deref(), config, cx);
         Self {
             focus: cx.focus_handle(),
@@ -532,12 +643,15 @@ impl Operator {
             song_order: SongOrder::default(),
             song_scrolling: false,
             frame_log: frame_log::FrameLog::from_env(),
+            #[cfg(test)]
+            presented_footers: Vec::new(),
             slide_rows: Vec::new(),
             selected_song: None,
             preview: None,
             preview_slide: 0,
             live: None,
             live_slide: None,
+            on_air: None,
             launcher,
             output: None,
             output_extent: None,
@@ -558,11 +672,13 @@ impl Operator {
             settings,
             image_worker,
             assets,
+            song_import: Default::default(),
             images: Vec::new(),
             image_rows: Vec::new(),
             selected_image: None,
             image_menu: None,
             media_message,
+            media_backend,
             sizing: Sizing::default(),
             size_cap: None,
             cue_preparer: None,
@@ -585,6 +701,9 @@ impl Operator {
             dialog_scope: cx.focus_handle(),
             dialog_message: None,
             item_menu: None,
+            popup_origin: None,
+            new_menu_closed_at: None,
+            new_menu_swallow_click: false,
             song_menu: None,
             song_menu_focus: cx.focus_handle(),
             bar_menu: None,
@@ -593,6 +712,7 @@ impl Operator {
             bar_opened_with_mouse: None,
             bar_bounds: Rc::default(),
             song_message: None,
+            themes: resources::ThemeState::new(cx),
             live_on_load: None,
             live_entry_on_load: None,
             live_focus: cx.focus_handle(),
@@ -609,6 +729,9 @@ impl Operator {
             _search_waker: None,
             _poller: Some(poller),
             _receipt_waker: Some(receipt_waker),
+            autosave,
+            scripture,
+            stage: Default::default(),
         }
     }
 }

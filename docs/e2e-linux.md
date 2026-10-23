@@ -15,7 +15,23 @@ Files:
   external tools; no pip packages).
 - `scripts/<feature>-x11.py`: one script per feature. Ported so far:
   `live-output-x11.py`, `schedule-x11.py`, `song-editor-x11.py` (from the
-  `*-windows.py` scripts of the same name).
+  `*-windows.py` scripts of the same name). New with a Windows counterpart:
+  `song-import-x11.py` (import-framework; `song-import-windows.py`).
+  End-to-end scenarios (backlog "Repeatable end-to-end scenarios"):
+  `scenario-s01-x11.py` (fresh profile, New Song, schedule, save, reopen,
+  Go Live) and `scenario-s02-x11.py` (present A, edit B, Next/Previous,
+  masks, Go Live under Black), with Windows counterparts
+  `scenario-s0{1,2}-windows.py` (scrutiny-r2). Feature scripts written on
+  the harness: `autosave-x11.py` (M1-12, S03; Windows counterpart
+  `autosave-windows.py`), `themes-x11.py` (M1-08; Windows counterpart
+  `themes-windows.py`). Finding while writing `themes-x11.py`: after an
+  editor window of the operator process closes, or once the operator's X
+  title names the schedule, AT-SPI lookups of the operator frame by title
+  time out, so the script locates operator controls once and reuses their
+  centers.
+  Also new with their feature: `media-backend-x11.py` (media-core; needs
+  `scripts/fetch-ffmpeg`). `scripture-x11.py` (M4-03/M4-04,
+  docs/scripture.md; Windows counterpart `scripture-windows.py`).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -150,7 +166,12 @@ Processes and profile:
   `app.control(id).center`: AccessKit ids (the same ids UIA exposes on
   Windows, e.g. `live-next`, `mask-black`, `song-0`) with window-relative
   rectangles, read over AT-SPI with `gdbus`. Positions hold only for the
-  layout at the time of the call.
+  layout at the time of the call. `Control.role` is the AT-SPI role name
+  ("dialog", "push button", "list item", ...): AccessKit's adapter answers
+  GetRoleName with an empty string, so the harness maps GetRole's number
+  (scrutiny-r2; before that every role read as ""). Controls are looked up
+  under the window's current title, which GPUI hands to AT-SPI when a frame
+  begins.
 - `app.file_dialog()`, `app.drive_file_dialog(path, cancel=False,
   owner=window)`: the portal Save/Open dialog; the path is typed into the
   location entry (Ctrl+L) in one burst because GTK's inline completion
@@ -233,7 +254,11 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
    record the exact command, display kind, result and artifact path in the
    work log. A pass here never closes a Windows, hardware or reference item.
 
-## Results (2026-10-22, HEAD f05e27a binary, `:100` = `serve --display :100`)
+## Results (2026-10-22 onward; `:N` = `serve --display :N`)
+
+The first six rows ran the HEAD f05e27a debug binary on 2026-10-22; each
+later row names its stream and date and ran the debug binary of that
+stream's tree (commits in the work log record of the same name).
 
 | Script | Display | Result |
 | --- | --- | --- |
@@ -243,6 +268,33 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `live-output-x11.py --kind dual --tolerate-audience-focus` | private dual, audience `secondary` 1920x1080 | PASS, four tolerated focus thefts |
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
+| `song-import-x11.py --display :112` (import-framework, 2026-10-22) | xvfb, audience `window` | PASS (27 s) |
+| `autosave-x11.py --display :113` (2026-10-22, autosave-recovery; review round 1 adds the unanswered-close step) | xvfb `serve --display :113` | PASS (19 s; round 1: 20.5 s) |
+| `songs-browser-x11.py --display :114` (songs-browser, 2026-10-22; re-run 2026-10-23 after review) | xvfb (`serve --display :114`), audience `window` 624x351 | PASS (Sort by keys mouse + keyboard, restart, label search, Options Song tab; since 2026-10-23 a song is Live and typing "bravo." in the search box, "CCLI b." in License Info and OK with changed options leave the audience frame unchanged; this catches leaked Black/Clear/Logo keys but not a re-cue on OK, which re-renders a pixel-identical slide here because the 351 px output draws no copyright strip: the GPUI test `typing_in_license_info_never_toggles_masks_or_cues_live` covers that) |
+| `themes-x11.py --display :117` (themes stream, 2026-10-22, binary sha256 `f37bf47ba9dd1ca2…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (40 s) |
+| `themes-x11.py --display :117` (themes review round 1, 2026-10-23, binary sha256 `0e1855b2e1137d1a…`; step 6 now edits the live theme) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (42 s) |
+| `themes-x11.py --display :117` (themes review round 2, 2026-10-23, binary sha256 `9b60e612488b600a…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (42 s) |
+| all eight `*-x11.py` scripts `--display :131` (pr1-review, 2026-10-23, after the native_x11 timeout and AT-SPI probe fixes) | xvfb (`serve --display :131`), audience `window` 624x351 | PASS: schedule 35 s, song-import 31 s, autosave 24 s, songs-browser 47 s, live-output 60 s (underline run 514 px of a 514 px line; non-underlined slides at most 31 px), scenario-s01 47 s (chorus black samples 23684), scenario-s02 52 s, song-editor 66 s |
+
+GTK portal folder chooser notes (song-import-x11.py): it opens on Recent,
+where Enter in the location entry does nothing, so the script first clicks
+the sidebar's Home row; a GTK tooltip under a resting pointer is a visible
+portal window that `App.file_dialog()` may return, so the pointer is parked
+away before the chooser opens; GPUI reads the X keymap at start and ignores
+xdotool's on-the-fly mapping for characters outside the US layout, so "ñ" is
+mapped to a spare keycode with `xmodmap` before the operator starts.
+
+scrutiny-r2 (2026-10-22, `:111` = `serve --display :111`, HEAD of
+`wave/scrutiny-r2`): `scenario-s01-x11.py` and `scenario-s02-x11.py` PASS,
+and the three ported scripts above PASS again on the same binary (exact
+commands and timings in the work-log record "scrutiny-r2"). Review round 1:
+`native_x11.viewable(wid)` answers "exists and mapped" from one xwininfo
+query (a window vanishing between two queries counts as gone), used by
+`App.wait_exit`, the file dialog close wait and the scenario scripts; S01 now
+also checks Options and the editor close prompt, S02 the Schedule item menu.
+Review round 2: S02 step 2c drives New ▾ (show keys inert while open; a
+press released 300 px away closes it and the first Enter reopens it) with
+`nx.drag`; it FAILS on the binary without the SC2-FOCUS-03 fix.
 
 Failure handling was checked with a nonexistent binary and an unusable
 display (exit 2) and with a deliberate failure while the audience was live
@@ -268,3 +320,34 @@ no temporary folder left).
   Windows; no IME.
 - No EasyWorship reference can run here; nothing in these runs is parity
   evidence.
+
+## Stage output (stage-display, 2026-10-22)
+
+`scripts/stage-display-x11.py` drives the operator with Foldback enabled and
+checks both renderer children (`sela --audience`, `sela --stage`); see its
+docstring and [stage-display.md](stage-display.md). Harness additions:
+`STAGE_TITLE`, `App.stage(timeout)`, an Openbox rule placing the `window`
+stage (`SELA_STAGE_MONITOR=window`, 624x351) below the audience on the `xvfb`
+kind, and a `triple` display kind (Xorg dummy, DUMMY0 primary plus DUMMY1 and
+DUMMY2 at 1920x1080) for the production placement of both outputs.
+
+What works for two or more outputs on Linux (checked on `:118`):
+
+- One Xvfb screen: one winit monitor, so both outputs use `window`.
+- `Xvfb :118 -screen 0 1920x1080x24 -screen 1 1920x1080x24`: two X
+  screens; `sela --list-monitors` prints one `screen` monitor on `:118` and
+  on `:118.1`, so it does not give winit a second monitor either.
+- Xorg with the dummy driver and three RandR outputs (the `triple` kind, or
+  started by hand on `:118` with the same `dummy.conf` at `Virtual 5760 1080`
+  and the `xrandr --addmode/--output` commands of `Display.start`): winit sees
+  DUMMY0/1/2; the audience covers DUMMY1 and Options › Foldback "Automatic"
+  puts the stage on DUMMY2. Openbox focuses each output window on map (the
+  M1-10 Linux finding also holds for the stage); `--tolerate-output-focus`
+  records it.
+- Full-screen captures of a 5760x1080 root need ImageMagick temporary space;
+  with `/` full, set `MAGICK_TEMPORARY_PATH` and `TMPDIR` to a tmpfs folder.
+
+| Script | Display | Result |
+| --- | --- | --- |
+| `stage-display-x11.py --display :118` | Xvfb 1920x1080 + harness Openbox rules; both outputs `window` 624x351 | PASS |
+| `stage-display-x11.py --display :118 --tolerate-output-focus` | Xorg dummy, three monitors; audience DUMMY1, stage DUMMY2 (Automatic) | PASS, two tolerated focus thefts by the stage window |

@@ -228,12 +228,13 @@ Common Windows prerequisites are listed once in
   search field. Re-run: `search-windows.py`.
 - [ ] **PP-LIB-02 Search fields** (EW8-OBS-046). Steps: with author and
   copyright filled, search for a word that is only there. Sela now: matches
-  author, copyright, license, administrator and song number; slide labels are
-  not indexed (recorded gap). Re-run: `search-windows.py`,
+  author, copyright, license, administrator and song number; slide labels
+  are indexed since schema 7 (songs-browser). Re-run: `search-windows.py`,
   `song-metadata-windows.py`.
 - [ ] **PP-LIB-03 Sort direction default** (EW8-OBS-064). Steps: read the
   checked direction under Sort by on a fresh profile. Sela now: Ascending;
-  Title and Date modified only. Re-run: `resource-browser-windows.py`.
+  every observed key plus Date modified. Re-run: `resource-browser-windows.py`,
+  `songs-browser-windows.py`.
 - [ ] **PP-LIB-04 Update items in Schedule wording** (EW8-OBS-061). Steps: edit
   and save a scheduled song, choose Update items in Schedule; record the
   dialog (this needs one save in a disposable profile). Sela now (best guess):
@@ -288,8 +289,10 @@ Common Windows prerequisites are listed once in
   Re-run: none yet (stream `ew-library-import`).
 - [ ] **PP-BIB-01 Scripture reference entry** (VAL-BIBLE-010). Steps: type
   references in the Scriptures tab: completion order and accept key, "Jude 5",
-  "John 3 16", "John 3:16-4:2". Sela now: parser only; `John 3 16` is
-  malformed, no UI. Re-run: none yet (stream `scripture`).
+  "John 3 16", "John 3:16-4:2". Sela now: the Scriptures tab parses as you
+  type; `John 3 16` is malformed, `Jude 5` is chapter 5 (missing); book
+  suggestions in canonical order, Tab or a click takes one (best guess).
+  Re-run: `scripture-windows.py`, `cargo test --bin sela tests::scripture`.
 
 ## Windows-only Sela runs
 
@@ -312,25 +315,652 @@ Common Windows prerequisites are listed once in
 
 ## Stream: scrutiny-r2
 
+- [ ] **PP-SC2-01 Keys while a context menu is open** (SC2-FOCUS-01;
+  EW8-OBS-010, -018). Steps: with A1 live, right-click a Songs row so its
+  context menu opens, then press B, period, Ctrl+B and Page Down; repeat with
+  the Schedule item menu open; record whether the audience or the toolbar
+  Black state changes and whether the menu stays open; also open the
+  toolbar New ▾ dropdown and the Media image row menu and press the same
+  keys, then Esc. Sela now: the Songs row menu, the Schedule item menu
+  (Duplicate/Remove) and the image menu take the focus, and while any of
+  them or New ▾ is open every show shortcut (B, period, Ctrl+B/C/L, Page
+  Down, arrows, Home/End, Ctrl+Delete) is inert; Esc closes the menu and
+  returns the focus to the row or button that opened it (SC2-FOCUS-01, -02;
+  UNOBSERVED best guess). Also on New ▾: with its menu open, press the left
+  button on New ▾, drag away and release, then press Enter (and separately
+  right-press New ▾, then left-click it); record whether the menu opens.
+  Sela now: the press closes it, and the next Enter or left click opens it
+  (SC2-FOCUS-03). Re-run: `scenario-s02-windows.py` (Songs, Schedule item and
+  New ▾ menus).
+- [ ] **PP-SC2-02 Next/Previous after a Go Live that did not show**
+  (SC2-LIVE-01; EW8-OBS-014, -050). Steps: hard to force in EW; the nearest
+  case is Go Live on an item whose background media is missing. Record
+  which slide Next/Previous then send and what the Live pane footer says.
+  Sela now: until a slide of the new live item has been shown, Next/Previous
+  send nothing and say "<title> is not on screen yet; use Go Live first"; the
+  footer says "<title> · not sent" (UNOBSERVED best guess). Re-run:
+  `navigation-windows.py`, `scenario-s02-windows.py`.
+- [ ] **PP-SC2-03 Go Live on a duplicate schedule item while the original is
+  stepping** (SC2-LIVE-02; EW8-OBS-013). Steps: schedule A1 twice, take the
+  first live, press Right and immediately select the second A1 and Go Live;
+  record whether the first item's next slide flashes on the audience. Sela
+  now: a Go Live on another entry, even of the same song revision, drops the
+  earlier entry's cues still being prepared, so only the duplicate's slide is
+  shown. Re-run: `schedule-remainder-windows.py`.
+- [ ] **PP-SC2-04 Live Page Down then a Songs click** (SC2-LIVE-03;
+  EW8-OBS-050). Steps: with schedule item 1 live and the Live pane focused,
+  press Page Down and at once click a song in Songs; then press Page Down in
+  Live again; record which schedule item goes live. Sela now: picking a song
+  cancels the waiting Page Down, and the next Page Down goes to the item
+  after the one on screen. Re-run: `navigation-windows.py`.
+- [ ] **PP-SC2-05 Screen reader announcement of dialogs and the window
+  title** (SC2-A11Y-01, -02; VAL-A11Y). Steps: with Narrator on, open the
+  unsaved-schedule prompt (Ctrl+Q with an unsaved schedule), the Delete song
+  confirmation, Options and the Song Editor close prompt; then add an item to
+  an untitled schedule. Record what Narrator reads. Sela now: each dialog is a
+  UIA Window element (AccessKit Dialog) named with its question (the editor
+  prompt is named "Save changes before closing?" and carries "Unsaved
+  changes. Save, discard, or keep editing." as its description; Delete song
+  carries its note "Schedules that use this song keep their copy. Live
+  output does not change." and a file error its message), and the title change reaches
+  UIA with the next frame Sela requests. Re-run: `a11y-windows.py`,
+  `scenario-s01-windows.py` (unsaved prompt, Options, editor close prompt).
+- [ ] **PP-SC2-06 Indonesian window title** (SC2-I18N-01). Steps: switch to
+  Bahasa Indonesia, add an item to an untitled schedule, read the title bar.
+  Sela now: "Sela — Pratinjau teknis" and "Jadwal tanpa judul* — Sela"
+  (EW8-OBS-067 itself is still unobserved). Re-run: `i18n-windows.py`.
+- [ ] **PP-SC2-07 Run the S01 and S02 Windows scenarios** (not run: no
+  Windows host on 2026-10-22). Steps: `python scripts\scenario-s01-windows.py`
+  then `python scripts\scenario-s02-windows.py` with a secondary monitor and
+  the keyboard idle; attach `.amp/in/artifacts/scenario-s0{1,2}-windows/`.
+  Sela now: both PASS on Linux/X11 (`scenario-s0{1,2}-x11.py`, xvfb `:111`,
+  2026-10-22). Re-run: these two scripts.
+- [ ] **PP-SC2-08 Normalize text size while a Go Live is in flight**
+  (SC2-LIVE-04; EW8-OBS-014). Steps: with item A live, select item B, press
+  Go Live and immediately click "Normalize text size across slides"; record
+  the size B's first slide lands with and whether it changes on the next
+  slide; also under Black double-click a Live slide and click Normalize at
+  once, and record whether the mask lifts. Sela now: the toggle rebuilds the
+  newest requested slide (B's Verse 1 here) in place, so B lands once, with
+  the new sizing and no intermediate old-sizing frame, and a double-click
+  unmask still lifts the mask over that slide (SC2-LIVE-04, -05; UNOBSERVED
+  best guess; the timing window is short on fast hardware). Re-run:
+  `live-output-windows.py`.
+- [ ] **PP-SC2-09 Song Editor close prompt wording** (SC2-I18N-02;
+  EW8-OBS-012). Steps: edit a song, press Cancel (and close the editor
+  window), read the prompt and press each of Yes, No and Cancel in turn on a
+  fresh edit. EW 8.0.49 observed: "You have unsaved changes. Would you like
+  to save changes before closing?", Yes/No/Cancel, No discarded. Sela now:
+  heading "Save changes before closing?" (ID "Simpan perubahan sebelum
+  menutup?"), Yes saves and closes, No discards, Cancel or Esc keeps editing;
+  it said "Close without saving?", which inverted Yes and No. Re-run:
+  `scenario-s01-windows.py`, `song-metadata-windows.py`.
+
 ## Stream: import-framework
+
+Added 2026-10-22 (M1-14, M4-07 OpenSong/ChordPro; docs/import.md "Import
+framework", reference-observations "Song import — UNOBSERVED best guesses").
+
+- [ ] **PP-IMPF-01 Where EW8 imports songs into the library**
+  (EW8-OBS-IMP-1). Steps: in a disposable profile, open every top menu at a
+  size where nothing is cut off (File, Edit, Live, Profiles, View, Help,
+  including File › New ▸ and Profiles › Utilities ▸), the Songs library
+  context menu, the Songs footer and the Song Editor's Import ▾; record each
+  import entry, its submenu and dialog title. Sela now: File › Import ▸
+  Songs… / Song Folder… after Close Schedule (best guess; EW8-OBS-053 shows
+  no Import row). Re-run: `song-import-windows.py`, `menu-bar-windows.py`;
+  GPUI `menu_contents_match_the_captures_plus_tracked_deviations`, whose
+  DEVIATIONS table must lose the Import rows (or this item close) once EW
+  is observed.
+- [ ] **PP-IMPF-02 Formats and the chooser** (EW8-OBS-IMP-2). Steps: open the
+  import dialog found in PP-IMPF-01; record its file-type filter list,
+  whether several files or a folder can be chosen, and import one original
+  OpenLyrics, OpenSong and ChordPro file each (fixtures from
+  `tests/fixtures/import/batch/`). Record what EW keeps and drops (labels,
+  order, chords, authors, CCLI). Sela now: those three formats, several
+  files or folders, chords removed with a warning. Re-run:
+  `song-import-windows.py`.
+- [ ] **PP-IMPF-03 Preview or report before saving** (EW8-OBS-IMP-3). Steps:
+  import the batch folder (including `broken.xml` and `empty.cho`); record
+  whether EW shows a list, warnings or errors before or after saving, and
+  what happens to the bad files. Sela now: staged preview with every file,
+  its warnings and errors; nothing saved before Import. Re-run:
+  `song-import-windows.py`.
+- [ ] **PP-IMPF-04 Duplicates** (EW8-OBS-IMP-4). Steps: import the same
+  folder twice, then a file with an existing title but other words; record
+  EW's prompt wording, choices and default, and what the library holds
+  afterwards (two songs, replaced, skipped). Sela now: same words → Skip,
+  same title → Import as copy, Replace = new revision, bulk choice. Re-run:
+  `song-import-windows.py`; GPUI `duplicate_choices_skip_copy_and_replace`.
+- [ ] **PP-IMPF-05 After the import** (EW8-OBS-IMP-5). Steps: record which
+  song is selected or previewed, where focus lands, whether the Songs list
+  scrolls to the new songs and whether any message shows. Sela now: imported
+  songs selected, first previewed and focused, counts in the Songs footer.
+  Re-run: `song-import-windows.py`.
+- [ ] **PP-IMPF-06 Cancel and partial failure** (EW8-OBS-IMP-6). Steps: start
+  a large import (copy the batch folder 50 times) and cancel midway; record
+  whether part of it was saved. Sela now: one transaction, nothing saved on
+  cancel or failure. Re-run: `song-import-windows.py`; GPUI
+  `cancel_while_files_are_read_commits_nothing`.
+- [ ] **PP-IMPF-07 Windows run of `song-import-windows.py`** (NOT RUN: no
+  Windows host on 2026-10-22). Steps: run it (see the run order table) and
+  inspect `01-import-preview.png` and `05-audience-imported-slide.png`;
+  check the common folder dialog accepts the typed path (the script presses
+  Enter until it closes). Sela now: the Linux counterpart
+  `song-import-x11.py` passes. Re-run: the script itself.
+- [ ] **PP-IMPF-08 Indonesian and Narrator pass of the import dialog.**
+  Steps: switch to Bahasa Indonesia, open the preview with duplicates and
+  failures, check for clipping; with Narrator, Tab through the choice groups
+  and confirm each is announced as a radio group with its title and the
+  selected choice. Sela now: EN/ID strings and AccessKit roles exist, not
+  heard with a screen reader. Re-run: `i18n-windows.py`, `a11y-windows.py`.
+- [ ] **PP-IMPF-09 Quit while an import is open** (EW8-OBS-IMP-7). Steps:
+  make an unsaved schedule change, open EW's import dialog found in
+  PP-IMPF-01 and, with its list or progress showing, press Ctrl+Q, then try
+  the window's close button; record whether EW closes, prompts about the
+  schedule, or refuses, and whether the import survives. Sela now: the
+  close is refused with "Finish or cancel the import before quitting." in
+  the import dialog (its own line under any import error, which stays);
+  after Cancel the usual Save / Don't Save / Cancel prompt appears. The same
+  refusal holds when the preview was opened while an earlier quit waited
+  for a settings write after Don't Save, or for a Save before quitting.
+  Also observe in EW: if a quit is pending (prompt answered, still saving)
+  can the import dialog be opened at all. Re-run: GPUI
+  `quit_waits_for_an_open_import_and_a_replaced_preview_cancels_it`,
+  `an_import_opened_during_the_settings_wait_after_dont_save_keeps_the_window`,
+  `an_import_opened_during_a_save_then_quit_keeps_the_window`; native
+  `python3 scripts/song-import-x11.py` (Ctrl+Q and Alt+F4 on the duplicate
+  preview) and `scripts/song-import-windows.py` (Ctrl+Q and WM_CLOSE).
 
 ## Stream: ew-library-import
 
 ## Stream: autosave-recovery
 
+Sela side: [autosave.md](autosave.md); best guesses EW8-OBS-071..078 in
+reference-observations.md. Observe only on a disposable EW profile and
+schedule; never on a service in use.
+
+- [ ] **PP-AUTO-01 Does EW autosave schedules?** (EW8-OBS-071). Steps: on a
+  disposable profile create a new schedule, add two songs, do not save; note
+  the time; wait 1, 5 and 10 minutes, each time listing the profile folder
+  (`%ProgramData%\Softouch\EasyWorship\<profile>\` and
+  `%LOCALAPPDATA%`/`%APPDATA%` EasyWorship folders) with timestamps; record
+  any new or changed file and its name. Sela now (best guess): revisions in
+  `<profile>\Recovery\` 2 s after the last change, at most 10 s after the
+  first. Re-run: `autosave-windows.py`.
+- [ ] **PP-AUTO-02 EW after a forced termination** (EW8-OBS-072, -073).
+  Steps: with an unsaved two-song schedule (and once with a saved schedule
+  plus one unsaved change), end `EasyWorship.exe` in Task Manager (End task)
+  or `taskkill /F`; relaunch; capture any prompt (wording, buttons, default
+  button, Esc), which schedule appears, its title bar and unsaved marker,
+  and whether Live/audience state comes back. Sela now (best guess): modal
+  "Recover the unsaved schedule?" with Restore (default) / Don't Restore,
+  lost-work disclosure, original file and baseline kept, Live untouched.
+  Re-run: `autosave-windows.py`, then `cargo test --bin sela autosave_recovery`.
+- [ ] **PP-AUTO-03 EW second instance** (EW8-OBS-074). Steps: with EW
+  running, start `EasyWorship.exe` again (Start menu and a double-clicked
+  `.ews` file); record whether the running window comes to the front, a
+  message appears (capture its text), or a second window opens. Sela now:
+  "Sela is already running" naming the profile, exits 0, no profile change.
+  Re-run: `autosave-windows.py`.
+- [ ] **PP-AUTO-04 EW profile/schedule backups and retention** (EW8-OBS-075).
+  Steps: open the Profiles menu and Options; record every backup/restore
+  item, its default folder and any count or age limit; list the profile
+  folder for backup files after several saves. Sela now: newest 20 autosave
+  revisions within 4 MiB, kept across sessions and after Don't Restore.
+  Re-run: none (record only; M1-13 owns explicit backup/restore).
+- [ ] **PP-AUTO-05 EW Exit with an unsaved schedule after a recovery**.
+  Steps: after PP-AUTO-02, change the restored schedule and choose File ›
+  Exit; record the prompt (EW8-OBS-070 wording) and whether a later launch
+  asks about recovery again. Sela now: the normal unsaved guard; Don't Save
+  marks the run clean and the next start asks nothing. Re-run:
+  `autosave-windows.py`.
+- [ ] **PP-AUTO-06 Run `autosave-windows.py`** (M1-12, S03; NOT RUN: no
+  Windows host on 2026-10-22). Checks LockFileEx as the profile lock and
+  TerminateProcess as the kill, which the Linux run (`autosave-x11.py`,
+  PASS) cannot. Prerequisites: seed (`--second-song`), secondary monitor.
+- [ ] **PP-AUTO-07 Real Windows failure conditions** (M1-12 checklist 5).
+  Steps: on a disposable profile, (a) put the profile on a small nearly full
+  VHD and edit until autosave fails, then free space; (b) deny write on
+  `Recovery\` with an ACL; (c) hold `Recovery\session.json` open with a
+  sharing lock (e.g. PowerShell `[IO.File]::Open(..., 'Open', 'Read', 'None')`);
+  record the footer notes and that editing and Live continue; (d) end Sela
+  with TerminateProcess after an unsaved edit has been autosaved, then
+  relaunch while (c)'s lock is held: the recovery prompt must still appear
+  with the "Autosave is off (…), so this answer cannot be recorded" line and
+  Restore must work read-only. Sela now: fault-adapter tests only
+  (`autosave::tests`, `tests::autosave_recovery`).
+  Re-run: the same steps after any fix.
+- [ ] **PP-AUTO-08 Power loss and the autosave hitch** (M1-12 acceptance,
+  P/H). Steps: (a) pull power (or hard-reset a VM) during repeated
+  autosaves on a disposable profile, then reopen and record the prompt and
+  restored schedule; (b) during the 90-minute rehearsal on the older
+  integrated-GPU laptop, edit the schedule every few seconds while Live
+  output runs a slide sequence and record frame pacing around commits
+  (`frame_log`). Sela now: process-kill tests (SIGKILL, Linux) and a GPUI
+  check that Live receipts arrive while a commit is held; no physical
+  power-loss or hardware timing evidence. Re-run: `autosave-windows.py`,
+  `prep-windows.py`.
+- [ ] **PP-AUTO-09 EW closed with a recovery prompt unanswered**
+  (EW8-OBS-076). Steps: after a forced termination as in PP-AUTO-02, if EW
+  shows a recovery prompt, close EW (title-bar X, and once Alt+F4) without
+  answering it; relaunch and record whether the prompt returns, its wording
+  (does it still say EW closed abnormally?) and whether the schedule is
+  still offered. Also close EW as fast as possible after launch (before any
+  prompt appears) and record the same. Sela now (best guess): nothing is
+  committed or acknowledged, `session.json` says `offered`, and the next
+  prompt starts "Sela was closed last time before this recovery question
+  was answered." Re-run: `autosave-x11.py` / `autosave-windows.py` step 4,
+  `cargo test --bin sela autosave_recovery`.
+- [ ] **PP-AUTO-10 EW Profiles menu and Profiles Manager…** (EW8-OBS-077,
+  M1-12b). Steps: on a disposable install open Profiles; record every item
+  and its state; open Profiles Manager… and capture the dialog; create a
+  profile "Test B", switch to it, rename it, switch back and delete it,
+  recording each prompt (wording, buttons, default), whether a running
+  schedule/Live output is closed or kept on switch, and which data (songs,
+  media, schedules, settings, backups) is per profile (list
+  `%ProgramData%\Softouch\EasyWorship\` before and after). Sela now: one
+  implicit profile per library folder; Profiles items rendered inert; no
+  create/switch/rename (M1-12b planned). Re-run: none yet (M1-12b adds its
+  own scripts).
+- [ ] **PP-AUTO-11 EW crash between a Save and the next autosave**
+  (EW8-OBS-078). Steps: open a saved schedule, add an item and wait until
+  EW has autosaved it (if PP-AUTO-01 shows EW autosaves at all), add one
+  more item, press Ctrl+S and end EW with Task Manager within a second;
+  relaunch and record whether a recovery copy is offered, its wording,
+  whether EW compares it with the newer file, and what Restore then puts in
+  the schedule (and whether saving overwrites the newer file). Sela now
+  (best guess): the older revision is offered with "Its schedule file was
+  saved again {ago}, after this autosave, so the file may hold newer work:
+  restoring brings back this older copy, and saving it replaces the file."
+  instead of "never saved". Re-run: `cargo test --bin sela
+  a_file_saved_after_the_last_autosave`, `cargo test --lib
+  a_file_saved_after_the_offered_revision`.
+
 ## Stream: bundle-backup-restore
 
 ## Stream: songs-browser
 
+Sela state after the stream (2026-10-22): Sort by Title/Author/Copyright/
+Administrator/Song Number (+ Date modified), schema 7 slide-label search and
+Options › Main Output › Song › Copyright Info. Linux evidence:
+`scripts/songs-browser-x11.py` PASS on Xvfb; nothing below is closed by it.
+
+- [ ] **PP-SB-01 Sort by order rules** (EW8-OBS-064). Steps: in a disposable
+  profile create (or import) four songs: one without an author, two with
+  authors differing only in case ("alpha writer", "Bravo Writer"), Song
+  Numbers 7, 10 and 0042, one Copyright starting "(c)" and one "©". Choose
+  Sort by > Author, Copyright, Administrator, Song Number, each Ascending and
+  Descending; record the order and where empty keys go, and whether Song
+  Number sorts as text or number. Sela now (best guess): empty keys last in
+  both directions, ASCII case ignored, Song Number numeric, ties by Title.
+  Re-run: `songs-browser-windows.py`, `resource-browser-windows.py`.
+- [ ] **PP-SB-02 Sort by with a search active** (EW8-OBS-045/064). Steps: type
+  a query matching several songs, then change Sort by; record whether the
+  results reorder. Sela now: search results stay in relevance order; Sort by
+  applies to the unfiltered list. Re-run: `songs-browser-windows.py`.
+- [ ] **PP-SB-03 Sort key shown in the list** (EW8-OBS-064). Steps: after Sort
+  by Author, record whether the Songs list shows an author column or text.
+  Sela now: titles only. Re-run: `songs-browser-windows.py`.
+- [ ] **PP-SB-04 Label search ranking** (EW8-OBS-046). Steps: with one song
+  titled "Glory Road" and another whose slide label is "Glory", type "glo";
+  record the result order; then type a label number ("verse 2"). Also add a
+  long song (many slides) with "glory" once in its lyrics and record whether
+  it lists above or below the label-only song. Sela now: title match first,
+  then songs with a lyric or metadata hit, and label-only matches after all
+  of them whatever the song lengths; "verse 2" needs both words.
+  Re-run: `songs-browser-windows.py`, `search-windows.py`.
+- [ ] **PP-SB-05 "Show on first displayed slide only"** (EW8-OBS-055/056).
+  Steps: tick it in Options › Main Output › Song; send a song with copyright
+  text Live starting at slide 3 (click slide 3, Go Live), then step to slides
+  4 and 1; record which slides show the strip. Sela now (best guess): only
+  slide 1 of the item shows it, whichever slide went live first. Re-run:
+  `songs-browser-windows.py`.
+- [ ] **PP-SB-06 License Info text on the output** (EW8-OBS-055/063). Steps:
+  type "CCLI License # 1234567" in License Info, OK, send a song with a Song
+  Number and copyright text Live; capture the strip. Sela now (best guess): a
+  third line "CCLI Song # N · CCLI License # 1234567". Re-run:
+  `songs-browser-windows.py`, `song-metadata-windows.py`.
+- [ ] **PP-SB-07 Options change while a song is Live** (EW8-OBS-055). Steps:
+  with a copyright song Live, untick Display Copyright Information and OK;
+  record whether the live slide redraws at once or only on the next slide.
+  Sela now: only the next cue changes; OK sends no renderer cue (GPUI test
+  `typing_in_license_info_never_toggles_masks_or_cues_live`, submission
+  count). The Linux script only shows the frame stays the same, which cannot
+  reveal a re-cue there (no strip on the 351 px xvfb output, so a re-sent
+  slide is identical); the Windows script would see slide 2 gain the strip.
+  Re-run: `songs-browser-windows.py`.
+- [ ] **PP-SB-08 Copyright Font, Song Font and Show Verse/Chorus Label**
+  (EW8-OBS-056). Steps: open each menu in Options › Main Output › Song and
+  record the choices and their effect on output. Sela now: not built (the
+  strip uses the slide face). Re-run: none yet.
+- [ ] **PP-SB-09 Windows run of `songs-browser-windows.py`** (NOT RUN: no
+  Windows host on 2026-10-22). Steps: seed with
+  `seed_library.exe --sort-songs`, run the script with the audience on the
+  secondary monitor; it covers mouse and keyboard Sort by with UIA ticks,
+  label search, the Options Song tab, the strip ink on slides 1 and 2 with
+  first-slide-only, and (since 2026-10-23) a real Options change typed into
+  License Info while slide 2 is Live (zero frame changes expected; a re-cue
+  on OK would add the strip to slide 2). Since review round 2 the License
+  Info text is typed as one virtual-key press per character (B and "." as
+  VK_B and VK_OEM_PERIOD), because `KEYEVENTF_UNICODE` input reaches GPUI
+  (zed a846890 `crates/gpui_windows/src/events.rs`, `VK_PACKET => None`)
+  only as WM_CHAR text and never runs the keymap. Sela now: the Linux script
+  PASSES; since 2026-10-23 it also keeps a song Live and checks that typing
+  in the search box and License Info and OK leave the audience frame
+  unchanged (no strip ink check there, the xvfb output is 351 px tall, so it
+  cannot see a re-cue on OK; the GPUI test counts cues). Re-run: itself.
+- [ ] **PP-SB-10 20k search and sort timings on the reference laptop**
+  (M1-07, M1-04). Steps: `cargo run --locked --release --example search_bench`
+  and `search-windows.py --latency-library` on the Windows machine of the
+  2026-10-13 runs and on the older integrated-GPU laptop. Sela now: only a
+  Linux VM run with opt-level overrides (work log, songs-browser record).
+  Re-run: `search-windows.py`, `resource-browser-windows.py`.
+- [ ] **PP-SB-11 A License Info longer than the output width**
+  (EW8-OBS-055/063; pr1-review 2026-10-23). Steps: type a License Info of
+  about 250 characters, OK, send a song with copyright text and a Song
+  Number Live at 1920x1080 and at a small output (e.g. 854x480); capture the
+  strip; record whether EW wraps, shrinks, cuts or hides the licensing line
+  and whether the "Title - Author" and copyright lines change size. Sela now
+  (best guess): the title and copyright lines keep the size they have
+  without License Info; a licensing line wider than the strip is cut at a
+  character and ends in "…" (dropped when not even that fits). Re-run:
+  `cargo test --lib a_long_license_line_is_cut`, `songs-browser-windows.py`.
+
 ## Stream: media-core
+
+- [ ] **PP-MC-01 Undecodable and damaged video in EasyWorship** (M2-02;
+  best guess in reference-observations "Media decoding best guesses").
+  Steps: in a disposable profile, import into Media › Videos (a) a text file
+  renamed `broken.mp4`, (b) an original FFV1-in-AVI clip whose codec tag was
+  renamed (make it with the fetched FFmpeg as `tests/media_decode.rs` does),
+  (c) an original clip cut in half; note any import message, the thumbnail,
+  and what Preview and Go Live do with each (does Live keep the previous
+  item?). Sela now: the decoder fails with `Corrupt`/`UnsupportedCodec`
+  before any frame (a half clip delivers what decodes, then ends); there is
+  no video UI yet. Re-run: `cargo test --locked --test media_decode`, then
+  the video-playback stream's script.
+- [ ] **PP-MC-02 Variable frame rate timing** (M2-02). Steps: play an
+  original clip whose frames 0-9 run at 30 fps followed by a 0.5 s gap (the
+  `setpts` recipe in `tests/media_decode.rs`) with an audible tick per frame
+  as a video background; film or capture the audience and note whether EW
+  holds the frame for the gap or plays at a constant rate. Sela now: every
+  frame keeps its source timestamp (`variable_frame_rate_keeps_each_frames_own_timestamp`).
+  Re-run: that test and the video-playback script.
+- [ ] **PP-MC-03 Windows run of the FFmpeg base** (VAL-MEDIA-004/030/031).
+  Steps: `powershell -NoProfile -ExecutionPolicy Bypass -File
+  scripts\fetch-ffmpeg.ps1` (expect "size and SHA-256 verified", then
+  "already holds" on a second run), `cargo build --locked` and `cargo build
+  --locked --examples`, then `python scripts\media-backend-windows.py
+  --gpl-dir <a GPL ffmpeg bin folder, e.g. a gyan.dev full build>`. It checks
+  the accepted dev copy and its log line, no console window during the
+  probe, the GPL and missing warnings with Live output/Go Live/Black still
+  working, and runs `cargo test --locked --test media_decode` with
+  `SELA_REQUIRE_FFMPEG=1` (the drop and outside-kill tests exercise the Job
+  Object). Not covered by that Windows run: the stall-watchdog, hanging-probe
+  and `first_frame` timeout tests and the `fetch-ffmpeg` usage test use
+  `cfg(unix)` shell fakes, and the GPL half of the locator test needs
+  `/usr/bin`; check those paths on Windows by hand (a `.cmd` ffprobe that
+  runs `timeout /t 30` must end in `ProbeTimedOut`) or port the fakes.
+  `fetch_ffmpeg_ps1_reports_usage_mistakes_as_exit_2` runs the PowerShell
+  usage checks (exit 2 for `-Platform` without a value, `-Dest -Force`,
+  `-Platform bogus`, `-Bogus x`) under `powershell` on Windows; confirm it
+  ran rather than printed `SKIPPED`, and also run it with
+  `SELA_PWSH=powershell.exe` if `pwsh` is installed, so Windows PowerShell
+  5.1 is covered. Sela now: Linux only (`scripts/media-backend-x11.py`
+  PASS; `fetch-ffmpeg.ps1` ran under PowerShell 7.4.6 on Linux only).
+  Re-run: the same commands.
+- [ ] **PP-MC-04 Mapped network and subst drives** (docs/media.md "Decoder
+  input arguments" known gap). Steps: map a share as `Z:` and `subst Y:` a
+  local folder; start a decode of a clip on each from a worker (or the
+  video-playback UI once it exists) and note that both are accepted today.
+  Decide whether `GetDriveTypeW` should refuse `DRIVE_REMOTE`. Re-run:
+  `cargo test --locked --lib media` after the change.
 
 ## Stream: video-playback
 
 ## Stream: scripture
 
+Observe each in EasyWorship 8.0.49 on a disposable profile with a
+public-domain translation (KJV if the install has it; never save). Every item
+is a Sela best guess recorded in docs/reference-observations.md
+("Scriptures — UNOBSERVED best guesses").
+
+- [ ] **PP-BIB-02 Scriptures tab layout** (M4-04). Steps: open Resources ›
+  Scriptures; capture the left pane (translation list or tree?), the search
+  box position, any mode switch, the verse list columns and the footer.
+  Sela now: translations in the left column, Reference/Keyword switch and box
+  above the verse list, footer Import Bible… / Add to Schedule / count.
+  Re-run: `scripture-windows.py`, then compare captures.
+- [ ] **PP-BIB-03 Keyword search** (M4-04). Steps: search "only begotten" and
+  "light"; record whether a separate mode is needed, the minimum length, the
+  match rule (all words, prefix, phrase), the hit order and the hit row
+  format. Sela now: Keyword mode, all words with the last as a prefix,
+  canonical order, 200 hits, from two characters (owner decision).
+  Re-run: `scripture-windows.py`.
+- [ ] **PP-BIB-04 Verse selection and Go Live** (M4-04). Steps: type "John
+  3:16-18"; click, Shift+click and Ctrl+click verses; double-click a verse;
+  record what is selected, what Preview shows and what goes live. Sela now:
+  click one, Shift range, Ctrl toggle, double-click sends the selection after
+  the first click selected that verse alone. Re-run: `scripture-windows.py`,
+  `cargo test --bin sela tests::scripture`.
+- [ ] **PP-BIB-05 Slide flow and reference placement** (M4-04, EW8-OBS-056).
+  Steps: send Psalm 119:1-24 live with the default Options › Scripture
+  settings; count the slides, note where each break falls, the font size, and
+  where and how the reference appears ("After Each Slide": per slide or the
+  whole passage?). Sela now: 44-character lines, 6 lines per slide, breaks
+  between verses, each slide's own reference over the translation name as the
+  footer strip. Re-run: `cargo test --bin sela tests::scripture::long_passages_split_into_readable_slides_in_order`.
+- [ ] **PP-BIB-06 Malformed or missing references** (VAL-BIBLE-009). Steps:
+  type "John 3:99", "Hezekiah 1", "John 3:18-16"; record the message and
+  whether the previous verses stay. Sela now: red note, previous list,
+  selection and Preview kept. Re-run: `scripture-windows.py`.
+- [ ] **PP-BIB-07 Translation switch** (M4-03). Steps: with John 3:16-18
+  shown, pick another installed translation; then pick one lacking the book.
+  Also: Ctrl+click every verse off, then switch; and switch after a keyword
+  search with a hit selected. Sela now: the same verses in the new
+  translation, missing ones named; a translation lacking the book or chapter
+  is refused; with nothing selected the referenced verses are selected
+  there; after a mode switch the box's text is looked up there. Re-run:
+  `cargo test --bin sela tests::scripture::translation_switch` (both
+  `translation_switch_*` tests) and
+  `tests::scripture::a_switch_while_a_reply_is_in_flight_is_not_reverted_or_mislabelled`,
+  `tests::scripture::a_switch_while_a_typed_reference_loads_over_a_shown_one_keeps_the_typed_one`.
+- [ ] **PP-BIB-08 Scripture schedule items** (M4-04). Steps: add a passage to
+  the schedule, save the schedule, reopen it; record the item title, whether
+  the text is stored in the `.ews` and whether it follows a later Bible
+  change. Sela now: a pinned snapshot titled "John 3:16-18 (KJV)",
+  `.selaschedule` version 5, reopened and played without its translation
+  file. Re-run: `python3 scripts/scripture-x11.py` (save/reopen through the
+  portal dialogs), `scripture-windows.py` (save through the native dialog).
+- [ ] **PP-BIB-09 Windows run of the Sela check** (M4-03/M4-04). Steps: run
+  `python scripts/scripture-windows.py` (row 23 below) on the three-monitor
+  setup and inspect its captures, including the per-slide reference strip
+  on the 1080p audience (on Linux it is checked by
+  `scripture-x11.py --kind dual`; the 351 px xvfb window is too small for
+  it). Not run: no Windows host on 2026-10-22.
+- [ ] **PP-BIB-10 Bible import** (M4-03). Steps: in EW, import one
+  public-domain OSIS/Zefania file if EW offers it; record the dialog and the
+  rights wording, and whether the shown passage, selection or Preview change
+  when the import finishes. Sela now: Import Bible… for OSIS/USFX/Zefania
+  (one file, no folders), imported texts marked restricted, nothing else
+  changes. Also: with no usable Bible (or before any import) type a
+  reference, then import one; click Import Bible… twice quickly; look at how
+  EW marks an unusable or rights-restricted translation in its list. Sela
+  now: text typed while no translation was usable fills the list once an
+  import makes one usable (Preview unchanged); a second click while the
+  dialog is open does nothing; rows read "ID · Name (damaged)" /
+  "(restricted)" (EN/ID, visible and spoken, damaged also red). Re-run:
+  `cargo test --bin sela tests::scripture::importing_a_user_file_adds_a_restricted_translation`,
+  `tests::scripture::a_catalog_refresh_after_an_import_leaves_preview_and_selection_alone`,
+  `tests::scripture::text_typed_with_no_usable_translation_applies_once_an_import_adds_one`,
+  `tests::scripture::corrupt_translation_files_are_rebuilt_or_listed_unusable`,
+  `python3 scripts/scripture-x11.py`.
+
 ## Stream: themes
 
+Sela behavior and every best guess: [themes](themes.md); best-guess IDs are in
+reference-observations.md, "Themes — UNOBSERVED best guesses".
+
+- [ ] **PP-TH-01 Themes tab layout and commands** (EW8-OBS-010 lists the tab;
+  content unobserved; TH-BG-01). Steps: open Resources › Themes in 8.0.49 with
+  the default profile; capture the tab (list or grid, thumbnails, columns,
+  footer + / gear, right-click menu entries); right-click a theme and record
+  every entry (Edit, Duplicate, Delete, "Set As Default Song Theme"…); note
+  which theme carries a default marker. Sela now: list with 160x90 thumbnails
+  and a footer New Theme / Edit… / Duplicate / Delete / Set as Default /
+  Apply to Song / Apply to Item / Item: Song Theme. Re-run:
+  `themes-windows.py`.
+- [ ] **PP-TH-02 Applying a theme to a song and a schedule item** (TH-BG-02,
+  TH-BG-03). Steps: with song A in the schedule and A live, change A's theme
+  from the Songs list (or by dragging a theme onto it) and separately from
+  the schedule item; record whether Preview/Live change before a new Go Live,
+  whether the library song and the schedule item change together, and
+  whether a saved .ews keeps the item's look. Sela now: library songs follow
+  their library theme; schedule items keep a snapshot (captured when first
+  shown or saved, explicit when applied); Live changes only on Go Live.
+  Re-run: `themes-windows.py`, `schedule-windows.py`.
+- [ ] **PP-TH-03 Editing a theme while it is live** (TH-BG-04; EW8-OBS-057).
+  Steps: with a themed song live, edit the theme's background and font and
+  save; record whether the audience changes immediately, on Next, or only on
+  a new Go Live; whether other songs on the theme change. Sela now: nothing
+  reaches the audience until a re-cue; library songs show the edit on their
+  next Preview; schedule items keep their snapshot. Re-run:
+  `themes-windows.py` (step 6 re-cues the Evening Navy song so the edited
+  theme itself is live; `themes-x11.py` does the same and passes on Xvfb).
+- [ ] **PP-TH-04 Theme editor controls** (EW8-OBS-030, -032, -043;
+  TH-BG-05). Steps: open a theme's editor (Edit Theme or the Layouts tab
+  theme selector), record its window title, whether margins (Text › Layout)
+  and Theme Elements show there, how Reset works, and the Save/Cancel
+  wording. Sela now: the Song Editor in theme mode, title "Theme Editor -
+  name", margins under Text, Copyright under Slide › Theme Elements, Reset
+  Look button, OK/Apply/Cancel. Re-run: `themes-windows.py`.
+- [ ] **PP-TH-05 Default song theme and a deleted theme** (EW8-OBS-019;
+  TH-BG-06). Steps: Set As Default Song Theme on a theme and check songs
+  without their own theme; delete a theme a song uses and record what the
+  song shows and any message, both for the library song and for that song
+  already in the schedule (and in a saved .ews). Sela now: the default
+  applies to songs without a theme; a deleted theme falls back to the
+  default with a Preview note, for schedule items too, and the substitute is
+  never captured or saved (TH-BG-10). Re-run: `themes-windows.py`; GPUI
+  `tests::themes::a_schedule_item_whose_song_theme_is_missing_is_noted_and_never_frozen`.
+- [ ] **PP-TH-06 Contrast/aspect/missing-font warnings** (TH-BG-07). Steps:
+  look for any EW warning when a theme uses an uninstalled font, a 4:3 image
+  on a 16:9 output, or white text on a near-white background. Sela now: row
+  and editor warnings (font, image, WCAG contrast < 3:1, aspect mismatch >
+  2%); EW is believed to show none. Re-run: `themes-windows.py`.
+- [ ] **PP-TH-07 Windows run of `themes-windows.py`** (NOT RUN: no Windows
+  host). Prerequisites as in the run order below; seed `--themes`; secondary
+  monitor for the audience. Also re-run `song-editor-windows.py` (editor
+  buttons now carry AccessKit ids `editor-button-N`; the theme editor's
+  margin fields are `theme-margin-<side>-field`, Use default is
+  `theme-margins-default`).
+- [ ] **PP-TH-08 Song Editor Layouts tab theme selector and Master edit scope**
+  (EW8-OBS-057; TH-BG-09; backlog M1-08a). Steps: open a themed song in the
+  Song Editor › Layouts; record the "Theme - name" selector (which themes it
+  lists, whether changing it changes the song's theme); edit the Master
+  background and save; check whether another song on the same theme changes,
+  whether the theme in Resources › Themes changes, and whether EW copies the
+  theme. Sela now: no selector; the song master is a song-local layer above
+  the theme and never edits a theme; theme-wide edits only through the
+  Themes tab. Re-run: none yet (M1-08a planned).
+- [ ] **PP-TH-09 Copy to Theme ▸ Song Theme from an image** (EW8-OBS-019;
+  TH-BG-09; backlog M1-08b). Steps: right-click an image in Media › Images ›
+  Copy to Theme ▸ Song Theme; record the new theme's name, background mode,
+  text format, whether it is selected or set as default, and where it
+  appears. Sela now: missing; an image background is set in the theme
+  editor's Background controls. Re-run: none yet (M1-08b planned).
+- [ ] **PP-TH-10 A theme deleted while its editor is open; a theme busy or
+  deleted elsewhere** (TH-BG-11, TH-BG-12). Steps: in 8.0.49 open a theme's
+  editor, delete that theme from Resources › Themes (if EW allows it while
+  the editor is open), then press OK in the editor; record the message, its
+  styling, and whether EW re-creates the theme, saves a copy, or discards the
+  edits. Separately, with two EW instances or a remote profile on the same
+  library, delete a theme in one and apply it to a song in the other; record
+  the message. Sela now: the editor shows "This theme was deleted in the
+  Themes tab · it was not saved · OK saves it as a new theme" as a failure
+  and the next OK saves a new theme under a fresh id; Apply to Song says
+  "“name” no longer exists · no song was restyled" and drops the theme; a
+  theme load blocked by another connection retries after 2 s. Re-run: GPUI
+  `tests::themes::a_theme_editor_save_never_resurrects_a_deleted_theme`,
+  `apply_to_song_reports_a_theme_deleted_meanwhile_and_drops_it`,
+  `a_theme_load_blocked_by_another_connection_is_retried`; `themes-windows.py`.
+
 ## Stream: stage-display
+
+Design note: [stage-display.md](stage-display.md). Linux evidence (GPUI tests,
+`stage-display-x11.py`) closes none of these.
+
+- [ ] **PP-STG-01 Foldback Options pages** (EW8-OBS-054/056, EW8-OBS-STG-7).
+  Steps: Edit › Options › Foldback; read every control on General, Song,
+  Scripture and Alerts and Clocks (scroll each page); note the default of
+  "Enable support for Foldback Output", whether the monitor list offers the
+  Main Output monitor, and what happens with only two monitors. Cancel.
+  Sela now: General only (enable, Automatic or a named monitor, Show clock,
+  Show next slide); no free monitor means no stage. Re-run:
+  `stage-display-windows.py`, GPUI `options_foldback_enables_routes_and_persists_the_stage`.
+- [ ] **PP-STG-02 Foldback content and layout** (EW8-OBS-STG-1). Steps: enable
+  Foldback on a third monitor, put song A (three sections) live, photograph
+  or capture the foldback for slide 1, 2 and 3: what is current, what is
+  "next" (whole next slide or its first line), labels, colours, font sizes,
+  margins, and how long text is fitted. Sela now: header label + clock,
+  current slide large white, "Next · name" and next slide in sky blue; the
+  slides in the live slide's own face, the label, clock, "Next ·" label and
+  message in bundled DejaVu Sans unless only the song face draws them
+  (stand-ins for characters the chosen face lacks); also check which font
+  EW's foldback uses for the slide and for its clock/labels (song font or
+  the Foldback Default Font) with a CJK song and with a symbol/script song.
+  Re-run: `stage-display-x11.py`, `stage-display-windows.py`, unit
+  `a_glyph_the_face_lacks_never_costs_the_current_slide`,
+  `chrome_stays_in_the_bundled_face_whatever_the_song_face`.
+- [ ] **PP-STG-03 Next at the end of an item and of the schedule**
+  (EW8-OBS-STG-2). Steps: schedule A then B; show A's last slide; then B's
+  last slide; then a library song not in the schedule; also an arrangement
+  with a repeated chorus. Sela now: "Next item · <title>", "End of
+  schedule", next follows the arrangement order of the live snapshot.
+  Re-run: GPUI `the_last_slide_points_at_the_next_schedule_item`,
+  `arrangement_changes_and_repeated_choruses_keep_next_deterministic`.
+- [ ] **PP-STG-04 Foldback clock** (EW8-OBS-STG-3). Steps: read the clock's
+  format (12/24 h, seconds), position, whether it is time of day or a
+  service timer, and the Alerts and Clocks settings that change it; change
+  the PC clock's minute boundary and watch it update. Sela now: 24-hour
+  "HH:MM" local time, updated on the minute by the stage process. Re-run:
+  `stage-display-windows.py` (clock region inked), unit `local_clock_has_the_hh_mm_shape`.
+- [ ] **PP-STG-05 Masks and the foldback** (EW8-OBS-STG-4; PP-MASK-05). Steps:
+  with a slide live and Foldback on, press Black, Clear and Logo; capture the
+  foldback each time. Sela now: masks never touch the stage. Re-run:
+  `stage-display-windows.py` (extend with mask captures if EW differs).
+- [ ] **PP-STG-06 Foldback lifecycle and menus** (EW8-OBS-STG-5). Steps:
+  toggle Live › Show Live Output with Foldback enabled and watch the
+  foldback; look for any foldback-only toggle in the menus and toolbar;
+  close the foldback window or unplug its monitor during Live. Sela now:
+  follows Live output (also when settings or the monitor list land after
+  Live output came on); Live › Show Stage Output is inert while Live output
+  is off, stops a running stage, and restarts a lost one in one activation;
+  it touches only the stage. Re-run: `stage-display-windows.py` steps 1, 5,
+  6; GPUI `a_lost_stage_never_touches_the_audience_and_restarts_alone`,
+  `the_stage_never_starts_without_live_output`,
+  `a_late_monitor_list_still_starts_the_stage`.
+- [ ] **PP-STG-07 Stage-only messages** (EW8-OBS-STG-6; M3-04). Steps: in
+  Alerts, check whether a message can target the foldback only and how it
+  looks there; confirm the audience never shows it. Sela now: Live › Stage
+  Message…, one line, private until Show on Stage. Re-run: GPUI
+  `the_stage_message_is_private_until_ok_and_never_reaches_the_audience`,
+  `stage-display-windows.py` step 4.
+- [ ] **PP-STG-08 Windows stage run** (NOT RUN: no Windows host on
+  2026-10-22). Steps: three monitors (primary operator plus two others),
+  `cargo build --locked` and `cargo build --locked --example seed_library`,
+  then `python scripts\stage-display-windows.py` (optionally `--stage
+  \\.\DISPLAYn`); record PASS/FAIL, placement and captures in the work log.
+  Checks the production borderless placement on a free monitor, both
+  receipts, the message, stage termination isolation, the stage-only
+  restart, Options › Foldback disable and settings.txt.
+- [ ] **PP-STG-09 Physical stage monitor** (M3-01/M3-02 hardware). Steps: a
+  real stage/confidence monitor at performer distance (3–6 m): readability
+  of current/next/clock/message; mixed DPI and refresh between audience and
+  stage; unplug/replug the stage monitor during Live (the audience must not
+  change); sleep/resume. Sela now: untested on hardware. Re-run:
+  `stage-display-windows.py`, then a manual rehearsal.
 
 ## Stream: fuzz-audit
 
@@ -389,8 +1019,17 @@ timing):
 | 18 | `song-metadata-windows.py` | seed (`--metadata-songs`, `--vanished-schedule`); secondary monitor |
 | 19 | `search-windows.py` | seed (`--second-song`); for latency also `cargo build --release` and a 20k library from `cargo run --locked --release --example search_bench -- --keep PATH` (`--binary target\release\sela.exe --latency-library PATH`) |
 | 20 | `resource-browser-windows.py` | seed (`--second-song`, `--extra-songs`); release binary and a 20k library for the scrolling timings |
+| 20a | `songs-browser-windows.py` | seed (`--sort-songs`); audience on the secondary monitor |
 | 21 | `prep-windows.py` | release binary (`--binary target\release\sela.exe`); seed (`--heavy-song`); audience on the laptop panel (`--monitor name:\\.\DISPLAY1`, the default) |
 | 22 | `reference-w03-windows.py` | not a Sela check: EasyWorship 8.0.49 open and maximized with one song previewed from the Songs tab; observation only |
+| 23 | `song-import-windows.py` | seed; secondary monitor; native folder dialog; the batch fixtures in `tests\fixtures\import\batch` |
+| 24 | `scenario-s01-windows.py` | none seeded (fresh profile); secondary monitor; native Save dialog |
+| 25 | `scenario-s02-windows.py` | seed (`--second-song`); secondary monitor |
+| 26 | `autosave-windows.py` | seed (`--second-song`); secondary monitor; no other Sela instance (it starts a second one on purpose) |
+| 27 | `themes-windows.py` | seed (`--themes`); secondary monitor; native Save dialog (themes stream, PP-TH-07) |
+| 28 | `media-backend-windows.py` | `scripts\fetch-ffmpeg.ps1` first; optional `--gpl-dir` (a GPL FFmpeg bin folder); runs `cargo test --test media_decode` unless `--skip-cargo` (PP-MC-03) |
+| 29 | `scripture-windows.py` | seed only (the script seeds); secondary monitor; first run installs the bundled KJV/WEB |
+| 30 | `stage-display-windows.py` | seed; three monitors (primary plus two non-primary); optional `--stage \\.\DISPLAYn` |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.

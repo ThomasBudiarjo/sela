@@ -107,6 +107,7 @@ impl Render for Operator {
         self.focus_pending_dialog(window, cx);
         self.focus_live_if_pending(window, cx);
         self.resume_guarded(window, cx);
+        self.song_import_render(window, cx);
         self.sync_window_title(window);
         if self.activation.is_none() {
             self.activation = Some(cx.observe_window_activation(window, |this, window, _| {
@@ -131,10 +132,17 @@ impl Render for Operator {
             // Live shortcuts must not reach the main window behind a modal dialog.
             .key_context(if self.dialog.is_some() {
                 "Sela"
+            } else if self.popup_menu_open() {
+                // An open popup menu is modal for the keyboard too
+                // (SC2-FOCUS-02), like the Songs and menu bar menus.
+                "Sela SelaPopupOpen"
             } else {
                 "Sela SelaShow"
             })
             .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &MenuDismiss, window, cx| {
+                this.dismiss_popup_menus(true, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 if this.may_close(window, cx) {
                     window.remove_window();
@@ -280,7 +288,15 @@ impl Render for Operator {
                     .gap_1()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(self.button(Control::NewMenu, "new-menu", t!(Msg::ToolbarNewMenu), cx))
+                    .child(
+                        self.button(Control::NewMenu, "new-menu", t!(Msg::ToolbarNewMenu), cx)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event: &gpui::MouseDownEvent, _, _| {
+                                    this.new_button_pressed(event.position);
+                                }),
+                            ),
+                    )
                     .child(self.button(
                         Control::OpenSchedule,
                         "open-schedule",
@@ -414,12 +430,20 @@ impl Render for Operator {
                         t!(Msg::ResetLayout),
                         cx,
                     ))
-                    .child(
+                    .child({
+                        let line = self.output_line();
                         div()
+                            .id("output-status")
+                            .debug_selector(|| "output-status".into())
+                            .min_w_0()
+                            .truncate()
                             .text_size(px(TEXT_CAPTION))
                             .text_color(rgb(MUTED))
-                            .child(self.output_line()),
-                    )
+                            // Truncates at the minimum window; hover shows it whole.
+                            .tooltip(StatusHint::builder(line.clone()))
+                            .child(line)
+                    })
+                    .children(self.media_warning())
                     .children(self.settings_note().map(|note| {
                         div()
                             .debug_selector(|| "settings-note".into())
@@ -432,7 +456,10 @@ impl Render for Operator {
                     })),
             )
             .when(!self.collapsed, |d| {
-                let detail = self.resource_detail(cx);
+                let detail = self.resource_detail(window, cx);
+                let sidebar = (self.tab == 1).then(|| self.scripture_sidebar(cx));
+                let scripture_footer = (self.tab == 1).then(|| self.scripture_footer(cx));
+                let collections = sidebar.is_none();
                 d.child(
                     div()
                         .flex_1()
@@ -484,17 +511,20 @@ impl Render for Operator {
                                         .border_r_1()
                                         .border_color(rgb(BORDER))
                                         .bg(rgb(CHROME))
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(t!(Msg::CollectionsHeader)),
-                                        )
-                                        .child(
-                                            div()
-                                                .mt_2()
-                                                .text_color(rgb(MUTED))
-                                                .child(t!(Msg::NoCollections)),
-                                        ),
+                                        .when(collections, |d| {
+                                            d.child(
+                                                div()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child(t!(Msg::CollectionsHeader)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .mt_2()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(t!(Msg::NoCollections)),
+                                            )
+                                        })
+                                        .children(sidebar),
                                 )
                                 .child(
                                     div()
@@ -510,6 +540,7 @@ impl Render for Operator {
                                 ),
                         ),
                 )
+                .children(scripture_footer)
                 .when(self.tab == 0, |d| {
                     let normalized = self.sizing == Sizing::Normalized;
                     d.child(
@@ -565,6 +596,7 @@ impl Render for Operator {
                             ),
                     )
                 })
+                .when(self.tab == 4, |d| d.child(self.theme_footer(cx)))
                 .when(self.tab == 2, |d| {
                     d.when(!self.assets.import_notes.is_empty(), |d| {
                         d.child(
@@ -645,36 +677,46 @@ impl Render for Operator {
                     )
                 })
             })
-            .when_some(
-                self.image_menu.filter(|_| self.tab == 2 && !self.collapsed),
-                |d, position| {
-                    d.child(
-                        div()
-                            .id("image-menu-popup")
-                            .role(Role::Menu)
-                            .aria_label(t!(Msg::A11yImageMenu))
-                            .accessibility_id("image-menu-popup")
-                            .occlude()
-                            .absolute()
-                            .left(position.x)
-                            .top(position.y)
-                            .bg(rgb(SURFACE))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .shadow_md()
-                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                                this.image_menu = None;
-                                cx.notify();
-                            }))
-                            .child(self.button(
-                                Control::ImageMenuLogo,
-                                "image-menu-logo",
-                                t!(Msg::UseAsLogo),
-                                cx,
-                            )),
-                    )
-                },
-            )
+            .when_some(self.image_menu_shown(), |d, position| {
+                d.child(
+                    div()
+                        .id("image-menu-popup")
+                        .role(Role::Menu)
+                        .aria_label(t!(Msg::A11yImageMenu))
+                        .accessibility_id("image-menu-popup")
+                        .key_context("SelaPopupMenu")
+                        .on_action(cx.listener(|this, _: &MenuNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &MenuPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
+                        // Tab stays inside the open menu.
+                        .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &FocusPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
+                        .occlude()
+                        .absolute()
+                        .left(position.x)
+                        .top(position.y)
+                        .bg(rgb(SURFACE))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .shadow_md()
+                        .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                            this.dismiss_popup_menus(false, window, cx);
+                        }))
+                        .child(self.button(
+                            Control::ImageMenuLogo,
+                            "image-menu-logo",
+                            t!(Msg::UseAsLogo),
+                            cx,
+                        )),
+                )
+            })
             .when(self.new_menu, |d| {
                 d.child(
                     div()
@@ -682,6 +724,21 @@ impl Render for Operator {
                         .role(Role::Menu)
                         .aria_label(t!(Msg::A11yNewMenu))
                         .accessibility_id("new-menu-popup")
+                        .key_context("SelaPopupMenu")
+                        .on_action(cx.listener(|this, _: &MenuNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &MenuPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
+                        // A press elsewhere closes it; one on the New button
+                        // itself closes it without reopening.
+                        .on_mouse_down_out(cx.listener(
+                            |this, event: &gpui::MouseDownEvent, window, cx| {
+                                this.new_menu_pressed_outside(event);
+                                this.dismiss_popup_menus(false, window, cx);
+                            },
+                        ))
                         .occlude()
                         .absolute()
                         .top(px(MENU_BAR_H + TOP_BAR_H))
@@ -711,6 +768,20 @@ impl Render for Operator {
                         .role(Role::Menu)
                         .aria_label(t!(Msg::A11yScheduleItemMenu))
                         .accessibility_id("item-menu-popup")
+                        .key_context("SelaPopupMenu")
+                        .on_action(cx.listener(|this, _: &MenuNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &MenuPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
+                        // Tab stays inside the open menu.
+                        .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
+                            this.move_popup_focus(true, window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &FocusPrevious, window, cx| {
+                            this.move_popup_focus(false, window, cx);
+                        }))
                         .occlude()
                         .absolute()
                         .left(position.x)
@@ -719,9 +790,8 @@ impl Render for Operator {
                         .border_1()
                         .border_color(rgb(BORDER))
                         .shadow_md()
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.item_menu = None;
-                            cx.notify();
+                        .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                            this.dismiss_popup_menus(false, window, cx);
                         }))
                         .child(self.button(
                             Control::ItemMenuDuplicate,
@@ -741,6 +811,8 @@ impl Render for Operator {
             .children(self.bar_menu_overlay(cx))
             .children(self.dialog_overlay(cx))
             .children(self.options_overlay(cx))
+            .children(self.import_overlay(window, cx))
+            .children(self.stage_message_overlay(cx))
             .when(editor_prompt_open(cx), |d| {
                 d.child(div().occlude().absolute().size_full())
             })

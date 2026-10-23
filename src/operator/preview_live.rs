@@ -12,6 +12,9 @@ const MAX_THUMBNAILS: usize = 32;
 pub(crate) struct Projected {
     version: Version,
     chosen: Option<VariantId>,
+    /// `Theme::key` of the look the slides were built with (M1-08): a font
+    /// job for another theme of the same revision never lands on them.
+    theme: u64,
 }
 
 /// A revision's default projection: no stored choice, so the first
@@ -21,6 +24,7 @@ impl From<Version> for Projected {
         Self {
             version,
             chosen: None,
+            theme: 0,
         }
     }
 }
@@ -30,6 +34,7 @@ impl Item {
         Projected {
             version: self.version,
             chosen: self.chosen,
+            theme: self.theme_key,
         }
     }
 }
@@ -72,6 +77,17 @@ fn tile_text_size(text: &str) -> f32 {
         .min(TILE_TEXT_H / (lines * TILE_LINE_HEIGHT))
         .min(TILE_TEXT_W / (widest * TILE_GLYPH_EM))
         .max(TILE_MIN_TEXT)
+}
+
+/// The copyright strip text an item's cues carry under the current Options
+/// (EW8-OBS-055): `None` without copyright text or with Display Copyright
+/// Information off. Built per cue, so an Options change reaches the next
+/// cue and never replaces the scene already live.
+fn copyright_footer(item: &Item, options: &slides::CopyrightOptions) -> Option<Arc<str>> {
+    item.copyright
+        .as_ref()
+        .filter(|_| options.display)
+        .map(|strip| strip.text(options).into())
 }
 
 /// Slide thumbnail: the image background when `thumb` has landed, else the
@@ -669,12 +685,14 @@ impl Operator {
         // A new session never replays earlier intent; Go Live must be repeated.
         self.output_extent = None;
         self.live_slide = None;
+        self.on_air = None;
         // Masks do carry over (EW8-OBS-017); a fresh renderer starts unmasked.
         self.sent_mask = self.output.as_ref().map(|_| Layer::None);
         self.unmask.cancel();
         self.logo_requested = None;
         self.logo_sent = None;
         self.sync_show(Instant::now());
+        self.follow_live_output();
     }
 
     pub(crate) fn go_live(&mut self) {
@@ -705,8 +723,17 @@ impl Operator {
     /// The Go Live cue itself, once any file check has passed or been waived.
     pub(crate) fn go_live_item(&mut self, item: Item, index: usize) {
         if self.ready_for_cue() {
-            if self.live.as_ref().map(|live| live.version) != Some(item.version) {
+            // Another item, including another schedule entry of the same
+            // revision (SC2-LIVE-02): cues still being prepared for the old
+            // one are stale, and its presented slide index means nothing for
+            // the new one (SC2-LIVE-01). Until a cue of the new item lands,
+            // nothing of it is on screen.
+            let same = |live: &Item| {
+                (live.version, live.entry, live.chosen) == (item.version, item.entry, item.chosen)
+            };
+            if !self.live.as_ref().is_some_and(same) {
                 self.cancel_cues();
+                self.live_slide = None;
             }
             self.live = Some(item);
             self.send(index);
@@ -718,7 +745,11 @@ impl Operator {
             self.live.as_ref().map(|item| item.slides.len()),
             self.requested_slide(),
         ) else {
-            self.live_message = Some(t!(Msg::LiveNothingLive).into());
+            self.live_message = Some(match &self.live {
+                // Its Go Live failed or was dropped: nothing to step from.
+                Some(item) => t!(Msg::LiveItemNotShown, title = item.title),
+                None => t!(Msg::LiveNothingLive).into(),
+            });
             return;
         };
         let target = if forward {
@@ -828,7 +859,14 @@ impl Operator {
             caps,
             sizing: self.sizing,
             background,
-            footer: item.copyright.clone(),
+            // A scripture slide's own reference (EW8-OBS-056) shows on every
+            // slide; a song's copyright strip follows the copyright options.
+            footer: item
+                .footers
+                .as_ref()
+                .and_then(|footers| footers.get(index).cloned())
+                .or_else(|| copyright_footer(&item, &self.settings.current.copyright)),
+            footer_shown: item.footers.is_some() || self.settings.current.copyright.shown_on(index),
         };
         let sizing = job.sizing;
         if self.cue_preparer.is_none() {
@@ -887,6 +925,9 @@ impl Operator {
                         self.unmask.drop_submission(pending.generation);
                         continue;
                     };
+                    #[cfg(test)]
+                    self.presented_footers
+                        .push((pending.index, cue.footer().map(|f| f.content().to_owned())));
                     match output.present_submission(cue, pending.generation, Instant::now()) {
                         Ok(()) => {
                             let version = slides::slide_version(pending.item, pending.index);
@@ -898,6 +939,12 @@ impl Operator {
                                 self.labels.push_back((version, pending.label));
                             }
                             self.live_slide = Some(pending.index);
+                            // Cancelled on every item change, so a cue in
+                            // flight always belongs to `live`.
+                            self.on_air = self
+                                .live
+                                .clone()
+                                .filter(|live| live.version == pending.item);
                             let clean = pending.warning.is_none();
                             self.presented = Some((pending.generation, pending.index, clean));
                             if !clean {
@@ -962,6 +1009,9 @@ impl Operator {
         let Some((index, generation)) = self.latest_request() else {
             return;
         };
+        // A new attempt, like `send`: an earlier failure no longer stands
+        // (this one sets it again if it fails too).
+        self.cue_failed = false;
         self.cancel_cues();
         self.dispatch(index, generation);
         self.unmask.retain_only(generation);
@@ -1085,6 +1135,8 @@ impl Operator {
             ));
         }
         notes.extend(self.preview_warning().map(|w| (w, DARK_ERROR)));
+        notes.extend(self.theme_label().map(|w| (w, DARK_MUTED)));
+        notes.extend(self.theme_notes().into_iter().map(|w| (w, DARK_ERROR)));
         let warning = (!notes.is_empty()).then_some(notes);
         let toolbar = self.arrangement_button(cx);
         slide_pane(
@@ -1178,10 +1230,25 @@ impl Operator {
         if let Some((_, error)) = output.and_then(|o| o.logo_rejected()) {
             lines.push((t!(Msg::LogoNotShown, error = error), DARK_ERROR));
         }
+        lines.extend(self.stage_lines());
         if let Some(message) = &self.live_message {
             lines.push((message.clone(), DARK_ERROR));
         }
         lines
+    }
+
+    /// Live pane footer: the live item and the slide last presented from it.
+    pub(crate) fn live_footer(&self) -> String {
+        match (&self.live, self.live_slide) {
+            (Some(item), Some(index)) => t!(
+                Msg::PreviewFooter,
+                title = item.title,
+                index = index + 1,
+                count = item.slides.len()
+            ),
+            (Some(item), None) => t!(Msg::LiveNotSent, title = item.title),
+            _ => t!(Msg::NothingLive).into(),
+        }
     }
 
     pub(crate) fn live_pane(&mut self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1193,16 +1260,7 @@ impl Operator {
         let confirmed = self.live_index(confirmed);
         let sending = self.live_index(output.and_then(|o| o.wanted().or(o.in_flight())));
         let lines = self.live_lines();
-        let footer = match (&self.live, self.live_slide) {
-            (Some(item), Some(index)) => t!(
-                Msg::PreviewFooter,
-                title = item.title,
-                index = index + 1,
-                count = item.slides.len()
-            ),
-            (Some(item), None) => t!(Msg::LiveNotSent, title = item.title),
-            _ => t!(Msg::NothingLive).into(),
-        };
+        let footer = self.live_footer();
         let tiles = self.live.as_ref().map(|item| {
             item.slides
                 .iter()

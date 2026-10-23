@@ -16,10 +16,15 @@ Schema 5 adds two tables (see [storage](storage.md#m1-07a--search-index--backed-
 - `search_rows(row INTEGER PRIMARY KEY, song UNIQUE REFERENCES songs(id))`
   gives every indexed song a stable integer key. The implicit rowids of
   `songs` are not used because `VACUUM` may renumber them.
-- `song_search`, an FTS5 table with columns `title`, `lyrics` and `metadata`.
-  - `lyrics` is every section's lyrics joined by newlines; section labels are
-    not indexed.
+- `song_search`, an FTS5 table with columns `title`, `lyrics`, `metadata`
+  and (since schema 7) `labels`.
+  - `lyrics` is every section's lyrics joined by newlines.
   - `metadata` is authors, copyright, license, administrator and song number (best guess, unobserved scope).
+  - `labels` is each distinct section label once, in section order
+    (EW8-OBS-046 matched label words; songs-browser, schema 7).
+- Since schema 7 `search_rows` also holds the Sort by keys (`author`,
+  `copyright`, `administrator`, `song_number`) that `Repository::library`
+  orders by; see [storage](storage.md#songs-browser--schema-7-label-index-sort-by-keys).
 
 The index holds exactly the nondeleted songs at their head revision. It is
 derived data: it can always be rebuilt from `song_revisions` payloads, and a
@@ -64,11 +69,26 @@ Tokenizer: `unicode61 remove_diacritics 2`.
 
 ## Ranking
 
-`ORDER BY bm25(song_search, 10.0, 1.0, 2.0), title COLLATE NOCASE, title,
-song id`.
+`ORDER BY bm25(song_search, 10.0, 1.0, 2.0, 0.0) = 0, bm25(song_search,
+10.0, 1.0, 2.0, 0.5), title COLLATE NOCASE, title, song id`.
 
-- Column weights are title 10, lyrics 1, metadata 2, so a title match ranks
-  above a lyric-only match.
+- Label-only songs come last. The first key is true only for a song whose
+  every hit is in its section labels: with the labels weight at 0 its bm25
+  is exactly 0, while any title, lyric or metadata hit gives a negative
+  score (FTS5's idf is clamped positive). So every song with a hit outside
+  its labels ranks above every label-only song, however long either song
+  is. The low label weight alone did not guarantee this: FTS5's bm25
+  normalizes each hit by the length of the whole row, so a short song's
+  label hit outscored a 400-word song's lyric hit (review finding,
+  2026-10-23; test
+  `a_label_only_hit_ranks_below_a_lyric_hit_in_a_much_longer_song`).
+- Within each group, column weights are title 10, lyrics 1, metadata 2,
+  labels 0.5, so a title match ranks above a lyric-only match for the same
+  word in songs of similar length. Because bm25 divides by the whole row's
+  token count, the labels column added in schema 7 also makes every row a
+  little longer, so a query that matches no label can order songs slightly
+  differently than at schema 6 when their label counts differ; the existing
+  ranking tests pass unchanged.
 - Ties break deterministically by title ignoring ASCII case (SQLite `NOCASE`
   folds ASCII only), then exact title, then the stable song id. Duplicate
   titles therefore keep a fixed order. Since M1-07b the ranking and `LIMIT`
@@ -186,6 +206,66 @@ Other costs to watch:
 - No measurement without the index was taken, so the index's share of save
   time is unknown.
 
+### Schema 7 re-run, this Linux VM only (songs-browser, 2026-10-22)
+
+Not comparable to the Windows numbers above and not a qualification: a
+shared 4-vCPU Intel Xeon 2.10 GHz cloud VM (15 GB RAM) with other builds
+running, and no release build (disk budget). Both runs used the dev profile
+with `opt-level=3` for `libsqlite3-sys`, `rusqlite` and `sela`
+(`cargo build --locked -j 3 --example search_bench --config
+profile.dev.package.libsqlite3-sys.opt-level=3 --config
+profile.dev.package.rusqlite.opt-level=3 --config
+profile.dev.package.sela.opt-level=3`, then `target/debug/examples/search_bench`),
+same corpus and seed. "Base" is commit 8ba013e (schema 6) with the same two
+label queries added; "schema 7" is the songs-browser tree.
+
+| Measurement | Base (schema 6) | Schema 7 |
+| --- | ---: | ---: |
+| Database size | 62.0 MiB | 64.0 MiB |
+| `save_song` p50 / p95 / max | 2.2 / 3.8 / 37.6 ms | 2.3 / 15.9 / 120.8 ms |
+| `Repository::open` | 487 ms | 552 ms |
+| `check_search` | 532 ms | 613 ms |
+| `rebuild_search` | 1,268 ms | 1,436 ms |
+| two-letter prefix `ma` p50 / p95 | 32.6 / 45.0 ms | 32.9 / 40.4 ms |
+| one-letter prefix `k` p95 | 114.0 ms | 89.9 ms |
+| most common word p50 / p95 | 34.0 / 39.6 ms | 37.0 / 49.3 ms |
+| section label `verse` (every song) | 0 hits, 0.06 ms | 200 (truncated), p50 35.6 / p95 42.8 ms |
+| section label and number `verse 3` | 0 hits | 200 (truncated), p50 37.6 / p95 46.9 ms |
+| all samples p50 / p95 / max | 3.2 / 72.3 / 131.7 ms | 16.7 / 71.3 / 102.4 ms |
+
+The title/lyric queries move within run-to-run noise on this shared VM; the
+pooled p50 rises only because the two label queries now match all 20,000
+songs (every fixture section is "Verse N"), like the most common word. Saves
+cost one extra `UPDATE search_rows` and a larger FTS row; the higher p95 and
+max of the schema 7 run coincide with concurrent builds on the VM and were
+not investigated further.
+
+Whole Songs list per Sort by order (`Repository::library`, 20,000 songs,
+schema 7 run): Title p50 73 / p95 86 ms, Date modified 72 / 80 ms, Author
+100 / 117 ms, Copyright 99 / 116 ms, Administrator 101 / 123 ms, Song Number
+103 / 120 ms. The four key sorts sort a temporary B-tree on the storage
+worker (no index: the empty-last expression comes first); the UI thread
+only receives the result. Measuring on the reference laptop stays open
+(parity-pending PP-SB-10).
+
+Label-only-last ranking (review fix, 2026-10-23, same VM, build command and
+corpus as above): the extra `bm25(..., 0.0) = 0` key is computed per matched
+row inside the FTS scan. A/B in one session, old SQL vs new SQL, two runs of
+the new SQL:
+
+| Query | Old p50 / p95 | New p50 / p95 (run 1, run 2) |
+| --- | ---: | ---: |
+| section label `verse` (20,000 matches) | 35.2 / 43.3 ms | 37.9 / 45.0, 39.4 / 49.7 ms |
+| `verse 3` | 38.3 / 50.7 ms | 42.0 / 53.6, 41.1 / 55.6 ms |
+| most common word | 35.5 / 52.2 ms | 37.7 / 58.7, 37.1 / 54.7 ms |
+| two-letter prefix | 32.5 / 40.8 ms | 34.0 / 39.9, 34.1 / 40.1 ms |
+| one-letter prefix | 72.1 / 91.3 ms | 75.0 / 88.0, 75.9 / 91.6 ms |
+| all 1,600 samples | 16.6 / 70.3 ms | 17.4 / 73.6, 17.1 / 74.5 ms |
+
+Queries that match many songs cost about 2-4 ms more at p50 (5-10%); rare
+and title queries are unchanged within noise. All stay under the 100 ms p95
+ceiling on this VM. Not a qualification (PP-SB-10).
+
 ## Operator search box (M1-07b)
 
 Implemented-unqualified. See [operator-shell](operator-shell.md#m1-07b--songs-search-box-operator)
@@ -198,7 +278,7 @@ Differences from EasyWorship 8.0.49 (RUN-W07A):
 | EW | Sela | Why |
 | --- | --- | --- |
 | Filters from one character | Filters from two; one character shows the full list and issues no query | owner decision (bounds the one-letter p95 of 109 ms measured in M1-07a) |
-| Word-prefix over title, slide labels (section text labels), lyric words (EW8-OBS-045) | FTS over title, lyrics and metadata, last term a prefix; **section labels are not indexed** | documented deviation: indexing labels needs a schema bump or a label column in the FTS table, tracked in [backlog](backlog.md#m1-07-search-label-matching); a label-only query ("Chorus") finds nothing in Sela |
+| Word-prefix over title, slide labels (section text labels), lyric words (EW8-OBS-045) | FTS over title, lyrics, metadata and (schema 7) section labels, last term a prefix | labels indexed by songs-browser ([backlog](backlog.md#m1-07-search-label-matching)); ranking is Sela's (labels weigh least) |
 | All matches | At most 200 results; when the cap is hit a "More songs match than are shown. Type more to narrow the search." row sits under the list (`song-search-more`) | bounds the list and the query; EW shows no hint (not observed) |
 | Empty list for no results | Empty list with a "No songs found" line | clearer for the operator |
 | Title echoed in the box when the pane first opens | Plain empty field | EW8-OBS-044 best guess |
@@ -267,10 +347,13 @@ element (rendered even when empty) after the only song. Before
 fix-sunday-focus-modality (SC-RES-01), focus stayed on the row that was no
 longer rendered; GPUI then dispatches keys from its root view, which has no
 key context, so every operator key was dead until the next click. Sort by
-Title or Date modified is persisted in `settings.txt`; Date modified is the
-order of the last save (`search_rows.row`, moved to the end on every save). A
-rebuilt index restarts in id order, so a rebuild loses dates (no schema change
-was made).
+Title, Author, Copyright, Administrator, Song Number or Date modified is
+persisted in `settings.txt` (`song_sort=title|author|copyright|administrator|song_number|modified`);
+Date modified is the stored `songs.modified` stamp (schema 6). The four
+observed keys (songs-browser, schema 7) put songs with an empty key last in
+both directions, ignore ASCII case, compare Song Number as a number and
+break ties by title (UNOBSERVED best guesses, reference-observations.md).
+While a query is active the results keep their relevance order.
 
 Frame measurement (release build, 20,000-song `search_bench --keep` corpus,
 `scripts/resource-browser-windows.py --binary target\release\sela.exe
@@ -281,8 +364,7 @@ present timestamp.
 
 ## Open
 
-- Searching slide labels (EW matches them; documented deviation above) and the field choice, if EW
-  exposes one.
+- The field choice, if EW exposes one (labels are searched since schema 7).
 - Loading and error states of the box beyond the existing library error line.
 - Linux and macOS runs, and a run on an older integrated-GPU laptop for the
   M1-15 rehearsal machine.

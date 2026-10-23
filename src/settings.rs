@@ -7,6 +7,7 @@
 
 use crate::i18n::Language;
 use crate::pane_layout::{self, Layout};
+use crate::slides::CopyrightOptions;
 use crate::song_order::{SongOrder, SongSort};
 use std::{
     io::Write,
@@ -42,6 +43,40 @@ pub struct Settings {
     /// Splitters, Resources collapsed state and window placement saved at the
     /// last normal close; `None` means the default layout.
     pub layout: Option<Layout>,
+    /// Options › Main Output › Song › Copyright Info (`copyright_display`,
+    /// `copyright_first_slide`, `license_info`; keys added within version 1,
+    /// written only when not the default).
+    pub copyright: CopyrightOptions,
+    /// Stage (Foldback) output, Options › Foldback (M3-01/M3-02). Keys
+    /// `stage_*` were added within version 1 and are written only when not
+    /// the default, so older builds ignore them.
+    pub stage: StageSettings,
+}
+
+/// Options › Foldback › General (EW8-OBS-056: "Enable support for Foldback
+/// Output" plus its own monitor) and Sela's stage content switches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StageSettings {
+    /// Start the stage output together with Live output (EW default: off).
+    pub enabled: bool,
+    /// Device name of the stage monitor; `None` means the first monitor that
+    /// is neither primary nor the audience monitor.
+    pub monitor: Option<String>,
+    /// Time of day in the stage header (default on).
+    pub clock: bool,
+    /// Next slide area (default on).
+    pub next: bool,
+}
+
+impl Default for StageSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            monitor: None,
+            clock: true,
+            next: true,
+        }
+    }
 }
 
 /// The saved layout of `path`, read without side effects. Unreadable or
@@ -130,6 +165,21 @@ pub fn parse(text: &str) -> Result<Settings, ParseError> {
             settings.song_order.sort = SongSort::from_code(value).unwrap_or_default();
         } else if key == "song_sort_descending" {
             settings.song_order.descending = value == "1";
+        } else if key == "copyright_display" {
+            // Only an explicit 0 turns the observed default (on) off.
+            settings.copyright.display = value != "0";
+        } else if key == "copyright_first_slide" {
+            settings.copyright.first_slide_only = value == "1";
+        } else if key == "license_info" {
+            settings.copyright.license_info = CopyrightOptions::clean_license(value);
+        } else if key == "stage_enabled" {
+            settings.stage.enabled = value == "1";
+        } else if key == "stage_monitor" && usable {
+            settings.stage.monitor = Some(value.to_owned());
+        } else if key == "stage_clock" {
+            settings.stage.clock = value != "0";
+        } else if key == "stage_next" {
+            settings.stage.next = value != "0";
         } else if key == "recent" && usable {
             // Lines are newest first; keep the first occurrence of a path.
             let path = PathBuf::from(value);
@@ -160,6 +210,28 @@ pub fn render(settings: &Settings) -> String {
     }
     if settings.song_order.descending {
         text.push_str("song_sort_descending=1\n");
+    }
+    if !settings.copyright.display {
+        text.push_str("copyright_display=0\n");
+    }
+    if settings.copyright.first_slide_only {
+        text.push_str("copyright_first_slide=1\n");
+    }
+    let license = CopyrightOptions::clean_license(&settings.copyright.license_info);
+    if !license.is_empty() {
+        text.push_str(&format!("license_info={license}\n"));
+    }
+    if settings.stage.enabled {
+        text.push_str("stage_enabled=1\n");
+    }
+    if let Some(name) = settings.stage.monitor.as_deref().filter(|n| writable(n)) {
+        text.push_str(&format!("stage_monitor={name}\n"));
+    }
+    if !settings.stage.clock {
+        text.push_str("stage_clock=0\n");
+    }
+    if !settings.stage.next {
+        text.push_str("stage_next=0\n");
     }
     for path in settings.recent_schedules.iter().take(MAX_RECENT) {
         // A path that is not valid Unicode cannot be written back either.
@@ -315,6 +387,34 @@ pub fn monitor_arg(saved: Option<&str>, monitors: Option<&[MonitorInfo]>) -> Str
     }
 }
 
+/// The `--stage` monitor argument: the saved stage monitor while it is
+/// connected (or the list is unknown), else the first monitor that is neither
+/// primary nor the audience's. `None` when there is no such monitor (or the
+/// list is still unknown and nothing was chosen): the stage is then not
+/// started, so a stage feed is never silently mapped over the audience
+/// (M3-01). Choosing the audience or primary monitor explicitly is allowed.
+pub fn stage_monitor_arg(
+    saved: Option<&str>,
+    audience: Option<&str>,
+    monitors: Option<&[MonitorInfo]>,
+) -> Option<String> {
+    let Some(list) = monitors else {
+        return saved.map(|name| format!("name:{name}"));
+    };
+    if let Some(name) = saved
+        && list.iter().any(|m| m.name == name)
+    {
+        return Some(format!("name:{name}"));
+    }
+    // The audience monitor as `monitor_arg` resolves it.
+    let audience = audience
+        .filter(|name| list.iter().any(|m| m.name == *name))
+        .or_else(|| list.iter().find(|m| !m.primary).map(|m| m.name.as_str()));
+    list.iter()
+        .find(|m| !m.primary && Some(m.name.as_str()) != audience)
+        .map(|free| format!("name:{}", free.name))
+}
+
 /// True when a saved choice is known to name no connected monitor.
 pub fn monitor_missing(saved: Option<&str>, monitors: Option<&[MonitorInfo]>) -> bool {
     match (saved, monitors) {
@@ -337,7 +437,9 @@ pub fn default_loader() -> Loader {
 
 enum Job {
     Load,
-    Save(Settings),
+    // Boxed: the settings grew past clippy's large-error bound once the
+    // copyright and stage options were both added (integration).
+    Save(Box<Settings>),
 }
 
 #[derive(Debug)]
@@ -389,7 +491,7 @@ impl Worker {
     }
 
     pub fn save(&self, settings: Settings) -> bool {
-        self.submit(Job::Save(settings))
+        self.submit(Job::Save(Box::new(settings)))
     }
 
     fn submit(&self, job: Job) -> bool {
@@ -516,11 +618,55 @@ mod tests {
         };
         let text = render(&settings);
         assert!(text.contains("song_sort=modified\n") && text.contains("song_sort_descending=1\n"));
-        assert_eq!(parse(&text), Ok(settings));
+        assert_eq!(parse(&text), Ok(settings.clone()));
         assert_eq!(
-            parse("sela-settings 1\nsong_sort=author\n"),
+            parse("sela-settings 1\nsong_sort=composer\n"),
             Ok(Settings::default())
         );
+        for sort in SongSort::ALL {
+            settings.song_order = SongOrder {
+                sort,
+                descending: false,
+            };
+            assert_eq!(parse(&render(&settings)), Ok(settings.clone()));
+        }
+        assert_eq!(
+            parse("sela-settings 1\nsong_sort=song_number\n")
+                .unwrap()
+                .song_order
+                .sort,
+            SongSort::SongNumber
+        );
+    }
+
+    #[test]
+    fn copyright_options_round_trip_and_defaults_are_not_written() {
+        let mut settings = Settings::default();
+        let text = render(&settings);
+        assert!(!text.contains("copyright") && !text.contains("license_info"));
+        settings.copyright = CopyrightOptions {
+            display: false,
+            first_slide_only: true,
+            license_info: "CCLI License # 11223344".into(),
+        };
+        let text = render(&settings);
+        assert!(text.contains("copyright_display=0\n"));
+        assert!(text.contains("copyright_first_slide=1\n"));
+        assert!(text.contains("license_info=CCLI License # 11223344\n"));
+        assert_eq!(parse(&text), Ok(settings.clone()));
+        // A line break cannot inject another key; overlong text is capped.
+        settings.copyright.license_info = "x\nlanguage=id".into();
+        let parsed = parse(&render(&settings)).unwrap();
+        assert_eq!(parsed.language, Language::English);
+        assert_eq!(parsed.copyright.license_info, "x language=id");
+        let long = format!("sela-settings 1\nlicense_info={}\n", "a".repeat(400));
+        assert_eq!(
+            parse(&long).unwrap().copyright.license_info.len(),
+            crate::slides::MAX_LICENSE_INFO
+        );
+        // Unknown values keep the default.
+        let odd = parse("sela-settings 1\ncopyright_display=maybe\ncopyright_first_slide=yes\n");
+        assert_eq!(odd.unwrap().copyright, CopyrightOptions::default());
     }
 
     #[test]
@@ -724,6 +870,68 @@ mod tests {
         assert_eq!(MonitorInfo::from_line(&info.to_line()), Some(info.clone()));
         assert_eq!(info.short_name(), "DISPLAY6");
         assert_eq!(MonitorInfo::from_line("junk"), None);
+    }
+
+    #[test]
+    fn stage_settings_round_trip_and_defaults_are_not_written() {
+        let mut settings = Settings::default();
+        assert!(settings.stage.clock && settings.stage.next && !settings.stage.enabled);
+        assert!(!render(&settings).contains("stage_"));
+        settings.stage = StageSettings {
+            enabled: true,
+            monitor: Some(r"\\.\DISPLAY7".into()),
+            clock: false,
+            next: false,
+        };
+        let text = render(&settings);
+        assert!(text.contains("stage_enabled=1\n") && text.contains("stage_clock=0\n"));
+        assert_eq!(parse(&text), Ok(settings));
+        // A file from before the stage keys loads with the defaults.
+        assert_eq!(
+            parse("sela-settings 1\noutput_monitor=X\n").unwrap().stage,
+            StageSettings::default()
+        );
+    }
+
+    #[test]
+    fn stage_monitor_never_defaults_onto_the_audience_monitor() {
+        let info = |name: &str, primary| MonitorInfo {
+            name: name.into(),
+            width: 1920,
+            height: 1080,
+            x: 0,
+            y: 0,
+            primary,
+        };
+        let three = [info("P", true), info("A", false), info("S", false)];
+        // Default audience is the first non-primary monitor (A); the stage
+        // takes the next free one.
+        let arg = |saved, audience, list| stage_monitor_arg(saved, audience, list);
+        assert_eq!(arg(None, None, Some(&three[..])).as_deref(), Some("name:S"));
+        assert_eq!(
+            arg(None, Some("S"), Some(&three[..])).as_deref(),
+            Some("name:A")
+        );
+        assert_eq!(
+            arg(Some("P"), None, Some(&three[..])).as_deref(),
+            Some("name:P")
+        );
+        // A saved stage monitor that is gone falls back to a free one.
+        assert_eq!(
+            arg(Some("Z"), Some("A"), Some(&three[..])).as_deref(),
+            Some("name:S")
+        );
+        // Two monitors: no free one, so no stage rather than the audience's.
+        let two = [info("P", true), info("A", false)];
+        assert_eq!(arg(None, None, Some(&two[..])), None);
+        assert_eq!(arg(Some("Z"), None, Some(&two[..])), None);
+        // An explicit choice of the audience monitor is honoured.
+        assert_eq!(
+            arg(Some("A"), None, Some(&two[..])).as_deref(),
+            Some("name:A")
+        );
+        assert_eq!(arg(Some("Q"), None, None).as_deref(), Some("name:Q"));
+        assert_eq!(arg(None, None, None), None);
     }
 
     #[test]

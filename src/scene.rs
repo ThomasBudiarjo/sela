@@ -123,6 +123,28 @@ pub struct ShadowStyle {
     pub opacity: u8,
 }
 
+/// The lyrics text box's distance from each canvas edge, in output pixels
+/// (theme or slide margins, M1-08). A cue without insets uses the renderer's
+/// fixed inset (`slides::INSET`) on every side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Insets {
+    pub left: u32,
+    pub right: u32,
+    pub top: u32,
+    pub bottom: u32,
+}
+
+impl Insets {
+    pub const fn uniform(side: u32) -> Self {
+        Self {
+            left: side,
+            right: side,
+            top: side,
+            bottom: side,
+        }
+    }
+}
+
 /// Owned text as the cue carries it: content, face, pixel size and style.
 #[derive(Clone)]
 pub struct OwnedText {
@@ -192,7 +214,34 @@ pub struct PreparedCue {
     background: PreparedBackground,
     text: Option<PreparedText>,
     footer: Option<PreparedText>,
+    insets: Option<Insets>,
+    /// Stage-only content (M3-02); only a stage renderer accepts such a cue.
+    stage: Option<PreparedStage>,
     bytes: usize,
+}
+
+/// A stage panel with the face it is drawn in. The renderer fits and places
+/// every field itself (`stage::layout`, `stage::fit`).
+pub struct PreparedStage {
+    panel: crate::stage::StagePanel,
+    font_version: ContentVersion,
+    font: Arc<[u8]>,
+    face_index: u32,
+}
+
+impl PreparedStage {
+    pub fn panel(&self) -> &crate::stage::StagePanel {
+        &self.panel
+    }
+    pub fn font(&self) -> &[u8] {
+        &self.font
+    }
+    pub fn font_version(&self) -> ContentVersion {
+        self.font_version
+    }
+    pub fn face_index(&self) -> u32 {
+        self.face_index
+    }
 }
 
 fn prepare_text(text: OwnedText, bytes: &mut usize) -> Result<PreparedText, PrepareError> {
@@ -257,8 +306,76 @@ impl PreparedCue {
             background,
             text,
             footer: None,
+            insets: None,
+            stage: None,
             bytes,
         })
+    }
+
+    /// A stage-output cue: an opaque color background plus a stage panel in
+    /// one explicit face. No audience text; the audience renderer refuses
+    /// it. Validates sizes, the face and the stage surface minimum.
+    pub fn for_stage(
+        version: ContentVersion,
+        extent: Extent,
+        background: [u8; 3],
+        panel: crate::stage::StagePanel,
+        font: (ContentVersion, Arc<[u8]>, u32),
+        caps: RendererCapabilities,
+    ) -> Result<Self, PrepareError> {
+        check_extent(extent, caps)?;
+        if extent.width < crate::stage::MIN_EXTENT.width
+            || extent.height < crate::stage::MIN_EXTENT.height
+        {
+            return Err(PrepareError::InvalidScene);
+        }
+        if !panel.is_valid() {
+            return Err(PrepareError::TooLarge);
+        }
+        let (font_version, font, face_index) = font;
+        if font.len() > MAX_SOURCE_BYTES {
+            return Err(PrepareError::TooLarge);
+        }
+        ttf_parser::Face::parse(&font, face_index).map_err(|_| PrepareError::InvalidFont)?;
+        let bytes = font.len()
+            + panel.current_label.len()
+            + panel.current.len()
+            + panel.next_label.len()
+            + panel.next.len()
+            + panel.message.len();
+        Ok(Self {
+            version,
+            extent,
+            background: PreparedBackground::Color([
+                background[0],
+                background[1],
+                background[2],
+                255,
+            ]),
+            text: None,
+            footer: None,
+            stage: Some(PreparedStage {
+                panel,
+                font_version,
+                font,
+                face_index,
+            }),
+            insets: None,
+            bytes,
+        })
+    }
+
+    /// Lays the lyrics out in this box instead of the fixed renderer inset.
+    /// Refused when the box leaves no room inside the extent.
+    pub fn with_insets(mut self, insets: Insets) -> Result<Self, PrepareError> {
+        let fits = |a: u32, b: u32, side: u32| a.checked_add(b).is_some_and(|sum| sum < side);
+        if !fits(insets.left, insets.right, self.extent.width)
+            || !fits(insets.top, insets.bottom, self.extent.height)
+        {
+            return Err(PrepareError::InvalidScene);
+        }
+        self.insets = Some(insets);
+        Ok(self)
     }
 
     /// Adds the copyright strip: a second text drawn over the bottom of the
@@ -291,6 +408,8 @@ impl PreparedCue {
             background: PreparedBackground::Color(color),
             text: None,
             footer: None,
+            insets: None,
+            stage: None,
             bytes: 0,
         })
     }
@@ -310,6 +429,15 @@ impl PreparedCue {
     /// The copyright strip, if the slide shows one.
     pub fn footer(&self) -> Option<&PreparedText> {
         self.footer.as_ref()
+    }
+    /// The lyrics box, when margins replace the fixed renderer inset.
+    pub fn insets(&self) -> Option<Insets> {
+        self.insets
+    }
+
+    /// Stage-only content; `Some` only for a stage-output cue.
+    pub fn stage(&self) -> Option<&PreparedStage> {
+        self.stage.as_ref()
     }
     pub fn resource_bytes(&self) -> usize {
         self.bytes

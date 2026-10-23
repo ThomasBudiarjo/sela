@@ -39,7 +39,65 @@ fn job(tag: u64) -> CueJob {
         sizing: Sizing::PerSlide,
         background: slides::color_background([0, 0, 0]),
         footer: None,
+        footer_shown: true,
     }
+}
+
+#[test]
+fn a_hidden_strip_still_shapes_the_normalized_size_and_the_cap_follows_the_strip() {
+    let format = SlideFormat::default();
+    let slides: Arc<[Slide]> = (0..2)
+        .map(|_| Slide {
+            label: "Verse".into(),
+            text: (1..=9)
+                .map(|n| format!("Original line {n}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            format: format.clone(),
+            background: None,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let resolved: Arc<[Resolved]> = vec![Resolved::bundled(&format); 2].into();
+    let at = |index: usize, footer: Option<&str>, shown: bool| CueJob {
+        index,
+        slides: slides.clone(),
+        resolved: resolved.clone(),
+        sizing: Sizing::Normalized,
+        extent: Extent {
+            width: 1280,
+            height: 720,
+        },
+        footer: footer.map(Into::into),
+        footer_shown: shown,
+        ..job(index as u64 + 1)
+    };
+    let strip = "Signal Hymn - A. Writer\n(c) 2020 Some Owner";
+    let mut cache = CapCache::default();
+    let cancel = AtomicBool::new(false);
+    let first = at(0, Some(strip), true).build(&mut cache, &cancel).unwrap();
+    let second = at(1, Some(strip), false)
+        .build(&mut cache, &cancel)
+        .unwrap();
+    assert!(first.cue.footer().is_some());
+    assert!(second.cue.footer().is_none(), "not drawn on this slide");
+    assert_eq!(first.size_cap, second.size_cap, "one size for the item");
+    assert_eq!(
+        first.cue.text().unwrap().font_size(),
+        second.cue.text().unwrap().font_size()
+    );
+    // A licensing line is a taller strip: the cached cap is recomputed.
+    let taller = "Signal Hymn - A. Writer\n(c) 2020 Some Owner\nCCLI License # 1";
+    let third = at(1, Some(taller), true)
+        .build(&mut cache, &cancel)
+        .unwrap();
+    let fresh = at(1, Some(taller), true)
+        .build(&mut CapCache::default(), &cancel)
+        .unwrap();
+    assert_eq!(third.size_cap, fresh.size_cap);
+    assert!(third.size_cap < first.size_cap);
+    let none = at(1, None, true).build(&mut cache, &cancel).unwrap();
+    assert!(none.size_cap > first.size_cap);
 }
 
 fn build(job: CueJob) -> Result<Built, PrepareError> {

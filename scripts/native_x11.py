@@ -47,6 +47,7 @@ from typing import Self, TypeVar
 ROOT = Path(__file__).resolve().parents[1]
 OPERATOR_TITLE = "Sela — Technical preview"
 AUDIENCE_TITLE = "Sela audience output"
+STAGE_TITLE = "Sela stage output"
 EDITOR_TITLE_PREFIX = "Song Editor - "
 # GPUI (zed a846890) renders through wgpu's Vulkan backend on Linux, so the
 # operator needs a Vulkan driver: pin Mesa's software rasterizer (lavapipe).
@@ -60,6 +61,10 @@ EXIT_PASS, EXIT_FAIL, EXIT_ENVIRONMENT = 0, 1, 2
 # 624x351 (16:9) plus its 1 px Openbox border fits right of the 1280 px
 # operator (also bordered) on a 1920 px screen without overlapping it.
 XVFB_AUDIENCE_SIZE = (624, 351)
+# xvfb kind: the stage (Foldback) output in its `window` placement
+# (`SELA_STAGE_MONITOR=window`) goes below the audience, same size, unfocused.
+XVFB_STAGE_SIZE = (624, 351)
+XVFB_STAGE_Y = 420
 REQUIRED_TOOLS = ("xdotool", "xwininfo", "xprop", "import", "dbus-daemon", "gdbus")
 
 T = TypeVar("T")
@@ -292,6 +297,11 @@ def _openbox_rc(kind: str, screen: tuple[int, int]) -> str:
     <size><width>{width}</width><height>{height}</height></size>
     <focus>no</focus>
   </application>
+  <application title="{STAGE_TITLE}">
+    <position force="yes"><x>{screen[0] - XVFB_STAGE_SIZE[0] - 2}</x><y>{XVFB_STAGE_Y}</y></position>
+    <size><width>{XVFB_STAGE_SIZE[0]}</width><height>{XVFB_STAGE_SIZE[1]}</height></size>
+    <focus>no</focus>
+  </application>
 """
     return text.replace("<applications>", "<applications>" + rules, 1)
 
@@ -333,6 +343,8 @@ class Display:
     `dual` — Xorg with the dummy driver and two 1920x1080 CRTCs (DUMMY0
     primary, DUMMY1 to its right): the audience opens on the real
     `secondary` placement, borderless and covering DUMMY1.
+    `triple` — as `dual` plus DUMMY2 to the right of DUMMY1, so the stage
+    (Foldback) output can take its production placement on a third monitor.
     """
 
     def __init__(
@@ -404,7 +416,7 @@ class Display:
         needed = ["openbox"] + (["Xvfb"] if kind == "xvfb" else ["Xorg", "xrandr"])
         absent = missing_tools(needed)
         if (
-            kind == "dual"
+            kind in ("dual", "triple")
             and not Path("/usr/lib/xorg/modules/drivers/dummy_drv.so").exists()
         ):
             absent.append("xserver-xorg-video-dummy")
@@ -426,9 +438,13 @@ class Display:
                 "tcp",
                 "-noreset",
             ]
-        elif kind == "dual":
+        elif kind in ("dual", "triple"):
             conf = scratch / "dummy.conf"
-            conf.write_text(_DUMMY_CONF)
+            conf.write_text(
+                _DUMMY_CONF.replace("Virtual 3840 1080", "Virtual 5760 1080")
+                if kind == "triple"
+                else _DUMMY_CONF
+            )
             command = [
                 "Xorg",
                 "-displayfd",
@@ -469,7 +485,18 @@ class Display:
         os.close(read)
         display = cls(f":{number.decode().strip()}", kind, True, tag, scratch)
         try:
-            if kind == "dual":
+            if kind == "triple":
+                tool("xrandr", "--addmode", "DUMMY2", "1920x1080")
+                tool(
+                    "xrandr",
+                    "--output",
+                    "DUMMY2",
+                    "--mode",
+                    "1920x1080",
+                    "--pos",
+                    "3840x0",
+                )
+            if kind in ("dual", "triple"):
                 tool("xrandr", "--addmode", "DUMMY1", "1920x1080")
                 tool(
                     "xrandr",
@@ -690,6 +717,15 @@ def geometry(wid: int) -> Geometry:
             raise Failure(f"xwininfo has no {label!r} for {wid}")
         values[key] = int(match[1])
     return Geometry(**values, viewable="IsViewable" in info)
+
+
+def viewable(wid: int) -> bool:
+    """`wid` exists and is mapped, from one xwininfo query: a window can
+    vanish between two queries (BadDrawable), which counts as not viewable."""
+    try:
+        return geometry(wid).viewable
+    except Failure:
+        return False
 
 
 THIEVES: list[str] = []
@@ -1253,7 +1289,11 @@ def build(examples: Iterable[str] = ("seed_library",)) -> None:
     for example in examples:
         command += ["--example", example]
     log(" ".join(command))
-    if subprocess.run(command, cwd=ROOT, timeout=3600, check=False).returncode != 0:
+    try:
+        done = subprocess.run(command, cwd=ROOT, timeout=3600, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise EnvironmentProblem(f"cargo build timed out after {error.timeout}s")
+    if done.returncode != 0:
         raise EnvironmentProblem("cargo build failed")
 
 
@@ -1265,13 +1305,16 @@ def seed_library(path: Path, *flags: str, seed: Path | None = None) -> Path:
             f"missing {seed} (cargo build --example seed_library, or pass --build)"
         )
     path.parent.mkdir(parents=True, exist_ok=True)
-    done = subprocess.run(
-        [str(seed), str(path), *flags],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    try:
+        done = subprocess.run(
+            [str(seed), str(path), *flags],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise EnvironmentProblem(f"seed_library timed out after {error.timeout}s")
     if done.returncode != 0:
         raise EnvironmentProblem(f"seed_library failed: {done.stderr.strip()}")
     return path
@@ -1313,6 +1356,116 @@ class Control:
     @property
     def center(self) -> tuple[int, int]:
         return self.x + self.width // 2, self.y + self.height // 2
+
+
+# AT-SPI role numbers 0-99 (at-spi2-core AtspiRole, also atspi-common's
+# Role), named the way atspi_role_get_name spells them.
+_ATSPI_ROLES = [
+    "invalid",
+    "accelerator label",
+    "alert",
+    "animation",
+    "arrow",
+    "calendar",
+    "canvas",
+    "check box",
+    "check menu item",
+    "color chooser",
+    "column header",
+    "combo box",
+    "date editor",
+    "desktop icon",
+    "desktop frame",
+    "dial",
+    "dialog",
+    "directory pane",
+    "drawing area",
+    "file chooser",
+    "filler",
+    "focus traversable",
+    "font chooser",
+    "frame",
+    "glass pane",
+    "html container",
+    "icon",
+    "image",
+    "internal frame",
+    "label",
+    "layered pane",
+    "list",
+    "list item",
+    "menu",
+    "menu bar",
+    "menu item",
+    "option pane",
+    "page tab",
+    "page tab list",
+    "panel",
+    "password text",
+    "popup menu",
+    "progress bar",
+    "push button",
+    "radio button",
+    "radio menu item",
+    "root pane",
+    "row header",
+    "scroll bar",
+    "scroll pane",
+    "separator",
+    "slider",
+    "spin button",
+    "split pane",
+    "status bar",
+    "table",
+    "table cell",
+    "table column header",
+    "table row header",
+    "tearoff menu item",
+    "terminal",
+    "text",
+    "toggle button",
+    "tool bar",
+    "tool tip",
+    "tree",
+    "tree table",
+    "unknown",
+    "viewport",
+    "window",
+    "extended",
+    "header",
+    "footer",
+    "paragraph",
+    "ruler",
+    "application",
+    "autocomplete",
+    "editbar",
+    "embedded",
+    "entry",
+    "chart",
+    "caption",
+    "document frame",
+    "heading",
+    "page",
+    "section",
+    "redundant object",
+    "form",
+    "link",
+    "input method window",
+    "table row",
+    "tree item",
+    "document spreadsheet",
+    "document presentation",
+    "document text",
+    "document web",
+    "document email",
+    "comment",
+    "list box",
+    "grouping",
+]
+
+
+def _atspi_role_name(number: int) -> str:
+    return _ATSPI_ROLES[number] if 0 <= number < len(_ATSPI_ROLES) else str(number)
 
 
 @dataclass
@@ -1360,6 +1513,14 @@ class _Atspi:
         role = _gv_strings(
             self.call(dest, path, "org.a11y.atspi.Accessible.GetRoleName")
         )
+        if not role or not role[0]:
+            # AccessKit's AT-SPI adapter (accesskit_unix 0.22) answers
+            # GetRoleName with an empty string; GetRole has the number.
+            number = re.search(
+                r"(?:uint32 )?(\d+),?\)",
+                self.call(dest, path, "org.a11y.atspi.Accessible.GetRole"),
+            )
+            role = [_atspi_role_name(int(number[1]))] if number else []
         extents = re.findall(
             r"-?\d+", self.call(dest, path, "org.a11y.atspi.Component.GetExtents", "1")
         )
@@ -1530,7 +1691,7 @@ class App:
             raise Failure(
                 f"{self.name}: process exit timed out after {timeout}s"
             ) from error
-        if self.wid and window_exists(self.wid) and geometry(self.wid).viewable:
+        if self.wid and viewable(self.wid):
             raise Failure(f"{self.name}: window {self.wid} survived process exit")
         return code
 
@@ -1599,6 +1760,19 @@ class App:
                 return None
             time.sleep(0.05)
 
+    def stage(self, timeout: float) -> tuple[int, int] | None:
+        """(pid, window) of the stage (`sela --stage`) child, or None after
+        `timeout`."""
+        deadline = time.monotonic() + timeout
+        while True:
+            for pid in children(self.pid):
+                for wid in visible_windows(pid):
+                    if window_name(wid) == STAGE_TITLE:
+                        return pid, wid
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+
     # -- AT-SPI controls
 
     def _a11y(self) -> _Atspi:
@@ -1623,7 +1797,9 @@ class App:
             self._atspi = _Atspi(_gv_strings(reply)[0])
         return self._atspi
 
-    def _app_root(self, atspi: _Atspi) -> tuple[str, str]:
+    def _app_root(self, atspi: _Atspi) -> tuple[str, str] | None:
+        """This app's AT-SPI bus and root, or None while it has not
+        registered yet (a polled probe keeps waiting)."""
         for bus, path in atspi.children(
             "org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root"
         ):
@@ -1638,7 +1814,7 @@ class App:
             )
             if pid and int(pid[-1]) == self.pid:
                 return bus, path
-        raise Failure(f"{self.name} is not registered with AT-SPI")
+        return None
 
     def controls(
         self, wid: int | None = None, timeout: float = 10.0
@@ -1647,11 +1823,17 @@ class App:
         self.wid), keyed by id, in window-relative client coordinates.
         Coordinates are only valid for the layout at the time of the call."""
         wid = wid or self.wid
-        title = window_name(wid)
         atspi = self._a11y()
 
         def collect():
-            bus, root = self._app_root(atspi)
+            registered = self._app_root(atspi)
+            if registered is None:
+                return None
+            bus, root = registered
+            # Read the title on every attempt: it can change while we wait
+            # (the UI language or the schedule name arrives after the first
+            # frame), and a stale title never matches the AT-SPI frame.
+            title = window_name(wid)
             frames = [p for _, p in atspi.children(bus, root)]
             with concurrent.futures.ThreadPoolExecutor(8) as pool:
                 for frame in frames:
@@ -1682,7 +1864,10 @@ class App:
             return None
 
         return wait_until(
-            collect, timeout, f"the AT-SPI tree of {title!r}", interval=0.3
+            collect,
+            timeout,
+            f"the AT-SPI tree of {window_name(wid)!r}",
+            interval=0.3,
         )
 
     def control(self, aid: str, wid: int | None = None) -> Control:
@@ -1742,7 +1927,7 @@ class App:
             time.sleep(0.4)
             press(dialog, "enter")
         wait_until(
-            lambda: not window_exists(dialog) or not geometry(dialog).viewable,
+            lambda: not viewable(dialog),
             12,
             "the portal file dialog to close",
         )
@@ -1834,7 +2019,7 @@ def arguments(
     )
     parser.add_argument(
         "--kind",
-        choices=("xvfb", "dual"),
+        choices=("xvfb", "dual", "triple"),
         default="xvfb",
         help="private display kind (ignored with --display)",
     )
@@ -1995,11 +2180,11 @@ def _cli(argv: list[str]) -> int:
     serve = sub.add_parser(
         "serve", help="start a display + Openbox and keep it until interrupted"
     )
-    serve.add_argument("--kind", choices=("xvfb", "dual"), default="xvfb")
+    serve.add_argument("--kind", choices=("xvfb", "dual", "triple"), default="xvfb")
     serve.add_argument("--display", help="display number to use (xvfb only), e.g. :100")
     config = sub.add_parser("openbox-config", help="write the harness Openbox rc.xml")
     config.add_argument("path", type=Path)
-    config.add_argument("--kind", choices=("xvfb", "dual"), default="xvfb")
+    config.add_argument("--kind", choices=("xvfb", "dual", "triple"), default="xvfb")
     config.add_argument("--screen", default="1920x1080")
     args = parser.parse_args(argv)
     if args.command == "doctor":

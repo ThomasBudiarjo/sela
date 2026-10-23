@@ -5,6 +5,7 @@
 //! `cargo run --locked --release --example search_bench [-- --songs N]`.
 use sela::{
     arrangement::SectionId,
+    song_order::{SongOrder, SongSort},
     storage::{Repository, Section, Song},
 };
 use std::time::{Duration, Instant};
@@ -236,6 +237,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("no match", "zzqxv".into()),
         ("FTS syntax as text", "\" NEAR( * AND title:".into()),
         ("lyric line", long_line),
+        // Every section is labelled "Verse N" (schema 7 indexes labels).
+        ("section label", "verse".into()),
+        ("section label and number", "verse 3".into()),
     ];
     let mut all = Vec::with_capacity(queries.len() * RUNS);
     let mut generation = 0u64;
@@ -279,5 +283,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ms(percentile(&all, 95.0)),
         ms(*all.last().unwrap())
     );
+
+    // The whole Songs list in each Sort by order (`Command::Library`).
+    println!(
+        "\n{:<38} {:>6} {:>9} {:>9}",
+        "library order", "songs", "p50 ms", "p95 ms"
+    );
+    for sort in SongSort::ALL {
+        let mut samples = Vec::with_capacity(20);
+        let mut count = 0;
+        for run in 0..WARMUP + 20 {
+            let start = Instant::now();
+            let listed = repository
+                .library(SongOrder {
+                    sort,
+                    descending: false,
+                })
+                .map_err(|e| format!("{sort:?}: {e:?}"))?;
+            if run >= WARMUP {
+                samples.push(start.elapsed());
+            }
+            count = listed.len();
+        }
+        samples.sort();
+        println!(
+            "{:<38} {:>6} {:>9} {:>9}",
+            sort.code(),
+            count,
+            ms(percentile(&samples, 50.0)),
+            ms(percentile(&samples, 95.0))
+        );
+    }
     Ok(())
 }
