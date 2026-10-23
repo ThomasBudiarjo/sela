@@ -84,6 +84,9 @@ impl save::Fs for TestFs {
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         save::RealFs.sync_dir(dir)
     }
+    fn modified(&self, path: &Path) -> io::Result<u64> {
+        save::RealFs.modified(path)
+    }
 }
 
 fn config(fs: Arc<TestFs>) -> Config {
@@ -557,6 +560,116 @@ fn an_unwritable_profile_after_a_crash_still_offers_a_read_only_restore(cx: &mut
     let closes =
         cx.update(|window, cx| operator.update(cx, |o, cx| o.autosave_allow_close(window, cx)));
     assert!(closes, "autosave is off: nothing to flush");
+}
+
+/// Sets `file`'s modification time to `ms` (wall clock since the epoch).
+fn set_modified(file: &Path, ms: u64) {
+    std::fs::File::options()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_millis(ms))
+        .unwrap();
+}
+
+#[gpui::test]
+fn a_file_saved_after_the_last_autosave_is_disclosed_instead_of_never_saved(
+    cx: &mut TestAppContext,
+) {
+    // Review round 2: the unsaved schedule was committed, the operator then
+    // saved it (which withdraws the marker) and Sela died before the saved
+    // schedule was committed. The file is newer than the copy on offer.
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_songs(&dir);
+    let songs = versions(&library);
+    let file = dir.path().join("Sunday.selaschedule");
+    std::fs::write(&file, b"saved after the autosave").unwrap();
+    set_modified(&file, NOW_MS + 2 * 60_000);
+    let committed = Snapshot {
+        path: Some(file.clone()),
+        entries: vec![
+            entry_of(songs[0].0, &songs[0].1),
+            entry_of(songs[1].0, &songs[1].1),
+        ],
+        baseline: vec![Pin {
+            version: songs[0].0,
+            arrangement: None,
+        }],
+    };
+    {
+        let config = Config {
+            clock: Arc::new(|| NOW_MS),
+            ..config(Arc::default())
+        };
+        let (mut store, _) = Store::open(dir.path(), &config).unwrap();
+        store.commit(1, &committed).unwrap();
+        store.mark_uncommitted(2, 2).unwrap();
+        store.clear_uncommitted().unwrap();
+    }
+    let (mut cx, operator) = start(cx, library, Arc::default(), "apply");
+    settle(&mut cx, &operator, "the recovery prompt", |o| {
+        o.dialog == Some(Dialog::Recovery)
+    });
+    let lines = operator.read_with(&cx, |o, _| o.recovery_lines());
+    assert_eq!(
+        lines,
+        [
+            "Sela did not close normally last time.",
+            "The last autosave (7 min ago) holds “Sunday.selaschedule” with 2 item(s).",
+            "Its schedule file was saved again 5 min ago, after this autosave, so the file may hold newer work: restoring brings back this older copy, and saving it replaces the file.",
+            "If you don't restore, the copies stay in the profile's Recovery folder until newer autosaves replace them.",
+        ]
+    );
+}
+
+#[gpui::test]
+fn a_close_waiting_for_a_start_up_open_that_fails_closes_at_once(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_songs(&dir);
+    let songs = versions(&library);
+    let committed = Snapshot {
+        path: None,
+        entries: vec![entry_of(songs[0].0, &songs[0].1)],
+        baseline: Vec::new(),
+    };
+    crashed_profile(&library, &committed, 2);
+    let before = std::fs::read(recovery(dir.path()).join(SESSION_FILE)).unwrap();
+    let fs = Arc::new(TestFs::default());
+    fs.session_full.store(true, Ordering::SeqCst);
+    let scan = Arc::new(AtomicBool::new(false));
+    *fs.hold_scan.lock().unwrap() = Some(scan.clone());
+    let (mut cx, operator) = start(cx, library, fs, "apply");
+    settle(&mut cx, &operator, "settings loaded", |o| {
+        o.settings.loaded_for_test()
+    });
+    let closed = cx.update(|window, cx| operator.update(cx, |o, cx| o.may_close(window, cx)));
+    assert!(!closed, "the close waits for the start-up scan");
+    // The scan then finds the offer but cannot write this run's session:
+    // autosave is off, and no worker is left to answer the queued close.
+    scan.store(true, Ordering::SeqCst);
+    let mut waited = Duration::ZERO;
+    let end = Instant::now() + Duration::from_secs(10);
+    while cx.read(|cx| cx.windows().len()) > 0 {
+        assert!(Instant::now() < end, "the window closes");
+        assert_ne!(
+            operator.read_with(&cx, |o, _| o.dialog.clone()),
+            Some(Dialog::Recovery),
+            "no prompt pops up in a window that is closing"
+        );
+        cx.executor().advance_clock(Duration::from_millis(100));
+        waited += Duration::from_millis(100);
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        waited < Duration::from_secs(1),
+        "closed without waiting out the close timeout ({waited:?})"
+    );
+    assert_eq!(
+        std::fs::read(recovery(dir.path()).join(SESSION_FILE)).unwrap(),
+        before,
+        "nothing could be recorded, so the next start asks again"
+    );
 }
 
 #[gpui::test]

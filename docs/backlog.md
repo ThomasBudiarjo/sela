@@ -900,8 +900,8 @@ Progress (autosave-recovery, 2026-10-22): **implemented-unqualified**; see
 thread, close flush, OS profile lock with a second-instance notice, recovery
 prompt with honest loss disclosure, 20-revision / 4 MiB retention. Linux U/I,
 GPUI and `scripts/autosave-x11.py` pass; `autosave-windows.py`, EW
-observations (EW8-OBS-071..077 UNOBSERVED), real disk/ACL faults, power loss
-and the older-hardware hitch measurement are open (PP-AUTO-01..10).
+observations (EW8-OBS-071..078 UNOBSERVED), real disk/ACL faults, power loss
+and the older-hardware hitch measurement are open (PP-AUTO-01..11).
 **Local profile management is not delivered here**: one implicit profile per
 library folder; the Profiles menu (Default, Profiles Manager…) stays inert.
 Create/switch/rename moved to M1-12b below (planned), so the title's "local

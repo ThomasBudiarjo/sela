@@ -555,6 +555,7 @@ pub enum Msg {
     RecoveryUnanswered,
     RecoveryRevision,
     RecoveryNotInFile,
+    RecoveryFileNewer,
     RecoveryLost,
     RecoveryNoCopy,
     RecoveryDamaged,
@@ -1059,6 +1060,7 @@ impl Msg {
         Msg::RecoveryUnanswered,
         Msg::RecoveryRevision,
         Msg::RecoveryNotInFile,
+        Msg::RecoveryFileNewer,
         Msg::RecoveryLost,
         Msg::RecoveryNoCopy,
         Msg::RecoveryDamaged,
@@ -1635,6 +1637,9 @@ impl Msg {
                 "The last autosave ({ago}) holds “{name}” with {count} item(s)."
             }
             Self::RecoveryNotInFile => "Those changes were never saved to the schedule file.",
+            Self::RecoveryFileNewer => {
+                "Its schedule file was saved again {ago}, after this autosave, so the file may hold newer work: restoring brings back this older copy, and saving it replaces the file."
+            }
             Self::RecoveryLost => {
                 "Newer changes (made {ago}) were not autosaved and cannot be recovered; the schedule then had {count} item(s)."
             }
@@ -2244,6 +2249,9 @@ impl Msg {
                 "Simpan otomatis terakhir ({ago}) berisi “{name}” dengan {count} item."
             }
             Self::RecoveryNotInFile => "Perubahan itu belum pernah disimpan ke file jadwal.",
+            Self::RecoveryFileNewer => {
+                "File jadwalnya disimpan lagi {ago}, setelah simpan otomatis ini, jadi file itu mungkin berisi pekerjaan yang lebih baru: memulihkan mengembalikan salinan lama ini, dan menyimpannya akan menggantikan file itu."
+            }
             Self::RecoveryLost => {
                 "Perubahan yang lebih baru (dibuat {ago}) belum tersimpan otomatis dan tidak dapat dipulihkan; saat itu jadwal berisi {count} item."
             }
@@ -2353,7 +2361,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 500);
+        assert_eq!(Msg::ALL.len(), 501);
     }
 
     #[test]

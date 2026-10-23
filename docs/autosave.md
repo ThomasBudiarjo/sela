@@ -6,7 +6,7 @@ EasyWorship observations, physical power loss and the older-hardware hitch
 measurement are open (see [parity-pending.md](parity-pending.md#stream-autosave-recovery)).
 EasyWorship 8.0.49 behaviour after a crash, and whether it autosaves
 schedules at all, is **unobserved**; everything below that faces the
-operator is a best guess recorded as EW8-OBS-071..077 in
+operator is a best guess recorded as EW8-OBS-071..078 in
 [reference-observations.md](reference-observations.md#autosave-and-recovery--unobserved-best-guesses-2026-10-22-autosave-recovery).
 
 Code: `src/autosave.rs` (framework-free store, policy, worker),
@@ -141,7 +141,11 @@ to its saved file and no lost work needs no prompt.
 The prompt (`Dialog::Recovery`, modal, focus on **Restore**) lists, one line
 each: Sela did not close normally (or, after `offered`, that Sela was closed
 before this question was answered); the last autosave's age, schedule name
-and item count; that its changes were never saved to the file; that newer
+and item count; that its changes were never saved to the file, or instead,
+when the revision's own schedule file was modified after the revision was
+committed (one metadata read at start), that the file was saved again
+later and may hold newer work, so restoring brings back an older copy and
+saving it replaces the file (EW8-OBS-078, unobserved); that newer
 changes (with their age and item count) were not autosaved and cannot be
 recovered; how many newer copies were damaged; that an autosave was cut
 off; that declined copies stay in the Recovery folder; and, when this run
@@ -169,6 +173,14 @@ the loss with OK only.
   locked) after an unclean run, the readable offer is still shown: Restore
   works read-only, nothing is committed or acknowledged, the footer says
   "Autosave is off: …", and the next start offers the same copy again.
+  A close made while that start-up scan ran no longer waits: once the open
+  fails no worker can answer it, so the window closes at the next close
+  poll, and the prompt is held back while a close is in progress (a
+  cancelled close shows it on the next poll).
+- A save withdraws the uncommitted marker at once, but the saved schedule
+  is committed only after the 2 s quiet period. A crash in that gap offers
+  the older unsaved revision; the "file saved again" line (not "never
+  saved") then warns that the file is newer.
 
 ## Close
 

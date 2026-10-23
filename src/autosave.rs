@@ -104,6 +104,8 @@ pub trait Fs: Send + Sync {
     fn remove(&self, path: &Path) -> io::Result<()>;
     /// Makes a rename in `dir` durable (Unix; a no-op elsewhere).
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
+    /// Last-modified time of `path` in wall-clock ms since the Unix epoch.
+    fn modified(&self, path: &Path) -> io::Result<u64>;
 }
 
 pub struct RealFs;
@@ -163,6 +165,14 @@ impl Fs for RealFs {
             let _ = dir;
             Ok(())
         }
+    }
+
+    fn modified(&self, path: &Path) -> io::Result<u64> {
+        let since = fs::metadata(path)?
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        Ok(u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
     }
 }
 
@@ -377,6 +387,10 @@ pub struct Offer {
     pub damaged: usize,
     /// A commit was cut off; its partial file was removed.
     pub interrupted: bool,
+    /// The revision's schedule file was modified (wall-clock ms) after the
+    /// revision was committed, so the file may hold newer work than the
+    /// revision (for example a Save in the gap before the next commit).
+    pub file_saved: Option<u64>,
     /// The previous run closed normally, but with this same offer still
     /// unanswered (it was already shown once and neither restored nor
     /// declined).
@@ -688,12 +702,19 @@ impl Store {
             let lost = marker.filter(|m| m.after >= newest);
             let unsaved = revision.as_ref().is_some_and(|r| r.snapshot.unsaved());
             if unsaved || lost.is_some() || damaged > 0 {
+                // One metadata read of the revision's own file: a newer
+                // modification time means a save the revision does not hold.
+                let file_saved = revision.as_ref().and_then(|r| {
+                    let modified = fs.modified(r.snapshot.path.as_deref()?).ok()?;
+                    (modified > r.saved_at).then_some(modified)
+                });
                 offer = Some(Offer {
                     revision,
                     lost,
                     damaged,
                     interrupted,
                     unanswered,
+                    file_saved,
                 });
             }
         }

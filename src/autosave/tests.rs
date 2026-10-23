@@ -130,6 +130,9 @@ impl Fs for FaultFs {
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         RealFs.sync_dir(dir)
     }
+    fn modified(&self, path: &Path) -> io::Result<u64> {
+        RealFs.modified(path)
+    }
 }
 
 fn config_with(fs: Arc<dyn Fs>, clock: WallClock) -> Config {
@@ -311,6 +314,46 @@ fn newer_uncommitted_work_is_disclosed_as_lost() {
             items: 3
         })
     );
+}
+
+#[test]
+fn a_file_saved_after_the_offered_revision_is_disclosed() {
+    // Review round 2: commit 1 holds unsaved edits, the operator then saves
+    // (the marker is withdrawn) and the process dies before the saved
+    // schedule is committed. Only the file's modification time remembers.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("Sunday.selaschedule");
+    let (c, now) = clock();
+    let cfg = config_with(Arc::new(RealFs), c);
+    let unsaved = Snapshot {
+        path: Some(file.clone()),
+        entries: vec![entry(1, "Morning Light"), entry(2, "Evening Song")],
+        baseline: vec![pin(1)],
+    };
+    let (mut store, _) = Store::open(dir.path(), &cfg).unwrap();
+    let committed_at = now.load(Ordering::SeqCst);
+    store.commit(1, &unsaved).unwrap();
+    store.mark_uncommitted(2, 2).unwrap();
+    store.clear_uncommitted().unwrap();
+    drop(store);
+    let set_modified = |ms: u64| {
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_millis(ms))
+            .unwrap();
+    };
+    let offer = |cfg: &Config| Store::open(dir.path(), cfg).unwrap().1.offer.unwrap();
+    assert_eq!(offer(&cfg).file_saved, None, "no file at all");
+    std::fs::write(&file, b"older").unwrap();
+    set_modified(committed_at - 60_000);
+    assert_eq!(offer(&cfg).file_saved, None, "saved before the commit");
+    set_modified(committed_at + 1_500);
+    let found = offer(&cfg);
+    assert_eq!(found.file_saved, Some(committed_at + 1_500));
+    assert_eq!(found.lost, None, "the save withdrew the marker");
+    assert_eq!(found.revision.unwrap().snapshot, unsaved);
 }
 
 #[test]
@@ -935,6 +978,9 @@ mod s03 {
         }
         fn sync_dir(&self, dir: &Path) -> io::Result<()> {
             RealFs.sync_dir(dir)
+        }
+        fn modified(&self, path: &Path) -> io::Result<u64> {
+            RealFs.modified(path)
         }
     }
 

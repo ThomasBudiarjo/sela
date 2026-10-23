@@ -132,7 +132,12 @@ impl Operator {
             changed = true;
             self.autosave_reply(reply, now);
         }
-        if self.autosave.prompt_pending && self.show_dialog_later(Dialog::Recovery) {
+        // A close in progress keeps the prompt back: the window is going
+        // away, and a cancelled close shows it on the next poll.
+        if self.autosave.prompt_pending
+            && self.autosave.closing.is_none()
+            && self.show_dialog_later(Dialog::Recovery)
+        {
             self.autosave.prompt_pending = false;
             changed = true;
         }
@@ -316,7 +321,11 @@ impl Operator {
                     name = name,
                     count = snapshot.entries.len()
                 ));
-                if snapshot.unsaved() {
+                if let Some(modified) = offer.file_saved {
+                    // Its file was saved after this copy: whatever the copy
+                    // held unsaved may be in the file now, with newer work.
+                    lines.push(t!(Msg::RecoveryFileNewer, ago = ago(modified, now)));
+                } else if snapshot.unsaved() {
                     lines.push(t!(Msg::RecoveryNotInFile).into());
                 }
             }
@@ -453,7 +462,9 @@ impl Operator {
                     let timed_out = cx.background_executor().now() - started >= CLOSE_WAIT;
                     let done = this.update_in(cx, |this, window, cx| {
                         this.poll_autosave(cx);
-                        if !this.autosave.closed {
+                        // Autosave turned off while the close waited (the
+                        // start-up open failed): nothing will answer it.
+                        if !this.autosave.closed && this.autosave.worker.is_some() {
                             if !timed_out {
                                 this.submit_close();
                                 return false;

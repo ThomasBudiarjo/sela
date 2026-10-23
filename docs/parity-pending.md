@@ -318,7 +318,7 @@ Common Windows prerequisites are listed once in
 
 ## Stream: autosave-recovery
 
-Sela side: [autosave.md](autosave.md); best guesses EW8-OBS-071..075 in
+Sela side: [autosave.md](autosave.md); best guesses EW8-OBS-071..078 in
 reference-observations.md. Observe only on a disposable EW profile and
 schedule; never on a service in use.
 
@@ -379,6 +379,19 @@ schedule; never on a service in use.
   implicit profile per library folder; Profiles items rendered inert; no
   create/switch/rename (M1-12b planned). Re-run: none yet (M1-12b adds its
   own scripts).
+- [ ] **PP-AUTO-11 EW crash between a Save and the next autosave**
+  (EW8-OBS-078). Steps: open a saved schedule, add an item and wait until
+  EW has autosaved it (if PP-AUTO-01 shows EW autosaves at all), add one
+  more item, press Ctrl+S and end EW with Task Manager within a second;
+  relaunch and record whether a recovery copy is offered, its wording,
+  whether EW compares it with the newer file, and what Restore then puts in
+  the schedule (and whether saving overwrites the newer file). Sela now
+  (best guess): the older revision is offered with "Its schedule file was
+  saved again {ago}, after this autosave, so the file may hold newer work:
+  restoring brings back this older copy, and saving it replaces the file."
+  instead of "never saved". Re-run: `cargo test --bin sela
+  a_file_saved_after_the_last_autosave`, `cargo test --lib
+  a_file_saved_after_the_offered_revision`.
 - [ ] **PP-AUTO-06 Run `autosave-windows.py`** (M1-12, S03; NOT RUN: no
   Windows host on 2026-10-22). Checks LockFileEx as the profile lock and
   TerminateProcess as the kill, which the Linux run (`autosave-x11.py`,
