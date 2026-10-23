@@ -203,8 +203,21 @@ impl Operator {
                 state.policy.finished(fingerprint, false, now);
                 state.health = Health::Failed(error);
             }
-            Reply::Marked(Ok(())) => {}
-            Reply::Marked(Err(error)) => state.health = Health::Failed(error),
+            Reply::Marked(Ok(())) | Reply::Unmarked(Ok(())) => {
+                // A retried marker landed; a failing commit still shows.
+                if matches!(state.health, Health::Failed(_)) && !state.policy.failing() {
+                    state.health = Health::Ready;
+                }
+            }
+            Reply::Marked(Err(error)) => {
+                let seen = state.policy.seen();
+                state.policy.marker_failed(Step::Mark(seen), now);
+                state.health = Health::Failed(error);
+            }
+            Reply::Unmarked(Err(error)) => {
+                state.policy.marker_failed(Step::Unmark, now);
+                state.health = Health::Failed(error);
+            }
             Reply::Resolved(fingerprint, result) => {
                 let ok = result.is_ok();
                 if let Some(f) = fingerprint {

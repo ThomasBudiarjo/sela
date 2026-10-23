@@ -841,8 +841,13 @@ impl Store {
         if self.offer_open || self.session.uncommitted.is_none() {
             return Ok(());
         }
-        self.session.uncommitted = None;
-        self.write_session()
+        let marker = self.session.uncommitted.take();
+        let result = self.write_session();
+        if result.is_err() {
+            // The file may still hold the marker: a retry must write again.
+            self.session.uncommitted = marker;
+        }
+        result
     }
 
     /// `open` found an offer that is not resolved yet.
@@ -936,7 +941,10 @@ pub enum Reply {
     /// The fingerprint the commit was for, and its outcome (plus a
     /// rotation/session warning that does not undo it).
     Committed(u64, Result<(Committed, Option<Error>), Error>),
+    /// A `Job::Mark` outcome.
     Marked(Result<(), Error>),
+    /// A `Job::Unmark` outcome.
+    Unmarked(Result<(), Error>),
     /// The restored fingerprint, if any, and the outcome.
     Resolved(Option<u64>, Result<Option<Committed>, Error>),
     /// The flushed fingerprint, if any, and the outcome.
@@ -976,7 +984,7 @@ impl Worker {
                         Job::Mark(fingerprint, items) => {
                             Reply::Marked(store.mark_uncommitted(fingerprint, items))
                         }
-                        Job::Unmark => Reply::Marked(store.clear_uncommitted()),
+                        Job::Unmark => Reply::Unmarked(store.clear_uncommitted()),
                         Job::Resolve(restore) => Reply::Resolved(
                             restore.as_ref().map(|(f, _)| *f),
                             store.resolve(restore.as_ref().map(|(f, s)| (*f, &**s))),
@@ -1045,6 +1053,8 @@ pub struct Policy {
     /// A marker for an edit made while the in-flight commit runs is queued
     /// behind it, so it lands with `after` = that commit.
     flight_marked: bool,
+    /// A marker write failed: no marker step before this instant.
+    marker_retry_at: Option<Instant>,
 }
 
 impl Policy {
@@ -1061,6 +1071,7 @@ impl Policy {
             retry_at: None,
             marked: false,
             flight_marked: false,
+            marker_retry_at: None,
         }
     }
 
@@ -1103,25 +1114,30 @@ impl Policy {
             }
         }
         let settled = self.in_flight.is_none();
+        let marker_due = self.marker_retry_at.is_none_or(|at| now >= at);
         if self.seen == self.committed {
             self.first_change = None;
-            if self.marked && settled {
+            if self.marked && settled && marker_due {
                 self.marked = false;
                 return Step::Unmark;
             }
             return Step::Idle;
         }
-        if unsaved && !self.marked {
+        if unsaved && !self.marked && marker_due {
             self.marked = true;
             // Queued behind a running commit, it lands after that commit.
             self.flight_marked = !settled;
             return Step::Mark(self.seen);
         }
-        if !unsaved && self.marked && settled {
+        if !unsaved && self.marked && settled && marker_due {
             self.marked = false;
             return Step::Unmark;
         }
-        if unsaved && !self.flight_marked && self.in_flight.is_some_and(|f| f != self.seen) {
+        if unsaved
+            && !self.flight_marked
+            && marker_due
+            && self.in_flight.is_some_and(|f| f != self.seen)
+        {
             // The newer edit would be lost if the process died right after
             // the running commit lands; the worker records this marker after
             // that commit, so it reads `after` = the commit's sequence.
@@ -1178,6 +1194,16 @@ impl Policy {
         }
     }
 
+    /// The worker could not write the marker change `step` (a `Mark` or an
+    /// `Unmark`): the disk does not hold what this policy assumed, so the
+    /// transition is taken again. A marker is a few hundred bytes and, while
+    /// commits fail, the only record of unsaved work, so it is retried after
+    /// the quiet period rather than the commit retry interval.
+    pub fn marker_failed(&mut self, step: Step, now: Instant) {
+        self.unqueued(step);
+        self.marker_retry_at = Some(now + self.cadence.quiet);
+    }
+
     /// A restored schedule (`fingerprint`) is being committed by the
     /// recovery answer; it needs no separate marker.
     pub fn restoring(&mut self, fingerprint: u64) {
@@ -1196,6 +1222,7 @@ impl Policy {
         self.flight_marked = false;
         self.first_change = None;
         self.retry_at = None;
+        self.marker_retry_at = None;
     }
 }
 

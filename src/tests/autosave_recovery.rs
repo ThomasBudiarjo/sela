@@ -895,6 +895,35 @@ fn a_full_disk_is_reported_and_retried_until_space_returns(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn a_marker_that_could_not_be_written_is_written_once_the_disk_allows(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let library = library_with_songs(&dir);
+    let fs = Arc::new(TestFs::default());
+    let (mut cx, operator) = start(cx, library, fs.clone(), "apply");
+    settle(&mut cx, &operator, "autosave ready", ready);
+    // Revisions keep failing (the commit cannot land), and the first
+    // marker write fails too.
+    fs.disk_full.store(true, Ordering::SeqCst);
+    fs.session_full.store(true, Ordering::SeqCst);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    advance(&mut cx, &operator, Duration::ZERO);
+    settle(&mut cx, &operator, "the failure note", |o| {
+        note(o).is_some_and(|(_, problem)| problem)
+    });
+    assert!(session(dir.path())["uncommitted"].is_null());
+    fs.session_full.store(false, Ordering::SeqCst);
+    for _ in 0..3 {
+        advance(&mut cx, &operator, Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    settle_disk(&mut cx, &operator, "the retried marker", || {
+        !session(dir.path())["uncommitted"].is_null()
+    });
+    assert_eq!(session(dir.path())["uncommitted"]["items"], 1);
+    assert!(revision_files(dir.path()).is_empty(), "commits still fail");
+}
+
+#[gpui::test]
 fn a_read_only_profile_turns_autosave_off_with_the_reason(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let library = library_with_songs(&dir);

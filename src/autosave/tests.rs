@@ -702,6 +702,42 @@ fn a_withdrawn_marker_discloses_no_loss() {
 }
 
 #[test]
+fn a_failed_marker_clear_is_written_again_on_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let fs = Arc::new(FaultFs::default());
+    let cfg = config_with(fs.clone(), clock().0);
+    let (mut store, _) = Store::open(dir.path(), &cfg).unwrap();
+    store.commit(1, &untitled()).unwrap();
+    store.mark_uncommitted(2, 3).unwrap();
+    fs.fail(Op::Write, SESSION_FILE, io::ErrorKind::StorageFull);
+    assert!(store.clear_uncommitted().is_err());
+    fs.heal();
+    store.clear_uncommitted().unwrap();
+    drop(store);
+    let offer = Store::open(dir.path(), &config()).unwrap().1.offer.unwrap();
+    assert_eq!(offer.lost, None, "the retried clear reached the disk");
+}
+
+#[test]
+fn a_failed_marker_write_is_taken_again_after_the_quiet_period() {
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    let mut policy = Policy::new(cadence(), 0);
+    assert_eq!(policy.step(1, true, at(0)), Step::Mark(1));
+    policy.marker_failed(Step::Mark(1), at(100));
+    assert_eq!(policy.step(1, true, at(1_000)), Step::Idle, "not hammered");
+    assert_eq!(policy.step(1, true, at(2_100)), Step::Mark(1), "retried");
+    assert_eq!(policy.step(1, true, at(2_200)), Step::Commit(1));
+    policy.finished(1, false, at(2_300));
+    // Saved to its file while the commit fails: the marker goes, and a
+    // failed withdrawal is retried too.
+    assert_eq!(policy.step(2, false, at(2_400)), Step::Unmark);
+    policy.marker_failed(Step::Unmark, at(2_500));
+    assert_eq!(policy.step(2, false, at(3_000)), Step::Idle);
+    assert_eq!(policy.step(2, false, at(4_500)), Step::Unmark, "retried");
+}
+
+#[test]
 fn an_edit_made_while_a_commit_runs_is_marked_without_waiting_for_it() {
     let t0 = Instant::now();
     let at = |ms: u64| t0 + Duration::from_millis(ms);

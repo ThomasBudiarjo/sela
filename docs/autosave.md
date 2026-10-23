@@ -63,7 +63,11 @@ new storage layout.
   would no longer be true: the schedule went back to the newest commit
   (undo) or now equals its file (save). It is never withdrawn while a commit
   runs, since that commit may still fail. A marker that arrives for exactly
-  the schedule a commit already holds is dropped.
+  the schedule a commit already holds is dropped. A marker or withdrawal
+  whose write fails (`Reply::Marked`/`Reply::Unmarked` with an error) is
+  taken again after the quiet period (2 s), not the 30 s commit retry: the
+  policy forgets that transition, and the store keeps the old marker in
+  memory, so the retry really writes `session.json` again.
 
 A revision records the entries (pinned song revision, arrangement, title),
 the schedule file path (UTF-8 only; a non-UTF-8 path is recorded as
@@ -236,7 +240,7 @@ marker or commit.
   flush, rotation by count and bytes, budget refusal, disk full, read-only,
   locked, rotation failure, error mapping, cadence (quiet, max delay,
   retry, revert with unmark, unsaved-only marking, marking during a running
-  commit, unqueued, restore/flush), worker non-blocking and bounded
+  commit, unqueued, failed marker and withdrawal retried, restore/flush), worker non-blocking and bounded
   queue, profile lock (same process, child process killed, read-only), and
   **S03** with real child processes killed by SIGKILL before, during and
   after a commit (`autosave::tests::s03`).
