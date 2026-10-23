@@ -19,6 +19,7 @@ use std::{
 };
 
 mod arrangement_rendering;
+mod autosave_recovery;
 mod focus_modality;
 mod layout_startup;
 mod navigation;

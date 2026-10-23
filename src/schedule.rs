@@ -305,6 +305,38 @@ impl Schedule {
         self.path = None;
         self.baseline.clear();
     }
+
+    /// Pins as last saved or opened (empty while untitled).
+    pub fn baseline(&self) -> &[Pin] {
+        &self.baseline
+    }
+
+    /// Replaces the contents with an autosaved revision (M1-12): its entries,
+    /// its file and that file's baseline, so edits that were not saved to
+    /// the file stay unsaved. Fresh entry IDs, like `open`.
+    pub fn restore(
+        &mut self,
+        path: Option<PathBuf>,
+        items: Vec<(Pin, String)>,
+        baseline: Vec<Pin>,
+    ) -> Result<(), Error> {
+        if items.len() > MAX_ITEMS || baseline.len() > MAX_ITEMS {
+            return Err(Error::Invalid);
+        }
+        self.document += 1;
+        self.baseline = baseline;
+        self.entries = items
+            .into_iter()
+            .map(|(pin, title)| Entry {
+                id: self.allocate(),
+                version: pin.version,
+                title,
+                arrangement: pin.arrangement,
+            })
+            .collect();
+        self.path = path;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

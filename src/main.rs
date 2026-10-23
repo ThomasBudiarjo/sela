@@ -144,6 +144,7 @@ fn bind_operator_keys(cx: &mut App) {
 }
 
 mod audience;
+mod instance;
 mod operator;
 mod song_library;
 mod text_input;
@@ -291,6 +292,11 @@ fn operator_window_options(
     }
 }
 
+/// The operator's profile lock, held for the life of the process.
+struct HeldProfile(#[allow(dead_code)] sela::profile::ProfileLock);
+
+impl gpui::Global for HeldProfile {}
+
 enum Mode {
     Operator(Option<std::path::PathBuf>),
     Editor(std::path::PathBuf),
@@ -353,6 +359,27 @@ fn main() {
             }
             Mode::Operator(library) => library,
         };
+        // One operator per profile (M1-12): a second one opens nothing but
+        // a notice. The OS lock dies with the process, however it ends.
+        let profile = library
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .filter(|p| !p.as_os_str().is_empty());
+        if let Some(profile) = profile {
+            match sela::profile::ProfileLock::acquire(profile) {
+                Ok(lock) => cx.set_global(HeldProfile(lock)),
+                Err(sela::profile::LockError::Held) => {
+                    instance::open(profile, cx);
+                    return;
+                }
+                // A read-only or lock-less folder: run, and let autosave
+                // report why it cannot write there.
+                Err(sela::profile::LockError::Unavailable(reason)) => {
+                    eprintln!("profile lock unavailable: {reason}");
+                }
+            }
+        }
+        cx.set_global(operator::AutosaveSetup(sela::autosave::Config::system()));
         let layout = library
             .as_deref()
             .and_then(std::path::Path::parent)

@@ -21,7 +21,9 @@ Files:
   `scenario-s01-x11.py` (fresh profile, New Song, schedule, save, reopen,
   Go Live) and `scenario-s02-x11.py` (present A, edit B, Next/Previous,
   masks, Go Live under Black), with Windows counterparts
-  `scenario-s0{1,2}-windows.py` (scrutiny-r2).
+  `scenario-s0{1,2}-windows.py` (scrutiny-r2). Feature scripts written on
+  the harness: `autosave-x11.py` (M1-12, S03; Windows counterpart
+  `autosave-windows.py`).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -255,6 +257,7 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
 | `song-import-x11.py --display :112` (import-framework, 2026-10-22) | xvfb, audience `window` | PASS (27 s) |
+| `autosave-x11.py --display :113` (2026-10-22, autosave-recovery; review round 1 adds the unanswered-close step) | xvfb `serve --display :113` | PASS (19 s; round 1: 20.5 s) |
 
 GTK portal folder chooser notes (song-import-x11.py): it opens on Recent,
 where Enter in the location entry does nothing, so the script first clicks

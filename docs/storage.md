@@ -1,5 +1,8 @@
 # M1-01a durable storage contract
 
+Schedule autosave and crash recovery (M1-12) live outside SQLite, in the
+profile's `Recovery/` folder; see [autosave](autosave.md).
+
 Implemented-unqualified prerequisite under the approved UI-first exception;
 not completion of M1-01, M1-05, M1-09 or the physical-output gate.
 

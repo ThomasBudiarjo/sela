@@ -399,6 +399,10 @@ impl Operator {
                 }
                 // Stays open until the commit lands (`song_import`).
                 Some(Dialog::ImportSongs) => self.confirm_song_import(),
+                Some(Dialog::Recovery) => {
+                    self.close_dialog(window, cx);
+                    self.restore_recovery();
+                }
                 Some(Dialog::Preflight | Dialog::FileError) | None => return,
             },
             Control::DialogCancel if self.dialog.is_some() => {
@@ -413,6 +417,9 @@ impl Operator {
                 }
                 if self.dialog == Some(Dialog::ImportSongs) {
                     self.cancel_song_import();
+                }
+                if self.dialog == Some(Dialog::Recovery) {
+                    self.decline_recovery();
                 }
                 self.close_dialog(window, cx);
             }

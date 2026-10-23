@@ -38,6 +38,7 @@ use std::{
 };
 
 mod assets;
+mod autosave;
 mod controls;
 mod dialogs;
 mod frame_log;
@@ -54,6 +55,7 @@ pub(super) mod song_import;
 mod update_items;
 
 use assets::{Assets, PREFLIGHT_DIALOG_W};
+pub(super) use autosave::AutosaveSetup;
 pub(super) use controls::Control;
 use controls::{
     ControlSet, DIALOG_TAB_INDEX, IMAGE_TAB_INDEX, SCHEDULE_TAB_INDEX, SLIDE_TAB_INDEX,
@@ -216,6 +218,9 @@ pub(crate) enum Request {
     /// A song import's duplicate check or commit (`song_import`), for the
     /// import job that asked; a reply for an older job is dropped.
     SongImport(u64),
+    /// Loading a restored schedule's songs for the open-time file check
+    /// (M1-11b); the schedule document it was for.
+    RecoveryCheck(u64),
 }
 
 pub(super) struct Operator {
@@ -383,6 +388,8 @@ pub(super) struct Operator {
     pub(super) _search_waker: Option<Task<()>>,
     _poller: Option<Task<()>>,
     _receipt_waker: Option<Task<()>>,
+    /// Schedule autosave and recovery (M1-12).
+    pub(super) autosave: autosave::AutosaveState,
 }
 
 impl Operator {
@@ -403,6 +410,7 @@ impl Operator {
             .filter(|p| !p.as_os_str().is_empty())
             .map(Path::to_path_buf);
         let assets = Assets::start(profile.as_deref());
+        let autosave = autosave::AutosaveState::start(profile.as_deref(), cx);
         let mut media_message = None;
         let image_worker = profile.clone().and_then(|profile| {
             let worker = images::Worker::start(profile).ok();
@@ -631,6 +639,7 @@ impl Operator {
             _search_waker: None,
             _poller: Some(poller),
             _receipt_waker: Some(receipt_waker),
+            autosave,
         }
     }
 }

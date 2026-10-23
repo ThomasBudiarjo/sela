@@ -734,3 +734,23 @@ observation. Each has an item in [parity-pending.md](parity-pending.md)
 | SC2-LIVE-05 | EW8-OBS-014, -016 (double-click unmask) | Normalize text size rebuilds that newest request in place: the cue still being prepared with the old sizing is cancelled (never shown), and a double-click unmask intent armed for it still lifts the mask when it lands (PP-SC2-08). |
 | SC2-FOCUS-03 | EW8-OBS-010 (menus) | A press on New ▾ that closes its open menu only swallows the click that completes on New ▾; a press released elsewhere or a right press leaves nothing behind, so the next Enter or left click on New ▾ opens the menu (PP-SC2-01). |
 | SC2-I18N-02 | EW8-OBS-012 (observed wording) | Not a guess for the wording: the Song Editor close prompt asks "Save changes before closing?" to match its observed Yes = save, No = discard answers (it said "Close without saving?"). The shortened question and Sela's description line are Sela's own (PP-SC2-09). |
+
+### Autosave and recovery — UNOBSERVED best guesses (2026-10-22, autosave-recovery)
+
+EasyWorship 8.0.49 was not run for M1-12 (no Windows host). No earlier
+observation in this ledger covers autosave, crash recovery, backups or a
+second instance (searched: autosave, recover, crash, backup, instance,
+profile). Each row is a reversible best guess; the steps to observe them are
+PP-AUTO-01..05, -09 and -10 in [parity-pending.md](parity-pending.md#stream-autosave-recovery).
+IDs may be renumbered when parallel streams merge.
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-071 | UNOBSERVED | Whether EW autosaves an unsaved schedule at all, and where. Sela commits schedule revisions to `<profile>\Recovery\` 2 s after the last change (at most 10 s after the first), off the UI thread. |
+| EW8-OBS-072 | UNOBSERVED | EW after a forced termination with an unsaved schedule: any recovery prompt, its wording, buttons and default. Sela shows a modal "Recover the unsaved schedule?" with Restore (default) / Don't Restore and discloses lost newer edits, damaged and interrupted autosaves. |
+| EW8-OBS-073 | UNOBSERVED | What a restored schedule looks like in EW (title bar, unsaved marker, file association). Sela restores the entries with their original file and baseline, so only unsaved changes show as unsaved; Live is untouched. |
+| EW8-OBS-074 | UNOBSERVED | EW's behaviour on a second launch while running (focus the running window, a message, or a second window). Sela shows "Sela is already running" naming the profile and exits without touching it. |
+| EW8-OBS-075 | UNOBSERVED | EW schedule/profile backups and their retention (Profiles menu, backup folders). Sela keeps the newest 20 autosave revisions within 4 MiB, across sessions; declined copies stay. |
+| EW8-OBS-076 | UNOBSERVED | EW closed while its recovery prompt (if any) is unanswered, or before it appears: whether the next launch asks again and with what wording. Sela commits and acknowledges nothing, records the run as `offered`, and the next prompt starts "Sela was closed last time before this recovery question was answered." (PP-AUTO-09). |
+| EW8-OBS-077 | UNOBSERVED | EW Profiles menu and Profiles Manager… (create, switch, rename, delete; per-profile data; behaviour on switch). Sela has one implicit profile per library folder and renders the Profiles items inert; profile management is ticket M1-12b (PP-AUTO-10). |
+| EW8-OBS-078 | UNOBSERVED | EW recovery after the schedule file was saved later than its newest autosave (crash between a Save and the next autosave): whether EW offers the older autosave, prefers or compares the file, or warns. Sela offers the older revision and replaces "never saved to the schedule file" with "Its schedule file was saved again {ago}, after this autosave, so the file may hold newer work …" when the file's modification time is newer than the revision (PP-AUTO-11). |

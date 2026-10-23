@@ -458,10 +458,17 @@ impl Operator {
                         }
                         // Don't Save covers the schedule only: an import
                         // preview opened during the wait still holds the
-                        // close back (EW8-OBS-IMP-7, PP-IMPF-09).
+                        // close back (EW8-OBS-IMP-7, PP-IMPF-09); otherwise
+                        // only the autosave flush (M1-12) may still have to
+                        // finish first.
                         let discarded =
                             !this.song_import.holds_dialog() && this.discard_still_holds();
-                        if discarded || this.may_close(window, cx) {
+                        let close = if discarded {
+                            this.autosave_allow_close(window, cx)
+                        } else {
+                            this.may_close(window, cx)
+                        };
+                        if close {
                             window.remove_window();
                         }
                         true
@@ -495,7 +502,7 @@ impl Operator {
     }
 
     /// Don't Save was chosen and the schedule has not changed since.
-    fn discard_still_holds(&self) -> bool {
+    pub(crate) fn discard_still_holds(&self) -> bool {
         self.settings
             .discarded
             .as_ref()

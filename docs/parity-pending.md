@@ -473,6 +473,107 @@ framework", reference-observations "Song import — UNOBSERVED best guesses").
 
 ## Stream: autosave-recovery
 
+Sela side: [autosave.md](autosave.md); best guesses EW8-OBS-071..078 in
+reference-observations.md. Observe only on a disposable EW profile and
+schedule; never on a service in use.
+
+- [ ] **PP-AUTO-01 Does EW autosave schedules?** (EW8-OBS-071). Steps: on a
+  disposable profile create a new schedule, add two songs, do not save; note
+  the time; wait 1, 5 and 10 minutes, each time listing the profile folder
+  (`%ProgramData%\Softouch\EasyWorship\<profile>\` and
+  `%LOCALAPPDATA%`/`%APPDATA%` EasyWorship folders) with timestamps; record
+  any new or changed file and its name. Sela now (best guess): revisions in
+  `<profile>\Recovery\` 2 s after the last change, at most 10 s after the
+  first. Re-run: `autosave-windows.py`.
+- [ ] **PP-AUTO-02 EW after a forced termination** (EW8-OBS-072, -073).
+  Steps: with an unsaved two-song schedule (and once with a saved schedule
+  plus one unsaved change), end `EasyWorship.exe` in Task Manager (End task)
+  or `taskkill /F`; relaunch; capture any prompt (wording, buttons, default
+  button, Esc), which schedule appears, its title bar and unsaved marker,
+  and whether Live/audience state comes back. Sela now (best guess): modal
+  "Recover the unsaved schedule?" with Restore (default) / Don't Restore,
+  lost-work disclosure, original file and baseline kept, Live untouched.
+  Re-run: `autosave-windows.py`, then `cargo test --bin sela autosave_recovery`.
+- [ ] **PP-AUTO-03 EW second instance** (EW8-OBS-074). Steps: with EW
+  running, start `EasyWorship.exe` again (Start menu and a double-clicked
+  `.ews` file); record whether the running window comes to the front, a
+  message appears (capture its text), or a second window opens. Sela now:
+  "Sela is already running" naming the profile, exits 0, no profile change.
+  Re-run: `autosave-windows.py`.
+- [ ] **PP-AUTO-04 EW profile/schedule backups and retention** (EW8-OBS-075).
+  Steps: open the Profiles menu and Options; record every backup/restore
+  item, its default folder and any count or age limit; list the profile
+  folder for backup files after several saves. Sela now: newest 20 autosave
+  revisions within 4 MiB, kept across sessions and after Don't Restore.
+  Re-run: none (record only; M1-13 owns explicit backup/restore).
+- [ ] **PP-AUTO-05 EW Exit with an unsaved schedule after a recovery**.
+  Steps: after PP-AUTO-02, change the restored schedule and choose File ›
+  Exit; record the prompt (EW8-OBS-070 wording) and whether a later launch
+  asks about recovery again. Sela now: the normal unsaved guard; Don't Save
+  marks the run clean and the next start asks nothing. Re-run:
+  `autosave-windows.py`.
+- [ ] **PP-AUTO-09 EW closed with a recovery prompt unanswered**
+  (EW8-OBS-076). Steps: after a forced termination as in PP-AUTO-02, if EW
+  shows a recovery prompt, close EW (title-bar X, and once Alt+F4) without
+  answering it; relaunch and record whether the prompt returns, its wording
+  (does it still say EW closed abnormally?) and whether the schedule is
+  still offered. Also close EW as fast as possible after launch (before any
+  prompt appears) and record the same. Sela now (best guess): nothing is
+  committed or acknowledged, `session.json` says `offered`, and the next
+  prompt starts "Sela was closed last time before this recovery question
+  was answered." Re-run: `autosave-x11.py` / `autosave-windows.py` step 4,
+  `cargo test --bin sela autosave_recovery`.
+- [ ] **PP-AUTO-10 EW Profiles menu and Profiles Manager…** (EW8-OBS-077,
+  M1-12b). Steps: on a disposable install open Profiles; record every item
+  and its state; open Profiles Manager… and capture the dialog; create a
+  profile "Test B", switch to it, rename it, switch back and delete it,
+  recording each prompt (wording, buttons, default), whether a running
+  schedule/Live output is closed or kept on switch, and which data (songs,
+  media, schedules, settings, backups) is per profile (list
+  `%ProgramData%\Softouch\EasyWorship\` before and after). Sela now: one
+  implicit profile per library folder; Profiles items rendered inert; no
+  create/switch/rename (M1-12b planned). Re-run: none yet (M1-12b adds its
+  own scripts).
+- [ ] **PP-AUTO-11 EW crash between a Save and the next autosave**
+  (EW8-OBS-078). Steps: open a saved schedule, add an item and wait until
+  EW has autosaved it (if PP-AUTO-01 shows EW autosaves at all), add one
+  more item, press Ctrl+S and end EW with Task Manager within a second;
+  relaunch and record whether a recovery copy is offered, its wording,
+  whether EW compares it with the newer file, and what Restore then puts in
+  the schedule (and whether saving overwrites the newer file). Sela now
+  (best guess): the older revision is offered with "Its schedule file was
+  saved again {ago}, after this autosave, so the file may hold newer work:
+  restoring brings back this older copy, and saving it replaces the file."
+  instead of "never saved". Re-run: `cargo test --bin sela
+  a_file_saved_after_the_last_autosave`, `cargo test --lib
+  a_file_saved_after_the_offered_revision`.
+- [ ] **PP-AUTO-06 Run `autosave-windows.py`** (M1-12, S03; NOT RUN: no
+  Windows host on 2026-10-22). Checks LockFileEx as the profile lock and
+  TerminateProcess as the kill, which the Linux run (`autosave-x11.py`,
+  PASS) cannot. Prerequisites: seed (`--second-song`), secondary monitor.
+- [ ] **PP-AUTO-07 Real Windows failure conditions** (M1-12 checklist 5).
+  Steps: on a disposable profile, (a) put the profile on a small nearly full
+  VHD and edit until autosave fails, then free space; (b) deny write on
+  `Recovery\` with an ACL; (c) hold `Recovery\session.json` open with a
+  sharing lock (e.g. PowerShell `[IO.File]::Open(..., 'Open', 'Read', 'None')`);
+  record the footer notes and that editing and Live continue; (d) end Sela
+  with TerminateProcess after an unsaved edit has been autosaved, then
+  relaunch while (c)'s lock is held: the recovery prompt must still appear
+  with the "Autosave is off (…), so this answer cannot be recorded" line and
+  Restore must work read-only. Sela now: fault-adapter tests only
+  (`autosave::tests`, `tests::autosave_recovery`).
+  Re-run: the same steps after any fix.
+- [ ] **PP-AUTO-08 Power loss and the autosave hitch** (M1-12 acceptance,
+  P/H). Steps: (a) pull power (or hard-reset a VM) during repeated
+  autosaves on a disposable profile, then reopen and record the prompt and
+  restored schedule; (b) during the 90-minute rehearsal on the older
+  integrated-GPU laptop, edit the schedule every few seconds while Live
+  output runs a slide sequence and record frame pacing around commits
+  (`frame_log`). Sela now: process-kill tests (SIGKILL, Linux) and a GPUI
+  check that Live receipts arrive while a commit is held; no physical
+  power-loss or hardware timing evidence. Re-run: `autosave-windows.py`,
+  `prep-windows.py`.
+
 ## Stream: bundle-backup-restore
 
 ## Stream: songs-browser
@@ -530,6 +631,7 @@ timing):
 | 23 | `song-import-windows.py` | seed; secondary monitor; native folder dialog; the batch fixtures in `tests\fixtures\import\batch` |
 | 24 | `scenario-s01-windows.py` | none seeded (fresh profile); secondary monitor; native Save dialog |
 | 25 | `scenario-s02-windows.py` | seed (`--second-song`); secondary monitor |
+| 26 | `autosave-windows.py` | seed (`--second-song`); secondary monitor; no other Sela instance (it starts a second one on purpose) |
 
 Linux counterparts, where they exist, are named `scripts/<feature>-x11.py`
 (see [e2e-linux.md](e2e-linux.md)); a Linux pass does not replace these runs.
