@@ -787,6 +787,9 @@ is a reversible best guess; the steps to observe them are in
   non-empty License Info adds a third strip line "CCLI Song # N · License
   Info" (just the License Info when the song has no Song Number); changes
   apply to the next cue sent to Live and never redraw the live slide; a song
-  without copyright text shows no strip whatever License Info holds. The
+  without copyright text shows no strip whatever License Info holds; a
+  licensing line wider than the strip never shrinks the title and copyright
+  lines but is cut with "…" (PP-SB-11; before pr1-review one long License
+  Info shrank the whole strip, to 12 px at 1080p, and hid it below 720p). The
   Copyright Font menu, Song Font and "Show Verse/Chorus Label" controls of
   the same tab are not built.

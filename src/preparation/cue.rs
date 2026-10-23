@@ -310,7 +310,8 @@ fn run(shared: Arc<Shared>, mut builder: Builder) {
 }
 
 /// The normalized cap depends on every slide of an item; recompute it only
-/// when the item, surface, sizing or face resolution changes. Holding the
+/// when the item, surface, sizing, face resolution or copyright strip text
+/// (the footer, whose height the text area gives up) changes. Holding the
 /// resolution `Arc` keeps its address from being reused while cached.
 #[derive(Default)]
 struct CapCache(Option<CapEntry>);

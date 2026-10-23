@@ -654,6 +654,16 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
   2026-10-13 runs and on the older integrated-GPU laptop. Sela now: only a
   Linux VM run with opt-level overrides (work log, songs-browser record).
   Re-run: `search-windows.py`, `resource-browser-windows.py`.
+- [ ] **PP-SB-11 A License Info longer than the output width**
+  (EW8-OBS-055/063; pr1-review 2026-10-23). Steps: type a License Info of
+  about 250 characters, OK, send a song with copyright text and a Song
+  Number Live at 1920x1080 and at a small output (e.g. 854x480); capture the
+  strip; record whether EW wraps, shrinks, cuts or hides the licensing line
+  and whether the "Title - Author" and copyright lines change size. Sela now
+  (best guess): the title and copyright lines keep the size they have
+  without License Info; a licensing line wider than the strip is cut at a
+  character and ends in "…" (dropped when not even that fits). Re-run:
+  `cargo test --lib a_long_license_line_is_cut`, `songs-browser-windows.py`.
 
 ## Stream: media-core
 

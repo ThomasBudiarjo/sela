@@ -223,7 +223,7 @@ pub fn size_cap_with_footer(
             .filter(|(s, _)| !s.text.is_empty() && !matches!(s.format.size, Some(Size::Fixed(_))))
             .filter_map(|(s, r)| {
                 let strip = footer.and_then(|f| footer_plan(f, r, extent));
-                fit_size(&s.text, r, text_extent(strip, extent))
+                fit_size(&s.text, r, text_extent(strip.as_ref(), extent))
             })
             .min(),
     }
@@ -347,40 +347,78 @@ impl CopyrightStrip {
     }
 }
 
-/// Strip font size and box height that fit the width, or `None` when it
+/// Strip font size, box height and the text as drawn, or `None` when it
 /// cannot be drawn (small output, a glyph the face lacks, too much text).
-fn footer_plan(text: &str, resolved: &Resolved, extent: Extent) -> Option<(u16, u32)> {
-    let lines = text.lines().count();
+///
+/// The size fits "Title - Author" and the copyright line to the width. A
+/// licensing (third) line never shrinks them: one wider than the strip is
+/// cut at a character boundary and ends in an ellipsis, and dropped when not
+/// even that fits. UNOBSERVED best guess (PP-SB-11): how EW lays out a
+/// License Info longer than the output width.
+fn footer_plan(text: &str, resolved: &Resolved, extent: Extent) -> Option<(u16, u32, String)> {
+    let lines: Vec<&str> = text.lines().collect();
     if extent.height < FOOTER_MIN_HEIGHT
         || text.len() > MAX_TEXT_BYTES
-        || !FOOTER_LINES.contains(&lines)
+        || !FOOTER_LINES.contains(&lines.len())
     {
         return None;
     }
     let width = extent.width.checked_sub(2 * INSET).filter(|w| *w > 0)? as f32;
     let face = ttf_parser::Face::parse(resolved.face().bytes(), resolved.face().index()).ok()?;
     let em = f32::from(face.units_per_em());
+    let advance = |c: char| -> Option<f32> {
+        Some(f32::from(face.glyph_hor_advance(face.glyph_index(c)?).unwrap_or(0)) / em)
+    };
+    let measure = |line: &str| -> Option<f32> { line.chars().map(advance).sum() };
     let mut widest: f32 = 0.;
-    for line in text.lines() {
-        let mut advance = 0u32;
-        for c in line.chars() {
-            advance += u32::from(face.glyph_hor_advance(face.glyph_index(c)?).unwrap_or(0));
-        }
-        widest = widest.max(advance as f32 / em);
+    for line in &lines[..2] {
+        widest = widest.max(measure(line)?);
     }
     let target = (extent.height as f32 * FOOTER_EM).round().max(10.);
     let size = (width / (widest * 1.05).max(f32::EPSILON))
         .min(target)
         .floor();
-    (size >= 8.).then(|| (size as u16, footer_height(lines, size as u16)))
+    if size < 8. {
+        return None;
+    }
+    let room = width / (size * 1.05);
+    let mut drawn = format!("{}\n{}", lines[0], lines[1]);
+    if let Some(license) = lines.get(2) {
+        let fitted = if measure(license)? <= room {
+            Some((*license).to_owned())
+        } else {
+            let ellipsis = if advance('\u{2026}').is_some() {
+                "\u{2026}"
+            } else {
+                "..."
+            };
+            let mut used = measure(ellipsis)?;
+            let mut cut = String::new();
+            for c in license.chars() {
+                used += advance(c)?;
+                if used > room {
+                    break;
+                }
+                cut.push(c);
+            }
+            let cut = cut.trim_end();
+            (!cut.is_empty()).then(|| format!("{cut}{ellipsis}"))
+        };
+        if let Some(line) = fitted {
+            drawn.push('\n');
+            drawn.push_str(&line);
+        }
+    }
+    let lines = drawn.lines().count();
+    Some((size as u16, footer_height(lines, size as u16), drawn))
 }
 
 /// The extent the lyrics are fitted in: the canvas without the strip's box
 /// (`footer_plan`), which the audience raster also keeps for the strip alone.
-fn text_extent(strip: Option<(u16, u32)>, extent: Extent) -> Extent {
+fn text_extent(strip: Option<&(u16, u32, String)>, extent: Extent) -> Extent {
     match strip {
-        Some((_, height)) => Extent {
-            height: extent.height.saturating_sub(height),
+        Some((_, height, _)) => Extent {
+            height: extent.height.saturating_sub(*height),
             ..extent
         },
         None => extent,
@@ -458,7 +496,7 @@ pub fn cue_with_footer(
                 let fits = |room: Extent| {
                     fit_size(&slide.text, resolved, room).is_some_and(|fits| scaled <= fits)
                 };
-                if !fits(text_extent(strip, extent)) {
+                if !fits(text_extent(strip.as_ref(), extent)) {
                     strip = None;
                     if !fits(extent) {
                         return Err(PrepareError::InvalidScene);
@@ -467,7 +505,7 @@ pub fn cue_with_footer(
                 scaled
             }
             _ => {
-                let size = fit_size(&slide.text, resolved, text_extent(strip, extent))
+                let size = fit_size(&slide.text, resolved, text_extent(strip.as_ref(), extent))
                     .ok_or(PrepareError::InvalidScene)?;
                 cap.map_or(size, |cap| size.min(cap.max(1)))
             }
@@ -482,9 +520,9 @@ pub fn cue_with_footer(
         })
     };
     let cue = PreparedCue::from_owned(version, extent, background, text, caps)?;
-    match footer.zip(strip) {
-        Some((content, (size, _))) => cue.with_footer(OwnedText {
-            content: content.to_owned(),
+    match strip {
+        Some((size, _, content)) => cue.with_footer(OwnedText {
+            content,
             font_version: resolved.face().version(),
             font: resolved.face().bytes_arc(),
             face_index: resolved.face().index(),
@@ -793,6 +831,55 @@ mod tests {
         assert!(height(&three) > height(&two));
         // Four lines are refused like other strips that cannot be drawn.
         assert!(build("a\nb\nc\nd").footer().is_none());
+    }
+
+    #[test]
+    fn a_long_license_line_is_cut_and_never_shrinks_the_copyright() {
+        let slide = Slide {
+            label: String::new(),
+            text: "one\ntwo".into(),
+            format: Default::default(),
+            background: None,
+        };
+        let resolved = Resolved::bundled(&slide.format);
+        let version = ContentVersion { id: 4, revision: 1 };
+        let base = "Amazing Grace - John Newton\nPublic Domain";
+        let license = CopyrightOptions::clean_license(&"CCLI License 1234567 ".repeat(13));
+        assert!(license.len() > 250);
+        for (width, height) in [(1920, 1080), (1280, 720), (854, 480)] {
+            let extent = Extent { width, height };
+            let build = |strip: &str| {
+                cue_with_footer(
+                    version,
+                    &slide,
+                    Some(strip),
+                    &resolved,
+                    extent,
+                    CAPS,
+                    None,
+                    black(),
+                )
+                .unwrap()
+                .footer()
+                .map(|f| (f.font_size(), f.content().to_owned()))
+            };
+            let (plain, _) = build(base).unwrap();
+            let (size, text) = build(&format!("{base}\n{license}")).expect("still drawn");
+            assert_eq!(
+                size, plain,
+                "{width}x{height}: the copyright keeps its size"
+            );
+            let third = text.lines().nth(2).expect("a cut licensing line");
+            assert!(third.starts_with("CCLI License 1234567"), "{third}");
+            assert!(
+                third.ends_with('\u{2026}') || third.ends_with("..."),
+                "{third}"
+            );
+            assert!(third.len() < license.len());
+            // A licensing line that fits is drawn whole.
+            let short = format!("{base}\nCCLI License # 1");
+            assert_eq!(build(&short).unwrap().1, short);
+        }
     }
 
     #[test]
