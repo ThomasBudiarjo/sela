@@ -1,13 +1,13 @@
 //! OpenLyrics 0.8/0.9 XML song parser (M1-14). See docs/import.md for the
 //! field mapping and what is reported instead of imported.
 use super::{
-    MAX_ORDER, MAX_SECTIONS, MAX_SLIDES, MAX_WARNINGS, Parsed, ParsedSection, ParsedSong, Rejected,
-    Warning, decode, label_for_code, song::AUTHOR_SEPARATOR,
+    MAX_LABEL, MAX_ORDER, MAX_SECTIONS, MAX_SLIDES, MAX_TEXT_FIELD, MAX_TITLE, Parsed,
+    ParsedSection, ParsedSong, Rejected, SLIDE_BYTES, Warning, cut, decode, label_for_code,
+    song::AUTHOR_SEPARATOR,
 };
 use crate::storage::{MAX_ADMINISTRATOR, song_number_ok};
 use roxmltree::Node;
 use std::collections::{HashMap, HashSet};
-use unicode_segmentation::UnicodeSegmentation;
 
 const NAMESPACE: &str = "http://openlyrics.info/namespace/2009/song";
 /// Element nesting cap, checked before roxmltree parses: its element parser
@@ -16,13 +16,6 @@ const NAMESPACE: &str = "http://openlyrics.info/namespace/2009/song";
 const MAX_DEPTH: usize = 32;
 /// Node cap passed to roxmltree; a large real song has a few thousand.
 const MAX_NODES: u32 = 50_000;
-/// Byte budget for section labels and slide text, priced like
-/// `arrangement::SourceSnapshot` (24 bytes per slide). The rest of
-/// `MAX_TEXT_BYTES` covers the capped metadata fields.
-const SLIDE_BYTES: usize = crate::arrangement::MAX_TEXT_BYTES - 16 * 1024;
-const MAX_TITLE: usize = 1024;
-const MAX_TEXT_FIELD: usize = 4096;
-const MAX_LABEL: usize = crate::arrangement::MAX_NAME_BYTES;
 
 pub fn parse(bytes: &[u8]) -> Parsed {
     let text = decode(bytes)?;
@@ -362,13 +355,7 @@ impl Reader {
             return text;
         }
         self.warn(Warning::Truncated(field.to_string()));
-        let end = text
-            .grapheme_indices(true)
-            .map(|(at, g)| at + g.len())
-            .take_while(|&end| end <= max)
-            .last()
-            .unwrap_or(0);
-        text[..end].to_string()
+        cut(&text, max).to_string()
     }
 
     fn finish(mut self) -> Parsed {
@@ -385,15 +372,13 @@ impl Reader {
         match titles.len() {
             // The caller substitutes a title on this warning, so it must
             // survive a full warning list.
-            0 => {
-                self.song.warnings.insert(0, Warning::MissingTitle);
-                self.song.warnings.truncate(MAX_WARNINGS);
-            }
+            0 => self.song.warn_missing_title(),
             1 => {}
             _ => self.warn(Warning::UnknownElement("title".into())),
         }
         if let Some(title) = titles.into_iter().next() {
             self.song.title = self.fit(title, MAX_TITLE, "title");
+            self.song.keep_title_usable();
         }
         let mut joined = 0;
         for author in std::mem::take(&mut self.authors) {
@@ -457,7 +442,7 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::import::{MAX_FILE_BYTES, song::to_song};
+    use crate::import::{MAX_FILE_BYTES, MAX_WARNINGS, song::to_song};
     use proptest::prelude::*;
     use std::time::{Duration, Instant};
 

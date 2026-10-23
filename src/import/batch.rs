@@ -503,9 +503,12 @@ mod tests {
     }
 
     #[test]
-    fn a_song_over_the_library_limit_is_not_staged() {
-        // 128 slides of 2.5 KiB pass the parser's own budget but not
-        // `storage::MAX_SONG_BYTES` (256 KiB).
+    fn a_song_over_the_library_limit_is_cut_to_fit_and_reported() {
+        // 120 slides of 2.5 KiB (300 KiB) are over `storage::MAX_SONG_BYTES`
+        // (256 KiB). Since M5-02 (SEC-01) every parser cuts slides past the
+        // shared text budget with `LimitReached`, so the song is staged
+        // shorter and storable; `TooLargeForLibrary` stays as the fallback
+        // for a song `to_song` still refuses.
         let line = "word ".repeat(500);
         let mut text = String::from("{title: Long}\n");
         for _ in 0..120 {
@@ -515,7 +518,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("long.cho");
         std::fs::write(&path, &text).unwrap();
-        assert_eq!(stage_file(&path), Err(FileError::TooLargeForLibrary));
+        let staged = stage_file(&path).unwrap();
+        assert!(staged.warnings.contains(&Warning::LimitReached));
+        assert!(staged.song.sections.len() < 120);
+        assert!(staged.song.encode().len() <= crate::storage::MAX_SONG_BYTES);
+        assert_eq!(staged.song.validate(), Ok(()));
     }
 
     #[test]

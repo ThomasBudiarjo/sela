@@ -194,7 +194,7 @@ impl Song {
         }
         Ok(())
     }
-    fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         for s in [&self.title, &self.authors, &self.copyright, &self.license]
             .into_iter()
@@ -205,7 +205,7 @@ impl Song {
         }
         out
     }
-    fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > MAX_SONG_BYTES {
             return Err(Error::Corrupt);
         }
@@ -366,6 +366,70 @@ impl Drop for Staging {
 }
 const MAX_BACKUP_BYTES: i64 = 256 * 1024 * 1024;
 
+/// SQLite's settings for database files that may be hostile (a restored
+/// backup can come from anywhere): defensive mode refuses schema and
+/// page-level corruption tricks, and an untrusted schema may not run
+/// functions with side effects from views, triggers or defaults.
+pub(crate) fn harden(db: &Connection) -> rusqlite::Result<()> {
+    use rusqlite::config::DbConfig;
+    db.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+    db.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+    Ok(())
+}
+
+/// A hardened read-only connection to a database Sela did not just write:
+/// a restore input, or the library read again for its pre-migration backup.
+fn open_untrusted_read_only(path: &std::path::Path) -> Result<Connection> {
+    let db = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    harden(&db)?;
+    db.busy_timeout(Duration::from_millis(100))?;
+    Ok(db)
+}
+
+/// The private copy a backup or restore writes the source's pages into.
+/// The pages may be hostile until `copy_new` has verified them, so the
+/// connection is hardened like every other (review finding, fuzz-audit).
+fn open_private_copy(path: &std::path::Path) -> Result<Connection> {
+    let target = Connection::open(path)?;
+    harden(&target)?;
+    target.execute_batch("PRAGMA synchronous=FULL; PRAGMA cache_size=-2048;")?;
+    target.busy_timeout(Duration::from_millis(100))?;
+    Ok(target)
+}
+
+/// Sela never creates triggers or views. A library that has one was not
+/// written by Sela, and its trigger would run on every later save.
+fn check_schema_objects(db: &Connection) -> Result<()> {
+    let foreign = db
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type IN ('trigger','view')")?
+        .exists([])?;
+    if foreign {
+        return Err(Error::Unsupported);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// For each `copy_new` on this thread: whether its source and its private
+    /// copy were hardened (defensive, untrusted schema). Tests read it to
+    /// check the call sites, not only the helpers.
+    static COPY_CONNECTIONS: std::cell::RefCell<Vec<[(bool, bool); 2]>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
+fn hardening(db: &Connection) -> (bool, bool) {
+    use rusqlite::config::DbConfig;
+    (
+        db.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap(),
+        !db.db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
+            .unwrap(),
+    )
+}
+
 fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicBool) -> Result<()> {
     use rusqlite::backup::{Backup, StepResult};
     if destination.as_os_str().len() > 4096 || destination.file_name().is_none() {
@@ -414,9 +478,9 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
         options.mode(0o600);
     }
     options.open(&path).map_err(|_| Error::Io)?;
-    let mut target = Connection::open(&path)?;
-    target.execute_batch("PRAGMA synchronous=FULL; PRAGMA cache_size=-2048;")?;
-    target.busy_timeout(Duration::from_millis(100))?;
+    let mut target = open_private_copy(&path)?;
+    #[cfg(test)]
+    COPY_CONNECTIONS.with(|c| c.borrow_mut().push([hardening(source), hardening(&target)]));
     let start = std::time::Instant::now();
     {
         let backup = Backup::new(source, &mut target)?;
@@ -448,6 +512,7 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     target.execute_batch("PRAGMA journal_mode=DELETE;")?;
     target.close().map_err(|(_, e)| Error::from(e))?;
     let verified = Repository::open_internal(&path, false)?;
+    check_schema_objects(&verified.db)?;
     verified.verify_history(cancel, start)?;
     verified.db.close().map_err(|(_, e)| Error::from(e))?;
     // Windows FlushFileBuffers requires a handle with write access.
@@ -484,11 +549,7 @@ impl Repository {
         if source.as_os_str().len() > 4096 {
             return Err(Error::Invalid);
         }
-        let db = Connection::open_with_flags(
-            source,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        db.busy_timeout(Duration::from_millis(100))?;
+        let db = open_untrusted_read_only(source)?;
         db.execute_batch("PRAGMA cache_size=-2048;")?;
         copy_new(&db, destination, cancel)
     }
@@ -643,6 +704,7 @@ impl Repository {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        harden(&db)?;
         db.busy_timeout(Duration::from_millis(100))?;
         db.set_limit(Limit::SQLITE_LIMIT_LENGTH, (MAX_SONG_BYTES + 4096) as i32)?;
         db.execute_batch(
@@ -714,11 +776,7 @@ impl Repository {
             // Hold the writer reservation across backup and migration. The separate
             // read connection copies the same committed state, without attempting
             // an online backup from a connection with an active write transaction.
-            let source = Connection::open_with_flags(
-                path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )?;
-            source.busy_timeout(Duration::from_millis(100))?;
+            let source = open_untrusted_read_only(path)?;
             let mut backup = path.as_os_str().to_owned();
             backup.push(format!(".schema{version}-backup"));
             copy_new(
@@ -2487,6 +2545,96 @@ mod tests {
             );
         }
     }
+    // M5-02 audit finding: a restored backup is an untrusted file. One that
+    // carries a trigger (or view) would run it on every later save of the
+    // restored library, for example deleting songs as they are written.
+    #[test]
+    fn restore_refuses_a_library_with_triggers_or_views() {
+        let (d, p, mut repo) = fixture();
+        repo.save_song(None, song()).unwrap();
+        drop(repo);
+        let cancel = AtomicBool::new(false);
+        for (name, sql) in [
+            (
+                "trigger",
+                "CREATE TRIGGER wipe AFTER INSERT ON song_revisions BEGIN DELETE FROM songs; END",
+            ),
+            ("view", "CREATE VIEW everything AS SELECT * FROM songs"),
+        ] {
+            let source = d.path().join(format!("{name}.sqlite"));
+            std::fs::copy(&p, &source).unwrap();
+            Connection::open(&source)
+                .unwrap()
+                .execute_batch(sql)
+                .unwrap();
+            let restored = d.path().join(format!("{name}-restored.sqlite"));
+            assert_eq!(
+                Repository::restore_new(&source, &restored, &cancel),
+                Err(Error::Unsupported),
+                "{name}"
+            );
+            assert!(!restored.exists(), "{name}");
+        }
+        // The untouched library still restores.
+        let restored = d.path().join("clean-restored.sqlite");
+        Repository::restore_new(&p, &restored, &cancel).unwrap();
+        assert_eq!(
+            Repository::open(&restored)
+                .unwrap()
+                .heads(false, None)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    // Review finding (fuzz-audit): the private copy a backup or restore
+    // writes, and the library read again for its pre-migration backup, were
+    // plain connections, though docs/storage.md says every connection is
+    // hardened.
+    #[test]
+    fn connections_to_untrusted_files_are_hardened() {
+        use rusqlite::config::DbConfig;
+        let (d, p, repo) = fixture();
+        drop(repo);
+        let hardened = |db: &Connection| {
+            (
+                db.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap(),
+                db.db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
+                    .unwrap(),
+            )
+        };
+        assert_eq!(
+            hardened(&open_untrusted_read_only(&p).unwrap()),
+            (true, false)
+        );
+        let copy = d.path().join("copy.sqlite");
+        assert_eq!(hardened(&open_private_copy(&copy).unwrap()), (true, false));
+        assert_eq!(hardened(&Repository::open(&p).unwrap().db), (true, false));
+    }
+
+    // Review round 2 (fuzz-audit): the test above checks the helpers only;
+    // this one fails if a backup, a restore or the pre-migration backup goes
+    // back to a plain connection at its call site.
+    #[test]
+    fn every_copy_reads_and_writes_through_hardened_connections() {
+        let take = || COPY_CONNECTIONS.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        let cancel = AtomicBool::new(false);
+        let (d, p, repo) = fixture();
+        take();
+        repo.backup_new(&d.path().join("backup.sqlite"), &cancel)
+            .unwrap();
+        assert_eq!(take(), vec![[(true, true); 2]], "backup");
+        drop(repo);
+        Repository::restore_new(&p, &d.path().join("restored.sqlite"), &cancel).unwrap();
+        assert_eq!(take(), vec![[(true, true); 2]], "restore");
+        let old = d.path().join("legacy");
+        legacy(&old);
+        Repository::open(&old).unwrap();
+        assert!(d.path().join("legacy.schema1-backup").exists());
+        assert_eq!(take(), vec![[(true, true); 2]], "pre-migration backup");
+    }
+
     #[test]
     fn backup_failures_never_publish_or_replace() {
         let (d, p, mut repo) = fixture();

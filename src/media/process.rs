@@ -40,6 +40,8 @@ pub struct Supervised {
 impl Supervised {
     /// Spawns `command` in its own process group (Unix) or Job Object
     /// (Windows) with no console window. The caller sets stdio.
+    // docs/security.md, "Unsafe code" U-02: the Linux `pre_exec` hook.
+    #[allow(unsafe_code)]
     pub fn spawn(mut command: Command) -> io::Result<Self> {
         #[cfg(unix)]
         {
@@ -99,6 +101,8 @@ impl Supervised {
 
     /// Kills the whole process group or job. Safe to call repeatedly and
     /// after the child exited; a no-op once it was reaped.
+    // docs/security.md, "Unsafe code" U-03: `kill` of the process group.
+    #[allow(unsafe_code)]
     pub fn kill(&mut self) {
         if self.reaped.is_some() {
             return;
@@ -162,7 +166,9 @@ impl Drop for Supervised {
     }
 }
 
+// docs/security.md, "Unsafe code" U-03: libc declarations.
 #[cfg(unix)]
+#[allow(unsafe_code)]
 mod unix {
     pub const SIGKILL: i32 = 9;
     #[cfg(target_os = "linux")]
@@ -178,7 +184,9 @@ mod unix {
     }
 }
 
+// docs/security.md, "Unsafe code" U-04: the Windows Job Object.
 #[cfg(windows)]
+#[allow(unsafe_code)]
 mod job {
     use std::ffi::c_void;
     use std::os::windows::io::AsRawHandle;
@@ -292,7 +300,9 @@ mod job {
     }
 }
 
+// Tests probe process existence with `kill(pid, 0)` (U-03).
 #[cfg(all(test, unix))]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use std::process::Stdio;

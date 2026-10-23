@@ -964,6 +964,29 @@ Design note: [stage-display.md](stage-display.md). Linux evidence (GPUI tests,
 
 ## Stream: fuzz-audit
 
+No EasyWorship behavior changed in this stream (data safety, audits and
+notices only), so there is nothing to observe in EW 8.0.49. Windows runs:
+
+- [ ] **PP-FUZZ-01 Fuzz suites and audit on Windows** (M5-02). Steps: on
+  the Windows host, `cargo test --locked --lib fuzz::` (default seeds), then
+  `PROPTEST_CASES=20000 cargo test --locked --lib fuzz::`, then
+  `bash scripts/audit.sh` from Git Bash (needs network for the advisory
+  database; on Windows the script builds cargo-deny 0.20.2 with
+  `cargo install`). Sela now: all pass on Linux; the Windows-only branches of
+  `media::ffmpeg::check_input` (UNC shares, `\\?\` and `\\.\` device paths)
+  are exercised only on Windows, and the Windows-only unsafe Job Object code
+  (docs/security.md U-01, U-04) compiles in the mingw cross check but has no
+  test run: confirm a decode started by `scripts/media-backend-windows.py`
+  leaves no `ffmpeg.exe` behind after Sela is killed from Task Manager.
+  Re-run: the same commands.
+- [ ] **PP-FUZZ-02 Notices in the installed program** (M5-07). Steps: when
+  the Inno Setup installer exists, install it and confirm `LICENSE`,
+  `THIRD-PARTY-NOTICES` and FFmpeg's own license files are in the install
+  folder and readable; decide the FFmpeg source offer (docs/security.md,
+  "Third-party notices"). Sela now: `THIRD-PARTY-NOTICES` is generated and
+  checked (`scripts/third_party_notices.py --check`); no installer. Re-run:
+  `scripts/audit.sh`.
+
 ## Windows script run order
 
 Prerequisites for every run: Windows 11 with Python 3 on PATH, the repository

@@ -23,7 +23,7 @@ use std::{
     },
 };
 
-mod downscale;
+pub(crate) mod downscale;
 
 /// Where a photo over the decode budget is fitted when the caller knows no
 /// output size (the Song Editor's import).
@@ -267,19 +267,19 @@ fn check_image(bytes: &[u8]) -> Result<(), Error> {
 }
 
 /// What a header inspection found, before the full decode.
-struct Inspected {
-    orientation: image::metadata::Orientation,
-    icc: bool,
+pub(crate) struct Inspected {
+    pub(crate) orientation: image::metadata::Orientation,
+    pub(crate) icc: bool,
     /// The decoded size exceeds `MAX_DECODED_BYTES`, so the image can only
     /// be stored downscaled (`downscale::fit`).
-    over_budget: bool,
+    pub(crate) over_budget: bool,
 }
 
 /// Header-only checks: format, animation, declared dimensions and metadata.
 /// Declared dimensions are bounded here, before any pixel buffer exists.
 /// `downscalable` widens the pixel bound from the decode budget to
 /// `downscale::MAX_SOURCE_PIXELS` for images that will be shrunk.
-fn inspect(bytes: &[u8], downscalable: bool) -> Result<Inspected, Error> {
+pub(crate) fn inspect(bytes: &[u8], downscalable: bool) -> Result<Inspected, Error> {
     let (max_pixels, max_buffer) = if downscalable {
         (
             downscale::MAX_SOURCE_PIXELS,

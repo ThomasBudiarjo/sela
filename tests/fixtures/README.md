@@ -22,3 +22,8 @@ The same Bitstream Vera license (with DejaVu changes in the public domain)
 covers it; keep `DejaVuSans.LICENSE` alongside both faces. It exists so the
 bundled default can use a real Bold face (M1-05g2) instead of synthesizing
 one.
+
+`fuzz/` is the retained corpus of the seeded fuzz suites in `src/fuzz/`
+(M5-02, docs/security.md): hand-written adversarial files, minimized cases of
+real findings and the proptest regression seeds (`*.proptest-regressions`).
+Every file is original synthetic content.

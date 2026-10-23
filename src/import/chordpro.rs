@@ -32,8 +32,9 @@ pub fn parse(bytes: &[u8]) -> Parsed {
         song.order = order;
     }
     if song.title.is_empty() {
-        warn(&mut song, Warning::MissingTitle);
+        song.warn_missing_title();
     }
+    song.fit_to_model()?;
     Ok(song)
 }
 
@@ -306,7 +307,7 @@ fn warn(song: &mut ParsedSong, warning: Warning) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::import::MAX_FILE_BYTES;
+    use crate::import::{MAX_FILE_BYTES, SLIDE_BYTES};
     use proptest::prelude::*;
     use proptest::test_runner::FileFailurePersistence;
 
@@ -588,12 +589,16 @@ mod tests {
             assert!(song.warnings.contains(&Warning::LimitReached));
         }
 
+        // Unmatched brackets are kept, in linear time, up to the text budget;
+        // a slide over the budget is refused as TooLarge (`fit_to_model`).
         let started = std::time::Instant::now();
-        let brackets = "[a".repeat(MAX_FILE_BYTES / 2 - 1);
+        let brackets = "[a".repeat((SLIDE_BYTES - 64) / 2);
         assert_eq!(
             parse_str(&brackets).sections[0].slides[0].len(),
             brackets.len()
         );
+        let whole_file = "[a".repeat(MAX_FILE_BYTES / 2 - 1);
+        assert_eq!(parse(whole_file.as_bytes()), Err(Rejected::TooLarge));
         assert!(started.elapsed() < std::time::Duration::from_secs(10));
     }
 

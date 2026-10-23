@@ -169,6 +169,21 @@ read-only SQLite may use/create WAL shared-memory auxiliary files, so this is
 not a promise of zero filesystem auxiliary activity. Unrecoverable hot-journal
 inputs fail; restore is not a repair engine.
 
+Hardening (M5-02, [security.md](security.md)): every connection Sela opens
+(the library, a restore input, the private copy a backup or restore writes,
+the library read again for its pre-migration backup, and each installed
+scripture translation) sets SQLite's
+`SQLITE_DBCONFIG_DEFENSIVE` and turns `SQLITE_DBCONFIG_TRUSTED_SCHEMA` off, so
+a hostile file cannot corrupt itself through schema tricks or run functions
+with side effects from its schema. A backup or restore whose copy contains any
+trigger or view (Sela creates none) fails as `Unsupported` before
+publication, because a foreign trigger would run on every later save
+(`restore_refuses_a_library_with_triggers_or_views`). The connection helpers
+are checked by `connections_to_untrusted_files_are_hardened`, and their use by
+backup, restore and the pre-migration backup (both the source and the private
+copy `copy_new` sees) by
+`every_copy_reads_and_writes_through_hardened_connections`.
+
 Private output is converted to rollback-journal mode, explicitly closed, reopened
 through existing supported-schema/quick-check/FK validation, then every historical
 song payload and schedule snapshot is bounded-decoded. Head resolution,

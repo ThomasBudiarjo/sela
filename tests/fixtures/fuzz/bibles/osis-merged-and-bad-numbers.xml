@@ -1,0 +1,7 @@
+<osis><osisText><div type="book" osisID="Gen">
+<verse osisID="Gen.1.1" sID="a"/>One<verse eID="a"/>
+<verse osisID="Gen.1.1" sID="b"/>more<verse eID="b"/>
+<verse osisID="Gen.1.2" sID="c"/>  <verse eID="c"/>
+<verse osisID="Gen.x.2" sID="d"/>bad<verse eID="d"/>
+<verse osisID="Gen.999.999 Gen.1000.1">edge</verse>
+</div></osisText></osis>

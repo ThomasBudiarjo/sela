@@ -100,6 +100,10 @@ pub fn hex(bytes: &[u8]) -> String {
 fn connect(path: &Path, flags: OpenFlags) -> Result<Connection> {
     use rusqlite::limits::Limit;
     let db = Connection::open_with_flags(path, flags | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    // A translation file in the profile may have been replaced or damaged:
+    // defensive mode and an untrusted schema, as for the library
+    // (docs/security.md, SEC-07).
+    crate::storage::harden(&db)?;
     db.busy_timeout(Duration::from_millis(100))?;
     // Verses and metadata stay below 4 KiB; FTS5 segment blobs may be larger.
     db.set_limit(Limit::SQLITE_LIMIT_LENGTH, 1 << 20)?;
@@ -246,6 +250,14 @@ pub fn open(path: &Path) -> Result<Translation> {
         } else {
             Error::Corrupt("not a Sela Bible file".into())
         });
+    }
+    // Sela writes no triggers or views; a file with one was not written by
+    // Sela, and a trigger could act on later writes (as SEC-07).
+    if db
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type IN ('trigger','view')")?
+        .exists([])?
+    {
+        return Err(Error::Corrupt("schema objects".into()));
     }
     let mut index_rebuilt = false;
     if !quick_check(&db)? {
@@ -536,6 +548,32 @@ pub(crate) mod tests {
             open(&path),
             Err(Error::Corrupt(_)) | Err(Error::Io(_))
         ));
+    }
+
+    // Review finding (fuzz-audit): translation files were opened without the
+    // library's SQLite hardening, and one carrying a trigger or view opened.
+    #[test]
+    fn foreign_schema_objects_are_refused_and_connections_hardened() {
+        use rusqlite::config::DbConfig;
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_for(dir.path(), "SYN");
+        for sql in [
+            "CREATE TRIGGER t AFTER UPDATE ON meta BEGIN DELETE FROM verses; END",
+            "CREATE VIEW everything AS SELECT * FROM verses",
+        ] {
+            write(&path, &info("SYN"), "o", &corpus()).unwrap();
+            damage(&path, sql);
+            assert_eq!(
+                open(&path).err(),
+                Some(Error::Corrupt("schema objects".into())),
+                "{sql}"
+            );
+        }
+        write(&path, &info("SYN"), "o", &corpus()).unwrap();
+        let translation = open(&path).unwrap();
+        let config = |c| translation.db.db_config(c).unwrap();
+        assert!(config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE));
+        assert!(!config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA));
     }
 
     #[test]

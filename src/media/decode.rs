@@ -592,7 +592,11 @@ impl Clock {
         };
         self.previous = Some(seconds);
         let first = *self.first.get_or_insert(seconds);
-        (Duration::from_secs_f64((seconds - first).max(0.)), repaired)
+        // A timestamp gap past `Duration::MAX` (a crafted time base) holds
+        // at the maximum; `from_secs_f64` would panic on it (SEC-10).
+        let elapsed =
+            Duration::try_from_secs_f64((seconds - first).max(0.)).unwrap_or(Duration::MAX);
+        (elapsed, repaired)
     }
 }
 
@@ -1035,6 +1039,30 @@ mod tests {
                 size: Some((2, 2)),
             })
         );
+    }
+
+    // SEC-10 (fuzz-audit): a frame time far from the first one (finite but
+    // past `Duration::MAX`, or a sum that overflows to infinity) panicked
+    // the decoder's supervisor thread.
+    #[test]
+    fn huge_frame_times_saturate_instead_of_panicking() {
+        let meta = |pts: Option<f64>, duration: Option<f64>| FrameMeta {
+            n: 0,
+            pts_time: pts,
+            duration_time: duration,
+            size: None,
+        };
+        let mut clock = Clock::new(Some(30.));
+        assert_eq!(clock.place(&meta(Some(-1e300), None)).0, Duration::ZERO);
+        assert_eq!(clock.place(&meta(Some(1e300), None)).0, Duration::MAX);
+        assert_eq!(clock.place(&meta(None, Some(f64::MAX))).0, Duration::MAX);
+        assert_eq!(
+            clock.place(&meta(None, Some(f64::MAX))),
+            (Duration::MAX, true)
+        );
+        let line = "[Parsed_showinfo_0 @ 0x1] n:1 pts_time:1e300 duration_time:1e308";
+        let parsed = parse_showinfo(line).unwrap();
+        assert_eq!(Clock::new(None).place(&parsed).0, Duration::ZERO);
     }
 
     #[test]

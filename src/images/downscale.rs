@@ -9,7 +9,7 @@ use std::io::Cursor;
 /// Largest declared pixel count that is decoded for shrinking: 48 MP
 /// (8000 × 6000). A 16-bit PNG buffer is twice RGBA, so a decode peaks at a
 /// few hundred MiB on the import thread, never on the UI thread.
-pub(super) const MAX_SOURCE_PIXELS: u64 = 48_000_000;
+pub(crate) const MAX_SOURCE_PIXELS: u64 = 48_000_000;
 /// Largest source file read for a photo that will be shrunk.
 pub(super) const MAX_SOURCE_BYTES: usize = 48 * 1024 * 1024;
 const JPEG_QUALITY: u8 = 90;

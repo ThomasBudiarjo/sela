@@ -1,3 +1,6 @@
+// Unsafe code is listed and justified in docs/security.md.
+#![deny(unsafe_code)]
+
 use gpui::{
     App, AppContext, Bounds, Context, FocusHandle, KeyBinding, TitlebarOptions, Window,
     WindowBounds, WindowOptions, actions, div, point, prelude::*, px, rgb, size,

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4ad3c9edd77e866c4d83c39d902dd31a1da9c4b9111425ee77b15807187752c1 # shrinks to frames = [(Some("0"), None, None, None), (Some("0"), None, None, None)], rate = Some(1e-300)
+cc 7e8a14eb63bf2c401648b850002179f8c017a8873f7268d9313671d50a67b567 # shrinks to kind = "audio", size = ("0", "0"), sar = "1:1", rates = ("1:1", "1:1"), rotation = "0", durations = ("1e308", "0"), attached = false
