@@ -20,6 +20,9 @@ pub(crate) enum OptionsTab {
 }
 
 impl OptionsTab {
+    /// Every choosable tab, in strip order (one focus handle each).
+    const ALL: [OptionsTab; 2] = [Self::General, Self::Song];
+
     fn slug(self) -> &'static str {
         match self {
             Self::General => "general",
@@ -28,9 +31,7 @@ impl OptionsTab {
     }
 
     fn of(slug: &str) -> Option<Self> {
-        [Self::General, Self::Song]
-            .into_iter()
-            .find(|tab| tab.slug() == slug)
+        Self::ALL.into_iter().find(|tab| tab.slug() == slug)
     }
 }
 
@@ -99,10 +100,11 @@ impl SongOptions {
         Self {
             tab: OptionsTab::General,
             draft: None,
-            tabs: (0..2)
-                .map(|i| {
+            tabs: OptionsTab::ALL
+                .iter()
+                .map(|&tab| {
                     cx.focus_handle()
-                        .tab_index(TAB_HEADER_INDEX + i)
+                        .tab_index(TAB_HEADER_INDEX + tab as isize)
                         .tab_stop(true)
                 })
                 .collect(),
@@ -243,9 +245,14 @@ impl Operator {
     /// The Song tab page: the Copyright Info group.
     pub(crate) fn song_options_page(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let draft = self.settings.song.draft.clone().unwrap_or_default();
+        // Until the stored settings load, OK cannot save and the load
+        // replaces the drafts, so nothing here takes input (the General
+        // tab's monitor rows behave the same way).
+        let loaded = self.settings.loaded;
         self.settings.song.license.update(cx, |input, _| {
             input.set_placeholder(t!(Msg::OptionsLicenseInfoPlaceholder));
             input.set_accessible("options-license-info", t!(Msg::OptionsLicenseInfo));
+            input.set_read_only(!loaded);
         });
         let checks = Check::ALL
             .into_iter()
@@ -320,6 +327,13 @@ impl Operator {
                     .text_color(rgb(MUTED))
                     .child(t!(Msg::OptionsCopyrightHint)),
             )
+            .children((!loaded).then(|| {
+                div()
+                    .debug_selector(|| "options-song-loading".into())
+                    .text_size(px(TEXT_SMALL))
+                    .text_color(rgb(MUTED))
+                    .child(t!(Msg::LoadingSettings))
+            }))
             .child(div().flex().flex_col().gap_1().children(checks))
             .child(
                 div()

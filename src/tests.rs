@@ -3019,6 +3019,32 @@ mod settings_ui {
     }
 
     #[gpui::test]
+    fn the_song_tab_takes_no_input_until_settings_load(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (mut vcx, operator, _slot) =
+            start_loading(cx, &dir, settings::default_writer(), gate.clone());
+        open_options(&mut vcx);
+        click(&mut vcx, "options-tab-song");
+        assert!(vcx.debug_bounds("options-song-loading").is_some());
+        click(&mut vcx, "options-license-info");
+        vcx.simulate_input("CCLI 9");
+        let license = |vcx: &mut VisualTestContext| {
+            operator.read_with(vcx, |o, cx| {
+                o.settings.song.license.read(cx).text().to_owned()
+            })
+        };
+        assert_eq!(license(&mut vcx), "", "an edit OK would discard");
+        gate.store(true, std::sync::atomic::Ordering::SeqCst);
+        settle(&mut vcx, &operator, "loaded", |o| o.settings_loaded());
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("options-song-loading").is_none());
+        click(&mut vcx, "options-license-info");
+        vcx.simulate_input("CCLI 9");
+        assert_eq!(license(&mut vcx), "CCLI 9");
+    }
+
+    #[gpui::test]
     fn late_loaded_never_overwrites_an_applied_choice(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
