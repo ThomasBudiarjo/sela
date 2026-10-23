@@ -163,9 +163,26 @@ pub(super) struct Item {
     /// Per-slide face resolution, `None` until the background resolver lands.
     /// Until then the current live scene stays and a deferred cue waits.
     pub(super) resolved: Option<Arc<[fonts::Resolved]>>,
+    /// The theme the slides were built with (M1-08): its rendered-look key
+    /// (0 for the built-in look), whole-value stamp and shown name.
+    pub(super) theme_key: u64,
+    pub(super) theme_stamp: u64,
+    pub(super) theme_name: String,
+    /// The song named a theme the library no longer has.
+    pub(super) theme_missing: bool,
+    /// The library's themes were not loaded (or failed to load) when the
+    /// item was built: it shows the default look and captured nothing.
+    pub(super) theme_unloaded: bool,
+    /// The song's library theme when the item was loaded.
+    pub(super) song_theme: Option<sela::theme::ThemeId>,
 }
 
 impl Item {
+    /// The theme state `Operator::wanted_theme` compares: stamp and notes.
+    pub(super) fn theme_view(&self) -> (u64, bool, bool) {
+        (self.theme_stamp, self.theme_missing, self.theme_unloaded)
+    }
+
     /// Position of the arrangement these slides follow: the stored choice
     /// when the song has it, else the first.
     pub(super) fn chosen_index(&self) -> usize {
@@ -222,6 +239,8 @@ pub(crate) enum Request {
     /// Loading a restored schedule's songs for the open-time file check
     /// (M1-11b); the schedule document it was for.
     RecoveryCheck(u64),
+    /// A theme load or write (M1-08).
+    Themes(resources::ThemeJob),
 }
 
 pub(super) struct Operator {
@@ -364,6 +383,8 @@ pub(super) struct Operator {
     bar_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
     /// Songs footer status: text and whether it reports a failure.
     pub(super) song_message: Option<(String, bool)>,
+    /// Themes tab state and the library's themes (M1-08).
+    pub(super) themes: resources::ThemeState,
     /// A library double-click waiting for its song to load.
     live_on_load: Option<Version>,
     /// A PageDown/PageUp to another schedule item waiting for its preview.
@@ -504,6 +525,7 @@ impl Operator {
         let library_changed =
             cx.observe_global::<crate::song_library::LibraryChanged>(|this, cx| {
                 this.catalog_stale = true;
+                this.themes.stale = true;
                 cx.notify();
             });
         let search_input = cx.new(|cx| {
@@ -630,6 +652,7 @@ impl Operator {
             bar_opened_with_mouse: None,
             bar_bounds: Rc::default(),
             song_message: None,
+            themes: resources::ThemeState::new(cx),
             live_on_load: None,
             live_entry_on_load: None,
             live_focus: cx.focus_handle(),

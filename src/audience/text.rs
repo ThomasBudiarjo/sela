@@ -21,8 +21,8 @@ const MAX_LINES: usize = 32;
 const MAX_TEXT_BYTES: usize = 4096;
 const MAX_SIDE: u32 = 4096;
 const MAX_AREA: usize = 16 * 1024 * 1024;
-/// Renderer text inset on each side, matching the slide fit.
-const INSET: u32 = 32;
+/// Renderer text inset on each side without margins, matching the slide fit.
+const INSET: u32 = slides::INSET;
 const LINE_HEIGHT: f32 = 1.3;
 /// Ink threshold that seeds dilation; antialiased edges grow from it.
 const SEED: u8 = 128;
@@ -89,31 +89,34 @@ pub fn layers(cue: &PreparedCue) -> Result<Layers, TextError> {
     );
     let (rows, row) = (area_height as usize, area_width as usize);
     if let Some(text) = cue.text() {
-        let lyrics_height = area_height.saturating_sub(cue.footer().map_or(0, |strip| {
+        // The same box the cue's size was fitted in (theme margins, M1-08).
+        let footer = cue.footer().map_or(0, |strip| {
             slides::footer_height(strip.content().lines().count(), strip.font_size())
-        }));
+        });
+        let lyrics = slides::lyrics_box(extent, cue.insets(), footer).ok_or(TextError::Bounds)?;
         let style = text.style();
         let size = f32::from(text.font_size());
         let mut area = glyph_coverage(
             text.font(),
             text.face_index(),
             text.content(),
-            area_width,
-            lyrics_height,
+            lyrics.width,
+            lyrics.height,
             size,
             &style,
         )?;
         if style.synth_bold {
             dilate(
                 &mut area,
-                area_width as usize,
-                lyrics_height as usize,
+                lyrics.width as usize,
+                lyrics.height as usize,
                 size / 48.,
             );
         }
-        for y in 0..lyrics_height as usize {
-            let start = (y + INSET as usize) * width + INSET as usize;
-            fill[start..start + row].copy_from_slice(&area[y * row..(y + 1) * row]);
+        let (x, y0, w) = (lyrics.x as usize, lyrics.y as usize, lyrics.width as usize);
+        for y in 0..lyrics.height as usize {
+            let start = (y + y0) * width + x;
+            fill[start..start + w].copy_from_slice(&area[y * w..(y + 1) * w]);
         }
     }
     if let Some(strip) = cue.footer() {
@@ -610,6 +613,42 @@ mod tests {
             }
         }
         (bounds.0 < bounds.2).then_some(bounds)
+    }
+
+    #[test]
+    fn theme_margins_keep_the_lyrics_inside_their_box() {
+        let extent = Extent {
+            width: 640,
+            height: 360,
+        };
+        let top_left = TextStyle {
+            align: HAlign::Left,
+            valign: VAlign::Top,
+            ..TextStyle::default()
+        };
+        let plain = layers(&styled("Margin", top_left, extent, 40)).unwrap();
+        let (left, top, _, _) = bbox(&plain.fill, 640).unwrap();
+        assert!(
+            (32..40).contains(&left) && (32..48).contains(&top),
+            "fixed inset"
+        );
+        let insets = sela::scene::Insets {
+            left: 200,
+            right: 20,
+            top: 120,
+            bottom: 20,
+        };
+        let boxed = styled("Margin", top_left, extent, 40)
+            .with_insets(insets)
+            .unwrap();
+        let (left, top, right, bottom) = bbox(&layers(&boxed).unwrap().fill, 640).unwrap();
+        assert!((200..208).contains(&left), "{left}");
+        assert!((120..136).contains(&top), "{top}");
+        assert!(right <= 640 - 20 && bottom <= 360 - 20);
+        // The slide fit and the raster agree on the box.
+        let room = slides::lyrics_box(extent, Some(insets), 0).unwrap();
+        assert_eq!((room.x, room.y), (200, 120));
+        assert_eq!((room.width, room.height), (420, 220));
     }
 
     #[test]

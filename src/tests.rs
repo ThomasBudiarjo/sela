@@ -27,6 +27,7 @@ mod resource_browser;
 mod scrutiny_r2;
 mod song_import;
 mod songs_browser;
+mod themes;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,
@@ -4761,6 +4762,7 @@ mod preflight_ui {
                 source: version,
                 song,
                 arrangement: None,
+                theme: None,
             }],
         };
         std::fs::write(&schedule, sela::schedule_file::encode(&file).unwrap()).unwrap();
@@ -5316,7 +5318,7 @@ mod schedule_files_ui {
         save_new(&mut cx, &operator, good.clone());
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&good).unwrap()).unwrap();
-        value["version"] = 4.into();
+        value["version"] = (schedule_file::VERSION + 1).into();
         let cases = [
             ("garbage", b"not a schedule".to_vec()),
             ("truncated", std::fs::read(&good).unwrap()[..40].to_vec()),
@@ -5358,6 +5360,7 @@ mod schedule_files_ui {
                 source: version,
                 song,
                 arrangement: None,
+                theme: None,
             }],
         };
         std::fs::write(&file, schedule_file::encode(&document).unwrap()).unwrap();

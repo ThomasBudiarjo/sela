@@ -1,14 +1,16 @@
 //! Schedule documents: `.selaschedule` files, like EasyWorship's `.ews`.
 //!
-//! The file is versioned UTF-8 JSON: `{"format":"sela-schedule","version":3,
+//! The file is versioned UTF-8 JSON: `{"format":"sela-schedule","version":4,
 //! "title":..,"items":[..]}`. Each item embeds the full pinned song revision
 //! (text, arrangement, formats, backgrounds, metadata) next to the source song
 //! id and revision, so a file opens against any library. Version 2 adds the
 //! item's chosen `arrangement` (a variant id of its embedded song); version 1
 //! files still open, with every item on the song's first arrangement. Version 3
 //! adds the song's optional `administrator` and `song_number`; older files open
-//! with both empty. A later
-//! version adds item kinds, themes or asset snapshots; readers reject a version
+//! with both empty. Version 4 adds the item's theme snapshot (`theme`, hex of
+//! `Theme::encode`, and `theme_explicit`, M1-08); older files open without
+//! one and take the library theme when first shown. A later
+//! version adds item kinds or asset snapshots; readers reject a version
 //! they do not know instead of guessing. Formats and backgrounds are embedded as hex of
 //! their own library codecs (`SlideFormat::encode`, `Background::encode`).
 //!
@@ -16,7 +18,9 @@
 use crate::arrangement::{Occurrence, OccurrenceId, SectionId, Variant, VariantId};
 use crate::background::Background;
 use crate::format::SlideFormat;
+use crate::schedule::ItemTheme;
 use crate::storage::{Id, MAX_ITEMS, Section, Song, Version};
+use crate::theme::Theme;
 use serde_json::{Map, Value, json};
 use std::{
     fs,
@@ -30,7 +34,7 @@ use std::{
 };
 
 pub const FORMAT: &str = "sela-schedule";
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub const EXTENSION: &str = "selaschedule";
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_TITLE_BYTES: usize = 1024;
@@ -43,6 +47,9 @@ pub struct Item {
     pub song: Song,
     /// The arrangement this occurrence plays; None is the song's first.
     pub arrangement: Option<VariantId>,
+    /// The item's theme snapshot (version 4); `None` takes the library theme
+    /// when the item is first shown.
+    pub theme: Option<ItemTheme>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -265,6 +272,10 @@ pub fn encode(file: &ScheduleFile) -> Result<Vec<u8>, WriteError> {
             if let Some(arrangement) = item.arrangement {
                 value.insert("arrangement".into(), id_hex(arrangement.0).into());
             }
+            if let Some(theme) = &item.theme {
+                value.insert("theme".into(), hex(&theme.theme.encode()).into());
+                value.insert("theme_explicit".into(), theme.explicit.into());
+            }
             Value::Object(value).to_string()
         })
         .collect();
@@ -329,6 +340,24 @@ pub fn decode(bytes: &[u8]) -> Result<ScheduleFile, ReadError> {
                 None => None,
             }
             .filter(|id| song.variants.iter().any(|v| v.id == *id));
+            // Version 4: the item's theme snapshot (M1-08). A damaged theme
+            // makes the file corrupt rather than silently restyling it.
+            let theme = match item.get("theme").filter(|_| version >= 4) {
+                Some(value) => {
+                    let bytes = unhex(value.as_str()?)?;
+                    if bytes.len() > crate::theme::MAX_ENCODED {
+                        return None;
+                    }
+                    Some(ItemTheme {
+                        theme: Theme::decode(&bytes)?,
+                        explicit: match item.get("theme_explicit") {
+                            Some(flag) => flag.as_bool()?,
+                            None => false,
+                        },
+                    })
+                }
+                None => None,
+            };
             Some(Item {
                 source: Version {
                     id: id_from(item.get("song_id")?)?,
@@ -336,6 +365,7 @@ pub fn decode(bytes: &[u8]) -> Result<ScheduleFile, ReadError> {
                 },
                 song,
                 arrangement,
+                theme,
             })
         })
         .collect::<Option<Vec<_>>>()

@@ -23,7 +23,12 @@ Files:
   masks, Go Live under Black), with Windows counterparts
   `scenario-s0{1,2}-windows.py` (scrutiny-r2). Feature scripts written on
   the harness: `autosave-x11.py` (M1-12, S03; Windows counterpart
-  `autosave-windows.py`).
+  `autosave-windows.py`), `themes-x11.py` (M1-08; Windows counterpart
+  `themes-windows.py`). Finding while writing `themes-x11.py`: after an
+  editor window of the operator process closes, or once the operator's X
+  title names the schedule, AT-SPI lookups of the operator frame by title
+  time out, so the script locates operator controls once and reuses their
+  centers.
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -259,6 +264,9 @@ Command line: `python3 scripts/native_x11.py doctor | serve [--display :N]
 | `song-import-x11.py --display :112` (import-framework, 2026-10-22) | xvfb, audience `window` | PASS (27 s) |
 | `autosave-x11.py --display :113` (2026-10-22, autosave-recovery; review round 1 adds the unanswered-close step) | xvfb `serve --display :113` | PASS (19 s; round 1: 20.5 s) |
 | `songs-browser-x11.py --display :114` (songs-browser, 2026-10-22; re-run 2026-10-23 after review) | xvfb (`serve --display :114`), audience `window` 624x351 | PASS (Sort by keys mouse + keyboard, restart, label search, Options Song tab; since 2026-10-23 a song is Live and typing "bravo." in the search box, "CCLI b." in License Info and OK with changed options leave the audience frame unchanged; this catches leaked Black/Clear/Logo keys but not a re-cue on OK, which re-renders a pixel-identical slide here because the 351 px output draws no copyright strip: the GPUI test `typing_in_license_info_never_toggles_masks_or_cues_live` covers that) |
+| `themes-x11.py --display :117` (themes stream, 2026-10-22, binary sha256 `f37bf47ba9dd1ca2…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (40 s) |
+| `themes-x11.py --display :117` (themes review round 1, 2026-10-23, binary sha256 `0e1855b2e1137d1a…`; step 6 now edits the live theme) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (42 s) |
+| `themes-x11.py --display :117` (themes review round 2, 2026-10-23, binary sha256 `9b60e612488b600a…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (42 s) |
 
 GTK portal folder chooser notes (song-import-x11.py): it opens on Recent,
 where Enter in the location entry does nothing, so the script first clicks

@@ -209,6 +209,12 @@ impl Frame {
         // (styled owned text; tag 1 was removed in M1-05g2).
         put_text(&mut f.bytes, cue.text());
         put_text(&mut f.bytes, cue.footer());
+        if let Some(insets) = cue.insets() {
+            f.bytes.push(1);
+            for side in [insets.left, insets.right, insets.top, insets.bottom] {
+                f.bytes.extend_from_slice(&side.to_le_bytes());
+            }
+        }
         f.len = f.bytes.len();
         if f.len - HEADER > MAX_RESOURCE_BODY {
             return Err(invalid());
@@ -303,12 +309,31 @@ impl Frame {
             };
             let text = payload.text()?;
             let footer = payload.text()?;
+            // Optional trailing lyrics box (M1-08 margins): tag 1 then the
+            // four insets; absent for the fixed inset.
+            let insets = if payload.0.is_empty() {
+                None
+            } else {
+                if payload.byte()? != 1 {
+                    return Err(invalid());
+                }
+                Some(crate::scene::Insets {
+                    left: payload.u32()?,
+                    right: payload.u32()?,
+                    top: payload.u32()?,
+                    bottom: payload.u32()?,
+                })
+            };
             if !payload.0.is_empty() {
                 return Err(invalid());
             }
             let cue = PreparedCue::from_owned(version, extent, background, text, caps);
-            match footer {
+            let cue = match footer {
                 Some(footer) => cue.and_then(|cue| cue.with_footer(footer)),
+                None => cue,
+            };
+            match insets {
+                Some(insets) => cue.and_then(|cue| cue.with_insets(insets)),
                 None => cue,
             }
         } else {
@@ -1287,6 +1312,85 @@ mod tests {
             )
             .err(),
             Some(PrepareError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn margin_insets_round_trip_and_bad_insets_are_rejected() {
+        let now = Instant::now();
+        let caps = RendererCapabilities {
+            max_texture_dimension: 8192,
+        };
+        let extent = Extent {
+            width: 640,
+            height: 360,
+        };
+        let format = crate::format::SlideFormat {
+            margins: Some(crate::format::Margins {
+                left: 300,
+                right: 60,
+                top: 90,
+                bottom: 30,
+            }),
+            ..Default::default()
+        };
+        let slide = crate::slides::Slide {
+            label: String::new(),
+            text: "Margin wire refrain".into(),
+            format: format.clone(),
+            background: None,
+        };
+        let cue = Arc::new(
+            crate::slides::cue(
+                ContentVersion { id: 5, revision: 6 },
+                &slide,
+                &crate::fonts::Resolved::bundled(&format),
+                extent,
+                caps,
+                None,
+                crate::slides::color_background([0, 0, 0]),
+            )
+            .unwrap(),
+        );
+        let insets = cue.insets().unwrap();
+        assert_eq!(insets.left, 100, "300 points at 360 lines");
+        let command = Command::from_wire(
+            Stamp {
+                epoch: Epoch(7),
+                sequence: 1,
+            },
+            Lane::Cue,
+            Payload::Scene(cue.clone()),
+            now + Duration::from_secs(2),
+        );
+        let mut wire = Vec::new();
+        Frame::command(&command, now)
+            .unwrap()
+            .write(&mut wire)
+            .unwrap();
+        let back = Frame::read(wire.as_slice())
+            .unwrap()
+            .into_command(now, caps)
+            .unwrap();
+        assert_eq!(back.cue().unwrap().insets(), Some(insets));
+        // The block trails the strip: a bad tag or a box wider than the
+        // canvas is refused, never drawn somewhere else.
+        let tag = wire.len() - 17;
+        let mut bad = wire.clone();
+        bad[tag] = 2;
+        assert!(
+            Frame::read(bad.as_slice())
+                .unwrap()
+                .into_command(now, caps)
+                .is_err()
+        );
+        let mut wide = wire.clone();
+        wide[tag + 1..tag + 5].copy_from_slice(&700u32.to_le_bytes());
+        assert!(
+            Frame::read(wide.as_slice())
+                .unwrap()
+                .into_command(now, caps)
+                .is_err()
         );
     }
 

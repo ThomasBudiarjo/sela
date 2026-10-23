@@ -14,6 +14,9 @@ pub(crate) struct SaveJob {
     pub(crate) then: Option<Then>,
     /// `Schedule::document` when the save began.
     pub(crate) document: u64,
+    /// Each entry and its theme snapshot when the save began (M1-08); an
+    /// entry without one takes its song's library theme in the file.
+    pub(crate) themes: Vec<(EntryId, Option<sela::schedule::ItemTheme>)>,
 }
 
 /// The one file operation on the schedule file worker.
@@ -134,9 +137,15 @@ impl Operator {
             pins: self.schedule.pins().collect(),
             then,
             document: self.schedule.document(),
+            themes: self
+                .schedule
+                .entries()
+                .iter()
+                .map(|e| (e.id, e.theme.clone()))
+                .collect(),
         };
         if self.queue(
-            storage::Command::Songs(versions),
+            storage::Command::ThemedSongs(versions),
             Request::SaveSchedule(job),
         ) {
             self.schedule_message = Some(t!(Msg::Saving).into());
@@ -200,23 +209,50 @@ impl Operator {
     }
 
     /// The saved songs arrived: hand the document to the file worker.
-    pub(crate) fn write_schedule(&mut self, job: SaveJob, songs: Vec<storage::Song>) {
+    pub(crate) fn write_schedule(
+        &mut self,
+        job: SaveJob,
+        songs: Vec<(storage::Song, Option<sela::theme::ThemeId>)>,
+    ) {
         let title = job
             .path
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let items = job
+        let mut items = Vec::with_capacity(songs.len());
+        for (((source, (song, song_theme)), pin), (entry, snapshot)) in job
             .versions
             .iter()
             .zip(songs)
             .zip(&job.pins)
-            .map(|((source, song), pin)| schedule_file::Item {
+            .zip(&job.themes)
+        {
+            // A saved item carries its theme snapshot (M1-08), so the file
+            // reopens with the same look on another library (image
+            // backgrounds are references: name and SHA-256). One never shown
+            // takes its song's library theme now, in the file and in the
+            // session alike, unless that cannot be trusted (themes not
+            // loaded, or the song's theme is missing): then it is saved
+            // without a snapshot and resolves again when reopened.
+            let theme = match snapshot {
+                Some(snapshot) => Some(snapshot.clone()),
+                None => self.capturable_theme(song_theme).map(|theme| {
+                    if job.document == self.schedule.document() {
+                        self.schedule.capture_theme(*entry, &theme);
+                    }
+                    sela::schedule::ItemTheme {
+                        theme,
+                        explicit: false,
+                    }
+                }),
+            };
+            items.push(schedule_file::Item {
                 source: *source,
                 song,
                 arrangement: pin.arrangement,
-            })
-            .collect();
+                theme,
+            });
+        }
         let queued = self
             .file_worker
             .as_ref()
@@ -241,6 +277,11 @@ impl Operator {
         arrangements: Vec<Option<VariantId>>,
     ) -> Option<Vec<storage::Song>> {
         let name = schedule_file::display_name(&path);
+        let mut themes = match self.themes.opening.take() {
+            Some((opened, themes)) if opened == path && themes.len() == items.len() => themes,
+            _ => vec![None; items.len()],
+        }
+        .into_iter();
         let entries = items
             .iter()
             .zip(arrangements)
@@ -248,8 +289,9 @@ impl Operator {
                 let pin = Pin {
                     version: *version,
                     arrangement,
+                    theme: None,
                 };
-                (pin, song.title.clone())
+                (pin, song.title.clone(), themes.next().flatten())
             })
             .collect();
         match self.schedule.open(path.clone(), entries) {
@@ -320,6 +362,11 @@ impl Operator {
         match result {
             Ok(file) => {
                 let arrangements = file.items.iter().map(|item| item.arrangement).collect();
+                // The snapshots wait beside the library import (M1-08).
+                self.themes.opening = Some((
+                    path.clone(),
+                    file.items.iter().map(|item| item.theme.clone()).collect(),
+                ));
                 let items = file
                     .items
                     .into_iter()
