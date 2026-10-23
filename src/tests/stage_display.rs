@@ -14,6 +14,19 @@ fn settle(
     what: &str,
     done: impl Fn(&Operator) -> bool,
 ) {
+    settle_or_report(cx, operator, what, done, String::new);
+}
+
+/// `settle` whose timeout message also carries `extra` (the children's
+/// logs) after the operator's view of both outputs, so a failure on a CI
+/// machine shows where a cue stopped.
+fn settle_or_report(
+    cx: &mut VisualTestContext,
+    operator: &Entity<Operator>,
+    what: &str,
+    done: impl Fn(&Operator) -> bool,
+    extra: impl Fn() -> String,
+) {
     let end = Instant::now() + Duration::from_secs(30);
     loop {
         operator.update(cx, |o, cx| o.poll(cx));
@@ -21,15 +34,43 @@ fn settle(
         if operator.read_with(cx, |o, _| done(o)) {
             return;
         }
-        assert!(Instant::now() < end, "bounded wait for {what}");
+        if Instant::now() >= end {
+            let report = operator.read_with(cx, |o, _| outputs_report(o));
+            panic!("bounded wait for {what}\n{report}{}", extra());
+        }
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// What the operator knows about both outputs: status, receipts, counters,
+/// the panel it wants on the stage, and the Live pane's stage lines.
+fn outputs_report(o: &Operator) -> String {
+    let supervisor = |name: &str, output: Option<&sela::output::Supervisor>| match output {
+        None => format!("{name}: off\n"),
+        Some(s) => format!(
+            "{name}: {:?}; live {:?}; in flight {:?}; wanted {:?}; rejected {:?}; {:?}\n",
+            s.status(),
+            s.live(),
+            s.in_flight(),
+            s.wanted(),
+            s.rejected(),
+            s.counters(),
+        ),
+    };
+    format!(
+        "{}{}on screen: {:?}\nstage panel wanted: {:?}\nstage lines: {:?}\n",
+        supervisor("audience", o.output.as_ref()),
+        supervisor("stage", o.stage.output.as_ref()),
+        o.on_screen(),
+        o.stage_panel(),
+        o.stage_lines(),
+    )
 }
 
 /// Renderer stand-in for either output. `SELA_FAKE_ROLE` is `audience` or
 /// `stage`; like the real renderers, an audience refuses stage cues and a
 /// stage refuses anything else. Every scene is appended to `SELA_FAKE_LOG`
-/// as one line: role, kind (`stage`/`scene`), the stage fields (or the
+/// (one file per role, see `log_of`) with a single write per line: role, kind (`stage`/`scene`), the stage fields (or the
 /// audience text) with newlines shown as `|`, then the face it carries
 /// (`face_field`). `SELA_FAKE_MODE`: `apply`, `exit-after:<n>` (exit
 /// after the nth applied scene), `reject-at:<n>` (fail the nth scene), or
@@ -87,12 +128,16 @@ fn fake_output_child() {
                                 .unwrap_or_default()
                         ),
                     };
+                    // One append per line: `writeln!` issues the text and the
+                    // newline as two writes, and a stage child restarted
+                    // while the old one is being killed shares this file.
                     let mut file = std::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
                         .open(&log)
                         .unwrap();
-                    writeln!(file, "{}", line.replace('\n', "|")).unwrap();
+                    let line = format!("{}\n", line.replace('\n', "|"));
+                    file.write_all(line.as_bytes()).unwrap();
                 }
                 session.accept(command, now)
             }
@@ -144,7 +189,16 @@ fn session_has_no_logo() -> bool {
     true
 }
 
-fn output_command(role: &'static str, mode: &'static str, log: &std::path::Path) -> Launch {
+/// Each role's log in the rig's log folder. Separate files: the audience and
+/// stage children get their cues at the same moment, and two processes
+/// appending to one file can interleave a line's text and its newline,
+/// hiding the stage line at the end of an audience line (the Windows CI
+/// symptom: a panel the stage acknowledged never showed in the log).
+fn log_of(logs: &std::path::Path, role: &str) -> std::path::PathBuf {
+    logs.join(format!("{role}.log"))
+}
+
+fn output_command(role: &'static str, mode: &'static str, logs: &std::path::Path) -> Launch {
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
         .args([
@@ -155,7 +209,7 @@ fn output_command(role: &'static str, mode: &'static str, log: &std::path::Path)
         ])
         .env("SELA_FAKE_ROLE", role)
         .env("SELA_FAKE_MODE", mode)
-        .env("SELA_FAKE_LOG", log);
+        .env("SELA_FAKE_LOG", log_of(logs, role));
     Launch {
         command,
         frames: Stream::Stderr,
@@ -194,6 +248,7 @@ fn stage_launcher(
 struct Rig {
     cx: VisualTestContext,
     operator: Entity<Operator>,
+    /// Folder of the children's logs (`log_of`), inside the profile folder.
     log: std::path::PathBuf,
     monitors: Arc<std::sync::Mutex<Vec<String>>>,
     _dir: tempfile::TempDir,
@@ -241,7 +296,8 @@ fn rig_with(
         format!("sela-settings 1\n{stored}"),
     )
     .unwrap();
-    let log = dir.path().join("outputs.log");
+    let log = dir.path().join("outputs");
+    std::fs::create_dir(&log).unwrap();
     let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
     let launcher = stage_launcher(stage, log.clone(), spawned.clone());
     let mut config = crate::operator::SettingsConfig {
@@ -289,7 +345,7 @@ fn rig_with(
 const ENABLED: &str = "stage_enabled=1\n";
 
 fn lines(log: &std::path::Path, role: &str) -> Vec<Vec<String>> {
-    std::fs::read_to_string(log)
+    std::fs::read_to_string(log_of(log, role))
         .unwrap_or_default()
         .lines()
         .filter(|line| line.starts_with(&format!("{role}\t")))
@@ -325,10 +381,32 @@ fn stage_shows(o: &Operator, label: &str) -> bool {
 
 fn wait_for_panel(rig: &mut Rig, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
     let log = rig.log.clone();
-    settle(&mut rig.cx, &rig.operator, what, |_| {
-        last_panel(&log).is_some_and(|panel| done(&panel))
-    });
+    settle_or_report(
+        &mut rig.cx,
+        &rig.operator,
+        what,
+        |_| last_panel(&log).is_some_and(|panel| done(&panel)),
+        || log_tails(&log),
+    );
     last_panel(&log).unwrap()
+}
+
+/// The last lines each child logged, for a timeout message.
+fn log_tails(log: &std::path::Path) -> String {
+    let mut report = String::new();
+    for role in ["audience", "stage"] {
+        let path = log_of(log, role);
+        let text = match std::fs::read(&path) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(error) => format!("(unreadable: {error})"),
+        };
+        let all: Vec<&str> = text.lines().collect();
+        report.push_str(&format!("{role} log, last of {} lines:\n", all.len()));
+        for line in &all[all.len().saturating_sub(10)..] {
+            report.push_str(&format!("  {line}\n"));
+        }
+    }
+    report
 }
 
 /// No audience scene ever carried stage content.

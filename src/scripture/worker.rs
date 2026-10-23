@@ -218,11 +218,13 @@ impl Worker {
     }
 }
 
-#[cfg(test)]
 impl Worker {
     /// Stops the worker and waits for its thread, so every file it opened
-    /// is closed when this returns (`Drop` does not wait).
-    fn shut_down(mut self) {
+    /// is closed when this returns (`Drop` does not wait). It blocks for as
+    /// long as the running command takes, so it is for tests only: Windows
+    /// refuses to delete a translation file the thread still has open.
+    #[doc(hidden)]
+    pub fn shut_down(mut self) {
         self.commands.take();
         if let Some(thread) = self.thread.take() {
             while !thread.is_finished() {

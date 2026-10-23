@@ -688,6 +688,9 @@ fn scripture_schedule_items_are_pinned_snapshots_that_survive_save_and_reopen(
     assert_eq!(document["items"][0]["verses"][1][1], "Alpha verse 17 light");
 
     // The translation file vanishing does not matter: the snapshot plays.
+    // It can only vanish while Sela does not hold it open (Windows refuses
+    // to delete an open file), so the scripture worker closes it first.
+    operator.update(&mut cx, |o, _| o.scripture.close_translation_files());
     std::fs::remove_file(dir.path().join("Scripture").join("SYA.selabible")).unwrap();
     let before: Vec<_> = operator.read_with(&cx, |o, _| {
         o.schedule.entries().iter().map(|e| e.id).collect()
