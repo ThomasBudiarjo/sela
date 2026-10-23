@@ -374,6 +374,7 @@ impl Render for Operator {
                             .flex_col()
                             .overflow_hidden()
                             .child(div().flex_1().min_h_0().child(self.live_pane(right, cx)))
+                            .children(self.video_transport(cx))
                             .child(
                                 div()
                                     .h(px(PANE_HEADER_H))
@@ -457,7 +458,11 @@ impl Render for Operator {
             )
             .when(!self.collapsed, |d| {
                 let detail = self.resource_detail(window, cx);
-                let sidebar = (self.tab == 1).then(|| self.scripture_sidebar(cx));
+                let sidebar = match self.tab {
+                    1 => Some(self.scripture_sidebar(cx)),
+                    2 => Some(self.media_sidebar(cx)),
+                    _ => None,
+                };
                 let scripture_footer = (self.tab == 1).then(|| self.scripture_footer(cx));
                 let collections = sidebar.is_none();
                 d.child(
@@ -597,85 +602,92 @@ impl Render for Operator {
                     )
                 })
                 .when(self.tab == 4, |d| d.child(self.theme_footer(cx)))
-                .when(self.tab == 2, |d| {
-                    d.when(!self.assets.import_notes.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .id("import-notes")
-                                .debug_selector(|| "import-notes".into())
-                                .role(Role::Status)
-                                .aria_label(t!(Msg::ImportImage))
-                                .accessibility_id("import-notes")
-                                .flex_shrink_0()
-                                .flex()
-                                .flex_col()
-                                .px_3()
-                                .py_1()
-                                .border_t_1()
-                                .border_color(rgb(BORDER))
-                                .text_size(px(TEXT_CAPTION))
-                                .text_color(rgb(MUTED))
-                                .children(self.assets.import_notes.iter().cloned()),
-                        )
-                    })
-                    .child(
-                        div()
-                            .h(px(STATUS_BAR_H))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .border_t_1()
-                            .border_color(rgb(BORDER))
-                            .child(
-                                self.button(
-                                    Control::ImportImage,
-                                    "import-image",
-                                    t!(Msg::ImportImage),
-                                    cx,
-                                )
-                                .when(self.assets.importing.is_some(), |d| {
-                                    mark_disabled(d).text_color(rgb(DISABLED))
-                                }),
-                            )
-                            .when(self.assets.importing.is_some(), |d| {
-                                d.child(self.button(
-                                    Control::CancelImport,
-                                    "cancel-import",
-                                    t!(Msg::ImportCancel),
-                                    cx,
-                                ))
-                            })
-                            .child(
-                                self.button(
-                                    Control::UseAsLogo,
-                                    "use-as-logo",
-                                    t!(Msg::UseAsLogo),
-                                    cx,
-                                )
-                                .when(self.selected_image.is_none(), |d| {
-                                    mark_disabled(d).text_color(rgb(DISABLED))
-                                }),
-                            )
-                            .children(self.media_message.clone().map(|message| {
+                .when(
+                    self.tab == 2 && self.video.category == super::video::Category::Videos,
+                    |d| d.child(self.video_footer(cx)),
+                )
+                .when(
+                    self.tab == 2 && self.video.category == super::video::Category::Images,
+                    |d| {
+                        d.when(!self.assets.import_notes.is_empty(), |d| {
+                            d.child(
                                 div()
-                                    .debug_selector(|| "media-message".into())
-                                    .px_2()
+                                    .id("import-notes")
+                                    .debug_selector(|| "import-notes".into())
+                                    .role(Role::Status)
+                                    .aria_label(t!(Msg::ImportImage))
+                                    .accessibility_id("import-notes")
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .flex_col()
+                                    .px_3()
+                                    .py_1()
+                                    .border_t_1()
+                                    .border_color(rgb(BORDER))
                                     .text_size(px(TEXT_CAPTION))
                                     .text_color(rgb(MUTED))
-                                    .truncate()
-                                    .child(message)
-                            }))
-                            .children(self.logo_error.clone().map(|error| {
-                                div()
-                                    .px_2()
-                                    .text_size(px(TEXT_CAPTION))
-                                    .text_color(rgb(ERROR))
-                                    .truncate()
-                                    .child(error)
-                            })),
-                    )
-                })
+                                    .children(self.assets.import_notes.iter().cloned()),
+                            )
+                        })
+                        .child(
+                            div()
+                                .h(px(STATUS_BAR_H))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .border_t_1()
+                                .border_color(rgb(BORDER))
+                                .child(
+                                    self.button(
+                                        Control::ImportImage,
+                                        "import-image",
+                                        t!(Msg::ImportImage),
+                                        cx,
+                                    )
+                                    .when(self.assets.importing.is_some(), |d| {
+                                        mark_disabled(d).text_color(rgb(DISABLED))
+                                    }),
+                                )
+                                .when(self.assets.importing.is_some(), |d| {
+                                    d.child(self.button(
+                                        Control::CancelImport,
+                                        "cancel-import",
+                                        t!(Msg::ImportCancel),
+                                        cx,
+                                    ))
+                                })
+                                .child(
+                                    self.button(
+                                        Control::UseAsLogo,
+                                        "use-as-logo",
+                                        t!(Msg::UseAsLogo),
+                                        cx,
+                                    )
+                                    .when(self.selected_image.is_none(), |d| {
+                                        mark_disabled(d).text_color(rgb(DISABLED))
+                                    }),
+                                )
+                                .children(self.media_message.clone().map(|message| {
+                                    div()
+                                        .debug_selector(|| "media-message".into())
+                                        .px_2()
+                                        .text_size(px(TEXT_CAPTION))
+                                        .text_color(rgb(MUTED))
+                                        .truncate()
+                                        .child(message)
+                                }))
+                                .children(self.logo_error.clone().map(|error| {
+                                    div()
+                                        .px_2()
+                                        .text_size(px(TEXT_CAPTION))
+                                        .text_color(rgb(ERROR))
+                                        .truncate()
+                                        .child(error)
+                                })),
+                        )
+                    },
+                )
             })
             .when_some(self.image_menu_shown(), |d, position| {
                 d.child(

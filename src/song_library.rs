@@ -431,10 +431,15 @@ type Backdrop = ((ImageRef, Aspect), Arc<[u8]>);
 
 /// Background preparation for previews and thumbnails, shared by their
 /// background tasks; the UI thread never locks it.
+/// A video's first frame at the preview size, by video and aspect.
+type Poster = ((sela::background::VideoRef, Aspect), Arc<[u8]>);
+
 struct Backdrops {
     profile: Option<PathBuf>,
     /// Least recently fitted first.
     fitted: Mutex<VecDeque<Backdrop>>,
+    /// Video posters (first frames) at the preview size, same bound.
+    posters: Mutex<VecDeque<Poster>>,
 }
 
 impl Backdrops {
@@ -442,6 +447,62 @@ impl Backdrops {
         Self {
             profile,
             fitted: Mutex::new(VecDeque::new()),
+            posters: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// A video background previews as its first frame (the audience plays
+    /// it); black with the substitution warning when it cannot be read.
+    fn poster(
+        &self,
+        video: &sela::background::VideoRef,
+        aspect: Aspect,
+    ) -> (PreparedBackground, Option<String>) {
+        let key = (video.clone(), aspect);
+        let cached = {
+            let posters = self.posters.lock().unwrap_or_else(|e| e.into_inner());
+            posters
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.clone())
+        };
+        let poster = match cached {
+            Some(rgba) => Ok(rgba),
+            None => self
+                .profile
+                .as_deref()
+                .ok_or(sela::videos::Substitute::Missing)
+                .and_then(|profile| {
+                    sela::videos::poster(
+                        profile,
+                        sela::videos::tools().as_ref(),
+                        video,
+                        aspect,
+                        PREVIEW,
+                    )
+                })
+                .inspect(|rgba| {
+                    let mut posters = self.posters.lock().unwrap_or_else(|e| e.into_inner());
+                    posters.retain(|(k, _)| *k != key);
+                    posters.push_back((key.clone(), rgba.clone()));
+                    while posters.len() > BACKDROPS {
+                        posters.pop_front();
+                    }
+                }),
+        };
+        match poster {
+            Ok(rgba) => (
+                PreparedBackground::Image {
+                    version: sela::videos::poster_version(video, aspect),
+                    extent: PREVIEW,
+                    rgba,
+                },
+                None,
+            ),
+            Err(why) => (
+                sela::slides::color_background(sela::background::BLACK),
+                Some(why.warning(&video.name)),
+            ),
         }
     }
 
@@ -452,6 +513,7 @@ impl Backdrops {
         let (image, aspect) = match plan(slide.background.as_ref()) {
             Plan::Color(rgb) => return (sela::slides::color_background(rgb), None),
             Plan::Image(image, aspect) => (image, aspect),
+            Plan::Video(video, aspect, _) => return self.poster(video, aspect),
         };
         let key = (image.clone(), aspect);
         let cached = {
@@ -537,6 +599,8 @@ fn pixels(
             crate::audience::compositor::blend_over(rgba, &coverage, &blend)?,
             size,
         )),
+        // Previews receive posters as images; a video cue never comes here.
+        PreparedBackground::Video { .. } => None,
     }
 }
 
@@ -4874,6 +4938,87 @@ mod tests {
         click(cx, &format!("format-menu-{row}"));
     }
 
+    /// video-playback: Select Media… › Videos sets a video Media Fill that
+    /// repeats, the Slide pane's Repeating turns it off as one undo step,
+    /// and the song saves it (EW8-OBS-032, EW8-OBS-039, SRC-10).
+    #[gpui::test]
+    fn select_media_videos_sets_a_repeating_video_fill_that_saves(cx: &mut TestAppContext) {
+        use sela::background::{Background, Fill};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let videos = sela::videos::videos_dir(dir.path());
+        std::fs::create_dir_all(&videos).unwrap();
+        std::fs::write(videos.join("Waves.mp4"), b"original wave clip bytes").unwrap();
+        let pinned = sela::videos::video_ref(dir.path(), "Waves.mp4").unwrap();
+        let (mut cx, view) = format_fixture(cx, path.clone());
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Media Fill");
+        let count = undo_len(&cx, &view);
+        click(&mut cx, "format-SelectMedia");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(vec!["Waves.mp4".to_owned()]))
+        );
+        let rows = view.read_with(&cx, |v, _| v.menu_rows(format_pane::Menu::Media));
+        assert_eq!(rows[0].0, "Waves", "named without the extension");
+        // Right and Left switch the category from the keyboard.
+        cx.simulate_keystrokes("right");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.kind),
+            format_pane::MediaKind::Images
+        );
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(Vec::new()))
+        );
+        cx.simulate_keystrokes("left");
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(vec!["Waves.mp4".to_owned()]))
+        );
+        click(&mut cx, "media-item-0");
+        cx.run_until_parked();
+        assert_eq!(
+            backgrounds(&cx, &view)[0],
+            Some(Background::video(pinned.clone()))
+        );
+        assert!(matches!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| &b.fill),
+            Some(Fill::Video { repeat: true, .. })
+        ));
+        assert_eq!(undo_len(&cx, &view), count + 1);
+        // The pane names it and offers Repeating for a video.
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("format-repeat").is_some());
+        click(&mut cx, "format-repeat");
+        assert!(matches!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| &b.fill),
+            Some(Fill::Video { repeat: false, .. })
+        ));
+        assert_eq!(undo_len(&cx, &view), count + 2);
+        // Media Fill again keeps the chosen video (EW keeps the current media).
+        fill(&mut cx, &view, "Media Fill");
+        assert!(matches!(
+            backgrounds(&cx, &view)[0].as_ref().map(|b| &b.fill),
+            Some(Fill::Video { repeat: false, .. })
+        ));
+        cx.simulate_keystrokes("ctrl-s");
+        wait(&mut cx, &view);
+        let version = view.read_with(&cx, |v, _| v.version.unwrap());
+        let saved = Repository::open(&path).unwrap().song(version).unwrap();
+        assert_eq!(saved.sections[0].background, backgrounds(&cx, &view)[0]);
+        assert_eq!(
+            saved.sections[0]
+                .background
+                .as_ref()
+                .and_then(|b| b.video_ref().cloned()),
+            Some(pinned)
+        );
+    }
+
     #[gpui::test]
     fn slide_tab_sets_color_image_and_aspect_as_undo_steps(cx: &mut TestAppContext) {
         use sela::background::{Background, Fill};
@@ -4924,6 +5069,14 @@ mod tests {
             Some(Fill::Media(None))
         );
         click(&mut cx, "format-SelectMedia");
+        cx.run_until_parked();
+        // EW8-OBS-039: the picker opens on Videos (empty here); Images is
+        // the next category.
+        assert_eq!(
+            view.read_with(&cx, |v, _| v.pane.media.names.clone()),
+            Some(Ok(Vec::new()))
+        );
+        click(&mut cx, "media-images");
         cx.run_until_parked();
         assert_eq!(
             view.read_with(&cx, |v, _| v.pane.media.names.clone()),
@@ -5015,6 +5168,154 @@ mod tests {
                 .map(|s| s.background.clone())
                 .collect::<Vec<_>>(),
             backgrounds(&cx, &view)
+        );
+    }
+
+    /// video-playback review: Select Media… › Videos › Import runs one
+    /// import at a time, says so in the status line, turns the row into
+    /// Cancel import (which reaches the copy), and an editor that closes
+    /// cancels its copy (the import's guard is dropped with the pane).
+    #[gpui::test]
+    fn select_media_video_import_is_one_at_a_time_shown_and_cancellable(cx: &mut TestAppContext) {
+        use format_pane::{MediaImport, MediaKind};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        std::fs::create_dir_all(sela::videos::videos_dir(dir.path())).unwrap();
+        let source = dir.path().join("Clip.mp4");
+        std::fs::write(&source, b"a long video, as far as this test knows").unwrap();
+        let (mut cx, view) = format_fixture(cx, path);
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Media Fill");
+        click(&mut cx, "format-SelectMedia");
+        // Started, not yet run: the background thread has not been polled.
+        view.update(&mut cx, |v, cx| {
+            v.start_media_import(MediaKind::Videos, source.clone(), cx)
+        });
+        let flag = view.read_with(&cx, |v, _| {
+            assert_eq!(v.status, "Importing Clip.mp4…");
+            let rows = v.menu_rows(format_pane::Menu::Media);
+            assert_eq!(rows.last().unwrap().0, "Cancel import");
+            assert!(rows.last().unwrap().1, "Cancel import is enabled");
+            v.pane.media.importing.as_ref().unwrap().flag()
+        });
+        // One at a time: a second import is refused, the first one stays.
+        let other = dir.path().join("Other.mp4");
+        view.update(&mut cx, |v, cx| {
+            v.start_media_import(MediaKind::Videos, other, cx)
+        });
+        view.read_with(&cx, |v, _| {
+            assert_eq!(v.status, sela::t!(sela::i18n::Msg::ImportBusy));
+            assert_eq!(v.pane.media.importing.as_ref().unwrap().name, "Clip.mp4");
+        });
+        // The row now cancels instead of prompting for another file.
+        cx.update(|window, cx| view.update(cx, |v, cx| v.import_media(window, cx)));
+        assert!(!cx.did_prompt_for_paths());
+        assert!(flag.load(std::sync::atomic::Ordering::Acquire));
+        view.read_with(&cx, |v, _| {
+            assert_eq!(v.status, "Cancelling import…");
+            let rows = v.menu_rows(format_pane::Menu::Media);
+            assert!(!rows.last().unwrap().1, "Cancel is spent");
+        });
+        // The job ends (refused or cancelled) and Import… is back.
+        cx.run_until_parked();
+        view.read_with(&cx, |v, _| {
+            assert!(v.pane.media.importing.is_none());
+            assert_ne!(v.status, "Importing Clip.mp4…");
+            let rows = v.menu_rows(format_pane::Menu::Media);
+            assert_eq!(rows.last().unwrap().0, "Import…");
+        });
+        assert!(
+            !sela::videos::videos_dir(dir.path())
+                .join("Clip.mp4")
+                .exists()
+        );
+        // Dropping the guard (the editor closed) cancels the copy.
+        let guard = MediaImport::new("Clip.mp4", MediaKind::Videos);
+        let flag = guard.flag();
+        assert!(!flag.load(std::sync::atomic::Ordering::Acquire));
+        drop(guard);
+        assert!(flag.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    /// video-playback review round 2: closing the editor window while its
+    /// Select Media… video import runs releases the editor and with it the
+    /// import's guard, which cancels the copy (the flag the copy polls).
+    #[gpui::test]
+    fn closing_the_editor_during_a_select_media_import_cancels_it(cx: &mut TestAppContext) {
+        use format_pane::MediaKind;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        std::fs::create_dir_all(sela::videos::videos_dir(dir.path())).unwrap();
+        let source = dir.path().join("Clip.mp4");
+        std::fs::write(&source, b"a long video, as far as this test knows").unwrap();
+        let (mut cx, view) = format_fixture(cx, path);
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Media Fill");
+        click(&mut cx, "format-SelectMedia");
+        view.update(&mut cx, |v, cx| {
+            v.start_media_import(MediaKind::Videos, source, cx)
+        });
+        let flag = view.read_with(&cx, |v, _| v.pane.media.importing.as_ref().unwrap().flag());
+        assert!(!flag.load(std::sync::atomic::Ordering::Acquire));
+        let weak = view.downgrade();
+        drop(view);
+        cx.update(|window, _| window.remove_window());
+        cx.run_until_parked();
+        assert!(weak.upgrade().is_none(), "nothing keeps the closed editor");
+        assert!(
+            flag.load(std::sync::atomic::Ordering::Acquire),
+            "the closed editor's import is cancelled"
+        );
+    }
+
+    /// With the pinned development FFmpeg: a cancelled Select Media… video
+    /// import stops before copying and leaves no file.
+    #[test]
+    fn a_cancelled_select_media_video_import_leaves_no_file() {
+        use format_pane::{MediaImportError, MediaKind, import_media_file};
+        let Ok(found) = sela::media::ffmpeg::locate() else {
+            let message = "SKIPPED a_cancelled_select_media_video_import_leaves_no_file: no FFmpeg";
+            assert!(
+                std::env::var_os("SELA_REQUIRE_FFMPEG").is_none_or(|v| v != "1"),
+                "{message}"
+            );
+            eprintln!("{message}");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join("Loop.mkv");
+        let status = std::process::Command::new(&found.ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x90:rate=10:duration=1",
+            ])
+            .args(["-c:v", "ffv1"])
+            .arg(&clip)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let tools = sela::media::decode::Tools::from(&found);
+        let profile = dir.path().join("profile");
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(
+            import_media_file(
+                MediaKind::Videos,
+                &profile,
+                &clip,
+                Some(tools.clone()),
+                &cancel
+            ),
+            Err(MediaImportError::Cancelled)
+        );
+        assert_eq!(sela::videos::list(&profile).unwrap(), Vec::<String>::new());
+        // Not cancelled, the same call imports it.
+        cancel.store(false, std::sync::atomic::Ordering::Release);
+        assert_eq!(
+            import_media_file(MediaKind::Videos, &profile, &clip, Some(tools), &cancel),
+            Ok("Loop.mkv".to_owned())
         );
     }
 

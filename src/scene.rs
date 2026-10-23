@@ -176,6 +176,39 @@ pub enum PreparedBackground {
         extent: Extent,
         rgba: Arc<[u8]>,
     },
+    /// A video the renderer decodes and plays itself, fitted to the cue's
+    /// extent (M2-02). The renderer starts its own supervised FFmpeg child
+    /// for `source.path` and admits the cue only once the first frame is
+    /// uploaded; it never opens the file in-process.
+    Video {
+        version: ContentVersion,
+        source: Arc<VideoSource>,
+    },
+}
+
+/// Longest video path carried by a cue, in UTF-8 bytes.
+pub const MAX_VIDEO_PATH: usize = 4096;
+
+/// What the renderer plays for a video background. The path is absolute
+/// and local (`media::ffmpeg::input_args` rules); the operator checked the
+/// file's pin before sending it (preflight), the renderer checks the path
+/// rules again.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VideoSource {
+    pub path: PathBuf,
+    pub aspect: crate::background::Aspect,
+    /// Loop (Repeating on) or play once and hold the last frame.
+    pub repeat: bool,
+}
+
+impl VideoSource {
+    /// Usable by a renderer: an absolute local path within the size bound.
+    pub fn is_valid(&self) -> bool {
+        self.path
+            .to_str()
+            .is_some_and(|path| !path.is_empty() && path.len() <= MAX_VIDEO_PATH)
+            && crate::media::ffmpeg::input_args(&self.path).is_ok()
+    }
 }
 
 pub struct PreparedText {
@@ -291,6 +324,12 @@ impl PreparedCue {
                     return Err(PrepareError::InvalidImage);
                 }
                 bytes = expected;
+            }
+            PreparedBackground::Video { source, .. } => {
+                if !source.is_valid() {
+                    return Err(PrepareError::InvalidScene);
+                }
+                bytes = source.path.as_os_str().len();
             }
             PreparedBackground::Color(_) => {}
         }

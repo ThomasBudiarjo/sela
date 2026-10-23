@@ -155,6 +155,8 @@ fn fake_output_child() {
                         Err(DeliveryError::RenderFailed)
                     }
                     Payload::Mask(_) | Payload::Logo(_) => Ok(()),
+                    // No video plays on either fake output.
+                    Payload::Media(_) => Err(DeliveryError::RenderFailed),
                     Payload::Scene(cue) => {
                         if cue.stage().is_some() != stage_role {
                             return Err(DeliveryError::RenderFailed);

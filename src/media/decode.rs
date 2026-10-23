@@ -64,6 +64,24 @@ pub enum Fit {
     /// Exactly this extent: scaled to fit, aspect kept, centered on black
     /// (letterbox or pillarbox). Matches a cue's output extent.
     Exact(Extent),
+    /// Exactly this extent, covered: scaled up or down until both sides
+    /// cover it, aspect kept, the overflow cropped evenly (a background's
+    /// Zoom, `background::Aspect::Zoom`).
+    Cover(Extent),
+    /// Exactly this extent, each axis scaled on its own (Stretch).
+    Stretch(Extent),
+}
+
+impl Fit {
+    /// The fit that sizes a background video like `background::fit` sizes
+    /// an image of the same aspect choice, exactly to `extent`.
+    pub fn for_aspect(aspect: crate::background::Aspect, extent: Extent) -> Self {
+        match aspect {
+            crate::background::Aspect::Maintain => Self::Exact(extent),
+            crate::background::Aspect::Zoom => Self::Cover(extent),
+            crate::background::Aspect::Stretch => Self::Stretch(extent),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +105,10 @@ pub struct DecodeOptions {
     /// `None` (the default) takes a fresh process-unique id per
     /// [`Decoder::start`], so two decoders never share frame versions.
     pub content_id: Option<u128>,
+    /// Repeat the input forever (`-stream_loop -1`): FFmpeg keeps the
+    /// timestamps increasing across the loop point, so the frames continue
+    /// without a gap and [`DecodeEvent::End`] never comes from the source.
+    pub looping: bool,
 }
 
 impl Default for DecodeOptions {
@@ -99,6 +121,7 @@ impl Default for DecodeOptions {
             probe_timeout: probe::PROBE_TIMEOUT,
             max_frames: None,
             content_id: None,
+            looping: false,
         }
     }
 }
@@ -378,11 +401,21 @@ pub fn first_frame(
     extent: Extent,
     timeout: Duration,
 ) -> Result<(MediaInfo, VideoFrame), MediaError> {
+    first_frame_fit(tools, input, Fit::Exact(extent), timeout)
+}
+
+/// [`first_frame`] with any [`Fit`] (a background's aspect choice).
+pub fn first_frame_fit(
+    tools: &Tools,
+    input: &Path,
+    fit: Fit,
+    timeout: Duration,
+) -> Result<(MediaInfo, VideoFrame), MediaError> {
     let decoder = Decoder::start(
         tools,
         input,
         DecodeOptions {
-            fit: Fit::Exact(extent),
+            fit,
             queue_frames: 1,
             max_frames: Some(1),
             ..Default::default()
@@ -433,7 +466,7 @@ pub fn output_extent(video: &VideoInfo, fit: Fit) -> Result<(Extent, Extent), Me
             let picture = within(ceiling);
             Ok((picture, picture))
         }
-        Fit::Within(max) | Fit::Exact(max)
+        Fit::Within(max) | Fit::Exact(max) | Fit::Cover(max) | Fit::Stretch(max)
             if max.width == 0
                 || max.height == 0
                 || max.width > MAX_DIMENSION
@@ -449,6 +482,16 @@ pub fn output_extent(video: &VideoInfo, fit: Fit) -> Result<(Extent, Extent), Me
             let factor = (f64::from(frame.width) / width).min(f64::from(frame.height) / height);
             Ok((scaled(factor, frame), frame))
         }
+        Fit::Cover(frame) => {
+            let factor = (f64::from(frame.width) / width).max(f64::from(frame.height) / height);
+            // Rounded up and never below the frame, so the crop always fits.
+            let picture = Extent {
+                width: ((width * factor).ceil() as u32).max(frame.width),
+                height: ((height * factor).ceil() as u32).max(frame.height),
+            };
+            Ok((picture, frame))
+        }
+        Fit::Stretch(frame) => Ok((frame, frame)),
     }
 }
 
@@ -459,7 +502,15 @@ fn filter_chain(picture: Extent, frame: Extent) -> String {
         "scale={}:{}:flags=bicubic,setsar=1",
         picture.width, picture.height
     );
-    if picture != frame {
+    if picture != frame && picture.width >= frame.width && picture.height >= frame.height {
+        chain += &format!(
+            ",crop={}:{}:{}:{}",
+            frame.width,
+            frame.height,
+            (picture.width - frame.width) / 2,
+            (picture.height - frame.height) / 2
+        );
+    } else if picture != frame {
         chain += &format!(
             ",pad={}:{}:{}:{}:color=black",
             frame.width,
@@ -471,17 +522,22 @@ fn filter_chain(picture: Extent, frame: Extent) -> String {
     chain + ",format=rgba,showinfo=checksum=0"
 }
 
-/// The full `ffmpeg` command line for one decode.
+/// The full `ffmpeg` command line for one decode; `looping` repeats the
+/// input forever (`-stream_loop -1`, an input option before `-i`).
 pub fn decode_args(
     input: &Path,
     stream: u32,
     picture: Extent,
     frame: Extent,
+    looping: bool,
 ) -> Result<Vec<OsString>, MediaError> {
     let mut args: Vec<OsString> = ["-loglevel", "info", "-nostats"]
         .into_iter()
         .map(OsString::from)
         .collect();
+    if looping {
+        args.extend(["-stream_loop", "-1"].map(OsString::from));
+    }
     args.extend(ffmpeg::input_args(input).map_err(MediaError::Input)?);
     let map = format!("0:{stream}");
     let filter = filter_chain(picture, frame);
@@ -667,7 +723,13 @@ impl Job {
                 height: frame.height,
             });
         }
-        let args = decode_args(&self.input, video.index, picture, frame)?;
+        let args = decode_args(
+            &self.input,
+            video.index,
+            picture,
+            frame,
+            self.options.looping,
+        )?;
         let frame_rate = video.frame_rate.map(|rate| rate.as_f64());
         if self
             .events
@@ -1189,6 +1251,7 @@ mod tests {
             1,
             extent(64, 36),
             extent(64, 36),
+            false,
         )
         .unwrap();
         let args: Vec<String> = args
@@ -1205,8 +1268,75 @@ mod tests {
         );
         assert!(joined.ends_with("-fps_mode passthrough -f rawvideo -pix_fmt rgba pipe:1"));
         assert_eq!(
-            decode_args(Path::new("http://x/y.mp4"), 0, extent(1, 1), extent(1, 1)),
+            decode_args(
+                Path::new("http://x/y.mp4"),
+                0,
+                extent(1, 1),
+                extent(1, 1),
+                false
+            ),
             Err(MediaError::Input(ffmpeg::InputRefused::Url))
+        );
+        let looping = decode_args(
+            Path::new("/media/clip.mkv"),
+            1,
+            extent(64, 36),
+            extent(64, 36),
+            true,
+        )
+        .unwrap();
+        let looping: Vec<String> = looping
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        // An input option: it must come before `-i`, or FFmpeg ignores it.
+        let at = |flag: &str| looping.iter().position(|a| a == flag).unwrap();
+        assert_eq!(looping[at("-stream_loop") + 1], "-1");
+        assert!(at("-stream_loop") < at("-i"));
+        assert!(!args.contains(&"-stream_loop".to_owned()));
+    }
+
+    #[test]
+    fn cover_fit_scales_past_the_frame_and_crops_evenly() {
+        // 4:3 into 16:9: the width covers, the height overflows and is cropped.
+        let (picture, frame) =
+            output_extent(&video(320, 240), Fit::Cover(extent(640, 360))).unwrap();
+        assert_eq!((picture, frame), (extent(640, 480), extent(640, 360)));
+        assert_eq!(
+            filter_chain(picture, frame),
+            "scale=640:480:flags=bicubic,setsar=1,crop=640:360:0:60,\
+             format=rgba,showinfo=checksum=0"
+        );
+        // A tall source covers by height and crops the sides.
+        let (picture, frame) =
+            output_extent(&video(100, 400), Fit::Cover(extent(200, 100))).unwrap();
+        assert_eq!((picture, frame), (extent(200, 800), extent(200, 100)));
+        // Odd rounding never leaves the picture smaller than the frame.
+        let (picture, frame) =
+            output_extent(&video(333, 187), Fit::Cover(extent(1920, 1080))).unwrap();
+        assert!(picture.width >= frame.width && picture.height >= frame.height);
+        assert_eq!(
+            Fit::for_aspect(crate::background::Aspect::Zoom, frame),
+            Fit::Cover(frame)
+        );
+    }
+
+    #[test]
+    fn stretch_fit_scales_each_axis_to_the_frame() {
+        let (picture, frame) =
+            output_extent(&video(320, 240), Fit::Stretch(extent(640, 360))).unwrap();
+        assert_eq!((picture, frame), (extent(640, 360), extent(640, 360)));
+        assert_eq!(
+            filter_chain(picture, frame),
+            "scale=640:360:flags=bicubic,setsar=1,format=rgba,showinfo=checksum=0"
+        );
+        assert_eq!(
+            Fit::for_aspect(crate::background::Aspect::Stretch, frame),
+            Fit::Stretch(frame)
+        );
+        assert_eq!(
+            Fit::for_aspect(crate::background::Aspect::Maintain, frame),
+            Fit::Exact(frame)
         );
     }
 

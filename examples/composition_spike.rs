@@ -163,6 +163,7 @@ fn main() -> Result<()> {
                 height: extent.height,
                 rgba,
             },
+            PreparedBackground::Video { .. } => unreachable!("no video cue in this spike"),
         };
         let start = Instant::now();
         let pixels =

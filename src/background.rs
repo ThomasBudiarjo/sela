@@ -4,7 +4,7 @@
 //! song's master, and a song without a master renders black. EasyWorship's
 //! master is its theme's Master layout; until themes exist (M1-08) the song
 //! master stands in for it.
-use crate::{images, scene::Extent};
+use crate::{images, scene::Extent, videos};
 use image::{GenericImage, GenericImageView, ImageBuffer, Rgba, RgbaImage, imageops};
 
 /// Encoded size bound, checked by storage before decoding.
@@ -33,6 +33,16 @@ pub struct ImageRef {
     pub sha256: [u8; 32],
 }
 
+/// A profile video by file name, pinned to a fingerprint of the bytes chosen
+/// in the editor (`videos::fingerprint`: the length plus the first and last
+/// MiB), so a replaced file is detected without hashing gigabytes.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct VideoRef {
+    pub name: String,
+    pub bytes: u64,
+    pub fingerprint: [u8; 32],
+}
+
 /// EW fill list None, Color Fill, Media Fill (EW8-OBS-038); Gradient Fill is
 /// not supported yet.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -42,6 +52,15 @@ pub enum Fill {
     Color([u8; 3]),
     /// Media Fill; black until an image is chosen (EW8-OBS-038).
     Media(Option<ImageRef>),
+    /// Media Fill with a video from Select Media… › Videos (EW8-OBS-032,
+    /// EW8-OBS-039). `repeat` is the slide pane's Repeating: on, the video
+    /// loops until something else goes live (SRC-10); off, it plays once and
+    /// holds its last frame. New video fills repeat (UNOBSERVED best guess
+    /// for EW's "Auto" on a background).
+    Video {
+        video: VideoRef,
+        repeat: bool,
+    },
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -69,7 +88,26 @@ impl Background {
     pub fn is_valid(&self) -> bool {
         match &self.fill {
             Fill::Media(Some(image)) => images::valid_name(&image.name),
+            Fill::Video { video, .. } => videos::valid_name(&video.name),
             _ => true,
+        }
+    }
+
+    pub fn video(video: VideoRef) -> Self {
+        Self {
+            fill: Fill::Video {
+                video,
+                repeat: true,
+            },
+            aspect: Aspect::default(),
+        }
+    }
+
+    /// The video this background plays, if any.
+    pub fn video_ref(&self) -> Option<&VideoRef> {
+        match &self.fill {
+            Fill::Video { video, .. } => Some(video),
+            _ => None,
         }
     }
 
@@ -97,6 +135,14 @@ impl Background {
                 out.extend_from_slice(image.name.as_bytes());
                 out.extend_from_slice(&image.sha256);
             }
+            Fill::Video { video, repeat } => {
+                out.push(4);
+                out.push(video.name.len() as u8);
+                out.extend_from_slice(video.name.as_bytes());
+                out.extend_from_slice(&video.bytes.to_le_bytes());
+                out.extend_from_slice(&video.fingerprint);
+                out.push(u8::from(*repeat));
+            }
         }
         out.push(self.aspect as u8);
         out
@@ -121,6 +167,25 @@ impl Background {
                 let name = std::str::from_utf8(r.take(len)?).ok()?.to_owned();
                 let sha256 = r.take(32)?.try_into().ok()?;
                 Fill::Media(Some(ImageRef { name, sha256 }))
+            }
+            4 => {
+                let len = usize::from(r.u8()?);
+                let name = std::str::from_utf8(r.take(len)?).ok()?.to_owned();
+                let bytes = u64::from_le_bytes(r.take(8)?.try_into().ok()?);
+                let fingerprint = r.take(32)?.try_into().ok()?;
+                let repeat = match r.u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return None,
+                };
+                Fill::Video {
+                    video: VideoRef {
+                        name,
+                        bytes,
+                        fingerprint,
+                    },
+                    repeat,
+                }
             }
             _ => return None,
         };
@@ -151,6 +216,8 @@ pub enum Plan<'a> {
     Color([u8; 3]),
     /// A profile image, decoded and fitted off the UI thread.
     Image(&'a ImageRef, Aspect),
+    /// A profile video, decoded and played by the renderer (M2-02).
+    Video(&'a VideoRef, Aspect, bool),
 }
 
 /// No background, no fill and an empty Media Fill are all black.
@@ -164,6 +231,10 @@ pub fn plan(background: Option<&Background>) -> Plan<'_> {
             fill: Fill::Media(Some(image)),
             aspect,
         }) => Plan::Image(image, *aspect),
+        Some(Background {
+            fill: Fill::Video { video, repeat },
+            aspect,
+        }) => Plan::Video(video, *aspect, *repeat),
         _ => Plan::Color(BLACK),
     }
 }
@@ -239,6 +310,20 @@ impl Reader<'_> {
 pub(crate) mod tests {
     use super::*;
 
+    pub(crate) fn video(name: &str, repeat: bool) -> Background {
+        Background {
+            fill: Fill::Video {
+                video: VideoRef {
+                    name: name.into(),
+                    bytes: 1 << 40,
+                    fingerprint: [9; 32],
+                },
+                repeat,
+            },
+            aspect: Aspect::Stretch,
+        }
+    }
+
     pub(crate) fn image(name: &str) -> Background {
         Background {
             fill: Fill::Media(Some(ImageRef {
@@ -266,6 +351,8 @@ pub(crate) mod tests {
         ];
         let longest = format!("{}.png", "a".repeat(251));
         all.push(image(&longest));
+        all.push(video("Waves.mp4", true));
+        all.push(video(&format!("{}.webm", "v".repeat(250)), false));
         for background in all {
             let bytes = background.encode();
             assert!(bytes.len() <= MAX_ENCODED);
@@ -394,6 +481,36 @@ pub(crate) mod tests {
             plan(Some(&image)),
             Plan::Image(image.image_ref().unwrap(), Aspect::Maintain)
         );
+        let clip = video("a.mp4", false);
+        assert_eq!(
+            plan(Some(&clip)),
+            Plan::Video(clip.video_ref().unwrap(), Aspect::Stretch, false)
+        );
+        assert!(
+            Background::video(clip.video_ref().unwrap().clone()).fill
+                == Fill::Video {
+                    video: clip.video_ref().unwrap().clone(),
+                    repeat: true
+                }
+        );
+    }
+
+    #[test]
+    fn video_fills_reject_bad_names_repeat_bytes_and_truncation() {
+        let bytes = video("clip.mp4", true).encode();
+        for len in 0..bytes.len() {
+            assert_eq!(Background::decode(&bytes[..len]), None, "{len}");
+        }
+        // The repeat flag is the byte before the aspect.
+        let mut repeat = bytes.clone();
+        let at = repeat.len() - 2;
+        repeat[at] = 2;
+        assert_eq!(Background::decode(&repeat), None);
+        for name in ["../a.mp4", "a.png", ".a.mp4", "a\\b.mp4", "a.exe", ""] {
+            let bad = video(name, true);
+            assert!(!bad.is_valid(), "{name}");
+            assert_eq!(Background::decode(&bad.encode()), None, "{name}");
+        }
     }
 
     #[test]

@@ -56,6 +56,7 @@ mod schedule_files;
 pub(super) mod song_import;
 mod stage;
 mod update_items;
+pub(crate) mod video;
 
 use assets::{Assets, PREFLIGHT_DIALOG_W};
 pub(super) use autosave::{AutosaveRefused, AutosaveSetup};
@@ -481,6 +482,8 @@ pub(super) struct Operator {
     pub(super) scripture: resources::ScriptureTab,
     /// Stage (Foldback) output session, message and Options draft (M3-01/02).
     pub(super) stage: stage::StageState,
+    /// Profile videos, thumbnails, pin checks and the Live transport (M2).
+    pub(super) video: video::VideoState,
 }
 
 impl Operator {
@@ -502,6 +505,7 @@ impl Operator {
             .map(Path::to_path_buf);
         let assets = Assets::start(profile.as_deref());
         let bundles = bundles::Bundles::start(profile.as_deref());
+        let profile_for_video = profile.clone();
         let autosave = autosave::AutosaveState::start(profile.as_deref(), cx);
         let mut media_message = None;
         let image_worker = profile.clone().and_then(|profile| {
@@ -746,6 +750,7 @@ impl Operator {
             autosave,
             scripture,
             stage: Default::default(),
+            video: video::VideoState::start(profile_for_video),
         }
     }
 }

@@ -920,3 +920,32 @@ Format and policy: [bundle.md](bundle.md).
 | EW8-OBS-BUN-5 | UNOBSERVED | EW profile/library backup and restore: menu placement (Profiles menu, Profiles Manager, Utilities ▸, File), file type, what is included (songs, media, schedules, settings, scripture, themes), and whether restore replaces the current profile or creates another. Sela adds Profiles › Back Up Profile… and Restore Profile… after Profiles Manager…; restore always creates a new profile folder and never replaces one. |
 | EW8-OBS-BUN-6 | UNOBSERVED | EW's progress and cancel behavior for exports, backups and restores. Sela shows a modal progress dialog with Cancel (Esc) and blocks Quit while a job runs; a standalone schedule whose import completed before it saw Cancel is kept in Schedules but not opened, with a note. |
 | EW8-OBS-BUN-7 | UNOBSERVED | EW's reaction to a damaged, foreign or newer package/backup. Sela refuses it before changing anything and says why (damaged, unsafe, newer Sela, wrong kind), adding "Nothing was changed." |
+
+### Video playback — UNOBSERVED best guesses (2026-10-23, video-playback)
+
+EasyWorship 8.0.49 was not run for the video-playback stream (no Windows
+host). Observed facts it builds on: EW8-OBS-032 (the Slide pane's Background
+has Media Fill, Select Media…, Media Usage, Aspect Ratio, Repeating Auto,
+Volume, disabled for an image), EW8-OBS-038 (Fill list), EW8-OBS-039 (Select
+Media… lists Videos first, thumbnails named without extensions) and SRC-10
+(Repeating loops "until you stop it or until you go live to something
+else"; "Set as Logo Background" for a video). Everything below is a
+reversible Sela best guess; steps and re-runs are the PP-VP items in
+[parity-pending.md](parity-pending.md#stream-video-playback). Design:
+[media.md](media.md#video-backgrounds-and-playback-m2-02-m2-03-m2-05-basic).
+
+| ID | State | Record |
+|---|---|---|
+| EW8-OBS-VP-1 | UNOBSERVED | Media tab: Sela has Videos and Images as two categories in the tab's left column (Images stays the tab's first view); EW's Media tab categories and their order are unobserved (EW8-OBS-019 saw Media › Images only). Rows show a poster and the name without its extension. |
+| EW8-OBS-VP-2 | UNOBSERVED | Video thumbnails and Preview tiles show the clip's first frame; which frame EW shows is unobserved. |
+| EW8-OBS-VP-3 | UNOBSERVED | A new video Media Fill repeats ("Repeating Auto" read as on for a background) and uses the aspect default (Zoom, like images); Repeating off plays once and holds the last frame. Volume is not built (audio plays at full level, EW8-OBS-VP-13). |
+| EW8-OBS-VP-4 | UNOBSERVED | Go Live on a slide with a video background starts the video at its first frame when the slide appears; the renderer prepares (primes) it before, and a video that does not open never replaces the live slide (Sela failure policy). |
+| EW8-OBS-VP-5 | UNOBSERVED | Next/Previous between slides that share the same background video keep it running (no restart); a slide with another background stops it. |
+| EW8-OBS-VP-6 | UNOBSERVED | Masks over a playing video (EW8-OBS-006): Black and Logo hide it while it keeps running; Clear shows it without the text; turning the mask off shows the current position. Masks never pause, restart or mute it. |
+| EW8-OBS-VP-7 | UNOBSERVED | Live transport: a row under the Live pane with Play/Pause, Restart and "state · position / length" while a video background is live; no keyboard shortcuts. EW's own media controls (placement, a seek bar, shortcuts) are unobserved. |
+| EW8-OBS-VP-8 | UNOBSERVED | Restart plays from the first frame, also from Paused or after the end; Play after the end replays. |
+| EW8-OBS-VP-9 | UNOBSERVED | A missing or replaced background video shows black behind the text with the warning "Background video ‘NAME’ is missing; showing black" (the image rule of M1-05h), checked again for every cue, also after the clip played earlier in the session (Sela best guess; review round 1); no Go Live dialog for videos yet. Select Media… › Import… in the Song Editor runs one import at a time with Cancel import (best guess; EW's import progress UI is unobserved). |
+| EW8-OBS-VP-10 | UNOBSERVED | Preview never plays a video (its tiles show the first frame); only Live does. |
+| EW8-OBS-VP-11 | UNOBSERVED | Importing a video copies it into the profile (like images); a file FFmpeg cannot play is refused with the reason; the same name with other bytes gets "name (2)". EW's copy-versus-reference choice is unobserved. |
+| EW8-OBS-VP-12 | UNOBSERVED (order seen) | Select Media… opens on Videos unless the current media is an image (EW8-OBS-039 showed Videos first and empty). |
+| EW8-OBS-VP-13 | UNOBSERVED | Audio of a background video (M2-04 slice): plays with the live video at full volume, follows its Pause/Play/Restart and loop, is silent after a play-once end, and keeps playing under Black, Clear and Logo (masks never mute it); the transport row notes "Sound on", "No sound output" or "Sound failed; the video plays on silently". EW's background-video audio default (Volume, mute, whether masks or the Audio mute affect it) is unobserved. |

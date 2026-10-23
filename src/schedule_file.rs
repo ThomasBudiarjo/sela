@@ -40,11 +40,15 @@ use std::{
 
 pub const FORMAT: &str = "sela-schedule";
 /// Newest version this Sela reads and writes.
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 /// Version written when the schedule has no scripture items.
 pub const SONGS_ONLY_VERSION: u32 = 4;
 /// First version with scripture items.
 pub const SCRIPTURE_VERSION: u32 = 5;
+/// First version whose song snapshots may hold video backgrounds (the
+/// background codec's tag 4); written only when one does, so a Sela
+/// before video says "newer" instead of "damaged".
+pub const VIDEO_VERSION: u32 = 6;
 pub const EXTENSION: &str = "selaschedule";
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_TITLE_BYTES: usize = 1024;
@@ -379,10 +383,29 @@ pub fn encode(file: &ScheduleFile) -> Result<Vec<u8>, WriteError> {
             },
         )
         .collect();
-    let version = if file.scripture.is_empty() {
+    let video = file.items.iter().any(|item| {
+        let theme = item
+            .theme
+            .as_ref()
+            .and_then(|t| t.theme.background.as_ref());
+        item.song
+            .master
+            .iter()
+            .chain(
+                item.song
+                    .sections
+                    .iter()
+                    .filter_map(|s| s.background.as_ref()),
+            )
+            .chain(theme)
+            .any(|b| b.video_ref().is_some())
+    });
+    let version = if video {
+        VIDEO_VERSION
+    } else if file.scripture.is_empty() {
         SONGS_ONLY_VERSION
     } else {
-        VERSION
+        SCRIPTURE_VERSION
     };
     let title = Value::from(file.title.clone()).to_string();
     let out = format!(

@@ -546,7 +546,7 @@ fn write_temporary(
 
 /// Gives `temporary`'s file the name `path` only if `path` is free, so an
 /// existing image is never replaced (`AlreadyExists` otherwise).
-fn link_new(temporary: &Path, path: &Path) -> io::Result<()> {
+pub(crate) fn link_new(temporary: &Path, path: &Path) -> io::Result<()> {
     match fs::hard_link(temporary, path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),

@@ -33,6 +33,7 @@ mod song_import;
 mod songs_browser;
 mod stage_display;
 mod themes;
+mod video_playback;
 
 const FAKE_EXTENT: Extent = Extent {
     width: 640,
@@ -74,6 +75,8 @@ fn fake_audience_child() {
     }
     let mut session = RendererSession::new(epoch);
     let mut scenes = 0u64;
+    // The applied scene's video, as the renderer would report it.
+    let mut video: Option<(sela::scene::ContentVersion, sela::playback::PlayState)> = None;
     while let Ok(frame) = Frame::read(std::io::stdin()) {
         let now = Instant::now();
         let stamp = frame.command_stamp().unwrap();
@@ -85,11 +88,47 @@ fn fake_audience_child() {
         Frame::acknowledgment(ack).write(out()).unwrap();
         if ack.outcome == Outcome::Accepted {
             let has_logo = session.logo().is_some();
+            let mut report = None;
             let ack = session
                 .present(Instant::now(), |payload| match payload {
                     // Mirrors the renderer: a Logo mask needs a logo to draw.
                     Payload::Mask(Layer::Logo) if !has_logo => Err(DeliveryError::RenderFailed),
                     Payload::Mask(_) | Payload::Logo(_) => Ok(()),
+                    // Only an applied video can be controlled.
+                    Payload::Media(action) => {
+                        use sela::playback::{MediaAction, PlayState};
+                        let Some((scene, state)) = &mut video else {
+                            return Err(DeliveryError::RenderFailed);
+                        };
+                        *state = match action {
+                            MediaAction::Pause => PlayState::Paused,
+                            MediaAction::Play | MediaAction::Restart => PlayState::Playing,
+                        };
+                        report = Some((*scene, *state));
+                        Ok(())
+                    }
+                    // A video that cannot open never replaces the scene
+                    // (the renderer's first-frame gate).
+                    Payload::Scene(cue)
+                        if matches!(
+                            cue.background(),
+                            sela::scene::PreparedBackground::Video { source, .. }
+                                if !source.path.exists()
+                        ) =>
+                    {
+                        Err(DeliveryError::RenderFailed)
+                    }
+                    Payload::Scene(cue)
+                        if matches!(
+                            cue.background(),
+                            sela::scene::PreparedBackground::Video { .. }
+                        ) =>
+                    {
+                        scenes += 1;
+                        video = Some((cue.version(), sela::playback::PlayState::Playing));
+                        report = video;
+                        Ok(())
+                    }
                     Payload::Scene(_) if mode == "reject" => Err(DeliveryError::RenderFailed),
                     Payload::Scene(_) => {
                         scenes += 1;
@@ -109,6 +148,40 @@ fn fake_audience_child() {
                 })
                 .unwrap();
             Frame::acknowledgment(ack).write(out()).unwrap();
+            if ack.outcome == Outcome::Applied
+                && session.applied().is_some_and(|cue| {
+                    !matches!(
+                        cue.background(),
+                        sela::scene::PreparedBackground::Video { .. }
+                    )
+                })
+            {
+                video = None;
+            }
+            if ack.outcome == Outcome::Applied
+                && let Some((scene, state)) = report
+            {
+                Frame::status(
+                    epoch,
+                    sela::playback::MediaStatus {
+                        scene,
+                        state,
+                        position: Duration::from_millis(
+                            if state == sela::playback::PlayState::Paused {
+                                1500
+                            } else {
+                                0
+                            },
+                        ),
+                        duration: Some(Duration::from_secs(10)),
+                        // No device in the fake renderer, like a host
+                        // without sound output.
+                        audio: sela::playback::AudioState::NoDevice,
+                    },
+                )
+                .write(out())
+                .unwrap();
+            }
         }
     }
     std::process::exit(0);

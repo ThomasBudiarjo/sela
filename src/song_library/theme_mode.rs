@@ -669,6 +669,37 @@ pub(crate) fn theme_preview(
                 }
             }
         }
+        // A video theme thumbnails as its first frame (UNOBSERVED best guess).
+        Plan::Video(video, aspect, _) => {
+            let poster = profile
+                .ok_or(sela::videos::Substitute::Missing)
+                .and_then(|profile| {
+                    sela::videos::poster(
+                        profile,
+                        sela::videos::tools().as_ref(),
+                        video,
+                        aspect,
+                        PREVIEW,
+                    )
+                });
+            match poster {
+                Ok(rgba) => {
+                    let luminance = mean_luminance(&rgba);
+                    (
+                        PreparedBackground::Image {
+                            version: sela::videos::poster_version(video, aspect),
+                            extent: PREVIEW,
+                            rgba,
+                        },
+                        luminance,
+                    )
+                }
+                Err(why) => {
+                    warnings.push(why.warning(&video.name));
+                    (black(), 0.)
+                }
+            }
+        }
     };
     if let Some(ratio) = sela::theme::low_contrast(theme, luminance) {
         warnings.push(t!(Msg::ThemeWarnContrast, ratio = format!("{ratio:.1}")));

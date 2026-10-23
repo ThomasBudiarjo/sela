@@ -40,7 +40,7 @@ impl Item {
 }
 
 /// GPUI draws BGRA; the fitted background is RGBA.
-fn render_image(rgba: &[u8], extent: Extent) -> Option<Arc<gpui::RenderImage>> {
+pub(super) fn render_image(rgba: &[u8], extent: Extent) -> Option<Arc<gpui::RenderImage>> {
     let mut bgra = rgba.to_vec();
     bgra.as_chunks_mut::<4>()
         .0
@@ -102,7 +102,7 @@ pub(crate) fn tile(
 ) -> gpui::Div {
     let fill = match background::plan(slide.background.as_ref()) {
         Plan::Color([r, g, b]) => u32::from_be_bytes([0, r, g, b]),
-        Plan::Image(..) => BLACK,
+        Plan::Image(..) | Plan::Video(..) => BLACK,
     };
     div()
         .w(px(168.))
@@ -368,8 +368,11 @@ impl Operator {
     /// The decoded tile thumbnail for a slide's image background, once the
     /// image worker has delivered it.
     pub(crate) fn thumbnail(&self, slide: &Slide) -> Option<Arc<gpui::RenderImage>> {
-        let Plan::Image(image, aspect) = background::plan(slide.background.as_ref()) else {
-            return None;
+        let (image, aspect) = match background::plan(slide.background.as_ref()) {
+            Plan::Image(image, aspect) => (image, aspect),
+            // A video tile shows its first frame (UNOBSERVED best guess).
+            Plan::Video(video, aspect, _) => return self.video_tile(video, aspect),
+            Plan::Color(_) => return None,
         };
         let key = (image.clone(), aspect, images::TILE);
         self.tile_images
@@ -420,8 +423,10 @@ impl Operator {
     /// not be prepared (owner rule: black plus this warning).
     pub(crate) fn preview_warning(&self) -> Option<String> {
         let slide = self.preview.as_ref()?.slides.get(self.preview_slide)?;
-        let Plan::Image(image, aspect) = background::plan(slide.background.as_ref()) else {
-            return None;
+        let (image, aspect) = match background::plan(slide.background.as_ref()) {
+            Plan::Image(image, aspect) => (image, aspect),
+            Plan::Video(..) => return self.preview_video_warning(),
+            Plan::Color(_) => return None,
         };
         if self.image_worker.is_none() {
             return Some(images::Substitute::Missing.warning(&image.name));
@@ -785,6 +790,8 @@ impl Operator {
         self.request_generation += 1;
         self.unmask.cancel();
         self.cue_failed = false;
+        // A video background is checked again for this request.
+        self.video.cue_request = Instant::now();
         self.dispatch(index, self.request_generation);
     }
 
@@ -841,6 +848,19 @@ impl Operator {
                         slides::color_background(background::BLACK),
                         Some(why.warning(&image.name)),
                     ),
+                    None => {
+                        self.defer(index, generation, item.version, false);
+                        self.live_message = Some(t!(Msg::PreparingBackground).into());
+                        return;
+                    }
+                }
+            }
+            // The renderer plays it; the pin is checked off the UI thread
+            // first, and a missing or changed file shows black with the
+            // warning like an image (M1-05h rule).
+            Plan::Video(video, aspect, repeat) => {
+                match self.video_background(video, aspect, repeat) {
+                    Some(prepared) => prepared,
                     None => {
                         self.defer(index, generation, item.version, false);
                         self.live_message = Some(t!(Msg::PreparingBackground).into());
@@ -1015,6 +1035,7 @@ impl Operator {
         // (this one sets it again if it fails too).
         self.cue_failed = false;
         self.cancel_cues();
+        self.video.cue_request = Instant::now();
         self.dispatch(index, generation);
         self.unmask.retain_only(generation);
         // Without a cue carrying the id, the `live_slide` fallback could later

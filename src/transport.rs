@@ -3,7 +3,11 @@
 use crate::{
     delivery::{Acknowledgment, Command, DeliveryError, Epoch, Lane, Outcome, Payload, Stamp},
     masks::Layer,
-    scene::{ContentVersion, Extent, PreparedBackground, PreparedCue, RendererCapabilities},
+    playback::{AudioState, MediaAction, MediaStatus, PlayState},
+    scene::{
+        ContentVersion, Extent, MAX_VIDEO_PATH, PreparedBackground, PreparedCue,
+        RendererCapabilities, VideoSource,
+    },
 };
 use std::{
     io::{self, Read, Write},
@@ -28,6 +32,12 @@ const LOGO: u8 = 6;
 /// Version 2 only: owned-resource metadata and background, then a stage panel
 /// (M3-02). Decodes to a stage cue, which only a stage renderer accepts.
 const STAGE: u8 = 7;
+/// Version 1 only: stamp, lane, budget, action (M2-03). Like MASK, never
+/// waits for preparation.
+const MEDIA: u8 = 8;
+/// Version 1 only, renderer to operator: the applied scene's video state
+/// (M2-03). Best effort, latest wins; never a receipt.
+const STATUS: u8 = 9;
 const MAX_BODY: usize = 65;
 pub const MAX_RESOURCE_BODY: usize = crate::scene::MAX_SCENE_BYTES + 160;
 
@@ -40,7 +50,8 @@ fn length(kind: u8) -> io::Result<usize> {
         ACK => Ok(25),
         READY => Ok(20),
         SURFACE => Ok(24),
-        MASK => Ok(30),
+        MASK | MEDIA => Ok(30),
+        STATUS => Ok(50),
         _ => Err(invalid()),
     }
 }
@@ -119,6 +130,7 @@ impl Frame {
     pub fn command(command: &Command, now: Instant) -> io::Result<Self> {
         let cue = match command.payload() {
             Payload::Mask(layer) => return Self::mask(command, *layer, now),
+            Payload::Media(action) => return Self::media(command, *action, now),
             Payload::Logo(cue) => return Self::resource_command(command, cue, LOGO, now),
             Payload::Scene(cue) if cue.stage().is_some() => {
                 return Self::resource_command(command, cue, STAGE, now);
@@ -127,7 +139,10 @@ impl Frame {
         };
         if cue.text().is_some()
             || cue.footer().is_some()
-            || matches!(cue.background(), PreparedBackground::Image { .. })
+            || matches!(
+                cue.background(),
+                PreparedBackground::Image { .. } | PreparedBackground::Video { .. }
+            )
         {
             return Self::resource_command(command, cue, COMMAND, now);
         }
@@ -173,6 +188,86 @@ impl Frame {
         };
         Ok(f)
     }
+    fn media(command: &Command, action: MediaAction, now: Instant) -> io::Result<Self> {
+        let budget = budget(command, now)?;
+        let mut f = Self::new(MEDIA);
+        let b = &mut f.bytes[HEADER..];
+        put_stamp(b, command.stamp());
+        b[24] = lane_byte(command.lane());
+        b[25..29].copy_from_slice(&budget.to_le_bytes());
+        b[29] = match action {
+            MediaAction::Play => 0,
+            MediaAction::Pause => 1,
+            MediaAction::Restart => 2,
+        };
+        Ok(f)
+    }
+    /// The renderer's video report for the operator (renderer epoch first).
+    pub fn status(epoch: Epoch, status: MediaStatus) -> Self {
+        let mut f = Self::new(STATUS);
+        let b = &mut f.bytes[HEADER..];
+        b[..16].copy_from_slice(&epoch.0.to_le_bytes());
+        b[16..32].copy_from_slice(&status.scene.id.to_le_bytes());
+        b[32..40].copy_from_slice(&status.scene.revision.to_le_bytes());
+        b[40] = match status.state {
+            PlayState::Primed => 0,
+            PlayState::Playing => 1,
+            PlayState::Paused => 2,
+            PlayState::Ended => 3,
+            PlayState::Failed => 4,
+        };
+        let millis = |d: Duration| d.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+        b[41..45].copy_from_slice(&millis(status.position).to_le_bytes());
+        // 0 means unknown; a known duration is at least 1 ms on the wire.
+        let duration = status.duration.map_or(0, |d| millis(d).max(1));
+        b[45..49].copy_from_slice(&duration.to_le_bytes());
+        b[49] = match status.audio {
+            AudioState::None => 0,
+            AudioState::Playing => 1,
+            AudioState::NoDevice => 2,
+            AudioState::Failed => 3,
+        };
+        f
+    }
+    pub fn into_status(self) -> io::Result<(Epoch, MediaStatus)> {
+        if !self.is_status() {
+            return Err(invalid());
+        }
+        let b = &self.bytes[HEADER..];
+        let state = match b[40] {
+            0 => PlayState::Primed,
+            1 => PlayState::Playing,
+            2 => PlayState::Paused,
+            3 => PlayState::Ended,
+            4 => PlayState::Failed,
+            _ => return Err(invalid()),
+        };
+        let u32_at = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        let duration = u32_at(45);
+        let audio = match b[49] {
+            0 => AudioState::None,
+            1 => AudioState::Playing,
+            2 => AudioState::NoDevice,
+            3 => AudioState::Failed,
+            _ => return Err(invalid()),
+        };
+        Ok((
+            Epoch(u128::from_le_bytes(b[..16].try_into().unwrap())),
+            MediaStatus {
+                scene: ContentVersion {
+                    id: u128::from_le_bytes(b[16..32].try_into().unwrap()),
+                    revision: u64::from_le_bytes(b[32..40].try_into().unwrap()),
+                },
+                state,
+                position: Duration::from_millis(u64::from(u32_at(41))),
+                duration: (duration > 0).then(|| Duration::from_millis(u64::from(duration))),
+                audio,
+            },
+        ))
+    }
+    pub fn is_status(&self) -> bool {
+        self.bytes[4] == 1 && self.bytes[5] == STATUS
+    }
     fn resource_command(
         command: &Command,
         cue: &PreparedCue,
@@ -210,6 +305,17 @@ impl Frame {
                 f.bytes.extend_from_slice(&extent.height.to_le_bytes());
                 put_blob(&mut f.bytes, rgba);
             }
+            // Tag 2: version, aspect, flags (bit 0 repeat), UTF-8 path.
+            PreparedBackground::Video { version, source } => {
+                let Some(path) = source.path.to_str().filter(|_| source.is_valid()) else {
+                    return Err(invalid());
+                };
+                f.bytes.push(2);
+                put_version(&mut f.bytes, *version);
+                f.bytes.push(source.aspect as u8);
+                f.bytes.push(u8::from(source.repeat));
+                put_blob(&mut f.bytes, path.as_bytes());
+            }
         }
         if kind == STAGE {
             let Some(stage) = cue.stage() else {
@@ -235,7 +341,7 @@ impl Frame {
         Ok(f)
     }
     fn is_command_kind(&self) -> bool {
-        matches!(self.bytes[5], COMMAND | MASK | LOGO | STAGE)
+        matches!(self.bytes[5], COMMAND | MASK | LOGO | STAGE | MEDIA)
     }
     pub fn command_stamp(&self) -> io::Result<Stamp> {
         if !self.is_command_kind() {
@@ -257,9 +363,10 @@ impl Frame {
             _ => Err(invalid()),
         }
     }
-    /// Masks carry no resources and bypass the renderer's preparation worker.
+    /// Masks and media commands carry no resources and bypass the
+    /// renderer's preparation worker.
     pub fn is_mask(&self) -> bool {
-        self.bytes[4] == 1 && self.bytes[5] == MASK
+        self.bytes[4] == 1 && matches!(self.bytes[5], MASK | MEDIA)
     }
     /// Relative budget starts after v1 read, or before v2 length/body transfer.
     /// Queue/preparation delay never restarts it; pre-header transit is excluded.
@@ -298,6 +405,20 @@ impl Frame {
                 deadline,
             ));
         }
+        if self.bytes[5] == MEDIA {
+            let action = match b[29] {
+                0 => MediaAction::Play,
+                1 => MediaAction::Pause,
+                2 => MediaAction::Restart,
+                _ => return Err(invalid()),
+            };
+            return Ok(Command::from_wire(
+                stamp,
+                lane,
+                Payload::Media(action),
+                deadline,
+            ));
+        }
         let version = ContentVersion {
             id: u128::from_le_bytes(b[29..45].try_into().unwrap()),
             revision: u64::from_le_bytes(b[45..53].try_into().unwrap()),
@@ -318,6 +439,29 @@ impl Frame {
                     },
                     rgba: payload.blob(crate::scene::MAX_SCENE_BYTES)?.into(),
                 },
+                2 => {
+                    let version = payload.version()?;
+                    let aspect = match payload.byte()? {
+                        0 => crate::background::Aspect::Maintain,
+                        1 => crate::background::Aspect::Stretch,
+                        2 => crate::background::Aspect::Zoom,
+                        _ => return Err(invalid()),
+                    };
+                    let repeat = match payload.byte()? {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(invalid()),
+                    };
+                    let path = payload.string(MAX_VIDEO_PATH)?;
+                    PreparedBackground::Video {
+                        version,
+                        source: Arc::new(VideoSource {
+                            path: path.into(),
+                            aspect,
+                            repeat,
+                        }),
+                    }
+                }
                 _ => return Err(invalid()),
             };
             if self.bytes[5] == STAGE {
@@ -752,7 +896,13 @@ pub struct PipeWorkers {
     outgoing: SyncSender<Frame>,
     incoming: Receiver<Frame>,
     failed: Arc<AtomicBool>,
+    /// One best-effort status frame, latest wins; written between queued
+    /// frames, never in place of a receipt.
+    status: Arc<std::sync::Mutex<Option<Frame>>>,
 }
+
+/// How often the writer looks at the status slot while no frame is queued.
+const STATUS_TICK: Duration = Duration::from_millis(50);
 impl PipeWorkers {
     pub fn new(
         reader: impl Read + Send + 'static,
@@ -771,14 +921,24 @@ impl PipeWorkers {
         let (reads, incoming) = mpsc::sync_channel(2);
         let failed = Arc::new(AtomicBool::new(false));
         let failure = failed.clone();
+        let status: Arc<std::sync::Mutex<Option<Frame>>> = Arc::default();
+        let pending_status = status.clone();
         std::thread::Builder::new()
             .name("cue-pipe-write".into())
             .spawn(move || {
                 let mut writer = writer;
-                while let Ok(frame) = writes.recv() {
-                    if frame.write(&mut writer).is_err() {
-                        failure.store(true, Ordering::Release);
-                        break;
+                loop {
+                    let frame = match writes.recv_timeout(STATUS_TICK) {
+                        Ok(frame) => Some(frame),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    let status = pending_status.lock().ok().and_then(|mut slot| slot.take());
+                    for frame in frame.into_iter().chain(status) {
+                        if frame.write(&mut writer).is_err() {
+                            failure.store(true, Ordering::Release);
+                            return;
+                        }
                     }
                 }
             })?;
@@ -797,7 +957,15 @@ impl PipeWorkers {
             outgoing,
             incoming,
             failed,
+            status,
         })
+    }
+    /// Offers a status frame; it replaces any status not yet written, never
+    /// blocks and never takes a receipt's queue slot.
+    pub fn offer_status(&self, frame: Frame) {
+        if let Ok(mut slot) = self.status.lock() {
+            *slot = Some(frame);
+        }
     }
     /// Full receipt queue is fatal to a session, not a reason to block rendering
     /// or discard Applied and continue claiming a healthy connection.
@@ -1753,5 +1921,245 @@ mod tests {
                 .outcome,
             Outcome::Rejected(DeliveryError::WrongEpoch)
         );
+    }
+
+    fn video_command(path: &str, aspect: crate::background::Aspect, repeat: bool) -> Command {
+        let now = Instant::now();
+        let source = VideoSource {
+            path: path.into(),
+            aspect,
+            repeat,
+        };
+        let cue = PreparedCue::from_owned(
+            ContentVersion { id: 7, revision: 1 },
+            Extent {
+                width: 64,
+                height: 36,
+            },
+            PreparedBackground::Video {
+                version: ContentVersion {
+                    id: 99,
+                    revision: 2,
+                },
+                source: Arc::new(source),
+            },
+            None,
+            RendererCapabilities {
+                max_texture_dimension: 2048,
+            },
+        )
+        .unwrap();
+        let mut d = Delivery::new(Epoch(42));
+        d.submit(Arc::new(cue), Lane::Cue, now, now + Duration::from_secs(2))
+            .unwrap();
+        d.take_next().unwrap()
+    }
+
+    fn wire(frame: &Frame) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        frame.write(&mut bytes).unwrap();
+        bytes
+    }
+
+    /// An absolute local path on this platform.
+    fn local(path: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{}", path.replace('/', "\\"))
+        } else {
+            path.to_owned()
+        }
+    }
+
+    #[test]
+    fn video_backgrounds_round_trip_their_path_aspect_and_repeat() {
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        for (aspect, repeat) in [
+            (crate::background::Aspect::Zoom, true),
+            (crate::background::Aspect::Maintain, false),
+            (crate::background::Aspect::Stretch, true),
+        ] {
+            let path = local("/profile/Resources/Videos/Wäves.mp4");
+            let command = video_command(&path, aspect, repeat);
+            let bytes = wire(&Frame::command(&command, Instant::now()).unwrap());
+            let decoded = Frame::read(&bytes[..])
+                .unwrap()
+                .into_command(Instant::now(), caps)
+                .unwrap();
+            let PreparedBackground::Video { version, source } = decoded.cue().unwrap().background()
+            else {
+                panic!("a video background");
+            };
+            assert_eq!(
+                *version,
+                ContentVersion {
+                    id: 99,
+                    revision: 2
+                }
+            );
+            assert_eq!(
+                source.path,
+                std::path::Path::new("/profile/Resources/Videos/Wäves.mp4")
+            );
+            assert_eq!((source.aspect, source.repeat), (aspect, repeat));
+        }
+        // Bad aspect or repeat bytes and a refused path fail framing.
+        let command = video_command(&local("/v.mp4"), crate::background::Aspect::Zoom, true);
+        let bytes = wire(&Frame::command(&command, Instant::now()).unwrap());
+        // Body: 8 header + 4 length + 61 metadata, tag 2, 24 version bytes.
+        let aspect_at = 8 + 4 + 61 + 1 + 24;
+        for (at, value) in [(aspect_at, 3u8), (aspect_at + 1, 2)] {
+            let mut bad = bytes.clone();
+            bad[at] = value;
+            assert!(
+                Frame::read(&bad[..])
+                    .unwrap()
+                    .into_command(Instant::now(), caps)
+                    .is_err(),
+                "{at}"
+            );
+        }
+        let path_at = aspect_at + 2 + 4;
+        let mut relative = bytes.clone();
+        relative[path_at..path_at + 2].copy_from_slice(b"vv");
+        assert!(
+            Frame::read(&relative[..])
+                .unwrap()
+                .into_command(Instant::now(), caps)
+                .is_err(),
+            "a relative path never becomes a cue"
+        );
+        // Builders refuse what the decoder would refuse.
+        let source = VideoSource {
+            path: "http://example.com/v.mp4".into(),
+            aspect: crate::background::Aspect::Zoom,
+            repeat: true,
+        };
+        assert!(!source.is_valid());
+    }
+
+    #[test]
+    fn media_commands_bypass_preparation_and_round_trip() {
+        let now = Instant::now();
+        let caps = RendererCapabilities {
+            max_texture_dimension: 2048,
+        };
+        for action in [MediaAction::Play, MediaAction::Pause, MediaAction::Restart] {
+            let mut d = Delivery::new(Epoch(42));
+            let stamp = d
+                .submit_media(action, now, now + Duration::from_secs(1))
+                .unwrap();
+            let command = d.take_next().unwrap();
+            assert_eq!(command.lane(), Lane::Safety);
+            let frame = Frame::command(&command, now).unwrap();
+            let bytes = wire(&frame);
+            let read = Frame::read(&bytes[..]).unwrap();
+            assert!(read.is_mask(), "no preparation for {action:?}");
+            assert_eq!(read.command_stamp().unwrap(), stamp);
+            let decoded = read.into_command(now, caps).unwrap();
+            assert!(matches!(decoded.payload(), Payload::Media(a) if *a == action));
+        }
+        let mut d = Delivery::new(Epoch(42));
+        d.submit_media(MediaAction::Play, now, now + Duration::from_secs(1))
+            .unwrap();
+        let mut bytes = wire(&Frame::command(&d.take_next().unwrap(), now).unwrap());
+        bytes[8 + 29] = 3;
+        assert!(
+            Frame::read(&bytes[..])
+                .unwrap()
+                .into_command(now, caps)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn status_frames_round_trip_and_reject_unknown_states() {
+        let status = MediaStatus {
+            scene: ContentVersion {
+                id: u128::MAX - 3,
+                revision: 9,
+            },
+            state: PlayState::Playing,
+            position: Duration::from_millis(61_250),
+            duration: Some(Duration::from_secs(90)),
+            audio: AudioState::NoDevice,
+        };
+        let bytes = wire(&Frame::status(Epoch(5), status));
+        let frame = Frame::read(&bytes[..]).unwrap();
+        assert!(frame.is_status() && !frame.is_acknowledgment());
+        assert!(frame.command_stamp().is_err(), "never a command");
+        assert_eq!(frame.into_status().unwrap(), (Epoch(5), status));
+        let unknown = MediaStatus {
+            duration: None,
+            ..status
+        };
+        let bytes = wire(&Frame::status(Epoch(5), unknown));
+        assert_eq!(
+            Frame::read(&bytes[..]).unwrap().into_status().unwrap().1,
+            unknown
+        );
+        let mut bad = bytes.clone();
+        bad[8 + 40] = 5;
+        assert!(Frame::read(&bad[..]).unwrap().into_status().is_err());
+        let mut bad_audio = bytes.clone();
+        bad_audio[8 + 49] = 4;
+        assert!(Frame::read(&bad_audio[..]).unwrap().into_status().is_err());
+        assert!(
+            Frame::read(&wire(&Frame::ready(Epoch(5), 8))[..])
+                .unwrap()
+                .into_status()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_status_offer_is_written_without_a_receipt_slot_and_latest_wins() {
+        struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let workers = PipeWorkers::with_wake(io::empty(), Sink(written.clone()), || {}).unwrap();
+        let status = |ms| MediaStatus {
+            scene: ContentVersion { id: 1, revision: 1 },
+            state: PlayState::Playing,
+            position: Duration::from_millis(ms),
+            duration: None,
+            audio: AudioState::None,
+        };
+        // Offered faster than the writer looks: only the latest is written.
+        workers.offer_status(Frame::status(Epoch(1), status(1)));
+        workers.offer_status(Frame::status(Epoch(1), status(2)));
+        // Receipts keep all four queue slots.
+        for _ in 0..4 {
+            let _ = workers.try_send(Frame::ready(Epoch(1), 8));
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let bytes = written.lock().unwrap().clone();
+            let mut reader = &bytes[..];
+            let mut frames = Vec::new();
+            while let Ok(frame) = Frame::read(&mut reader) {
+                frames.push(frame);
+            }
+            let statuses: Vec<_> = frames
+                .into_iter()
+                .filter(Frame::is_status)
+                .map(|f| f.into_status().unwrap().1.position)
+                .collect();
+            if !statuses.is_empty() {
+                assert_eq!(statuses, [Duration::from_millis(2)]);
+                break;
+            }
+            assert!(Instant::now() < deadline, "status written");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

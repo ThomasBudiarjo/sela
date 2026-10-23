@@ -46,6 +46,14 @@ pub(crate) enum Control {
     ReviewFiles,
     ItemMenuDuplicate,
     Arrangement,
+    /// Media tab categories (Videos, Images) and the video import.
+    MediaVideos,
+    MediaImages,
+    ImportVideo,
+    CancelVideoImport,
+    /// Live pane video transport (M2-03).
+    VideoPlayPause,
+    VideoRestart,
     /// The Songs list itself. Its rows are the tab stops; the list holds
     /// focus after a click below the rows or once the focused row is no
     /// longer rendered.
@@ -61,7 +69,7 @@ pub(crate) const SLIDE_TAB_INDEX: isize = 1000;
 pub(crate) const IMAGE_TAB_INDEX: isize = 2000;
 
 impl Control {
-    pub(crate) const ALL: [Control; 38] = [
+    pub(crate) const ALL: [Control; 44] = [
         Self::ResetLayout,
         Self::Quit,
         Self::CollapseResources,
@@ -99,6 +107,12 @@ impl Control {
         Self::ReviewFiles,
         Self::ItemMenuDuplicate,
         Self::Arrangement,
+        Self::MediaVideos,
+        Self::MediaImages,
+        Self::ImportVideo,
+        Self::CancelVideoImport,
+        Self::VideoPlayPause,
+        Self::VideoRestart,
         Self::SongList,
     ];
 
@@ -138,6 +152,10 @@ impl Control {
                 | Self::CancelImport
                 | Self::UseAsLogo
                 | Self::ImageMenuLogo
+                | Self::MediaVideos
+                | Self::MediaImages
+                | Self::ImportVideo
+                | Self::CancelVideoImport
                 | Self::Normalize
                 | Self::AddToSchedule
                 | Self::SongList
@@ -160,7 +178,7 @@ impl Control {
     /// AccessKit role exposed to UI Automation (zed rev a846890
     /// gpui/src/elements/div.rs `StatefulInteractiveElement::role`).
     pub(crate) fn role(self) -> Role {
-        if self.tab_number().is_some() {
+        if self.tab_number().is_some() || matches!(self, Self::MediaVideos | Self::MediaImages) {
             return Role::Tab;
         }
         match self {
@@ -284,6 +302,20 @@ impl Operator {
             Control::Black => self.toggle_mask(Mask::Black),
             Control::Clear => self.toggle_mask(Mask::Clear),
             Control::ImportImage => self.prompt_import(cx),
+            Control::MediaVideos if !self.collapsed && self.tab == 2 => {
+                self.video.category = video::Category::Videos;
+                self.video.message = None;
+                // Videos imported elsewhere (the Song Editor's Select
+                // Media…) show up without a restart.
+                self.video.rescan();
+            }
+            Control::MediaImages if !self.collapsed && self.tab == 2 => {
+                self.video.category = video::Category::Images;
+            }
+            Control::ImportVideo => self.prompt_video_import(cx),
+            Control::CancelVideoImport => self.cancel_video_import(),
+            Control::VideoPlayPause => self.toggle_video_playback(),
+            Control::VideoRestart => self.restart_video(),
             Control::CancelImport => self.cancel_import(),
             Control::ReviewFiles => self.review_files(window, cx),
             Control::UseAsLogo => self.use_as_logo(),
