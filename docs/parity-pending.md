@@ -863,7 +863,9 @@ reference-observations "Video playback — UNOBSERVED best guesses".
   re-reads the pin (also after an earlier successful play): black plus the
   warning, the transport hidden; a replaced file counts as changed
   (fingerprint); no Go Live dialog for videos. Re-run: `video-windows.py`
-  step 7 and
+  step 7 covers only a slide whose video never existed (the Bridge); no
+  native script deletes or replaces the clip after it played or while the
+  song is live, so those cases are checked by hand as above and by
   `cargo test --locked --bin sela tests::video_playback::a_video_replaced_or_deleted_after_it_played_is_caught_on_the_next_go_live`.
 - [ ] **PP-VP-09 Preview of a video slide** (EW8-OBS-VP-10, VP-2). Steps:
   select the song in Preview: does the Preview thumbnail play? Which frame
@@ -895,7 +897,11 @@ reference-observations "Video playback — UNOBSERVED best guesses".
   time ("Another import is still finishing"), "Importing NAME…" in the
   status line, the Import row becomes Cancel import, closing the editor
   cancels the copy, Media › Videos rescans when opened. Re-run:
-  `cargo test --locked --bin sela song_library::tests::select_media_video_import_is_one_at_a_time_shown_and_cancellable`.
+  `cargo test --locked --bin sela song_library::tests::select_media_video_import_is_one_at_a_time_shown_and_cancellable`
+  and `song_library::tests::closing_the_editor_during_a_select_media_import_cancels_it`
+  (the flag the copy polls; a cancel during the chunked copy itself:
+  `cargo test --locked --lib videos::tests::import_refuses_non_video_and_cancelled_imports_leave_no_file`
+  with `SELA_REQUIRE_FFMPEG=1`).
 - [ ] **PP-VP-12 Windows run of `scripts/video-windows.py`**. Steps: as in
   [Windows script run order](#windows-script-run-order) row 32. Sela now:
   Linux only (`scripts/video-x11.py` PASS on `:123`, 2026-10-23). Re-run:

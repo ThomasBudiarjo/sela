@@ -778,7 +778,9 @@ impl<K: Clone + PartialEq + Send + 'static, V: Send + 'static> Lookups<K, V> {
                         return;
                     }
                     // Cleared once the reply is queued, so a `want` in
-                    // between cannot ask for it again.
+                    // between cannot ask for it again. [`Lookups::poll`]
+                    // clears it too: the caller may take the reply before
+                    // this thread gets here, and must be able to ask again.
                     if let Ok(mut state) = shared.0.lock() {
                         state.working = None;
                     }
@@ -801,9 +803,19 @@ impl<K: Clone + PartialEq + Send + 'static, V: Send + 'static> Lookups<K, V> {
         }
     }
 
-    /// A finished result, if one is waiting. Never blocks.
+    /// A finished result, if one is waiting. Never waits on the worker
+    /// (it holds the lock only to pop or clear a key). Taking a reply ends
+    /// that key's in-flight mark, so a `want` right after it (a stale pin
+    /// check asked for again) queues the key even when the worker has not
+    /// yet cleared the mark itself.
     pub fn poll(&self) -> Option<(K, V)> {
-        self.replies.try_recv().ok()
+        let reply = self.replies.try_recv().ok()?;
+        if let Ok(mut state) = self.queue.0.lock()
+            && state.working.as_ref() == Some(&reply.0)
+        {
+            state.working = None;
+        }
+        Some(reply)
     }
 }
 

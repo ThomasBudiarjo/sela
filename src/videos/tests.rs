@@ -185,6 +185,41 @@ fn a_pin_check_is_fresh_only_for_cues_asked_for_before_its_read() {
     assert_eq!(check(&checks).result, Err(Substitute::Missing));
 }
 
+/// video-playback review round 2: the caller can take a reply before the
+/// worker thread clears its in-flight mark. Asking for the same key again
+/// right then (a stale pin check re-wanted for a later cue) must queue it,
+/// or the deferred cue waits for a check nobody runs.
+#[test]
+fn a_key_asked_again_right_after_its_reply_is_queued_even_before_the_worker_clears_it() {
+    let (sender, replies) = mpsc::sync_channel(2);
+    // No worker thread: the test plays it, stopped between its send and
+    // its own clear of `working`.
+    let lookups = Lookups::<u32, &str> {
+        queue: Arc::new((
+            Mutex::new(Wanted {
+                keys: VecDeque::new(),
+                working: Some(7),
+                closed: false,
+            }),
+            Condvar::new(),
+        )),
+        replies,
+    };
+    // While in flight, asking again does not queue a second run.
+    lookups.want([7, 8]);
+    assert_eq!(lookups.queue.0.lock().unwrap().keys, [8]);
+    sender.send((7, "stale")).unwrap();
+    assert_eq!(lookups.poll(), Some((7, "stale")));
+    lookups.want([7]);
+    assert_eq!(lookups.queue.0.lock().unwrap().keys, [7]);
+    // A reply for another key leaves the key being worked marked.
+    lookups.queue.0.lock().unwrap().working = Some(9);
+    sender.send((7, "again")).unwrap();
+    assert_eq!(lookups.poll(), Some((7, "again")));
+    lookups.want([9, 7]);
+    assert_eq!(lookups.queue.0.lock().unwrap().keys, [7]);
+}
+
 #[test]
 fn the_lru_keeps_entries_by_key_and_value() {
     let mut lru = Lru::new(usize::MAX, 4);

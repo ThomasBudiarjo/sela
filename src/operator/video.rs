@@ -342,24 +342,20 @@ impl Operator {
         }
         let cue_request = self.video.cue_request;
         match self.video.checked.get(video).cloned() {
-            Some(Checked {
-                result: Ok(path),
-                started,
-            }) if started >= cue_request => Some((
-                PreparedBackground::Video {
-                    version: videos::background_version(video, aspect, repeat),
-                    source: Arc::new(sela::scene::VideoSource {
-                        path,
-                        aspect,
-                        repeat,
-                    }),
-                },
-                None,
-            )),
-            Some(Checked {
-                result: Err(why),
-                started,
-            }) if started >= cue_request => black(why),
+            Some(checked) if checked.fresh_for(cue_request) => match checked.result {
+                Ok(path) => Some((
+                    PreparedBackground::Video {
+                        version: videos::background_version(video, aspect, repeat),
+                        source: Arc::new(sela::scene::VideoSource {
+                            path,
+                            aspect,
+                            repeat,
+                        }),
+                    },
+                    None,
+                )),
+                Err(why) => black(why),
+            },
             stale => {
                 if stale.is_some() {
                     // Checked again for this cue: missing, so the next poll

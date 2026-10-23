@@ -5237,6 +5237,37 @@ mod tests {
         assert!(flag.load(std::sync::atomic::Ordering::Acquire));
     }
 
+    /// video-playback review round 2: closing the editor window while its
+    /// Select Media… video import runs releases the editor and with it the
+    /// import's guard, which cancels the copy (the flag the copy polls).
+    #[gpui::test]
+    fn closing_the_editor_during_a_select_media_import_cancels_it(cx: &mut TestAppContext) {
+        use format_pane::MediaKind;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        std::fs::create_dir_all(sela::videos::videos_dir(dir.path())).unwrap();
+        let source = dir.path().join("Clip.mp4");
+        std::fs::write(&source, b"a long video, as far as this test knows").unwrap();
+        let (mut cx, view) = format_fixture(cx, path);
+        click(&mut cx, "format-TabSlide");
+        fill(&mut cx, &view, "Media Fill");
+        click(&mut cx, "format-SelectMedia");
+        view.update(&mut cx, |v, cx| {
+            v.start_media_import(MediaKind::Videos, source, cx)
+        });
+        let flag = view.read_with(&cx, |v, _| v.pane.media.importing.as_ref().unwrap().flag());
+        assert!(!flag.load(std::sync::atomic::Ordering::Acquire));
+        let weak = view.downgrade();
+        drop(view);
+        cx.update(|window, _| window.remove_window());
+        cx.run_until_parked();
+        assert!(weak.upgrade().is_none(), "nothing keeps the closed editor");
+        assert!(
+            flag.load(std::sync::atomic::Ordering::Acquire),
+            "the closed editor's import is cancelled"
+        );
+    }
+
     /// With the pinned development FFmpeg: a cancelled Select Media… video
     /// import stops before copying and leaves no file.
     #[test]
