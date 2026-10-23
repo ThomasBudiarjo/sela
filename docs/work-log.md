@@ -4407,3 +4407,4 @@ Done: audience footer raster, Song Editor Administrator/Song Number with validat
   - Videos in bundles and backups (backlog M1-13).
   - The suspicions listed in the scrutiny-r2 record.
 - Next: the owner runs the Windows run order on the three-monitor Windows host, then the parity-pending PP items in EW 8.0.49. After that, tickets can move toward `done` one at a time.
+- Follow-up (2026-10-23, ci-windows): Windows CI on `4e1b6ff` (run 39920759223) failed `transport::tests::video_backgrounds_round_trip_their_path_aspect_and_repeat`. The test built the sent path with `local()` (`C:\profile\...` on Windows) but compared the decoded path with the Unix literal `/profile/...`. Test-only fix: compare with the path it sent. `cargo test --lib transport` 23 passed, clippy -D warnings and the windows-gnu check exit 0; the Windows run on the pushed head is the evidence.

@@ -1998,10 +1998,7 @@ mod tests {
                     revision: 2
                 }
             );
-            assert_eq!(
-                source.path,
-                std::path::Path::new("/profile/Resources/Videos/Wäves.mp4")
-            );
+            assert_eq!(source.path, std::path::Path::new(&path));
             assert_eq!((source.aspect, source.repeat), (aspect, repeat));
         }
         // Bad aspect or repeat bytes and a refused path fail framing.
