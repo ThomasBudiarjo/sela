@@ -145,7 +145,7 @@ impl Render for Operator {
             }))
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 if this.may_close(window, cx) {
-                    window.remove_window();
+                    this.remove_for_close(window);
                 }
             }))
             .on_action(cx.listener(|this, _: &SaveSchedule, _, cx| {

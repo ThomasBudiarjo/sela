@@ -112,6 +112,7 @@ impl Operator {
     fn prompt_save_as(&mut self, then: Option<Then>, cx: &mut Context<Self>) {
         let suggested = self.schedule.name();
         let picked = cx.prompt_for_new_path(&self.schedule_dir(), suggested.as_deref());
+        self.save_as_quits = matches!(then, Some(Then::Quit));
         self.file_prompt = Some(cx.spawn(async move |this, cx| {
             let picked = picked.await;
             let _ = this.update(cx, |this, cx| {
@@ -127,9 +128,22 @@ impl Operator {
     }
 
     fn finish_prompt(&mut self) {
+        self.save_as_quits = false;
         if let Some(task) = self.file_prompt.take() {
             task.detach();
         }
+    }
+
+    /// Save was chosen in a quit's Unsaved prompt and has not finished: the
+    /// window closes once the file is written. A cancelled Save As or a
+    /// failed write drops the quit.
+    pub(crate) fn quitting_after_save(&self) -> bool {
+        let quits = |job: &SaveJob| matches!(job.then, Some(Then::Quit));
+        self.save_as_quits
+            || matches!(self.resume, Some(Then::Quit))
+            || matches!(&self.file_job, Some(FileJob::Write(job)) if quits(job))
+            || matches!(&self.request, Some(Request::SaveSchedule(job)) if quits(job))
+            || matches!(&self.queued, Some((_, Request::SaveSchedule(job))) if quits(job))
     }
 
     fn begin_save(&mut self, path: PathBuf, then: Option<Then>) {

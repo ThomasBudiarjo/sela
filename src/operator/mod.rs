@@ -404,6 +404,9 @@ pub(super) struct Operator {
     file_job: Option<schedule_files::FileJob>,
     /// A native Open or Save dialog is showing.
     file_prompt: Option<Task<()>>,
+    /// That dialog is the Save As of a quit's Unsaved prompt: the window
+    /// closes once the chosen file is written.
+    save_as_quits: bool,
     /// Guarded command that continues once a save from the unsaved prompt
     /// lands; started from `render`, which has the window.
     resume: Option<Then>,
@@ -698,6 +701,7 @@ impl Operator {
             file_worker: schedule_file::Worker::start(schedule_writer).ok(),
             file_job: None,
             file_prompt: None,
+            save_as_quits: false,
             resume: None,
             file_error: None,
             window_title: String::new(),

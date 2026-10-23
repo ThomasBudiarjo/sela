@@ -176,7 +176,7 @@ impl Operator {
             }
             Then::Quit => {
                 if self.allow_close(window, cx) {
-                    window.remove_window();
+                    self.remove_for_close(window);
                 }
             }
         }
