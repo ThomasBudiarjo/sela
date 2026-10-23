@@ -209,7 +209,7 @@ marker or commit.
 
 | Failure | What the operator sees | Data |
 | --- | --- | --- |
-| Disk or quota full | "Autosave failed: the disk is full. Unsaved changes are not protected; Sela retries every 30 seconds." | no partial file; older revisions intact; retried |
+| Disk or quota full | "Autosave failed: the disk is full. Unsaved changes are not protected; Sela retries every 30 seconds." (the number is `Cadence::retry`) | no partial file; older revisions intact; retried |
 | Read-only profile / folder | "Autosave is off: the profile folder is read-only." (at start) or the failed note | editing continues |
 | Session unwritable at start after a crash | the recovery prompt still appears, with "Autosave is off (…), so this answer cannot be recorded …"; footer "Autosave is off: …" | read-only restore; offered again next start |
 | Recovery file locked by another program | "Autosave failed: another program is holding a recovery file. …" | retried |

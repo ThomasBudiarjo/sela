@@ -1084,6 +1084,11 @@ impl Policy {
         }
     }
 
+    /// The cadence this policy runs with.
+    pub fn cadence(&self) -> Cadence {
+        self.cadence
+    }
+
     /// Fingerprint of the newest successful commit (or the initial one).
     pub fn committed(&self) -> u64 {
         self.committed

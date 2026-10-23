@@ -419,7 +419,15 @@ impl Operator {
                 return Some((t!(Msg::AutosaveOff, reason = reason(error)), true));
             }
             Health::Failed(error) => {
-                return Some((t!(Msg::AutosaveFailed, reason = reason(error)), true));
+                let seconds = state.policy.cadence().retry.as_secs();
+                return Some((
+                    t!(
+                        Msg::AutosaveFailed,
+                        reason = reason(error),
+                        seconds = seconds
+                    ),
+                    true,
+                ));
             }
             Health::Absent | Health::Starting => return None,
             Health::Ready => {}

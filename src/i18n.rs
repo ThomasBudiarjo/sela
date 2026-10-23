@@ -1903,7 +1903,7 @@ impl Msg {
             Self::AgoDays => "{count} days ago",
             Self::AutosaveProtected => "Unsaved changes are autosaved",
             Self::AutosaveFailed => {
-                "Autosave failed: {reason}. Unsaved changes are not protected; Sela retries every 30 seconds."
+                "Autosave failed: {reason}. Unsaved changes are not protected; Sela retries every {seconds} seconds."
             }
             Self::AutosaveOff => "Autosave is off: {reason}.",
             Self::AutosaveCleanup => "Old autosave copies could not be removed: {reason}.",
@@ -2512,7 +2512,7 @@ impl Msg {
             Self::ImportRowDetail => "{name} · Slide: {count}",
             Self::ImportBulkLabel => "Semua duplikat",
             Self::ImportReplaceNote => {
-                "Ganti menyimpan kata-kata berkas sebagai revisi baru lagu di pustaka. Revisi itu tidak membawa format slide, latar, dan latar master lagu, dan urutan dari berkas menggantikan susunannya; jadwal tetap memakai salinannya."
+                "Ganti menyimpan lirik dari berkas sebagai revisi baru untuk lagu di pustaka. Revisi itu tidak menyertakan format slide, latar, atau latar master lagu, dan urutan dari berkas menggantikan susunan lagu; jadwal tetap memakai salinannya."
             }
             Self::ImportChoiceImport => "Impor",
             Self::ImportChoiceSkip => "Lewati",
@@ -2577,7 +2577,7 @@ impl Msg {
             Self::WindowTitleUntitledDirty => "Jadwal tanpa judul* — Sela",
             Self::RecoveryHeading => "Pulihkan jadwal yang belum disimpan?",
             Self::RecoveryLostHeading => "Perubahan yang belum disimpan hilang",
-            Self::RecoveryUnclean => "Sela tidak ditutup dengan normal terakhir kali.",
+            Self::RecoveryUnclean => "Sela tidak ditutup secara normal terakhir kali.",
             Self::RecoveryUnanswered => {
                 "Terakhir kali Sela ditutup sebelum pertanyaan pemulihan ini dijawab."
             }
@@ -2614,7 +2614,7 @@ impl Msg {
             Self::AgoDays => "{count} hari yang lalu",
             Self::AutosaveProtected => "Perubahan yang belum disimpan sudah tersimpan otomatis",
             Self::AutosaveFailed => {
-                "Simpan otomatis gagal: {reason}. Perubahan yang belum disimpan tidak terlindungi; Sela mencoba lagi tiap 30 detik."
+                "Simpan otomatis gagal: {reason}. Perubahan yang belum disimpan tidak terlindungi; Sela mencoba lagi tiap {seconds} detik."
             }
             Self::AutosaveOff => "Simpan otomatis mati: {reason}.",
             Self::AutosaveCleanup => "Salinan simpan otomatis lama tidak dapat dihapus: {reason}.",
@@ -2698,7 +2698,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 572);
+        assert_eq!(Msg::ALL.len(), 574);
     }
 
     #[test]
