@@ -618,6 +618,14 @@ pub enum Msg {
     ImportDialogBusy,
     ImportQuitBlocked,
     ImportErrBatchBytes,
+    BarImportEasyWorship,
+    ImportSongsOverLimit,
+    ImportErrMissingWords,
+    ImportEwNoSongs,
+    ImportEwNoWords,
+    ImportEwTooLarge,
+    ImportEwChanged,
+    ImportEwNotLibrary,
     LiveItemNotShown,
     WindowTitleIdle,
     WindowTitleUntitledDirty,
@@ -1365,6 +1373,14 @@ impl Msg {
         Msg::ImportDialogBusy,
         Msg::ImportQuitBlocked,
         Msg::ImportErrBatchBytes,
+        Msg::BarImportEasyWorship,
+        Msg::ImportSongsOverLimit,
+        Msg::ImportErrMissingWords,
+        Msg::ImportEwNoSongs,
+        Msg::ImportEwNoWords,
+        Msg::ImportEwTooLarge,
+        Msg::ImportEwChanged,
+        Msg::ImportEwNotLibrary,
         Msg::LiveItemNotShown,
         Msg::WindowTitleIdle,
         Msg::WindowTitleUntitledDirty,
@@ -2197,6 +2213,20 @@ impl Msg {
             Self::ImportErrBatchBytes => {
                 "Not read: one import holds at most {max} MiB of song text"
             }
+            Self::BarImportEasyWorship => "EasyWorship Library…",
+            Self::ImportSongsOverLimit => {
+                "Songs not read, over the limit of {max} per import: {count}"
+            }
+            Self::ImportErrMissingWords => "No words for this song in SongWords.db",
+            Self::ImportEwNoSongs => {
+                "No EasyWorship library here: Songs.db was not found in this folder or its Databases\\Data folder"
+            }
+            Self::ImportEwNoWords => "Songs.db was found, but SongWords.db is missing beside it",
+            Self::ImportEwTooLarge => "The EasyWorship library is larger than {max} MiB",
+            Self::ImportEwChanged => {
+                "The library changed while it was copied. Close EasyWorship and import again."
+            }
+            Self::ImportEwNotLibrary => "Not an EasyWorship library: {error}",
             Self::LiveItemNotShown => "{title} is not on screen yet; use Go Live first",
             Self::WindowTitleIdle => "Sela — Technical preview",
             Self::WindowTitleUntitledDirty => "Untitled schedule* — Sela",
@@ -3109,6 +3139,22 @@ impl Msg {
             Self::ImportErrBatchBytes => {
                 "Tidak dibaca: satu impor paling banyak {max} MiB teks lagu"
             }
+            Self::BarImportEasyWorship => "Pustaka EasyWorship…",
+            Self::ImportSongsOverLimit => {
+                "Lagu tidak dibaca, melebihi batas {max} per impor: {count}"
+            }
+            Self::ImportErrMissingWords => "Tidak ada lirik lagu ini di SongWords.db",
+            Self::ImportEwNoSongs => {
+                "Tidak ada pustaka EasyWorship di sini: Songs.db tidak ditemukan di folder ini atau folder Databases\\Data-nya"
+            }
+            Self::ImportEwNoWords => {
+                "Songs.db ditemukan, tetapi SongWords.db tidak ada di sampingnya"
+            }
+            Self::ImportEwTooLarge => "Pustaka EasyWorship lebih besar dari {max} MiB",
+            Self::ImportEwChanged => {
+                "Pustaka berubah saat disalin. Tutup EasyWorship lalu impor lagi."
+            }
+            Self::ImportEwNotLibrary => "Bukan pustaka EasyWorship: {error}",
             Self::LiveItemNotShown => "{title} belum tampil; gunakan Tayangkan dulu",
             Self::WindowTitleIdle => "Sela — Pratinjau teknis",
             Self::WindowTitleUntitledDirty => "Jadwal tanpa judul* — Sela",
@@ -3450,7 +3496,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 740);
+        assert_eq!(Msg::ALL.len(), 748);
     }
 
     #[test]

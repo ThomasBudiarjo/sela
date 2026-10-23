@@ -33,7 +33,11 @@ Files:
   `scripts/fetch-ffmpeg`). `scripture-x11.py` (M4-03/M4-04,
   docs/scripture.md; Windows counterpart `scripture-windows.py`). `stage-display-x11.py`
   (M3-01/M3-02, docs/stage-display.md; Windows counterpart
-  `stage-display-windows.py`).
+  `stage-display-windows.py`). `ew-import-x11.py` (M4-07 EasyWorship
+  library, docs/import.md "EasyWorship library"; Windows counterpart
+  `ew-import-windows.py`; both build a synthetic library with
+  `scripts/ew_library_fixture.py` and reuse song-import's folder chooser
+  driver).
 - Older X11 scripts (`native-smoke.sh`, `operator-shell.py`,
   `song-library.py`) predate the harness and were not run or ported in this
   slice; the documented `native-smoke.sh` command still uses
@@ -271,6 +275,7 @@ stream's tree (commits in the work log record of the same name).
 | `live-output-x11.py --kind dual` | private dual | FAIL as expected: the audience took the focus |
 | `schedule-x11.py` + `song-editor-x11.py` in parallel | private xvfb `:0` and `:1` | PASS, PASS |
 | `song-import-x11.py --display :112` (import-framework, 2026-10-22) | xvfb, audience `window` | PASS (27 s) |
+| `ew-import-x11.py --display :121` (ew-library-import, 2026-10-23, binary sha256 `9b7bc1893541af33…`) | xvfb `:121` (own Xvfb + openbox), no audience | PASS (18 s) |
 | `autosave-x11.py --display :113` (2026-10-22, autosave-recovery; review round 1 adds the unanswered-close step) | xvfb `serve --display :113` | PASS (19 s; round 1: 20.5 s) |
 | `songs-browser-x11.py --display :114` (songs-browser, 2026-10-22; re-run 2026-10-23 after review) | xvfb (`serve --display :114`), audience `window` 624x351 | PASS (Sort by keys mouse + keyboard, restart, label search, Options Song tab; since 2026-10-23 a song is Live and typing "bravo." in the search box, "CCLI b." in License Info and OK with changed options leave the audience frame unchanged; this catches leaked Black/Clear/Logo keys but not a re-cue on OK, which re-renders a pixel-identical slide here because the 351 px output draws no copyright strip: the GPUI test `typing_in_license_info_never_toggles_masks_or_cues_live` covers that) |
 | `themes-x11.py --display :117` (themes stream, 2026-10-22, binary sha256 `f37bf47ba9dd1ca2…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (40 s) |

@@ -1,4 +1,5 @@
-//! File › Import › Songs… / Song Folder… (M1-14, M4-07 OpenSong/ChordPro):
+//! File › Import › Songs… / Song Folder… (M1-14, M4-07 OpenSong/ChordPro)
+//! and EasyWorship Library… (M4-07 EasyWorship 6-8 child):
 //! a native file chooser that never blocks, the bounded `sela-import`
 //! worker (`sela::import::worker`) that reads and stages each file, a staged
 //! preview listing every song with its warnings and every file that failed,
@@ -8,12 +9,15 @@
 //! Where EasyWorship 8.0.49 offers library import is UNOBSERVED (the File
 //! menu in EW8-OBS-053 has no Import row); the menu placement, duplicate
 //! policy and dialog are best guesses recorded in
-//! docs/reference-observations.md and docs/parity-pending.md.
+//! docs/reference-observations.md and docs/parity-pending.md. An EasyWorship
+//! library is read from private copies of its `Songs.db` and `SongWords.db`
+//! (`sela::import::ew_library`), one preview row per song.
 use super::*;
 use sela::import::{
     Rejected, Warning,
     batch::{self, FileError, Format, Staged},
-    worker::{Event, Importer, Pace, SubmitError},
+    ew_library::{self, LibraryError},
+    worker::{Event, Importer, Pace, Source, SubmitError},
 };
 use sela::storage::{ImportWrite, LibraryMatch};
 
@@ -108,6 +112,8 @@ pub(crate) struct SongImport {
     pub(crate) over_limit: usize,
     /// Chosen folders the walk cut at `batch::MAX_FOLDER_ENTRIES`.
     pub(crate) truncated: Vec<PathBuf>,
+    /// This import reads an EasyWorship library: rows are songs, not files.
+    pub(crate) library: bool,
     /// Shown in the dialog (commit failure, replace conflict).
     pub(crate) error: Option<String>,
     /// Quit or window close asked while the preview is open. Its own slot,
@@ -155,7 +161,11 @@ impl SongImport {
         }
         if self.over_limit > 0 {
             notes.push(t!(
-                Msg::ImportOverLimit,
+                if self.library {
+                    Msg::ImportSongsOverLimit
+                } else {
+                    Msg::ImportOverLimit
+                },
                 count = self.over_limit,
                 max = batch::MAX_FILES
             ));
@@ -224,6 +234,7 @@ impl SongImport {
         self.ignored = 0;
         self.over_limit = 0;
         self.truncated.clear();
+        self.library = false;
         self.error = None;
         self.quit_note = None;
         self.storage = None;
@@ -231,20 +242,28 @@ impl SongImport {
     }
 }
 
-/// Earlier rows with the same title and words: the first one keeps its
-/// choice, later ones point at it.
+/// Earlier rows with the same title and words, or the same source id (an
+/// EasyWorship `song_uid` listed twice): the first one keeps its choice,
+/// later ones point at it.
 pub(crate) fn batch_duplicates(rows: &[Row]) -> Vec<Option<usize>> {
     let mut first: HashMap<&batch::DuplicateKey, usize> = HashMap::new();
+    let mut ids: HashMap<&str, usize> = HashMap::new();
     rows.iter()
         .enumerate()
         .map(|(index, row)| {
-            let key = &row.result.as_ref().ok()?.key;
-            match first.get(key) {
-                Some(&earlier) => Some(earlier),
-                None => {
-                    first.insert(key, index);
-                    None
-                }
+            let staged = row.result.as_ref().ok()?;
+            let by_id = staged
+                .source_id
+                .as_deref()
+                .and_then(|id| ids.get(id).copied());
+            let by_key = first.get(&staged.key).copied();
+            if let Some(id) = staged.source_id.as_deref() {
+                ids.entry(id).or_insert(index);
+            }
+            first.entry(&staged.key).or_insert(index);
+            match (by_id, by_key) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (earlier, None) | (None, earlier) => earlier,
             }
         })
         .collect()
@@ -255,6 +274,7 @@ pub(crate) fn format_name(format: Format) -> &'static str {
         Format::OpenLyrics => "OpenLyrics",
         Format::OpenSong => "OpenSong",
         Format::ChordPro => "ChordPro",
+        Format::EasyWorship => "EasyWorship",
     }
 }
 
@@ -280,6 +300,8 @@ pub(crate) fn file_error_text(error: &FileError) -> String {
         FileError::Unsupported => return t!(Msg::ImportErrUnsupported).into(),
         FileError::Unreadable(error) => return t!(Msg::ImportErrUnreadable, error = error),
         FileError::TooLargeForLibrary => return t!(Msg::ImportErrLibraryLimit).into(),
+        FileError::MissingWords => return t!(Msg::ImportErrMissingWords).into(),
+        FileError::Library(error) => return library_error_text(error),
         FileError::BatchFull => return t!(Msg::ImportErrBatchFull, max = batch::MAX_FILES),
         FileError::BatchTooLarge => {
             return t!(
@@ -300,6 +322,23 @@ pub(crate) fn file_error_text(error: &FileError) -> String {
     }
 }
 
+/// Why an EasyWorship library gave no songs.
+pub(crate) fn library_error_text(error: &LibraryError) -> String {
+    match error {
+        LibraryError::NoSongsDb => t!(Msg::ImportEwNoSongs).into(),
+        LibraryError::NoWordsDb => t!(Msg::ImportEwNoWords).into(),
+        LibraryError::TooLarge => t!(
+            Msg::ImportEwTooLarge,
+            max = ew_library::MAX_DB_BYTES / (1024 * 1024)
+        ),
+        LibraryError::Changed => t!(Msg::ImportEwChanged).into(),
+        LibraryError::Unreadable(error) => t!(Msg::ImportErrUnreadable, error = error),
+        LibraryError::NotLibrary(error) => t!(Msg::ImportEwNotLibrary, error = error),
+        // The worker ends a cancelled job with Done; no row says this.
+        LibraryError::Canceled => t!(Msg::ImportCancelled).into(),
+    }
+}
+
 fn choice_label(choice: Choice, duplicate: bool) -> &'static str {
     match choice {
         Choice::Import if duplicate => t!(Msg::ImportChoiceCopy),
@@ -315,12 +354,6 @@ fn choice_id(choice: Choice) -> &'static str {
         Choice::Skip => "skip",
         Choice::Replace => "replace",
     }
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 impl Operator {
@@ -361,8 +394,53 @@ impl Operator {
         }));
     }
 
+    /// File › Import › EasyWorship Library…: one folder, the EasyWorship
+    /// profile or the data folder that holds `Songs.db` (UNOBSERVED where
+    /// EW keeps it; `ew_library::DATA_FOLDERS`).
+    pub(crate) fn begin_ew_library_import(&mut self, cx: &mut Context<Self>) {
+        if self.worker.is_none() {
+            self.song_message = Some((t!(Msg::NoLibraryOpen).into(), true));
+            return;
+        }
+        if self.song_import.active() {
+            return;
+        }
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(t!(Msg::ImportPrompt).into()),
+        });
+        self.song_import.phase = Phase::Choosing;
+        self.song_import.prompt = Some(cx.spawn(async move |this, cx| {
+            let picked = picked.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(task) = this.song_import.prompt.take() {
+                    task.detach();
+                }
+                match picked {
+                    Ok(Ok(Some(mut paths))) if !paths.is_empty() => {
+                        this.start_song_import_from(Source::EasyWorship(paths.swap_remove(0)))
+                    }
+                    Ok(Err(error)) => {
+                        this.song_import.phase = Phase::Idle;
+                        this.song_message =
+                            Some((t!(Msg::ImportFailedStart, error = error.to_string()), true));
+                    }
+                    _ => this.song_import.phase = Phase::Idle,
+                }
+                cx.notify();
+            });
+        }));
+    }
+
     /// Reads `paths` on the `sela-import` thread and opens the preview.
     pub(crate) fn start_song_import(&mut self, paths: Vec<PathBuf>) {
+        self.start_song_import_from(Source::Paths(paths));
+    }
+
+    /// Reads `source` on the `sela-import` thread and opens the preview.
+    pub(crate) fn start_song_import_from(&mut self, source: Source) {
         if self.song_import.importer.is_none() {
             match Importer::start_paced(self.song_import.pace.clone()) {
                 Ok(importer) => self.song_import.importer = Some(importer),
@@ -375,10 +453,11 @@ impl Operator {
             }
         }
         self.song_import.reset();
+        self.song_import.library = matches!(source, Source::EasyWorship(_));
         self.song_import.job += 1;
         let job = self.song_import.job;
         let importer = self.song_import.importer.as_mut().expect("started above");
-        match importer.submit(job, paths) {
+        match importer.submit_source(job, source) {
             Ok(()) => {}
             Err(SubmitError::Busy) => {
                 self.song_message = Some((t!(Msg::ImportBusy).into(), true));
@@ -429,7 +508,7 @@ impl Operator {
                     self.song_import.over_limit = over_limit;
                     for (path, error) in unreadable {
                         self.song_import.rows.push(Row {
-                            name: file_name(&path),
+                            name: batch::display_name(&path),
                             path,
                             result: Err(FileError::Unreadable(error)),
                             duplicate: None,
@@ -438,10 +517,14 @@ impl Operator {
                     }
                 }
                 Event::File {
-                    job, path, result, ..
+                    job,
+                    path,
+                    name,
+                    result,
+                    ..
                 } if job == current && reading => {
                     self.song_import.rows.push(Row {
-                        name: file_name(&path),
+                        name,
                         path,
                         choice: if result.is_ok() {
                             Choice::Import
@@ -1294,7 +1377,14 @@ mod tests {
             bytes: batch::song_bytes(&song),
             song: Arc::new(song),
             warnings: Vec::new(),
+            source_id: None,
         }))
+    }
+
+    fn staged_with_id(title: &str, lyrics: &str, id: &str) -> Result<Box<Staged>, FileError> {
+        let mut staged = staged(title, lyrics)?;
+        staged.source_id = Some(id.into());
+        Ok(staged)
     }
 
     fn row(result: Result<Box<Staged>, FileError>) -> Row {
@@ -1319,6 +1409,23 @@ mod tests {
         assert_eq!(
             batch_duplicates(&rows),
             [None, None, Some(0), None, Some(0)]
+        );
+    }
+
+    #[test]
+    fn a_repeated_easyworship_song_uid_is_a_duplicate_inside_the_import() {
+        let rows = vec![
+            row(staged_with_id("A", "one", "{1}")),
+            row(staged_with_id("B", "other words", "{2}")),
+            // Same uid, other title and words: still the same EW song.
+            row(staged_with_id("A (edited)", "changed", "{1}")),
+            // Same words, new uid: the key still matches.
+            row(staged_with_id("b", "OTHER words", "{3}")),
+            row(staged_with_id("C", "three", "{4}")),
+        ];
+        assert_eq!(
+            batch_duplicates(&rows),
+            [None, None, Some(0), Some(1), None]
         );
     }
 
@@ -1377,6 +1484,14 @@ mod tests {
             FileError::Rejected(None, Rejected::TooDeep),
             FileError::Rejected(None, Rejected::WrongFormat),
             FileError::Rejected(Some(Format::OpenLyrics), Rejected::NoLyrics),
+            FileError::MissingWords,
+            FileError::Library(LibraryError::NoSongsDb),
+            FileError::Library(LibraryError::NoWordsDb),
+            FileError::Library(LibraryError::TooLarge),
+            FileError::Library(LibraryError::Changed),
+            FileError::Library(LibraryError::Unreadable("denied".into())),
+            FileError::Library(LibraryError::NotLibrary("no song table".into())),
+            FileError::Library(LibraryError::Canceled),
         ] {
             let text = file_error_text(&error);
             assert!(!text.is_empty() && !text.contains('{'), "{error:?}: {text}");

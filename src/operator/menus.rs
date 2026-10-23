@@ -735,6 +735,8 @@ pub(crate) enum BarItem {
     ImportHeader,
     ImportSongs,
     ImportFolder,
+    /// File › Import ▸ EasyWorship Library… (M4-07; UNOBSERVED placement).
+    ImportEasyWorship,
     ReportsPrinting,
     Exit,
     Cut,
@@ -785,6 +787,7 @@ impl BarItem {
             BarItem::ImportHeader => Msg::BarImport,
             BarItem::ImportSongs => Msg::BarImportSongs,
             BarItem::ImportFolder => Msg::BarImportFolder,
+            BarItem::ImportEasyWorship => Msg::BarImportEasyWorship,
             BarItem::ReportsPrinting => Msg::BarReportsPrinting,
             BarItem::Exit => Msg::BarExit,
             BarItem::Cut => Msg::BarCut,
@@ -847,6 +850,7 @@ impl BarItem {
             BarItem::ImportHeader => "bar-file-import",
             BarItem::ImportSongs => "bar-file-import-songs",
             BarItem::ImportFolder => "bar-file-import-folder",
+            BarItem::ImportEasyWorship => "bar-file-import-easyworship",
             BarItem::ReportsPrinting => "bar-file-reports",
             BarItem::Exit => "bar-file-exit",
             BarItem::Cut => "bar-edit-cut",
@@ -899,7 +903,9 @@ impl BarItem {
             // Mirrors the toolbar Logo button: usable only when a logo is
             // chosen or already showing.
             BarItem::LogoOnLive => !(operator.logo.is_none() && !operator.masks.is_on(Mask::Logo)),
-            BarItem::ImportSongs | BarItem::ImportFolder => !operator.song_import.active(),
+            BarItem::ImportSongs | BarItem::ImportFolder | BarItem::ImportEasyWorship => {
+                !operator.song_import.active()
+            }
             // Foldback must be enabled in Options (EW8-OBS-056), a stage
             // child must exist and Live output must be on (the stage starts
             // and stops with it); a running stage can always be stopped. The
@@ -969,6 +975,7 @@ const FILE_MENU: &[BarEntry] = &[
     BarEntry::Item(BarItem::ImportHeader),
     BarEntry::Item(BarItem::ImportSongs),
     BarEntry::Item(BarItem::ImportFolder),
+    BarEntry::Item(BarItem::ImportEasyWorship),
     BarEntry::Separator,
     BarEntry::Item(BarItem::ReportsPrinting),
     BarEntry::Separator,
@@ -1204,6 +1211,7 @@ impl Operator {
             BarItem::ShowLiveOutput => self.toggle_output(),
             BarItem::ImportSongs => self.begin_song_import(false, cx),
             BarItem::ImportFolder => self.begin_song_import(true, cx),
+            BarItem::ImportEasyWorship => self.begin_ew_library_import(cx),
             BarItem::ShowStageOutput => self.toggle_stage_output(),
             BarItem::StageMessage => self.open_stage_message(window, cx),
             _ => unreachable!("enabled() gates unbuilt items"),

@@ -5,6 +5,7 @@
 //! back instead of growing a queue. Nothing here touches the library; the
 //! operator commits accepted songs through the storage worker.
 use super::batch::{self, FileError, MAX_FILES, MAX_STAGED_BYTES, Staged};
+use super::ew_library::{self, Library, LibraryError};
 use std::{
     path::PathBuf,
     sync::{
@@ -37,6 +38,9 @@ pub enum Event {
         job: u64,
         index: usize,
         path: PathBuf,
+        /// How the preview names the row: the file name, or `Songs.db #N`
+        /// for a song of an EasyWorship library.
+        name: String,
         result: Result<Box<Staged>, FileError>,
     },
     /// Last event of a job. `canceled`: it stopped early on request.
@@ -46,9 +50,18 @@ pub enum Event {
     Failed { job: u64 },
 }
 
+/// What one job reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// Chosen song files and folders (`batch::find`).
+    Paths(Vec<PathBuf>),
+    /// A folder holding an EasyWorship 6-8 library (`ew_library::locate`).
+    EasyWorship(PathBuf),
+}
+
 struct Job {
     id: u64,
-    paths: Vec<PathBuf>,
+    source: Source,
     cancel: Arc<AtomicBool>,
 }
 
@@ -99,6 +112,11 @@ impl Importer {
 
     /// Starts reading `paths` as job `id`. One job runs at a time.
     pub fn submit(&mut self, id: u64, paths: Vec<PathBuf>) -> Result<(), SubmitError> {
+        self.submit_source(id, Source::Paths(paths))
+    }
+
+    /// Starts reading `source` as job `id`. One job runs at a time.
+    pub fn submit_source(&mut self, id: u64, source: Source) -> Result<(), SubmitError> {
         if self.running.is_some() {
             return Err(SubmitError::Busy);
         }
@@ -106,7 +124,7 @@ impl Importer {
         self.jobs
             .try_send(Job {
                 id,
-                paths,
+                source,
                 cancel: cancel.clone(),
             })
             .map_err(|error| match error {
@@ -156,9 +174,21 @@ fn run(
     events: &mpsc::SyncSender<Event>,
     pace: Option<&(dyn Fn(usize) + Send + Sync)>,
 ) -> Result<(), ()> {
+    match &job.source {
+        Source::Paths(paths) => run_paths(job, paths, events, pace),
+        Source::EasyWorship(folder) => run_library(job, folder, events, pace),
+    }
+}
+
+fn run_paths(
+    job: &Job,
+    paths: &[PathBuf],
+    events: &mpsc::SyncSender<Event>,
+    pace: Option<&(dyn Fn(usize) + Send + Sync)>,
+) -> Result<(), ()> {
     let canceled = || job.cancel.load(Ordering::Acquire);
     let send = |event: Event| events.send(event).map_err(|_| ());
-    let found = batch::find(&job.paths, &job.cancel);
+    let found = batch::find(paths, &job.cancel);
     send(Event::Found {
         job: job.id,
         total: found.files.len(),
@@ -178,23 +208,13 @@ fn run(
                 canceled: true,
             });
         }
-        let result = match over_budget(index, held, None) {
-            Some(error) => Err(error),
-            None => batch::read(&path)
-                .and_then(|bytes| batch::stage(&path, &bytes))
-                .and_then(
-                    |staged| match over_budget(index, held, Some(staged.bytes)) {
-                        Some(error) => Err(error),
-                        None => {
-                            held += staged.bytes;
-                            Ok(Box::new(staged))
-                        }
-                    },
-                ),
-        };
+        let result = within_budget(index, &mut held, || {
+            batch::read(&path).and_then(|bytes| batch::stage(&path, &bytes))
+        });
         send(Event::File {
             job: job.id,
             index,
+            name: batch::display_name(&path),
             path,
             result,
         })?;
@@ -203,6 +223,107 @@ fn run(
         job: job.id,
         canceled: canceled(),
     })
+}
+
+/// One EasyWorship library: copies it, then stages its songs in title
+/// order, at most `MAX_FILES`. A library that cannot be read at all is one
+/// failed row named after the chosen folder.
+fn run_library(
+    job: &Job,
+    folder: &std::path::Path,
+    events: &mpsc::SyncSender<Event>,
+    pace: Option<&(dyn Fn(usize) + Send + Sync)>,
+) -> Result<(), ()> {
+    let canceled = || job.cancel.load(Ordering::Acquire);
+    let send = |event: Event| events.send(event).map_err(|_| ());
+    let opened = Library::open(folder, &job.cancel).and_then(|library| {
+        let count = library.count()?;
+        let ids = library.song_ids(MAX_FILES)?;
+        Ok((library, count, ids))
+    });
+    let (library, count, ids) = match opened {
+        Ok(opened) => opened,
+        Err(LibraryError::Canceled) => {
+            return send(Event::Done {
+                job: job.id,
+                canceled: true,
+            });
+        }
+        Err(error) => {
+            send(Event::Found {
+                job: job.id,
+                total: 1,
+                ignored: 0,
+                over_limit: 0,
+                unreadable: Vec::new(),
+                truncated: Vec::new(),
+            })?;
+            send(Event::File {
+                job: job.id,
+                index: 0,
+                path: folder.to_path_buf(),
+                name: batch::display_name(folder),
+                result: Err(FileError::Library(error)),
+            })?;
+            return send(Event::Done {
+                job: job.id,
+                canceled: canceled(),
+            });
+        }
+    };
+    send(Event::Found {
+        job: job.id,
+        total: ids.len(),
+        ignored: 0,
+        over_limit: count.saturating_sub(ids.len()),
+        unreadable: Vec::new(),
+        truncated: Vec::new(),
+    })?;
+    let path = library.songs_path();
+    let mut held = 0usize;
+    for (index, rowid) in ids.into_iter().enumerate() {
+        if let Some(pace) = pace {
+            pace(index);
+        }
+        if canceled() {
+            return send(Event::Done {
+                job: job.id,
+                canceled: true,
+            });
+        }
+        let result = within_budget(index, &mut held, || {
+            library.song(rowid).and_then(|row| ew_library::stage(&row))
+        });
+        send(Event::File {
+            job: job.id,
+            index,
+            path: path.clone(),
+            name: ew_library::row_name(rowid),
+            result,
+        })?;
+    }
+    send(Event::Done {
+        job: job.id,
+        canceled: canceled(),
+    })
+}
+
+/// Stages one row unless a batch limit is reached first, and counts its
+/// bytes against `held`.
+fn within_budget(
+    index: usize,
+    held: &mut usize,
+    stage: impl FnOnce() -> Result<Staged, FileError>,
+) -> Result<Box<Staged>, FileError> {
+    if let Some(error) = over_budget(index, *held, None) {
+        return Err(error);
+    }
+    let staged = stage()?;
+    if let Some(error) = over_budget(index, *held, Some(staged.bytes)) {
+        return Err(error);
+    }
+    *held += staged.bytes;
+    Ok(Box::new(staged))
 }
 
 /// Which batch limit file `index` hits with `held` bytes already staged
@@ -285,6 +406,133 @@ mod tests {
         // The thread takes the next job.
         importer.submit(8, vec![dir.path().join("a.cho")]).unwrap();
         assert_eq!(drain(&mut importer, 8).len(), 3);
+    }
+
+    #[test]
+    fn an_easyworship_library_is_staged_song_by_song_in_title_order() {
+        use crate::import::ew_library::fixture::{FixtureSong, ew8_words, hashes, write_library};
+        let dir = tempfile::tempdir().unwrap();
+        let words: &'static str =
+            Box::leak(ew8_words(&[("Verse 1", &["Line one"])]).into_boxed_str());
+        let song = |title, uid, words| FixtureSong {
+            title,
+            song_uid: uid,
+            words,
+            ..FixtureSong::default()
+        };
+        write_library(
+            dir.path(),
+            &[
+                song("Zebra Hymn", "{Z}", Some(words)),
+                song("alpha song", "{A}", Some(words)),
+                song("Middle", "{M}", None),
+            ],
+        );
+        let before = hashes(dir.path());
+        let mut importer = Importer::start().unwrap();
+        importer
+            .submit_source(4, Source::EasyWorship(dir.path().to_path_buf()))
+            .unwrap();
+        let events = drain(&mut importer, 4);
+        assert!(matches!(
+            events[0],
+            Event::Found {
+                job: 4,
+                total: 3,
+                over_limit: 0,
+                ..
+            }
+        ));
+        let rows: Vec<(String, Option<String>, Option<FileError>)> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::File { name, result, .. } => Some((
+                    name.clone(),
+                    result.as_ref().ok().map(|s| s.song.title.clone()),
+                    result.as_ref().err().cloned(),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("Songs.db #2".into(), Some("alpha song".into()), None),
+                ("Songs.db #3".into(), None, Some(FileError::MissingWords)),
+                ("Songs.db #1".into(), Some("Zebra Hymn".into()), None),
+            ]
+        );
+        assert_eq!(hashes(dir.path()), before);
+        // A folder without a library is one failed row, then Done.
+        let empty = tempfile::tempdir().unwrap();
+        importer
+            .submit_source(5, Source::EasyWorship(empty.path().to_path_buf()))
+            .unwrap();
+        let events = drain(&mut importer, 5);
+        assert!(matches!(events[0], Event::Found { total: 1, .. }));
+        assert!(matches!(
+            &events[1],
+            Event::File {
+                result: Err(FileError::Library(LibraryError::NoSongsDb)),
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[2],
+            Event::Done {
+                job: 5,
+                canceled: false
+            }
+        ));
+    }
+
+    #[test]
+    fn a_library_over_the_file_limit_counts_the_rest_and_cancel_stops_it() {
+        use crate::import::ew_library::fixture::{FixtureSong, write_library};
+        let dir = tempfile::tempdir().unwrap();
+        let song = FixtureSong {
+            title: "Same",
+            words: Some("{\\rtf1 Line\\par}"),
+            ..FixtureSong::default()
+        };
+        write_library(dir.path(), &vec![song; MAX_FILES + 2]);
+        let (reached_tx, reached) = mpsc::sync_channel::<usize>(8);
+        let (go, go_rx) = mpsc::sync_channel::<()>(8);
+        let go_rx = std::sync::Mutex::new(go_rx);
+        let pace: Pace = Arc::new(move |index| {
+            if index == 1 {
+                let _ = reached_tx.send(index);
+                let _ = go_rx.lock().unwrap().recv();
+            }
+        });
+        let mut importer = Importer::start_paced(Some(pace)).unwrap();
+        importer
+            .submit_source(6, Source::EasyWorship(dir.path().to_path_buf()))
+            .unwrap();
+        assert_eq!(reached.recv_timeout(Duration::from_secs(20)).unwrap(), 1);
+        importer.cancel();
+        go.send(()).unwrap();
+        let events = drain(&mut importer, 6);
+        assert!(matches!(
+            events[0],
+            Event::Found {
+                total: MAX_FILES,
+                over_limit: 2,
+                ..
+            }
+        ));
+        let files = events
+            .iter()
+            .filter(|e| matches!(e, Event::File { .. }))
+            .count();
+        assert_eq!(files, 1, "song 0 only");
+        assert!(matches!(
+            events.last(),
+            Some(Event::Done {
+                job: 6,
+                canceled: true
+            })
+        ));
     }
 
     #[test]

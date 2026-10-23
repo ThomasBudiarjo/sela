@@ -1640,10 +1640,26 @@ Depends on: M1-13, M1-14, M4-06. Tests: U, I, N, L.
 - [ ] Document blocked formats and provide permitted interchange alternatives.
 - [ ] EasyWorship 6-8 library (mission feature `easyworship-library-import`,
   VAL-IMPORT-008..011, 017). Song words RTF parser `import::ew_rtf`:
-  implemented-unqualified (2026-10-22, both dialects, docs/import.md). Open:
-  read-only `Songs.db`/`SongWords.db` copies with `UTF8_U_CI`, metadata
-  mapping, missing `word` row, `song_uid` duplicates, staged UI, source
-  hashes before/after (native), and EW8 non-ASCII words (unobserved).
+  implemented-unqualified (2026-10-22, both dialects, docs/import.md).
+  ew-library-import 2026-10-23: library importer `import::ew_library`
+  implemented-unqualified: File › Import ▸ EasyWorship Library… (folder
+  chooser, UNOBSERVED placement), private copies of `Songs.db`/`SongWords.db`
+  (plus `-wal`/`-journal`) opened `query_only` with `UTF8_U_CI` registered,
+  metadata mapping (title, author, copyright, administrator, CCLI from
+  `vendor_id`; description/tags reported as not imported), `ew_rtf::parse`
+  per newest `word` row, missing `word` row as a failed row, `song_uid`
+  duplicates inside an import, re-import as library duplicates, the
+  framework's staged preview and one-transaction commit. Sources hashed
+  before/after in unit, GPUI and native tests. Linux native
+  `ew-import-x11.py` PASS. Open: every schema detail is an UNOBSERVED guess
+  to check on a copy of the owner's EW 8.0.49 library (PP-EWL-01..08),
+  Windows `ew-import-windows.py` (NOT RUN, PP-EWL-07), EW8 non-ASCII words
+  (PP-IMP-01/PP-EWL-08).
+  - [ ] Libraries over 500 songs: only the first 500 by title are staged
+    and the rest counted; importing the remainder (paging or a larger
+    virtualized preview) is open.
+  - [ ] Song description and tags/keywords: Sela songs have no fields for
+    them, so they are reported, not imported.
 
 Acceptance: each claimed importer has a versioned corpus and fidelity report;
 the parent is not closed by one generic parser.
