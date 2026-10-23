@@ -410,7 +410,9 @@ pub fn default_loader() -> Loader {
 
 enum Job {
     Load,
-    Save(Settings),
+    // Boxed: the settings grew past clippy's large-error bound once the
+    // copyright and stage options were both added (integration).
+    Save(Box<Settings>),
 }
 
 #[derive(Debug)]
@@ -462,7 +464,7 @@ impl Worker {
     }
 
     pub fn save(&self, settings: Settings) -> bool {
-        self.submit(Job::Save(settings))
+        self.submit(Job::Save(Box::new(settings)))
     }
 
     fn submit(&self, job: Job) -> bool {
