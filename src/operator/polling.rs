@@ -376,6 +376,7 @@ impl Operator {
                     Request::SaveSchedule(_)
                         | Request::ImportSchedule(..)
                         | Request::UpdateScan { .. }
+                        | Request::RecoveryCheck(_)
                 );
                 match worker.submit(command) {
                     Ok(cancel) => {

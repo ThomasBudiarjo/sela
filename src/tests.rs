@@ -3556,6 +3556,36 @@ fn failed_or_stale_preparation_never_replaces_the_current_scene(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn normalize_after_a_failed_cue_clears_the_failed_indicator(cx: &mut TestAppContext) {
+    use sela::preparation::cue::{Built, CuePreparer};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cx, operator) = live_fixture(cx, &dir);
+    click(&mut cx, "go-live");
+    settle(&mut cx, &operator, "verse on screen", |o| {
+        o.on_screen() == Some("Signal Hymn · Verse 1")
+    });
+    let failing = CuePreparer::with_builder(|_, _| -> Result<Built, _> {
+        Err(sela::scene::PrepareError::InvalidScene)
+    })
+    .unwrap();
+    operator.update(&mut cx, |o, _| o.cue_preparer = Some(failing));
+    click(&mut cx, "live-next");
+    settle(&mut cx, &operator, "the failed cue", |o| o.cue_failed);
+    operator.update(&mut cx, |o, _| {
+        o.cue_preparer = Some(CuePreparer::new().unwrap());
+    });
+    let sent = operator.read_with(&cx, |o, _| submitted(o));
+    click(&mut cx, "normalize-text");
+    settle(&mut cx, &operator, "the re-sized cue presented", |o| {
+        submitted(o) > sent && o.pending_cues.is_empty()
+    });
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(o.on_screen(), Some("Signal Hymn · Verse 1"));
+        assert!(!o.cue_failed, "the re-sent slide prepared");
+    });
+}
+
+#[gpui::test]
 fn the_cue_queue_is_bounded_and_refuses_with_a_message(cx: &mut TestAppContext) {
     use sela::preparation::cue::LIVE_DEPTH;
     let dir = tempfile::tempdir().unwrap();

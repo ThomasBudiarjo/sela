@@ -990,6 +990,9 @@ impl Operator {
         let Some((index, generation)) = self.latest_request() else {
             return;
         };
+        // A new attempt, like `send`: an earlier failure no longer stands
+        // (this one sets it again if it fails too).
+        self.cue_failed = false;
         self.cancel_cues();
         self.dispatch(index, generation);
         self.unmask.retain_only(generation);
