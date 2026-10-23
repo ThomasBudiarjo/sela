@@ -844,9 +844,11 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
   (c) an original clip cut in half; note any import message, the thumbnail,
   and what Preview and Go Live do with each (does Live keep the previous
   item?). Sela now: the decoder fails with `Corrupt`/`UnsupportedCodec`
-  before any frame (a half clip delivers what decodes, then ends); there is
-  no video UI yet. Re-run: `cargo test --locked --test media_decode`, then
-  the video-playback stream's script.
+  before any frame (a half clip delivers what decodes, then ends); since
+  video-playback (2026-10-23) a Media › Videos import of such a file is
+  refused with the reason (PP-VP-01) and a video cue that does not open keeps
+  the previous slide (PP-VP-03). Re-run: `cargo test --locked --test
+  media_decode`, then `video-windows.py`.
 - [ ] **PP-MC-02 Variable frame rate timing** (M2-02). Steps: play an
   original clip whose frames 0-9 run at 30 fps followed by a 0.5 s gap (the
   `setpts` recipe in `tests/media_decode.rs`) with an audible tick per frame
@@ -877,6 +879,24 @@ Options › Main Output › Song › Copyright Info. Linux evidence:
   5.1 is covered. Sela now: Linux only (`scripts/media-backend-x11.py`
   PASS; `fetch-ffmpeg.ps1` ran under PowerShell 7.4.6 on Linux only).
   Re-run: the same commands.
+- [ ] **PP-MC-05 Media that points at a network address** (wave
+  completeness check 2026-10-23; best guess in reference-observations
+  "Media decoding best guesses": a local playlist or reference file naming a
+  network URL). Steps: in a disposable profile, with the network cable in,
+  try to add to Media › Videos (+ / import) (a) an original `.m3u` whose
+  only line is `http://example.invalid/clip.mp4`, (b) a Windows `.url`
+  shortcut to the same address, (c) the `.m3u` of (a) renamed
+  `playlist.mp4`; then pull the network cable and repeat;
+  record whether EW accepts either, shows a thumbnail, makes a network
+  request (watch with Resource Monitor › Network) or shows an error and its
+  wording. Online video is M4-08, so only the local-file behavior is
+  compared here. Sela now: Media › Videos refuses (a) and (b) by extension;
+  for (c) the import probe refuses any non-file protocol before FFmpeg opens
+  it (`MediaError::ProtocolRefused`, VAL-MEDIA-038), so the file is refused
+  as not playable and no network request is made (UNOBSERVED best guess).
+  Re-run:
+  `cargo test --locked --lib media` and `cargo test --locked --test
+  media_decode`.
 - [ ] **PP-MC-04 Mapped network and subst drives** (docs/media.md "Decoder
   input arguments" known gap). Steps: map a share as `Z:` and `subst Y:` a
   local folder; start a decode of a clip on each from a worker (or the
@@ -1044,7 +1064,7 @@ is a Sela best guess recorded in docs/reference-observations.md
   file. Re-run: `python3 scripts/scripture-x11.py` (save/reopen through the
   portal dialogs), `scripture-windows.py` (save through the native dialog).
 - [ ] **PP-BIB-09 Windows run of the Sela check** (M4-03/M4-04). Steps: run
-  `python scripts/scripture-windows.py` (row 23 below) on the three-monitor
+  `python scripts/scripture-windows.py` (row 29 below) on the three-monitor
   setup and inspect its captures, including the per-slide reference strip
   on the 1080p audience (on Linux it is checked by
   `scripture-x11.py --kind dual`; the 351 px xvfb window is too small for
@@ -1155,6 +1175,17 @@ reference-observations.md, "Themes — UNOBSERVED best guesses".
   `tests::themes::a_theme_editor_save_never_resurrects_a_deleted_theme`,
   `apply_to_song_reports_a_theme_deleted_meanwhile_and_drops_it`,
   `a_theme_load_blocked_by_another_connection_is_retried`; `themes-windows.py`.
+- [ ] **PP-TH-11 Copyright element placement** (TH-BG-08; EW8-OBS-032
+  Theme Elements, EW8-OBS-063 copyright strip; wave completeness check
+  2026-10-23). Steps: open a song theme's editor in 8.0.49, select its
+  Copyright element (Slide › Theme Elements) and record whether it can be
+  dragged, resized or aligned freely on the slide, which position, size,
+  font and alignment controls it has and their defaults, and whether
+  hiding it also hides the copyright on song slides that use the theme;
+  then send a song with copyright text live and capture where the strip
+  sits at 1920x1080. Sela now: only the bottom strip, shown or hidden per
+  theme, in the theme's copyright format; no free placement (UNOBSERVED
+  best guess). Re-run: `themes-windows.py`; GPUI `tests::themes`.
 
 ## Stream: stage-display
 

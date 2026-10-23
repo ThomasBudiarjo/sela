@@ -823,7 +823,7 @@ exists (EW8-OBS-010); the Master is a layout of the song's theme
 Copy to Theme and "Set As Default Song Theme" re-render the song preview
 (EW8-OBS-019); format and margin controls (EW8-OBS-028..030); copyright strip
 (EW8-OBS-063). Everything below is a reversible Sela choice to check
-(docs/parity-pending.md, PP-TH-01..09; design in docs/themes.md).
+(docs/parity-pending.md, PP-TH-01..11; TH-BG-08 is PP-TH-11; design in docs/themes.md).
 
 | ID | State | Record |
 |---|---|---|
@@ -843,7 +843,7 @@ Copy to Theme and "Set As Default Song Theme" re-render the song preview
 ## Media decoding best guesses (media-core, 2026-10-22)
 
 EasyWorship 8.0.49 was not run for media-core. Each item is a reversible
-best guess; the observations to make are PP-MC-01 and PP-MC-02 in
+best guess; the observations to make are PP-MC-01, PP-MC-02 and PP-MC-05 in
 [parity-pending.md](parity-pending.md).
 
 - UNOBSERVED best guess: a video file EasyWorship cannot decode (unknown codec, damaged or not media). Sela's decoder reports `UnsupportedCodec` or `Corrupt` before any frame and never replaces what is live; the operator-facing wording and where it shows belong to the video-playback stream.

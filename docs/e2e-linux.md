@@ -294,6 +294,7 @@ stream's tree (commits in the work log record of the same name).
 | `themes-x11.py --display :117` (themes review round 2, 2026-10-23, binary sha256 `9b60e612488b600a…`) | xvfb `:117` (`serve --display :117`), audience `window` 624x351 | PASS (42 s) |
 | `bundle-x11.py --display :122` (bundle-backup-restore, 2026-10-23; `serve --display :122`) | xvfb, no audience output | PASS (about 45 s) |
 | all eight `*-x11.py` scripts `--display :131` (pr1-review, 2026-10-23, after the native_x11 timeout and AT-SPI probe fixes) | xvfb (`serve --display :131`), audience `window` 624x351 | PASS: schedule 35 s, song-import 31 s, autosave 24 s, songs-browser 47 s, live-output 60 s (underline run 514 px of a 514 px line; non-underlined slides at most 31 px), scenario-s01 47 s (chorus black samples 23684), scenario-s02 52 s, song-editor 66 s |
+| all fifteen `*-x11.py` scripts `--display :198` (wave completeness check, 2026-10-23, merged head `4e1b6ff`, binary sha256 `d61e0ca86b9bd457…`) | xvfb (`serve --display :198`), audience `window` 624x351 | PASS: autosave 22 s, bundle 45 s, ew-import 19 s, live-output 61 s, media-backend 21 s, scenario-s01 49 s, scenario-s02 57 s, schedule 36 s, scripture 52 s, song-editor 66 s, song-import 32 s, songs-browser 44 s, stage-display 33 s, themes 46 s, video 43 s |
 
 GTK portal folder chooser notes (song-import-x11.py): it opens on Recent,
 where Enter in the location entry does nothing, so the script first clicks
