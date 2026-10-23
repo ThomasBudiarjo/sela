@@ -1741,11 +1741,20 @@ class App:
             )
             time.sleep(0.4)
             press(dialog, "enter")
-        wait_until(
-            lambda: not window_exists(dialog) or not geometry(dialog).viewable,
-            12,
-            "the portal file dialog to close",
-        )
+
+        def closed() -> bool:
+            # GTK may destroy the dialog between the two X queries; a window
+            # that vanished in between is closed, not a harness failure.
+            if not window_exists(dialog):
+                return True
+            try:
+                return not geometry(dialog).viewable
+            except Failure:
+                if window_exists(dialog):
+                    raise
+                return True
+
+        wait_until(closed, 12, "the portal file dialog to close")
         time.sleep(0.4)
         if owner:
             activate(owner)

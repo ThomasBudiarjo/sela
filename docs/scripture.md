@@ -7,10 +7,13 @@ Import Bible… button and its file prompt, the catalog refresh after an
 import, translation switches and the `.selaschedule` v4 save/reopen) and the
 Linux/X11 native script `scripts/scripture-x11.py` (typing, Go Live, the
 malformed note, the WEB switch, keyword search, Import Bible… through the
-portal dialog, Add to Schedule; with `--kind dual` also the per-slide
-reference strip on a 1920x1080 audience). Not checked by any test: the red
-styling of a damaged translation row (visual only) and the native
-`.selaschedule` v4 save/reopen (in-process only). Windows runs, EasyWorship
+portal dialog with the "(restricted)" row label, Add to Schedule, Ctrl+S /
+Ctrl+O of the `.selaschedule` v4 file through the portal dialogs with the
+item going live from its snapshot after its translation file was deleted;
+with `--kind dual` also the per-slide reference strip on a 1920x1080
+audience). A damaged or restricted translation row says so in words
+("(damaged)", "(restricted)", EN/ID) in both its visible and accessible
+label, tested in GPUI; only its red colour is untested. Windows runs, EasyWorship
 8.0.49 observations and physical-output checks are still open
 (docs/parity-pending.md, Stream: scripture).
 
@@ -151,7 +154,12 @@ Import Bible… (Scriptures footer) reads one OSIS, USFX or Zefania XML file
   the `.selaschedule` file (see Schedule items).
 - After an import (whether it succeeded or failed) the catalog is refreshed
   for the new row only: the verse list, its selection, Preview and the
-  schedule selection stay as the operator left them.
+  schedule selection stay as the operator left them. The one exception:
+  when no translation was usable before (nothing was shown), the refresh
+  looks the box's text up in the newly usable translation and fills the
+  list and selection, still without touching Preview.
+- Import Bible… opens one file dialog at a time: while it is open, and
+  while an import runs, the button is disabled and asks for nothing.
 
 ## Scriptures tab
 

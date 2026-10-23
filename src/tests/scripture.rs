@@ -2,7 +2,7 @@
 //! the real scripture worker over synthetic bundles in a temporary profile,
 //! and the fake audience child for renderer receipts.
 use super::*;
-use crate::operator::ScriptureTab;
+use crate::operator::{ScriptureTab, translation_label};
 use sela::scripture::{TranslationInfo, VerseId, bundled, bundled::Bundle};
 
 fn v(book: u8, chapter: u16, verse: u16) -> VerseId {
@@ -66,12 +66,20 @@ fn open_tab(
     cx: &mut TestAppContext,
     prepare: impl FnOnce(&std::path::Path),
 ) -> (VisualTestContext, Entity<Operator>, tempfile::TempDir) {
+    open_tab_with(cx, prepare, bundles())
+}
+
+fn open_tab_with(
+    cx: &mut TestAppContext,
+    prepare: impl FnOnce(&std::path::Path),
+    bundles: Vec<Bundle>,
+) -> (VisualTestContext, Entity<Operator>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let library = library_with_song(&dir);
     prepare(dir.path());
     let (mut cx, operator, _) = with_library(cx, Some(library), "apply");
     cx.simulate_resize(size(px(1600.), px(1000.)));
-    operator.update(&mut cx, |o, _| o.scripture.bundles = bundles());
+    operator.update(&mut cx, |o, _| o.scripture.bundles = bundles);
     click(&mut cx, "Scriptures");
     settle(&mut cx, &operator, "scripture catalog", |o| {
         !tab(o).catalog_pending && !tab(o).translations.is_empty()
@@ -464,6 +472,12 @@ fn corrupt_translation_files_are_rebuilt_or_listed_unusable(cx: &mut TestAppCont
         assert_eq!(tab(o).current.as_deref(), Some("SYA"));
     });
     assert!(cx.debug_bounds("scripture-message").is_some());
+    // The damage is said in words on the row, not only by its colour.
+    let label = |o: &Operator| {
+        let entry = tab(o).translations.iter().find(|e| e.info.id == "USER");
+        translation_label(entry.unwrap())
+    };
+    assert_eq!(operator.read_with(&cx, |o, _| label(o)), "USER (damaged)");
     click(&mut cx, "translation-USER");
     operator.read_with(&cx, |o, _| {
         assert_eq!(tab(o).current.as_deref(), Some("SYA"));
@@ -482,7 +496,9 @@ fn corrupt_translation_files_are_rebuilt_or_listed_unusable(cx: &mut TestAppCont
     cx.run_until_parked();
     click(&mut cx, "translation-USER");
     let indonesian = operator.read_with(&cx, |o, _| note(o));
+    let indonesian_label = operator.read_with(&cx, |o, _| label(o));
     sela::i18n::set_language(sela::i18n::Language::English);
+    assert_eq!(indonesian_label, "USER (rusak)");
     assert!(
         indonesian
             .as_deref()
@@ -513,11 +529,17 @@ fn importing_a_user_file_adds_a_restricted_translation(cx: &mut TestAppContext) 
     // Import Bible… asks for one file (no folders); cancelling imports nothing.
     click(&mut cx, "scripture-import");
     assert!(cx.did_prompt_for_paths(), "Import Bible… asks for a file");
+    // A second click while that dialog is open asks for nothing more.
+    click(&mut cx, "scripture-import");
     cx.simulate_path_prompt_response(|options| {
         assert!(options.files && !options.directories && !options.multiple);
         None
     });
     cx.run_until_parked();
+    assert!(
+        !cx.did_prompt_for_paths(),
+        "one Import Bible… dialog at a time"
+    );
     assert_eq!(
         operator.read_with(&cx, |o, _| tab(o).importing.clone()),
         None
@@ -560,6 +582,15 @@ fn importing_a_user_file_adds_a_restricted_translation(cx: &mut TestAppContext) 
     operator.read_with(&cx, |o, _| {
         let entry = tab(o).current_entry().unwrap();
         assert!(!entry.info.redistributable, "imported rights are unknown");
+        // Shown and spoken in words, not only in the accessible name.
+        assert_eq!(
+            translation_label(entry),
+            "SZEF · Synthetic Zefania (restricted)"
+        );
+        assert_eq!(
+            translation_label(&tab(o).translations[0]),
+            "SYA · Synthetic SYA"
+        );
         // An Indonesian text gets Indonesian book names on its slides.
         assert_eq!(preview_title(o), Some("Yohanes 3:16-17 (SZEF)"));
     });
@@ -835,5 +866,96 @@ fn a_switch_while_a_reply_is_in_flight_is_not_reverted_or_mislabelled(cx: &mut T
     operator.read_with(&cx, |o, _| {
         // The SYB hits are gone with the switch, so nothing is selected.
         assert!(o.schedule.entries().is_empty(), "{:?}", entry_titles(o));
+    });
+}
+
+/// Reviewer minor (round 2): a typed reference still loading while another
+/// one is shown must be looked up in the new translation, not replaced by
+/// the shown reference.
+#[gpui::test]
+fn a_switch_while_a_typed_reference_loads_over_a_shown_one_keeps_the_typed_one(
+    cx: &mut TestAppContext,
+) {
+    let (mut cx, operator, _dir) = open_tab(cx, |_| {});
+    type_box(&mut cx, &operator, "John 3:16");
+    settle(&mut cx, &operator, "shown passage", |o| {
+        preview_title(o) == Some("John 3:16 (SYA)")
+    });
+    // Typed, and SYB clicked before the SYA passage is polled.
+    type_box(&mut cx, &operator, "3 John 1:14");
+    assert_eq!(
+        operator.read_with(&cx, |o, _| preview_title(o).map(str::to_owned)),
+        Some("John 3:16 (SYA)".into()),
+        "the typed passage has not landed yet"
+    );
+    click(&mut cx, "translation-SYB");
+    settle(&mut cx, &operator, "typed reference in SYB", |o| {
+        preview_title(o) == Some("3 John 1:14 (SYB)")
+    });
+    for _ in 0..20 {
+        operator.update(&mut cx, |o, cx| o.poll(cx));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    operator.read_with(&cx, |o, _| {
+        assert_eq!(tab(o).current.as_deref(), Some("SYB"));
+        assert_eq!(selected(o), [64_001_014]);
+        assert_eq!(preview_title(o), Some("3 John 1:14 (SYB)"));
+    });
+}
+
+/// Reviewer minor (round 2): with no usable translation the typed text
+/// went nowhere, and the refresh after an import that made one usable did
+/// not look it up. It now fills the list; Preview still stays.
+#[gpui::test]
+fn text_typed_with_no_usable_translation_applies_once_an_import_adds_one(cx: &mut TestAppContext) {
+    let (mut cx, operator, dir) = open_tab_with(
+        cx,
+        |profile| {
+            let folder = profile.join("Scripture");
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("USER.selabible"), b"damaged").unwrap();
+        },
+        Vec::new(),
+    );
+    assert_eq!(operator.read_with(&cx, |o, _| tab(o).current.clone()), None);
+    click(&mut cx, "Songs");
+    settle(&mut cx, &operator, "catalog", |o| o.catalog.len() == 1);
+    add_song(&mut cx, &operator, "Signal Hymn");
+    click(&mut cx, "schedule-item-0");
+    settle(&mut cx, &operator, "song preview", |o| {
+        preview_title(o) == Some("Signal Hymn")
+    });
+    click(&mut cx, "Scriptures");
+    type_box(&mut cx, &operator, "John 3:16");
+    operator.read_with(&cx, |o, _| assert!(cx_has_rows(o, 0)));
+    let file = dir.path().join("later-zefania.xml");
+    std::fs::write(
+        &file,
+        r#"<XMLBIBLE biblename="Later"><INFORMATION><identifier>SLAT</identifier></INFORMATION>
+        <BIBLEBOOK bnumber="43"><CHAPTER cnumber="3"><VERS vnumber="16">Later sixteen</VERS>
+        <VERS vnumber="17">Later seventeen</VERS></CHAPTER></BIBLEBOOK></XMLBIBLE>"#,
+    )
+    .unwrap();
+    operator.update(&mut cx, |o, _| o.start_scripture_import(file));
+    settle(
+        &mut cx,
+        &operator,
+        "typed text in the imported translation",
+        |o| tab(o).current.as_deref() == Some("SLAT") && selected(o) == [43_003_016],
+    );
+    for _ in 0..20 {
+        operator.update(&mut cx, |o, cx| o.poll(cx));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    operator.read_with(&cx, |o, _| {
+        assert!(cx_has_rows(o, 2));
+        assert_eq!(selected(o), [43_003_016]);
+        assert_eq!(
+            preview_title(o),
+            Some("Signal Hymn"),
+            "only an operator action changes Preview"
+        );
     });
 }

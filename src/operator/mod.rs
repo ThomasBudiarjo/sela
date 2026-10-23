@@ -73,6 +73,8 @@ pub(super) use options::{MonitorSlot, SettingsConfig};
 use options::{RecentChange, SettingsState};
 #[cfg(test)]
 pub(crate) use resources::ScriptureTab;
+#[cfg(test)]
+pub(crate) use resources::translation_label;
 use resources::{
     ClearSongSearch, DeleteSongRow, ExtendFirstSongRow, ExtendLastSongRow, ExtendNextSongRow,
     ExtendPreviousSongRow, FirstSongRow, LastSongRow, NextSongRow, PageDownSongRow, PageUpSongRow,

@@ -598,6 +598,7 @@ pub enum Msg {
     ScriptureRebuilt,
     ScriptureNotInstalled,
     ScriptureRestricted,
+    ScriptureDamagedTag,
     ScriptureAddedToSchedule,
     ScriptureWhyMissing,
     ScriptureWhyIo,
@@ -1133,6 +1134,7 @@ impl Msg {
         Msg::ScriptureRebuilt,
         Msg::ScriptureNotInstalled,
         Msg::ScriptureRestricted,
+        Msg::ScriptureDamagedTag,
         Msg::ScriptureAddedToSchedule,
         Msg::ScriptureWhyMissing,
         Msg::ScriptureWhyIo,
@@ -1738,6 +1740,7 @@ impl Msg {
             Self::ScriptureRebuilt => "Rebuilt {translation} from the bundled copy",
             Self::ScriptureNotInstalled => "{translation} is not installed",
             Self::ScriptureRestricted => "restricted",
+            Self::ScriptureDamagedTag => "damaged",
             Self::ScriptureAddedToSchedule => "Added {reference} to the schedule",
             Self::ScriptureWhyMissing => "the file is missing",
             Self::ScriptureWhyIo => "the file cannot be read or written ({detail})",
@@ -2366,6 +2369,7 @@ impl Msg {
             Self::ScriptureRebuilt => "{translation} dibangun ulang dari salinan bawaan",
             Self::ScriptureNotInstalled => "{translation} tidak terpasang",
             Self::ScriptureRestricted => "terbatas",
+            Self::ScriptureDamagedTag => "rusak",
             Self::ScriptureAddedToSchedule => "{reference} ditambahkan ke jadwal",
             Self::ScriptureWhyMissing => "berkas tidak ada",
             Self::ScriptureWhyIo => "berkas tidak dapat dibaca atau ditulis ({detail})",
@@ -2450,7 +2454,7 @@ mod tests {
         assert_eq!(sorted.len(), Msg::ALL.len(), "duplicate variant in ALL");
         // Match arms are exhaustive, so a variant missing from ALL still has
         // both translations; this count guard keeps ALL honest as it grows.
-        assert_eq!(Msg::ALL.len(), 531);
+        assert_eq!(Msg::ALL.len(), 532);
     }
 
     #[test]

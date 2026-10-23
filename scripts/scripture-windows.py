@@ -17,6 +17,11 @@ screen captures of the real operator and audience:
 - with "John 3:16-18" again, the WEB row then Go Live changes the output;
 - Keyword mode, "only begotten": verse rows appear; a double-click on the
   first one goes live.
+- Import Bible… through the native Open dialog (a small synthetic Zefania
+  file): the footer reports "Imported SZEF", the new row is labelled
+  "(restricted)", the selection count and the audience are unchanged.
+- Ctrl+S through the native Save dialog writes a version-4 .selaschedule
+  whose first item is the KJV scripture item with its verse text pinned.
 
 Takes over the real keyboard and mouse; never run with EasyWorship open.
 Needs a secondary monitor for the audience (`--monitor`, default secondary).
@@ -54,6 +59,23 @@ lo = _load("live_output_windows", "live-output-windows.py")
 a11y = _load("a11y_windows", "a11y-windows.py")
 
 APPLICATION_ID = 0x53424942  # "SBIB", src/scripture/store.rs
+SCHEDULE = "Scripture service"
+SYNTHETIC_ZEFANIA = """<XMLBIBLE biblename="Synthetic Zefania"><INFORMATION>
+<identifier>SZEF</identifier><language>IND</language>
+<rights>Synthetic rights</rights></INFORMATION>
+<BIBLEBOOK bnumber="43"><CHAPTER cnumber="3">
+<VERS vnumber="16">Teks sintetis enam belas</VERS>
+<VERS vnumber="17">Teks sintetis tujuh belas</VERS>
+</CHAPTER></BIBLEBOOK></XMLBIBLE>
+"""
+
+
+def saved_schedule(path: pathlib.Path) -> dict | None:
+    """The saved .selaschedule document, once it is complete JSON."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 def main() -> int:
@@ -230,6 +252,69 @@ def main() -> int:
         keyword = a11y.wait_for(5.0, lambda: lo.digest(audience_hwnd) != web_digest)
         check.expect(keyword, "a double-clicked hit went live")
         save("06-keyword-live", audience_hwnd)
+        keyword_digest = a11y.stable_digest(audience_hwnd)
+
+        # Import Bible… through the native Open dialog; the catalog refresh
+        # after it changes nothing the operator chose.
+        count_before = node("scripture-selection-count")["name"]
+        bible = data / "synthetic-zefania.xml"
+        bible.write_text(SYNTHETIC_ZEFANIA, encoding="utf-8")
+        click("scripture-import")
+        time.sleep(0.8)
+        nw.drive_file_dialog(app.process.pid, hwnd, str(bible))
+        row = node("translation-SZEF", 15.0)
+        summary["imported_row"] = row["name"]
+        check.expect(
+            row["name"].endswith("(restricted)"), "the imported row says restricted"
+        )
+        deadline = time.monotonic() + 15
+        message = ""
+        while time.monotonic() < deadline:
+            found = a11y.nodes_by_id(a11y.uia(hwnd)).get("scripture-message")
+            message = found["name"] if found else ""
+            if message.startswith("Imported"):
+                break
+            time.sleep(0.3)
+        summary["import_message"] = message
+        check.expect("SZEF" in message, f"import message {message!r}")
+        check.expect(
+            (data / "Scripture" / "SZEF.selabible").is_file(), "SZEF.selabible written"
+        )
+        time.sleep(1.0)
+        count_after = node("scripture-selection-count")["name"]
+        summary["selection_after_import"] = count_after
+        check.expect(count_after == count_before, "the import kept the selection")
+        check.expect(
+            lo.digest(audience_hwnd) == keyword_digest, "the import left Live alone"
+        )
+        save("07-imported")
+
+        # Ctrl+S: version 4 with the scripture item pinned in the file.
+        press("ctrl+s")
+        time.sleep(0.8)
+        nw.drive_file_dialog(app.process.pid, hwnd, str(data / SCHEDULE))
+        schedule_file = data / f"{SCHEDULE}.selaschedule"
+        deadline = time.monotonic() + 5
+        while saved_schedule(schedule_file) is None:
+            if time.monotonic() > deadline:
+                raise nw.Failure("Ctrl+S did not save the schedule file")
+            time.sleep(0.05)
+        document = saved_schedule(schedule_file)
+        items = document.get("items") or []
+        first_item = items[0] if items else {}
+        summary["saved"] = {
+            "version": document.get("version"),
+            "kinds": [i.get("kind") for i in items],
+            "title": first_item.get("title"),
+            "translation": first_item.get("translation"),
+        }
+        check.expect(document.get("version") == 4, "the schedule file is version 4")
+        check.expect(
+            first_item.get("kind") == "scripture"
+            and first_item.get("translation") == "KJV"
+            and any("loved the world" in str(v) for v in first_item.get("verses", [])),
+            f"the scripture item is pinned in the file: {summary['saved']}",
+        )
 
         press("ctrl+q")
         time.sleep(0.6)

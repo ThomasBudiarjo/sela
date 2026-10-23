@@ -1357,8 +1357,11 @@ Depends on: M4-03, M1-04, M1-08, M1-10. Tests: U, I, R, N.
   mismatched canon, empty search and long passages with readable splitting.
   (`tests::scripture` GPUI tests and scripture unit tests.)
 - [ ] Inspect browser/editor/output, including malformed reference recovery.
-  Progress: Linux X11 captures inspected (`scripture-x11.py` PASS); the
-  Windows run and the 1080p reference strip are open (PP-BIB-09).
+  Progress: Linux X11 captures inspected (`scripture-x11.py` PASS, including
+  `.selaschedule` v4 save/reopen through the portal dialogs since review
+  round 2); the 1080p reference strip is checked natively on Linux by
+  `scripture-x11.py --kind dual` (strip at [748, 988, 1170, 1042]); the
+  Windows run is open (PP-BIB-09).
 
 Acceptance: selected verses appear in intended order with correct translation
 and references; historical support documentation alone is not UX verification.

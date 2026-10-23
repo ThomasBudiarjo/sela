@@ -10,6 +10,8 @@ mod song_select;
 mod songs;
 mod themes;
 
+#[cfg(test)]
+pub(crate) use scriptures::translation_label;
 pub(crate) use scriptures::{ScriptureTab, bind_scripture_keys};
 pub(super) use song_search::SongSearch;
 pub(super) use song_select::{SONG_ROW_H, SongSelection};

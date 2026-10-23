@@ -373,12 +373,15 @@ is a Sela best guess recorded in docs/reference-observations.md
   there; after a mode switch the box's text is looked up there. Re-run:
   `cargo test --bin sela tests::scripture::translation_switch` (both
   `translation_switch_*` tests) and
-  `tests::scripture::a_switch_while_a_reply_is_in_flight_is_not_reverted_or_mislabelled`.
+  `tests::scripture::a_switch_while_a_reply_is_in_flight_is_not_reverted_or_mislabelled`,
+  `tests::scripture::a_switch_while_a_typed_reference_loads_over_a_shown_one_keeps_the_typed_one`.
 - [ ] **PP-BIB-08 Scripture schedule items** (M4-04). Steps: add a passage to
   the schedule, save the schedule, reopen it; record the item title, whether
   the text is stored in the `.ews` and whether it follows a later Bible
   change. Sela now: a pinned snapshot titled "John 3:16-18 (KJV)",
-  `.selaschedule` version 4. Re-run: `scripture-windows.py`.
+  `.selaschedule` version 4, reopened and played without its translation
+  file. Re-run: `python3 scripts/scripture-x11.py` (save/reopen through the
+  portal dialogs), `scripture-windows.py` (save through the native dialog).
 - [ ] **PP-BIB-09 Windows run of the Sela check** (M4-03/M4-04). Steps: run
   `python scripts/scripture-windows.py` (row 23 below) on the three-monitor
   setup and inspect its captures, including the per-slide reference strip
@@ -390,8 +393,17 @@ is a Sela best guess recorded in docs/reference-observations.md
   rights wording, and whether the shown passage, selection or Preview change
   when the import finishes. Sela now: Import Bible… for OSIS/USFX/Zefania
   (one file, no folders), imported texts marked restricted, nothing else
-  changes. Re-run: `cargo test --bin sela tests::scripture::importing_a_user_file_adds_a_restricted_translation`,
+  changes. Also: with no usable Bible (or before any import) type a
+  reference, then import one; click Import Bible… twice quickly; look at how
+  EW marks an unusable or rights-restricted translation in its list. Sela
+  now: text typed while no translation was usable fills the list once an
+  import makes one usable (Preview unchanged); a second click while the
+  dialog is open does nothing; rows read "ID · Name (damaged)" /
+  "(restricted)" (EN/ID, visible and spoken, damaged also red). Re-run:
+  `cargo test --bin sela tests::scripture::importing_a_user_file_adds_a_restricted_translation`,
   `tests::scripture::a_catalog_refresh_after_an_import_leaves_preview_and_selection_alone`,
+  `tests::scripture::text_typed_with_no_usable_translation_applies_once_an_import_adds_one`,
+  `tests::scripture::corrupt_translation_files_are_rebuilt_or_listed_unusable`,
   `python3 scripts/scripture-x11.py`.
 
 ## Stream: themes

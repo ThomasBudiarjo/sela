@@ -96,6 +96,9 @@ struct PendingPassage {
     translation: String,
     reference: Reference,
     select: Select,
+    /// Whether the landed passage replaces Preview (an operator lookup)
+    /// or only fills the list (text applied by a catalog refresh).
+    preview: bool,
 }
 
 /// A line under the box: an error in red, or a hint in muted text.
@@ -140,6 +143,8 @@ pub(crate) struct ScriptureTab {
     queued: Option<Command>,
     in_flight: bool,
     pub(crate) importing: Option<String>,
+    /// The Import Bible… file dialog is open; a second click asks nothing.
+    pub(crate) import_prompt: bool,
     /// Scripture items of a schedule file being opened, waiting for its
     /// songs to be imported into the library.
     pub(crate) opening: Option<Vec<sela::schedule_file::ScriptureItem>>,
@@ -198,6 +203,7 @@ impl ScriptureTab {
             queued: None,
             in_flight: false,
             importing: None,
+            import_prompt: false,
             opening: None,
             resolve_pending: false,
             list_state: ListState::new(0, ListAlignment::Top, px(200.)),
@@ -274,6 +280,29 @@ impl ScriptureTab {
                 self.message = Some((t!(Msg::ScriptureBusy).into(), true));
             }
         }
+    }
+}
+
+/// The label of a translation row, shown and spoken: its id and name,
+/// then "(damaged)" for an unusable file or "(restricted)" for text whose
+/// rights do not allow redistribution (an import), in the UI language.
+pub(crate) fn translation_label(entry: &Entry) -> String {
+    let id = &entry.info.id;
+    let name = if entry.info.name.is_empty() || entry.info.name == *id {
+        id.clone()
+    } else {
+        format!("{id} · {}", entry.info.name)
+    };
+    let tag = if matches!(entry.state, State::Damaged(_)) {
+        Some(t!(Msg::ScriptureDamagedTag))
+    } else if !entry.info.redistributable {
+        Some(t!(Msg::ScriptureRestricted))
+    } else {
+        None
+    };
+    match tag {
+        Some(tag) => format!("{name} ({tag})"),
+        None => name,
     }
 }
 
@@ -572,6 +601,13 @@ impl Operator {
                     // The shown translation became unusable: its rows go,
                     // Preview and Live stay as they are.
                     self.scripture.forget_shown();
+                    if before.is_none() {
+                        // There was no usable translation, so nothing was
+                        // shown: the box's text is looked up in the one an
+                        // import made usable. Only the list fills; Preview
+                        // still changes only on an operator action.
+                        self.scripture_text_applied(cx);
+                    }
                 }
                 // Any other refresh (after an import, whether it succeeded
                 // or not) leaves the list, the selection and Preview alone:
@@ -746,20 +782,33 @@ impl Operator {
                 offset_in_item: px(0.),
             });
         }
-        self.preview_scripture(cx);
+        if pending.preview {
+            self.preview_scripture(cx);
+        }
     }
 
     /// Typed text changed (or the mode, translation or catalog did).
     pub(crate) fn scripture_text_changed(&mut self, cx: &mut Context<Self>) {
         let text = self.scripture.input.read(cx).text().to_string();
         match self.scripture.mode {
-            Mode::Reference => self.reference_typed(&text),
+            Mode::Reference => self.reference_typed(&text, true),
             Mode::Keyword => self.keyword_typed(&text),
         }
         cx.notify();
     }
 
-    fn reference_typed(&mut self, text: &str) {
+    /// Looks the box's text up again without touching Preview (a keyword
+    /// search never does).
+    fn scripture_text_applied(&mut self, cx: &mut Context<Self>) {
+        let text = self.scripture.input.read(cx).text().to_string();
+        match self.scripture.mode {
+            Mode::Reference => self.reference_typed(&text, false),
+            Mode::Keyword => self.keyword_typed(&text),
+        }
+        cx.notify();
+    }
+
+    fn reference_typed(&mut self, text: &str, preview: bool) {
         let tab = &mut self.scripture;
         // Newer text supersedes any passage still loading for older text.
         tab.generations.advance();
@@ -785,7 +834,7 @@ impl Operator {
         let Some(id) = tab.current.clone() else {
             return;
         };
-        self.load_reference(reference, id, None);
+        self.load_reference(reference, id, None, preview);
     }
 
     /// Locates `reference` in translation `id` and asks for its chapters;
@@ -795,6 +844,7 @@ impl Operator {
         reference: Reference,
         id: String,
         keep: Option<Vec<VerseId>>,
+        preview: bool,
     ) -> bool {
         let tab = &mut self.scripture;
         let Some(inventory) = tab.inventory_of(&id) else {
@@ -826,6 +876,7 @@ impl Operator {
             translation: id.clone(),
             reference,
             select,
+            preview,
         });
         tab.submit(Command::Passage {
             generation,
@@ -915,7 +966,7 @@ impl Operator {
                 // With nothing selected the referenced verses are selected
                 // there, as if typed again.
                 let keep = (!keep.is_empty()).then_some(keep);
-                self.load_reference(reference, id, keep);
+                self.load_reference(reference, id, keep, true);
             }
             _ => {
                 // Nothing for the old translation may land after this: the
@@ -1117,9 +1168,13 @@ impl Operator {
     }
 
     pub(crate) fn prompt_scripture_import(&mut self, cx: &mut Context<Self>) {
-        if self.scripture.importing.is_some() || self.scripture.worker.is_none() {
+        if self.scripture.importing.is_some()
+            || self.scripture.import_prompt
+            || self.scripture.worker.is_none()
+        {
             return;
         }
+        self.scripture.import_prompt = true;
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -1127,14 +1182,16 @@ impl Operator {
             prompt: Some(t!(Msg::ScriptureImportPrompt).into()),
         });
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = paths.await else {
-                return;
-            };
-            let Some(path) = paths.into_iter().next() else {
-                return;
+            // Picked, cancelled or failed: the dialog is closed either way.
+            let path = match paths.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                _ => None,
             };
             let _ = this.update(cx, |this, cx| {
-                this.start_scripture_import(path);
+                this.scripture.import_prompt = false;
+                if let Some(path) = path {
+                    this.start_scripture_import(path);
+                }
                 cx.notify();
             });
         })
@@ -1536,17 +1593,9 @@ impl Operator {
                 let id = entry.info.id.clone();
                 let selected = current.as_deref() == Some(id.as_str());
                 let damaged = matches!(entry.state, State::Damaged(_));
-                let restricted = !entry.info.redistributable;
-                let name = if entry.info.name.is_empty() || entry.info.name == id {
-                    id.clone()
-                } else {
-                    format!("{id} · {}", entry.info.name)
-                };
-                let spoken = if restricted {
-                    format!("{name} ({})", t!(Msg::ScriptureRestricted))
-                } else {
-                    name.clone()
-                };
+                // The same words are shown and spoken, so a damaged or
+                // restricted translation is never marked by colour alone.
+                let name = translation_label(&entry);
                 let handle = self.scripture.translation_focus.get(index).cloned();
                 let chosen = id.clone();
                 let keyboard = id.clone();
@@ -1555,7 +1604,7 @@ impl Operator {
                     .id(SharedString::from(accessibility.clone()))
                     .debug_selector(move || accessibility.clone())
                     .role(Role::ListItem)
-                    .aria_label(spoken)
+                    .aria_label(name.clone())
                     .aria_selected(selected)
                     .aria_position_in_set(index)
                     .aria_size_of_set(count)
@@ -1601,7 +1650,7 @@ impl Operator {
         let tab = &self.scripture;
         let selected = tab.selection.len();
         let message = tab.message.clone();
-        let importing = tab.importing.is_some() || tab.worker.is_none();
+        let importing = tab.importing.is_some() || tab.import_prompt || tab.worker.is_none();
         div()
             .id("scripture-footer")
             .h(px(STATUS_BAR_H))
