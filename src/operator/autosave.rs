@@ -48,6 +48,9 @@ pub(crate) struct AutosaveState {
     pub(crate) offer: Option<Offer>,
     /// The offer still has to be shown (another dialog was open).
     prompt_pending: bool,
+    /// The close flush ended and the window is being removed: no prompt
+    /// may open in it any more, even if a poll runs before it goes.
+    window_closing: bool,
     pub(crate) last: Option<save::Committed>,
     /// A commit stands but old copies could not be removed.
     pub(crate) cleanup: Option<save::Error>,
@@ -99,6 +102,7 @@ impl AutosaveState {
             clock,
             offer: None,
             prompt_pending: false,
+            window_closing: false,
             last: None,
             cleanup: None,
             closed: false,
@@ -148,9 +152,12 @@ impl Operator {
             self.autosave_reply(reply, now);
         }
         // A close in progress keeps the prompt back: the window is going
-        // away, and a cancelled close shows it on the next poll.
+        // away, and a cancelled close shows it on the next poll. Once the
+        // window is being removed, a poll that still runs (the window goes
+        // after the task returns) shows nothing; the next start asks again.
         if self.autosave.prompt_pending
             && self.autosave.closing.is_none()
+            && !self.autosave.window_closing
             && self.show_dialog_later(Dialog::Recovery)
         {
             self.autosave.prompt_pending = false;
@@ -521,6 +528,7 @@ impl Operator {
                             this.may_close(window, cx)
                         };
                         if close {
+                            this.autosave.window_closing = true;
                             window.remove_window();
                         }
                         cx.notify();
