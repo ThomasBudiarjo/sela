@@ -115,7 +115,9 @@ sys.exit(1 if bad else 0)
     echo "audit: dependency pin check FAILED" >&2
     status=1
 fi
-if ! python3 -I scripts/test_third_party_notices.py 2>/dev/null; then
+# unittest reports on stderr; keep it quiet on success, show it on failure.
+if ! notice_tests=$(python3 -I scripts/test_third_party_notices.py 2>&1); then
+    printf '%s\n' "$notice_tests" >&2
     echo "audit: notices generator unit checks FAILED" >&2
     status=1
 fi

@@ -337,11 +337,13 @@ fn worst_case_bibles_finish_within_their_time_bound() {
         ),
         ("unclosed comment", fill("<usfx><!--", "-", "")),
         ("quoted attribute", fill("<usfx a=\"", ">", "")),
+        // A 4-byte unit puts the 4 KiB verse cut right after a space, so
+        // `check_verses` sees whether the cut drops it (SEC-11).
         (
             "long verse",
             fill(
                 "<usfx><book id=\"GEN\"><c id=\"1\"/><v id=\"1\"/>",
-                "word ",
+                "and ",
                 "<ve/></book></usfx>",
             ),
         ),

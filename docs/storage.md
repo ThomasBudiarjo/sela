@@ -178,8 +178,11 @@ a hostile file cannot corrupt itself through schema tricks or run functions
 with side effects from its schema. A backup or restore whose copy contains any
 trigger or view (Sela creates none) fails as `Unsupported` before
 publication, because a foreign trigger would run on every later save
-(`restore_refuses_a_library_with_triggers_or_views`). The connection paths
-are checked by `connections_to_untrusted_files_are_hardened`.
+(`restore_refuses_a_library_with_triggers_or_views`). The connection helpers
+are checked by `connections_to_untrusted_files_are_hardened`, and their use by
+backup, restore and the pre-migration backup (both the source and the private
+copy `copy_new` sees) by
+`every_copy_reads_and_writes_through_hardened_connections`.
 
 Private output is converted to rollback-journal mode, explicitly closed, reopened
 through existing supported-schema/quick-check/FK validation, then every historical

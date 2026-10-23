@@ -85,8 +85,12 @@ an entry here.
 | U-04 | `src/media/process.rs` (`mod job`, Windows only) | `kernel32` Job Object calls (`CreateJobObjectW`, `SetInformationJobObject`, `AssignProcessToJobObject`, `TerminateJobObject`, `CloseHandle`) and `unsafe impl Send for Job` | Null attributes and name; the limit block is a live, correctly sized `repr(C)` struct; the process handle is borrowed from a live `Child`; the owned job handle is closed once on drop. A kernel handle may be used from any thread. |
 
 Each site carries `#[allow(unsafe_code)]` on the narrowest item (function or
-module) and a `SAFETY` comment; `cargo check --all-targets` and the Windows
-cross check fail on any other unsafe code.
+module) and a `SAFETY` comment. `Cargo.toml` sets `[lints.rust] unsafe_code =
+"deny"` for every target of the package (library, binary, examples and the
+integration tests in `tests/`; review round 2: the crate-root
+`#![deny(unsafe_code)]` alone left examples and integration tests open), so
+`cargo check --all-targets` and the Windows cross check fail on any other
+unsafe code.
 
 Dependencies contain unsafe code (GPUI, wgpu, the windows crates, image
 codecs, SQLite through rusqlite, cosmic-text). They are not audited line by
@@ -104,7 +108,7 @@ decoder of untrusted input listed above:
 | --- | --- | --- |
 | `songs` | the four song parsers and File › Import staging (`import::batch::stage`) | same result twice; size, section, slide, order and warning caps; no empty slide or CR; an empty title is always reported, also when a long grapheme is cut away; every accepted song converts and passes `Song::validate`; every staged file is a valid song with a title; generated OpenLyrics, OpenSong and ChordPro files read back exactly; 1 MiB worst cases within 20 s (debug build); oversized files refused within 0.5 s |
 | `bibles` | OSIS, USFX and Zefania importers; bundle decoder; installed translation files | same result twice; verses ordered, unique, non-empty, trimmed, collapsed, without controls, within the verse and count caps; metadata and warning caps; every accepted file installs and reads back exactly; generated USFX reads back exactly; a decoded bundle installs; a byte-damaged translation file opens exactly as written or is refused; 8 MiB worst cases within 20 s; oversized files refused within 0.5 s |
-| `recovery` | autosave revisions and the session file | committed revisions read back exactly; with a recomputed checksum, edited revisions read back valid (themes, snapshots matching their pins, caps) and re-commit identically; without one nothing is read; 512 KiB worst cases |
+| `recovery` | autosave revisions and the session file | committed revisions read back exactly; with a recomputed checksum, edited revisions read back valid (themes, snapshots matching their pins, caps) and re-commit identically; without one nothing is read; 512 KiB worst cases; a session file is read exactly as written (its format and version, a known state, its times and a complete `uncommitted` block or null, nothing defaulted) and written back identically, or not read at all |
 | `scripture` | reference parser, completion | valid reference or typed error; accepted references re-parse from their canonical spelling; every name and abbreviation in both languages reads back; completion bounded and unique |
 | `schedule` | `.selaschedule` decoding (versions 1-5) | opened files hold only valid songs, known arrangements, valid themes and valid scripture items at ascending positions, save again and reopen identically; generated files with themes and scripture items round trip; refusals are typed |
 | `codecs` | slide format (with margins), background, theme, song payload | whatever decodes is valid and re-encodes to the same bytes; valid values round trip |
@@ -157,7 +161,7 @@ the fix, 2026-10-22).
 | SEC-08 | A font whose family name holds control characters was listed in the font list, but the slide format naming it is invalid, so choosing it could never be saved. | Such name records are skipped (another usable name still lists the face) | `fuzz::fonts::a_family_name_with_control_characters_is_not_listed`, `listed_font_families_can_always_be_chosen` |
 | SEC-09 | (Review round 1.) A title of one grapheme longer than 1,024 bytes (a letter with hundreds of combining marks) was cut to "" by SEC-02's grapheme cut, after the `MissingTitle` check: the parsers accepted a song with an empty title and no `MissingTitle`, which `to_song` refuses (ChordPro, OpenSong, OpenLyrics). | A title cut to nothing or blank is cleared and reported as `MissingTitle` (first) next to `Truncated("title")` (`ParsedSong::keep_title_usable`) | `import::tests::a_title_cut_to_nothing_is_reported_missing`; fuzz `songs` `grapheme_heavy_titles_keep_the_import_invariants`; corpus `title-one-long-grapheme.*` |
 | SEC-10 | (Merged media code.) A duration or frame time past `Duration::MAX` (finite, from a crafted time base: `"duration": "1e300"` in the ffprobe report, or a `showinfo` gap that large) panicked the probing or decoding thread in `Duration::from_secs_f64`. | Report durations out of range are unknown (`try_from_secs_f64`); frame times saturate at `Duration::MAX` | `media::probe::tests::a_duration_past_the_duration_range_is_unknown_not_a_panic`, `media::decode::tests::huge_frame_times_saturate_instead_of_panicking`; fuzz `media` generated reports and frames (`media-reports.proptest-regressions`) |
-| SEC-11 | (Merged scripture code.) A Bible verse cut at 4 KiB right after a space kept the trailing space, so the stored text was not trimmed as documented. | The verse and metadata cut drops trailing whitespace | `scripture::import::tests::a_verse_cut_at_the_limit_ends_without_a_space`; fuzz `bibles` worst case "long verse" |
+| SEC-11 | (Merged scripture code.) A Bible verse cut at 4 KiB right after a space kept the trailing space, so the stored text was not trimmed as documented. | The verse and metadata cut drops trailing whitespace | `scripture::import::tests::a_verse_cut_at_the_limit_ends_without_a_space`; fuzz `bibles` worst case "long verse" (its 4-byte "and " unit makes the cut end right after a space; review round 2) |
 | SEC-12 | (Merged scripture code.) Installed translation files were opened without the library's SQLite hardening, and a file with a trigger or view was accepted. | Every scripture connection is hardened (`storage::harden`); triggers and views make the file `Corrupt` | `scripture::store::tests::foreign_schema_objects_are_refused_and_connections_hardened` |
 | SEC-13 | (Merged profile lock.) The "Sela is already running" notice read `settings.txt` whole for its language, bypassing SEC-06's 1 MiB bound. | It reads through `settings::peek`, which has the bound | `instance::tests::the_notice_reads_the_language_within_the_settings_bound`, `settings::tests::an_oversized_file_is_unreadable_and_kept_aside` |
 
@@ -168,6 +172,15 @@ library read again for its pre-migration backup;
 monitor name under SEC-05's rule after merging the stage settings, and made
 the notices generator fail when a crate without license files names a
 `WITH` exception that has no standard text (`scripts/test_third_party_notices.py`).
+
+Review round 2 made those checks reach the call sites:
+`storage::tests::every_copy_reads_and_writes_through_hardened_connections`
+records the hardening of the source and private copy inside `copy_new` for a
+backup, a restore and a pre-migration backup, and fails if any goes back to a
+plain connection. The notices generator now evaluates the SPDX expression
+(`AND` needs every term's text, `OR` one alternative) instead of accepting any
+one known text, and `scripts/audit.sh` prints the unit check report when it
+fails.
 
 No hang, stack overflow or memory-safety issue was found in any parser.
 SEC-10 was a panic (a crashed worker thread, not memory corruption); every

@@ -138,19 +138,82 @@ def spdx_ids(expression: str) -> tuple[list[str], list[str]]:
     return licenses, exceptions
 
 
+def satisfied(expression: str, known: set[str]) -> bool:
+    """Whether the license texts in `known` cover an SPDX expression.
+
+    `OR` (and the legacy `/`) needs one alternative, `AND` needs every term,
+    and `AND` binds tighter than `OR`. A `WITH` exception is checked
+    separately (its text is always required). Unparsable input is never
+    covered.
+    """
+    tokens = [t for t in re.split(r"\s+|([()/])", expression) if t]
+    tokens = ["OR" if t == "/" else t for t in tokens]
+    position = 0
+
+    def peek() -> str | None:
+        return tokens[position] if position < len(tokens) else None
+
+    def take() -> str:
+        nonlocal position
+        token = peek()
+        if token is None:
+            raise ValueError("unexpected end")
+        position += 1
+        return token
+
+    def term() -> bool:
+        token = take()
+        if token == "(":
+            inner = either()
+            if take() != ")":
+                raise ValueError("unclosed parenthesis")
+            return inner
+        if token in ("OR", "AND", "WITH", ")"):
+            raise ValueError(f"unexpected {token}")
+        if peek() == "WITH":
+            take()
+            take()
+        return token in known
+
+    def every() -> bool:
+        result = term()
+        while peek() == "AND":
+            take()
+            result = term() and result
+        return result
+
+    def either() -> bool:
+        result = every()
+        while peek() == "OR":
+            take()
+            result = every() or result
+        return result
+
+    try:
+        result = either()
+    except ValueError:
+        return False
+    return result and position == len(tokens)
+
+
 def standard_texts(package: dict) -> list[tuple[str, str]]:
     expression = package.get("license") or ""
     licenses, exceptions = spdx_ids(expression)
     label = f"{package['name']} {package['version']}"
     texts = []
+    known = set()
     for spdx in licenses:
         path = SPDX_DIR / f"{spdx}.txt"
         if path.is_file():
+            known.add(spdx)
             texts.append((f"{spdx} (standard text)", normalized(path.read_text(encoding="utf-8"))))
-    if not texts:
+    # Under `AND` every term applies, so each needs its text; under `OR` one
+    # alternative is enough (review finding: an `AND` term without a text was
+    # skipped silently as long as another id had one).
+    if not satisfied(expression, known):
         raise SystemExit(
-            f"{label} ships no license file and no standard text exists for "
-            f"{expression!r}; add one to {SPDX_DIR.relative_to(ROOT)}"
+            f"{label} ships no license file and the standard texts in "
+            f"{SPDX_DIR.relative_to(ROOT)} do not cover {expression!r}; add the missing one"
         )
     # An exception (`Apache-2.0 WITH LLVM-exception`) is part of the terms:
     # its text is required, never silently left out.

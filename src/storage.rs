@@ -412,6 +412,24 @@ fn check_schema_objects(db: &Connection) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// For each `copy_new` on this thread: whether its source and its private
+    /// copy were hardened (defensive, untrusted schema). Tests read it to
+    /// check the call sites, not only the helpers.
+    static COPY_CONNECTIONS: std::cell::RefCell<Vec<[(bool, bool); 2]>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
+fn hardening(db: &Connection) -> (bool, bool) {
+    use rusqlite::config::DbConfig;
+    (
+        db.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap(),
+        !db.db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
+            .unwrap(),
+    )
+}
+
 fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicBool) -> Result<()> {
     use rusqlite::backup::{Backup, StepResult};
     if destination.as_os_str().len() > 4096 || destination.file_name().is_none() {
@@ -461,6 +479,8 @@ fn copy_new(source: &Connection, destination: &std::path::Path, cancel: &AtomicB
     }
     options.open(&path).map_err(|_| Error::Io)?;
     let mut target = open_private_copy(&path)?;
+    #[cfg(test)]
+    COPY_CONNECTIONS.with(|c| c.borrow_mut().push([hardening(source), hardening(&target)]));
     let start = std::time::Instant::now();
     {
         let backup = Backup::new(source, &mut target)?;
@@ -2591,6 +2611,28 @@ mod tests {
         let copy = d.path().join("copy.sqlite");
         assert_eq!(hardened(&open_private_copy(&copy).unwrap()), (true, false));
         assert_eq!(hardened(&Repository::open(&p).unwrap().db), (true, false));
+    }
+
+    // Review round 2 (fuzz-audit): the test above checks the helpers only;
+    // this one fails if a backup, a restore or the pre-migration backup goes
+    // back to a plain connection at its call site.
+    #[test]
+    fn every_copy_reads_and_writes_through_hardened_connections() {
+        let take = || COPY_CONNECTIONS.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        let cancel = AtomicBool::new(false);
+        let (d, p, repo) = fixture();
+        take();
+        repo.backup_new(&d.path().join("backup.sqlite"), &cancel)
+            .unwrap();
+        assert_eq!(take(), vec![[(true, true); 2]], "backup");
+        drop(repo);
+        Repository::restore_new(&p, &d.path().join("restored.sqlite"), &cancel).unwrap();
+        assert_eq!(take(), vec![[(true, true); 2]], "restore");
+        let old = d.path().join("legacy");
+        legacy(&old);
+        Repository::open(&old).unwrap();
+        assert!(d.path().join("legacy.schema1-backup").exists());
+        assert_eq!(take(), vec![[(true, true); 2]], "pre-migration backup");
     }
 
     #[test]

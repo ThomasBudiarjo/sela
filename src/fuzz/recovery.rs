@@ -219,13 +219,108 @@ proptest! {
             vec![
                 br#"{"format":"sela-recovery-session","version":1,"state":"running","started_at_ms":1,"acknowledged":0,"uncommitted":null}"#.to_vec(),
                 br#"{"format":"sela-recovery-session","version":1,"state":"offered","started_at_ms":1,"acknowledged":2,"uncommitted":{"after":1,"since_ms":2,"items":3}}"#.to_vec(),
+                br#"{"format":"sela-recovery-session","version":1,"state":"clean","started_at_ms":1,"acknowledged":9,"uncommitted":{"after":1,"since_ms":2}}"#.to_vec(),
             ],
             JSON_TOKENS,
         ),
     ) {
-        let first = within(Duration::from_secs(5), "session decode", || {
-            crate::autosave::decode_session(&bytes)
-        });
-        prop_assert_eq!(first, crate::autosave::decode_session(&bytes));
+        check_session(&bytes);
+    }
+}
+
+/// A session file is read exactly as written or not at all: an accepted one
+/// holds the file's own format, version, known state, times and a complete
+/// `uncommitted` block (or null), nothing defaulted or invented, and it is
+/// written back identically by the next start (review round 2: the property
+/// checked only determinism).
+fn check_session(bytes: &[u8]) {
+    use crate::autosave::{decode_session, encode_session};
+    use serde_json::{Value, json};
+    let decoded = within(Duration::from_secs(5), "session decode", || {
+        decode_session(bytes)
+    });
+    assert_eq!(decoded, decode_session(bytes), "same input, same result");
+    let Some(session) = decoded else { return };
+    let file: Value = serde_json::from_slice(bytes).expect("an accepted session is JSON");
+    let uncommitted = match &file["uncommitted"] {
+        Value::Null => Value::Null,
+        u => json!({"after": u["after"], "since_ms": u["since_ms"], "items": u["items"]}),
+    };
+    let expected = json!({
+        "format": "sela-recovery-session",
+        "version": 1,
+        "state": file["state"],
+        "started_at_ms": file["started_at_ms"],
+        "acknowledged": file["acknowledged"],
+        "uncommitted": uncommitted,
+    });
+    assert_eq!(file["format"], expected["format"]);
+    assert_eq!(file["version"], expected["version"]);
+    assert!(["running", "clean", "offered"].contains(&file["state"].as_str().unwrap_or("")));
+    let encoded = encode_session(&session);
+    let written: Value = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(written, expected, "the session holds what the file says");
+    assert_eq!(decode_session(&encoded), Some(session), "round trip");
+}
+
+#[test]
+fn incomplete_or_unknown_session_files_are_not_read() {
+    let session = |state: &str, uncommitted: &str| {
+        format!(
+            r#"{{"format":"sela-recovery-session","version":1,"state":{state},"started_at_ms":1,"acknowledged":2,"uncommitted":{uncommitted}}}"#
+        )
+    };
+    for (what, bytes) in [
+        (
+            "no items",
+            session(r#""offered""#, r#"{"after":1,"since_ms":2}"#),
+        ),
+        (
+            "no after",
+            session(r#""offered""#, r#"{"since_ms":2,"items":3}"#),
+        ),
+        (
+            "text count",
+            session(r#""offered""#, r#"{"after":1,"since_ms":2,"items":"3"}"#),
+        ),
+        (
+            "negative",
+            session(r#""offered""#, r#"{"after":-1,"since_ms":2,"items":3}"#),
+        ),
+        (
+            "fraction",
+            session(r#""offered""#, r#"{"after":1.5,"since_ms":2,"items":3}"#),
+        ),
+        ("not a block", session(r#""offered""#, "3")),
+        ("unknown state", session(r#""paused""#, "null")),
+        ("no state", session("null", "null")),
+        (
+            "other version",
+            session(r#""clean""#, "null").replace(r#""version":1"#, r#""version":2"#),
+        ),
+        (
+            "no acknowledged",
+            session(r#""clean""#, "null").replace(r#""acknowledged":2,"#, ""),
+        ),
+    ] {
+        assert_eq!(
+            crate::autosave::decode_session(bytes.as_bytes()),
+            None,
+            "{what}"
+        );
+        check_session(bytes.as_bytes());
+    }
+    for good in [
+        session(r#""running""#, "null"),
+        session(
+            r#""offered""#,
+            r#"{"after":1,"since_ms":2,"items":3,"extra":0}"#,
+        ),
+    ] {
+        assert!(
+            crate::autosave::decode_session(good.as_bytes()).is_some(),
+            "{good}"
+        );
+        check_session(good.as_bytes());
     }
 }

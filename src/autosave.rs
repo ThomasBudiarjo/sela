@@ -677,7 +677,7 @@ pub fn decode_revision(bytes: &[u8]) -> Option<Revision> {
     })
 }
 
-fn encode_session(session: &Session) -> Vec<u8> {
+pub(crate) fn encode_session(session: &Session) -> Vec<u8> {
     let uncommitted = session.uncommitted.map_or(
         Value::Null,
         |u| json!({"after": u.after, "since_ms": u.since, "items": u.items}),
